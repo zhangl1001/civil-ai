@@ -3,7 +3,6 @@ import type { AbilityProfile } from '@/domain/learning';
 import type { PracticeSession } from '@/domain/practice';
 import { database } from '@/db/database';
 import { STORES } from '@/db/schema';
-import { fileRepository } from './FileRepository';
 import { abilityDiagnosisService, type AbilityDiagnosis } from './AbilityDiagnosisService';
 import { DEFAULT_KNOWLEDGE_TREE, XC_MODULES } from './KnowledgeDefaults';
 import { settingsService } from './SettingsService';
@@ -96,16 +95,11 @@ class PlanService {
     const key = this.planSettingKey(projectId);
     const saved = await settingsService.get<ExamPlan | null>(key, null);
     if (saved && Object.keys(saved).length) return saved;
-    const compatibilityPlan = await fileRepository.readJson<ExamPlan>(projectId, '备考计划.json', {});
-    if (compatibilityPlan && Object.keys(compatibilityPlan).length) {
-      await settingsService.set(key, compatibilityPlan);
-    }
-    return compatibilityPlan;
+    return {};
   }
 
   async savePlan(projectId: string, plan: ExamPlan): Promise<ExamPlan> {
     await settingsService.set(this.planSettingKey(projectId), plan);
-    await fileRepository.writeText(projectId, '备考计划.json', JSON.stringify(plan, null, 2));
     return plan;
   }
 

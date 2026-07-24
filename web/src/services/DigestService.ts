@@ -4,7 +4,6 @@ import type { DigestSection, DigestTab } from '@/domain/digest';
 import type { LearningEvent } from '@/domain/learning';
 import { generationTaskService } from './GenerationTaskService';
 import { digestRepository } from './DigestRepository';
-import { fileRepository } from './FileRepository';
 import { projectRepository } from './ProjectRepository';
 import type { EnqueueResult } from '@/tasks/taskTypes';
 
@@ -45,10 +44,7 @@ export class DigestService {
 
   async dashboard(tab = this.readActiveTab(), date = today()): Promise<DigestDashboard> {
     const project = await projectRepository.getActiveProject();
-    let items = await digestRepository.listForDate(project.id, tab, date);
-    if (!items.length) {
-      items = await digestRepository.importCompatibilityDate(project.id, tab, date);
-    }
+    const items = await digestRepository.listForDate(project.id, tab, date);
     const history = await digestRepository.history(project.id, tab, 20);
     const sections: DigestSection[] = items.map((item) => ({
       id: item.id,
@@ -68,7 +64,6 @@ export class DigestService {
 
   async saveGenerated(tab: DigestTab, date: string, content: string): Promise<void> {
     const project = await projectRepository.getActiveProject();
-    await fileRepository.writeText(project.id, pathFor(tab, date), content);
     await digestRepository.saveFromMarkdown(project.id, tab, date, content);
     const now = Date.now();
     await database.put<LearningEvent>(STORES.learningEvents, {

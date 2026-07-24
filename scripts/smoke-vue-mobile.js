@@ -319,7 +319,7 @@ for (const marker of ["dashboard", "saveGenerated", "enqueueGenerate", "digestRe
 }
 
 const digestRepository = read("web/src/services/DigestRepository.ts");
-for (const marker of ["STORES.digestItems", "projectTypeDate", "rangeForTab", "listForMonth", "importCompatibilityDate", "fileRepository.readText"]) {
+for (const marker of ["STORES.digestItems", "projectTypeDate", "rangeForTab", "listForMonth"]) {
   if (!digestRepository.includes(marker)) fail(`digest repository missing: ${marker}`);
 }
 

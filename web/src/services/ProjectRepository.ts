@@ -2,7 +2,6 @@ import { database } from '@/db/database';
 import { STORES } from '@/db/schema';
 import type { Project, ProjectStatus } from '@/domain/project';
 import type { CreateProjectInput } from '@/domain/plan';
-import { fileRepository } from './FileRepository';
 import { createExamPlan } from './PlanService';
 import { settingsService } from './SettingsService';
 
@@ -20,16 +19,6 @@ export class ProjectRepository {
     return projects.map(normalizeProject).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  private async writeDefaultFiles(projectId: string, input?: CreateProjectInput): Promise<void> {
-    if (!input) return;
-    const existingFiles = await fileRepository.list(projectId);
-    const existingPaths = new Set(existingFiles.map((file) => file.path));
-
-    if (!existingPaths.has('备考计划.json')) {
-      await fileRepository.writeText(projectId, '备考计划.json', JSON.stringify(createExamPlan(input), null, 2));
-    }
-  }
-
   async createProject(input: string | CreateProjectInput = DEFAULT_PROJECT_NAME, status?: ProjectStatus): Promise<Project> {
     const data: CreateProjectInput = typeof input === 'string' ? { name: input } : input;
     const name = data.name?.trim() || DEFAULT_PROJECT_NAME;
@@ -42,7 +31,6 @@ export class ProjectRepository {
       updatedAt: now
     };
     await database.put<Project>(STORES.projects, project);
-    await this.writeDefaultFiles(project.id, { ...data, name });
     return project;
   }
 
@@ -80,8 +68,8 @@ export class ProjectRepository {
     }
   }
 
-  async ensureProjectFiles(projectId: string): Promise<void> {
-    await this.writeDefaultFiles(projectId);
+  async ensureProjectFiles(_projectId: string, input?: CreateProjectInput): Promise<void> {
+    if (input) createExamPlan(input);
   }
 
   async activateProject(projectId: string, activeProfileId?: string): Promise<Project> {
