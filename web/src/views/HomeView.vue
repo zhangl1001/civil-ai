@@ -211,6 +211,7 @@ import {
   type CandidateHomeSnapshot
 } from '@/modules/candidate/public';
 import { qualityDashboardService, type QualityDashboard } from '@/services/QualityDashboardService';
+import { practiceFlowService } from '@/services/PracticeFlowService';
 
 const router = useRouter();
 const candidateHome = ref<CandidateHomeSnapshot | null>(null);
@@ -368,6 +369,7 @@ function daysUntil(value: string): number | undefined {
 }
 
 function startWeakPractice(module: string) {
+  practiceFlowService.writeStartContext({ module, mode: 'practice' });
   qualityDashboardService.startWeakPractice(module);
   void router.push('/vue/practice/session');
 }
