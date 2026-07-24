@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 备考计划</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .page{min-height:0;align-items:stretch}
+  .subpage-content{padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+  .subpage-content>*{flex-shrink:0}
+  /* Countdown — match home style */
+  .countdown-card{display:flex;align-items:center;gap:14px;background:var(--surface);border-radius:14px;padding:16px;box-shadow:var(--card-shadow);cursor:pointer}
+  .countdown-card:active{opacity:.85}
+  .cd-days{font-size:38px;font-weight:800;color:var(--accent);line-height:1;min-width:56px;text-align:center}
+  .cd-label{font-size:10px;color:var(--text-secondary)}
+  .cd-right{flex:1;min-width:0}
+  .cd-phase{font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px}
+  .cd-bar{height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:4px}
+  .cd-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .4s}
+  .cd-meta{font-size:11px;color:var(--text-secondary)}
+
+  /* Section header — match home */
+  .sec-hdr{display:flex;justify-content:space-between;align-items:center;padding:4px 0}
+  .sec-title{font-size:15px;font-weight:700;color:var(--text)}
+
+  /* Ability — match home mod-list */
+  .mod-list{background:var(--surface);border-radius:14px;padding:4px 0;box-shadow:var(--card-shadow);overflow:hidden}
+  .mod-row{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer}
+  .mod-row:active{background:var(--hover)}
+  .mod-row+.mod-row{border-top:1px solid var(--border-light)}
+  .mod-name{font-size:13px;font-weight:500;color:var(--text);width:56px;flex-shrink:0}
+  .mod-bar-wrap{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+  .mod-bar-fill{height:100%;border-radius:3px;transition:width .4s}
+  .mod-pct{font-size:12px;font-weight:600;width:36px;text-align:right;flex-shrink:0}
+
+  /* Plan task list */
+  .task-card{background:var(--surface);border-radius:14px;box-shadow:var(--card-shadow);overflow:hidden}
+  .task-item{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:background .12s}
+  .task-item:active{background:var(--hover)}
+  .task-item+.task-item{border-top:1px solid var(--border-light)}
+  .task-ic{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .task-ic svg{width:18px;height:18px}
+  .task-ic.t-practice{background:var(--accent-soft);color:var(--accent)}
+  .task-ic.t-essay{background:rgba(52,199,89,.12);color:var(--green)}
+  .task-ic.t-review{background:rgba(240,160,48,.12);color:var(--orange)}
+  .task-ic.t-digest{background:var(--purple-soft);color:var(--purple)}
+  .task-ic.t-mock{background:rgba(255,69,58,.12);color:var(--red)}
+  .task-info{flex:1;min-width:0}
+  .task-name{font-size:14px;font-weight:500;color:var(--text)}
+  .task-name.done{color:var(--text-secondary)}
+  .task-detail{font-size:11px;color:var(--text-secondary);margin-top:1px;display:flex;align-items:center;gap:6px}
+  .task-detail .task-acc{font-weight:600}
+  .task-detail .task-acc.high{color:var(--green)}
+  .task-detail .task-acc.mid{color:var(--orange)}
+  .task-detail .task-acc.low{color:var(--red)}
+  .task-ck{width:22px;height:22px;border-radius:50%;border:2px solid var(--border);flex-shrink:0;transition:all .2s}
+  .task-ck.done{background:var(--green);border-color:var(--green);position:relative}
+  .task-ck.done::after{content:'';position:absolute;top:3px;left:6px;width:6px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+
+  /* Progress summary — pill style */
+  .plan-summary{display:flex;align-items:center;justify-content:center;gap:10px;padding:10px 0;font-size:13px;color:var(--text-secondary)}
+  .plan-summary .ps-num{font-size:22px;font-weight:800;color:var(--accent);line-height:1}
+  .plan-summary .ps-sep{color:var(--border);font-size:18px}
+  .plan-summary .ps-den{font-size:22px;font-weight:800;color:var(--text);line-height:1}
+  .plan-summary .ps-label{font-size:11px;margin-left:2px}
+
+  /* Generate button — match card-btn */
+  .gen-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:48px;border:none;border-radius:14px;background:var(--accent);color:#fff;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
+  .gen-btn:active{opacity:.85}
+  .gen-btn svg{width:18px;height:18px}
+
+  /* Plan action bar — sits inside task-card */
+  .plan-actions{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border-light)}
+  .plan-act-btn{display:flex;align-items:center;justify-content:center;gap:6px;flex:1;height:38px;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;transition:opacity .12s}
+  .plan-act-btn:active{opacity:.7}
+  .plan-act-btn.primary{background:var(--accent-soft);color:var(--accent)}
+  .plan-act-btn.secondary{background:var(--surface2);color:var(--text-secondary)}
+  .plan-act-btn svg{width:15px;height:15px}
+
+  /* Empty state */
+  .empty-wrap{background:var(--surface);border-radius:14px;padding:28px 20px;box-shadow:var(--card-shadow);text-align:center}
+  .empty-ic{width:44px;height:44px;border-radius:50%;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px}
+  .empty-ic svg{width:22px;height:22px;color:var(--accent)}
+  .empty-t{font-size:16px;font-weight:600;color:var(--text);margin-bottom:4px}
+  .empty-d{font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:16px}
+
+  /* History */
+  .hist-card{background:var(--surface);border-radius:14px;box-shadow:var(--card-shadow);overflow:hidden}
+  .hist-toggle{display:flex;align-items:center;gap:8px;padding:14px 16px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text);-webkit-tap-highlight-color:transparent}
+  .hist-toggle:active{background:var(--hover)}
+  .hist-toggle svg{transition:transform .2s}
+  .hist-toggle.open svg{transform:rotate(90deg)}
+  .hist-body{display:none;padding:0 16px 12px}
+  .hist-body.open{display:block}
+  .hist-row{display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px;color:var(--text-secondary)}
+  .hist-row+.hist-row{border-top:1px solid var(--border-light)}
+  .hist-date{width:44px;flex-shrink:0;color:var(--text);font-weight:500}
+  .hist-bar{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+  .hist-bar-fill{height:100%;border-radius:2px}
+  .hist-pct{width:36px;text-align:right;flex-shrink:0;font-weight:600}
+
+  .modal-overlay{position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center}
+  .modal-card{background:var(--surface);border-radius:14px;padding:24px;width:90%;max-width:340px;box-sizing:border-box}
+  .modal-card h3{font-size:17px;margin-bottom:16px}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="navbar" style="justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:6px">
+      <button data-plan-action="back"><i data-lucide="arrow-left"></i></button>
+      <span class="title">备考计划</span>
+    </div>
+    <div class="navbar-actions">
+      <button data-task-bell data-plan-action="task" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+    </div>
+  </div>
+
+  <!-- Countdown -->
+  <div class="countdown-card" data-plan-action="date-picker">
+    <div style="text-align:center">
+      <div class="cd-days" id="plan-cd-days">--</div>
+      <div class="cd-label">距考试</div>
+    </div>
+    <div class="cd-right">
+      <div class="cd-phase" id="plan-cd-phase">点击设置考试日期</div>
+      <div class="cd-bar"><div class="cd-fill" id="plan-cd-fill" style="width:0%"></div></div>
+      <div class="cd-meta" id="plan-cd-meta"></div>
+    </div>
+  </div>
+
+  <!-- Ability -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">能力概览</span></div>
+    <div class="mod-list" id="plan-mod-list">
+      <div style="padding:16px;color:var(--text-secondary);font-size:13px;text-align:center">暂无练习数据</div>
+    </div>
+    <div id="mod-legend" style="display:none;gap:12px;padding:6px 4px;font-size:10px;color:var(--text-secondary);justify-content:center">
+      <span><span class="kp-dot" style="background:var(--green)"></span> ≥70%</span>
+      <span><span class="kp-dot" style="background:var(--orange)"></span> ≥50%</span>
+      <span><span class="kp-dot" style="background:var(--red)"></span> &lt;50%</span>
+    </div>
+  </div>
+
+  <!-- Today plan -->
+  <div>
+    <div class="sec-hdr">
+      <span class="sec-title">今日计划</span>
+    </div>
+    <div id="plan-content"></div>
+  </div>
+
+  <!-- History -->
+  <div class="hist-card" id="hist-card" style="display:none">
+    <div class="hist-toggle" data-plan-action="toggle-history">
+      <i data-lucide="chevron-right" style="width:14px;height:14px"></i>
+      <span>近7天完成趋势</span>
+    </div>
+    <div class="hist-body" id="hist-body"></div>
+  </div>
+</div>
+
+<div class="tabs"></div>
+
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+(function() {
+API.initPage('plan');
+
+var _plan = null, _profile = null;
+function _today() { return API.getLocalDate(); }
+var TYPE_ICONS = { diagnosis:'activity', practice:'edit-3', essay:'file-text', review:'rotate-ccw', digest:'book-open', mock:'monitor' };
+var TYPE_PAGES = {
+  diagnosis: function(m,kp){ localStorage.setItem('mp-target-module',m||'资料分析'); if(kp)localStorage.setItem('mp-target-kp',kp);else localStorage.removeItem('mp-target-kp'); localStorage.setItem('mp-practice-date',_today()); localStorage.setItem('mp-practice-mode','smart'); localStorage.setItem('mp-from-plan','1'); API.pushPage('practice-card'); },
+  practice: function(m,kp){ localStorage.setItem('mp-target-module',m); if(kp)localStorage.setItem('mp-target-kp',kp);else localStorage.removeItem('mp-target-kp'); localStorage.setItem('mp-practice-date',_today()); localStorage.setItem('mp-practice-mode','direct'); localStorage.setItem('mp-from-plan','1'); API.pushPage('practice-card'); },
+  essay: function(){ localStorage.setItem('es-date',_today()); API.pushPage('essay'); },
+  review: function(){ API.pushPage('wrongbook'); },
+  digest: function(){ API.pushPage('digest'); },
+  mock: function(){ API.switchTab('exam'); }
+};
+
+window._updatePlanProgress = function(type, module, count, accuracy) {
+  var today = API.getLocalDate();
+  return API.PlanProgressReducer.consume({
+    id: 'legacy-page-' + [type, module || '', today, count || 0, accuracy || 0].join('|'),
+    type: type, mode: type, module: module || '', date: today,
+    total: count || 0, correct: Math.round((count || 0) * (accuracy || 0) / 100)
+  }).then(function(changed) { if (changed) loadPlan().then(renderPlan); });
+};
+
+async function loadPlan() {
+  _plan = await API.fetchJSON('备考计划.json');
+  _profile = await API.fetchJSON('能力画像.json');
+  if (_plan && !_plan.business_model) {
+    _plan.business_model = API.Business.createTargetModel(_plan);
+    savePlan(_plan);
+  }
+}
+async function savePlan(p) {
+  try {
+    await API.writeFile('备考计划.json', JSON.stringify(p));
+  } catch(e) { console.warn('[savePlan]', e); API.toast('计划保存失败'); }
+}
+
+function getCurrentPhase() {
+  if (!_plan || !_plan.phases) return '基础期';
+  var ps = ['基础期','强化期','冲刺期'], now = new Date();
+  for (var i = ps.length-1; i >= 0; i--) { var r = _plan.phases[ps[i]]; if (typeof r === 'string') { var m = r.match(/(\d{4}-\d{2}-\d{2})/); if (m && new Date(m[1]+'T00:00:00') <= now) return ps[i]; } }
+  return ps[0];
+}
+
+function generateDailyPlan() {
+  if (!_plan) { API.toast('请先创建备考计划'); return; }
+  if (_plan.tasks && _plan.tasks[_today()] && _plan.tasks[_today()].items.length) {
+    API.confirm('重新生成', '今日已有计划，覆盖重新生成？', function() { doGenerate(); });
+    return;
+  }
+  doGenerate();
+}
+
+async function doGenerate() {
+  var stats = await API.fetchJSON('练习统计.json');
+  var reviewDue = await API.getReviewDue();
+  var targets = await API.Business.loadSyllabusTargets(_profile || {modules:{}});
+  var built = API.Business.buildTodayTasks({ plan: _plan, profile: _profile || {modules:{}}, stats: stats || {records:[]}, reviewDue: reviewDue, targets: targets });
+  if (!_plan.tasks) _plan.tasks = {};
+  _plan.tasks[_today()] = built;
+  savePlan(_plan);
+  renderPlan();
+  // Show AI optimize button after local generation
+  var optBtn = document.getElementById('plan-opt-btn');
+  if(optBtn) optBtn.style.display = '';
+  lucide.createIcons();
+  API.toast('今日计划已生成：' + built.phase);
+}
+
+function aiOptimizePlan() {
+  if (!_plan || !_plan.tasks || !_plan.tasks[_today()]) return;
+  var profile = _profile || {};
+  var items = _plan.tasks[_today()].items;
+  var itemDesc = items.map(function(t){ return t.type + (t.module ? '('+t.module+')' : '') + ':' + t.target; }).join(', ');
+  var accuracyDesc = '';
+  if (profile.modules) {
+    accuracyDesc = Object.keys(profile.modules).map(function(m){ return m+':'+API.moduleStats(profile, m).accuracy+'%'; }).join(', ');
+  }
+  var msg = '请根据以下信息优化今日备考计划，调整任务数量和类型使其更合理：\n' +
+    '当前计划：' + itemDesc + '\n' +
+    '能力画像：' + accuracyDesc + '\n' +
+    '备考阶段：' + getCurrentPhase() + '\n' +
+    '考试日期：' + (_plan.exam_date || '') + '\n\n' +
+    '请输出优化后的计划列表，格式为JSON数组，每项包含 type(practice/essay/review/digest/mock)、module(模块名)、text(任务描述)、target(目标数量)。' +
+    '只输出JSON数组，不要其他文字。保存在 备考计划.json 的 tasks.' + _today() + '.items 字段中。';
+  API.openAIChat(msg, { freshSession: true, freshName: '优化计划' });
+}
+
+function renderCountdown() {
+  if (!_plan || !_plan.exam_date) return;
+  var ps = ['基础期','强化期','冲刺期'];
+  var endD = new Date(_plan.exam_date+'T00:00:00');
+  var startD = new Date();
+  if (_plan.phases) { for (var i=0;i<ps.length;i++) { var r=_plan.phases[ps[i]]; if (typeof r==='string') { var m=r.match(/(\d{4}-\d{2}-\d{2})/); if(m){startD=new Date(m[1]+'T00:00:00');break;} } } }
+  var td=Math.max(1,Math.ceil((endD-startD)/86400000));
+  var ed=Math.max(0,Math.ceil((new Date()-startD)/86400000));
+  var remain=Math.max(0,td-ed);
+  var pct=Math.min(100,Math.round(ed/td*100));
+  var cdDays=document.getElementById('plan-cd-days');
+  if(!cdDays){API.toast('DOM未找到plan-cd-days');return;}
+  cdDays.textContent=remain;
+  var cdPhase=document.getElementById('plan-cd-phase'); if(cdPhase) cdPhase.textContent=ps[Math.min(2,Math.floor(ed/Math.max(1,td/3)))]+' · 进度 '+pct+'%';
+  var cdFill=document.getElementById('plan-cd-fill'); if(cdFill) cdFill.style.width=pct+'%';
+  var dt=new Date(endD);
+  var cdMeta=document.getElementById('plan-cd-meta'); if(cdMeta) cdMeta.textContent=dt.getFullYear()+'年'+(dt.getMonth()+1)+'月'+dt.getDate()+'日';
+}
+
+function renderAbility() {
+  if (!_profile||!_profile.modules) return;
+  var mods=Object.keys(_profile.modules).map(function(m){ var ms=API.moduleStats(_profile, m); return {name:m, total:ms.total, accuracy:ms.accuracy}; }).filter(function(d){return d.total>=1;}).sort(function(a,b){return a.accuracy-b.accuracy;});
+  if (!mods.length) return;
+  document.getElementById('mod-legend').style.display='flex';
+  document.getElementById('plan-mod-list').innerHTML=mods.map(function(d){
+    var name=d.name,pct=d.accuracy;
+    var c=pct>=70?'var(--green)':pct>=50?'var(--orange)':'var(--red)';
+    return '<div class="mod-row" data-plan-action="module" data-module="'+API.escapeAttr(name)+'"><span class="mod-name">'+esc(name)+'</span><div class="mod-bar-wrap"><div class="mod-bar-fill" style="width:'+pct+'%;background:'+c+'"></div></div><span class="mod-pct" style="color:'+c+'">'+pct+'%</span></div>';
+  }).join('');
+}
+
+function goMod(m){ localStorage.setItem('mp-target-module',m); localStorage.setItem('mp-practice-date',_today()); localStorage.setItem('mp-practice-mode','direct'); localStorage.setItem('mp-from-plan','1'); API.pushPage('practice-card'); }
+
+function renderPlan() {
+  var c=document.getElementById('plan-content');
+  if(!c) return;
+  var items=(_plan&&_plan.tasks&&_plan.tasks[_today()])?_plan.tasks[_today()].items:[];
+  if(!items.length){
+    c.innerHTML='<div class="empty-wrap"><div class="empty-ic"><i data-lucide="calendar-check"></i></div><div class="empty-t">今日计划为空</div><div class="empty-d">AI 根据能力画像和备考阶段<br>智能生成每日任务</div><button class="gen-btn" data-plan-action="generate"><i data-lucide="sparkles"></i> 生成今日计划</button></div>';
+    lucide.createIcons(); return;
+  }
+  var h='';
+  // Summary — above the task card
+  var doneN=items.filter(function(t){return t.done;}).length;
+  var pct=Math.round(doneN/items.length*100);
+  h+='<div class="plan-summary"><span class="ps-num" style="color:'+((pct===100)?'var(--green)':'var(--accent)')+'">'+doneN+'</span><span class="ps-sep">/</span><span class="ps-den">'+items.length+'</span><span class="ps-label">已完成</span></div>';
+  h+='<div class="task-card">';
+  items.forEach(function(t){
+    var ic=TYPE_ICONS[t.type]||'edit-3';
+    // Build detail line — when target is 0 (pending), show actual count only
+    var detailParts = [];
+    if(t.type==='practice'||t.type==='review') {
+      if(t.target > 0) {
+        detailParts.push('<span>'+((t.actual||0))+'/'+t.target+'</span>');
+      } else if(t.actual > 0) {
+        detailParts.push('<span>'+t.actual+'题</span>');
+      } else {
+        detailParts.push('<span>待练习</span>');
+      }
+      if(t.accuracy) {
+        var cls = t.accuracy>=70?'high':t.accuracy>=50?'mid':'low';
+        detailParts.push('<span class="task-acc '+cls+'">'+t.accuracy+'%</span>');
+      }
+    } else if(t.done) {
+      detailParts.push('<span>已完成</span>');
+    }
+    if (t.reason) detailParts.push('<span>'+esc(t.reason)+'</span>');
+    var detailHtml = detailParts.length ? '<div class="task-detail">'+detailParts.join('')+'</div>' : '';
+    h+='<div class="task-item" data-plan-action="task-item" data-type="'+API.escapeAttr(t.type)+'" data-module="'+API.escapeAttr(t.module||'')+'" data-kp="'+API.escapeAttr(t.knowledge_point||'')+'">';
+    h+='<div class="task-ic t-'+t.type+'"><i data-lucide="'+ic+'"></i></div>';
+    h+='<div class="task-info"><div class="task-name'+(t.done?' done':'')+'">'+esc(t.text)+'</div>'+detailHtml+'</div>';
+    h+='<div class="task-ck'+(t.done?' done':'')+'"></div></div>';
+  });
+  // Action bar inside task-card
+  h+='<div class="plan-actions">';
+  h+='<button class="plan-act-btn primary" data-plan-action="optimize"><i data-lucide="wand-2"></i> AI 优化</button>';
+  h+='<button class="plan-act-btn secondary" data-plan-action="generate"><i data-lucide="refresh-cw"></i> 重新生成</button>';
+  h+='</div>';
+  h+='</div>';
+  if(pct===100) API.toast('今日计划全部完成！');
+  c.innerHTML=h;
+  lucide.createIcons();
+}
+
+function goTask(type,module,kp){var fn=TYPE_PAGES[type];if(fn)fn(module,kp);}
+function renderHistory(){
+  if(!_plan||!_plan.tasks)return;
+  var dates=Object.keys(_plan.tasks).filter(function(d){return d!==_today();}).sort().reverse().slice(0,7);
+  if(!dates.length)return;
+  document.getElementById('hist-card').style.display='';
+  var h='';
+  dates.forEach(function(d){
+    var items=_plan.tasks[d].items||[];
+    var dn=items.filter(function(t){return t.done;}).length;
+    var pct=items.length?Math.round(dn/items.length*100):0;
+    var c=pct>=80?'var(--green)':pct>=50?'var(--orange)':'var(--red)';
+    h+='<div class="hist-row"><span class="hist-date">'+d.substring(5).replace('-','/')+'</span><div class="hist-bar"><div class="hist-bar-fill" style="width:'+pct+'%;background:'+c+'"></div></div><span class="hist-pct" style="color:'+c+'">'+dn+'/'+items.length+'</span></div>';
+  });
+  document.getElementById('hist-body').innerHTML=h;
+}
+
+function esc(s){ return API._esc(s); }
+
+function openDatePicker(){
+  var cur=(_plan&&_plan.exam_date)||'';
+  API.datePicker(cur?'修改考试日期':'设置考试日期', cur, async function(dateStr){
+    if(!_plan)_plan={};_plan.exam_date=dateStr;
+    await savePlan(_plan);
+    renderCountdown();
+    renderAbility();
+    renderPlan();
+    renderHistory();
+  });
+}
+
+// ---- Init ----
+// Use setTimeout to ensure DOM is fully rendered after pushPage
+setTimeout(async function(){
+  try {
+    await loadPlan();
+    if (!_plan || !_plan.exam_date) return;
+    renderCountdown();
+    renderAbility();
+    renderPlan();
+    renderHistory();
+    lucide.createIcons();
+  } catch(e) { API.toast('加载出错: ' + e.message); }
+}, 100);
+
+function _onAicDone(e){
+  // If AI was manually stopped, don't auto-retry
+  if (e.detail && e.detail.stopped) return;
+  setTimeout(async function(){ await loadPlan(); renderPlan(); },800);
+}
+
+// When user manually stops AI, reload current plan state
+function _onAicStopped() {
+  loadPlan().then(function() { renderPlan(); });
+}
+document.addEventListener('aic-done', _onAicDone);
+document.addEventListener('aic-stopped', _onAicStopped);
+var _planRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:plan', _planRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var target = e.target.closest('[data-plan-action]');
+      if (!target || !root.contains(target)) return;
+      var action = target.getAttribute('data-plan-action');
+      if (action === 'back') API.goBack();
+      else if (action === 'task') API.openTaskPanel();
+      else if (action === 'date-picker') openDatePicker();
+      else if (action === 'toggle-history') { target.classList.toggle('open'); document.getElementById('hist-body').classList.toggle('open'); }
+      else if (action === 'module') goMod(target.getAttribute('data-module') || '');
+      else if (action === 'generate') generateDailyPlan();
+      else if (action === 'optimize') aiOptimizePlan();
+      else if (action === 'task-item') goTask(target.getAttribute('data-type'), target.getAttribute('data-module') || '', target.getAttribute('data-kp') || '');
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  },
+  destroy: function() {
+    document.removeEventListener('aic-done', _onAicDone);
+    document.removeEventListener('aic-stopped', _onAicStopped);
+  }
+});
+})();
+</script>
+</body>
+</html>

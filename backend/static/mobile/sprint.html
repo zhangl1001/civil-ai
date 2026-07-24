@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 考前冲刺</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .sprint-days { font-size: 40px; font-weight: 850; color: var(--orange); line-height: 1; }
+  .sprint-days-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+  .sprint-phase { font-size: 13px; font-weight: 700; color: var(--orange); margin-top: 7px; }
+  #sprint-hero { text-align:left; }
+
+  .mission-card { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: 14px; padding: 16px; box-shadow: var(--card-shadow); }
+  body.light .mission-card { border-color:rgba(0,0,0,.035); }
+  .mission-date { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
+  .mission-module { font-size: 14px; font-weight: 600; color: var(--text); margin-top: 4px; }
+  .mission-kps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+
+  .weak-rank-list { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: 14px; box-shadow: var(--card-shadow); overflow: hidden; }
+  body.light .weak-rank-list { border-color:rgba(0,0,0,.035); }
+  .weak-rank-row { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-light); }
+  .weak-rank-row:last-child { border-bottom: none; }
+  .weak-rank-num { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .weak-rank-num.urgent { background: rgba(255,69,58,.12); color: var(--red); }
+  .weak-rank-num.warning { background: rgba(240,160,48,.12); color: var(--orange); }
+  .weak-rank-num.normal { background: var(--accent-soft); color: var(--accent); }
+  .weak-rank-info { flex: 1; min-width: 0; }
+  .weak-rank-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .weak-rank-meta { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .weak-rank-pct { font-size: 14px; font-weight: 700; flex-shrink: 0; }
+
+  .action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .action-card { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: 14px; padding: 14px 12px; box-shadow: var(--card-shadow); cursor: pointer; transition: transform .15s, background .15s; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; }
+  body.light .action-card { border-color:rgba(0,0,0,.035); }
+  .action-card:active { background:var(--hover); }
+  .action-card:active { transform: scale(.97); }
+  .action-card .icon-box { width: 44px; height: 44px; }
+  .action-label { font-size: 13px; font-weight: 600; color: var(--text); }
+  .action-sub { font-size: 11px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar tool-navbar">
+    <button data-sprint-action="back"><i data-lucide="arrow-left"></i></button>
+    <span class="title">考前冲刺</span>
+    <button data-task-bell data-sprint-action="task" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+  </div>
+
+  <!-- Hero countdown -->
+  <div class="hero-card orange" id="sprint-hero">
+    <div class="sprint-days" id="sprint-days">--</div>
+    <div class="sprint-days-label">天距考试</div>
+    <div class="sprint-phase" id="sprint-phase">加载中...</div>
+    <div class="intensity-bar">
+      <div class="intensity-opt" data-sprint-action="intensity" data-level="normal">稳步冲刺</div>
+      <div class="intensity-opt active" data-sprint-action="intensity" data-level="high">强化冲刺</div>
+      <div class="intensity-opt" data-sprint-action="intensity" data-level="extreme">极限冲刺</div>
+    </div>
+  </div>
+
+  <!-- Today's mission -->
+  <div>
+    <div class="sec-hdr">
+      <span class="sec-title">今日任务</span>
+      <span class="sec-action" data-sprint-action="regenerate">重新规划</span>
+    </div>
+    <div id="mission-area">
+      <div class="mission-card"><div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">加载中...</div></div>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="action-grid">
+    <div class="action-card" data-sprint-action="practice">
+      <div class="icon-box orange"><i data-lucide="zap" style="width:20px;height:20px"></i></div>
+      <div class="action-label">弱项突击</div>
+      <div class="action-sub">聚焦薄弱点</div>
+    </div>
+    <div class="action-card" data-sprint-action="mock">
+      <div class="icon-box red"><i data-lucide="timer" style="width:20px;height:20px"></i></div>
+      <div class="action-label">限时模考</div>
+      <div class="action-sub">严格计时</div>
+    </div>
+    <div class="action-card" data-sprint-action="redo">
+      <div class="icon-box blue"><i data-lucide="rotate-ccw" style="width:20px;height:20px"></i></div>
+      <div class="action-label">错题重做</div>
+      <div class="action-sub">查漏补缺</div>
+    </div>
+    <div class="action-card" data-sprint-action="error-report">
+      <div class="icon-box purple"><i data-lucide="pie-chart" style="width:20px;height:20px"></i></div>
+      <div class="action-label">错因报告</div>
+      <div class="action-sub">深度分析</div>
+    </div>
+  </div>
+
+  <!-- Weak KP ranking -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">薄弱知识点排名</span><span class="tag orange" id="weak-count-tag">0 项</span></div>
+    <div class="weak-rank-list" id="weak-rank-list"><div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:13px">暂无数据</div></div>
+  </div>
+
+
+</div>
+
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+(function() {
+API.initPage('sprint');
+
+var sprintPlan = null;
+var currentIntensity = 'high';
+
+(async () => {
+  var plan = await API.fetchJSON('备考计划.json');
+  if (!plan || !plan.exam_date) {
+    document.getElementById('sprint-days').textContent = '?';
+    document.getElementById('sprint-phase').textContent = '请先设置备考计划';
+  } else {
+    var today = new Date();
+    var examD = new Date(plan.exam_date + 'T00:00:00');
+    var remain = Math.max(0, Math.ceil((examD - today) / 86400000));
+    document.getElementById('sprint-days').textContent = remain;
+    var intensity = remain <= 7 ? 'extreme' : remain <= 14 ? 'high' : 'normal';
+    document.getElementById('sprint-phase').textContent = intensity === 'extreme' ? '极限冲刺期' : intensity === 'high' ? '强化冲刺期' : '稳步冲刺期';
+    currentIntensity = intensity;
+    document.querySelectorAll('.intensity-opt').forEach(function(el) { el.classList.toggle('active', el.dataset.level === intensity); });
+  }
+  try { sprintPlan = await Stats.generateSprintPlan(); } catch(e) { console.warn('[sprint] error:', e); }
+  renderMission();
+  renderWeakRank();
+  renderEmergency();
+  renderWeekProgress();
+  lucide.createIcons();
+})();
+
+function setIntensity(level) {
+  currentIntensity = level;
+  // Persist to 备考计划.json
+  API.fetchJSON('备考计划.json').then(function(plan) {
+    if (plan) { plan.intensity = level; API.writeFile('备考计划.json', JSON.stringify(plan, null, 2)); }
+  }).catch(function(){});
+  document.querySelectorAll('.intensity-opt').forEach(function(el) { el.classList.toggle('active', el.dataset.level === level); });
+  if (sprintPlan) {
+    sprintPlan.intensity = level;
+    var dq = Math.round((level === 'extreme' ? 5 : level === 'high' ? 3 : 2) * 8);
+    sprintPlan.daily_questions = dq;
+    // Sync today's mission so the intensity change reflects immediately in the mission card
+    if (sprintPlan.daily_schedule && sprintPlan.daily_schedule.length) {
+      var today = API.getLocalDate();
+      var tm = sprintPlan.daily_schedule.find(function(s) { return s.date === today; }) || sprintPlan.daily_schedule[0];
+      if (tm) { tm.intensity = level; tm.question_count = dq; }
+    }
+    renderMission();
+  }
+}
+
+function renderMission() {
+  if (!sprintPlan || !sprintPlan.daily_schedule || sprintPlan.daily_schedule.length === 0) {
+    document.getElementById('mission-area').innerHTML = '<div class="mission-card"><div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">暂无冲刺任务，请先完成练习建立能力画像</div></div>';
+    return;
+  }
+  var today = API.getLocalDate();
+  var todayMission = sprintPlan.daily_schedule.find(function(s) { return s.date === today; }) || sprintPlan.daily_schedule[0];
+  var html = '<div class="mission-card">';
+  html += '<div class="mission-date">' + esc(todayMission.date || today) + '</div>';
+  html += '<div class="mission-module">目标 ' + esc(todayMission.focus_module || '综合') + ' · ' + todayMission.question_count + '题</div>';
+  html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">复习 ' + todayMission.review_count + ' 题 · 强度：' + (todayMission.intensity === 'extreme' ? '极限' : todayMission.intensity === 'high' ? '强化' : '稳步') + '</div>';
+  if (todayMission.priority_kps && todayMission.priority_kps.length > 0) {
+    html += '<div class="mission-kps">';
+    todayMission.priority_kps.forEach(function(kp) { html += '<span class="tag blue">' + esc(kp) + '</span>'; });
+    html += '</div>';
+  }
+  html += '</div>';
+  document.getElementById('mission-area').innerHTML = html;
+}
+
+function renderWeakRank() {
+  if (!sprintPlan || !sprintPlan.weak_kps || sprintPlan.weak_kps.length === 0) { document.getElementById('weak-count-tag').textContent = '0 项'; return; }
+  document.getElementById('weak-count-tag').textContent = sprintPlan.weak_kps.length + ' 项';
+  var html = '';
+  sprintPlan.weak_kps.slice(0, 8).forEach(function(kp, i) {
+    var pct = Math.round(kp.proficiency * 100);
+    var cls = pct < 40 ? 'urgent' : pct < 55 ? 'warning' : 'normal';
+    html += '<div class="weak-rank-row" data-sprint-action="drill" data-module="' + API.escapeAttr(kp.module) + '" data-kp="' + API.escapeAttr(kp.kp) + '">';
+    html += '<div class="weak-rank-num ' + cls + '">' + (i + 1) + '</div>';
+    html += '<div class="weak-rank-info"><div class="weak-rank-name">' + esc(kp.kp) + '</div>';
+    html += '<div class="weak-rank-meta">' + esc(kp.module) + (kp.dominant_error ? ' · ' + kp.dominant_error.replace('错误', '') : '') + (kp.plateau ? ' · ⚠高原期' : '') + '</div></div>';
+    html += '<div class="weak-rank-pct ' + (pct < 40 ? 'text-red' : pct < 55 ? 'text-orange' : 'text-accent') + '">' + pct + '%</div>';
+    html += '</div>';
+  });
+  document.getElementById('weak-rank-list').innerHTML = html;
+}
+
+function renderWeekProgress() {
+  var area = document.getElementById('week-progress-area');
+  var tag = document.getElementById('week-progress-tag');
+  if (!area || !tag) return;
+  var days = ['一','二','三','四','五','六','日'];
+  var today = new Date();
+  var promises = [];
+  for (var i = 6; i >= 0; i--) {
+    var d = new Date(today); d.setDate(d.getDate() - i);
+    var ds = API.getLocalDate(d);
+    promises.push(API.fetchJSON('每日完成/' + ds + '.json').then(function(r) { return r; }).catch(function() { return null; }));
+  }
+  Promise.all(promises).then(function(results) {
+    var done = 0;
+    var html = '';
+    results.forEach(function(rec, i) {
+      var has = rec && rec.overall && rec.overall.score !== undefined;
+      if (has) done++;
+      var color = has ? 'var(--green)' : 'var(--border)';
+      html += '<div style="flex:1;text-align:center">';
+      html += '<div style="width:28px;height:28px;border-radius:8px;background:'+color+';margin:0 auto 4px;display:flex;align-items:center;justify-content:center">';
+      if (has) html += '<i data-lucide="check" style="width:14px;height:14px;color:#fff"></i>';
+      html += '</div>';
+      html += '<div style="font-size:10px;color:var(--text-secondary)">'+days[i]+'</div>';
+      html += '</div>';
+    });
+    area.innerHTML = html;
+    tag.textContent = done + '/7';
+    lucide.createIcons();
+  });
+}
+
+function renderEmergency() {
+  var section = document.getElementById('emergency-section');
+  var list = document.getElementById('emergency-list');
+  var count = document.getElementById('emergency-count');
+  if (!section || !list || !count) return;
+  if (!sprintPlan || !sprintPlan.emergency_review || sprintPlan.emergency_review.length === 0) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  count.textContent = sprintPlan.emergency_review.length + ' 项';
+  var html = '';
+  sprintPlan.emergency_review.slice(0, 5).forEach(function(kp) {
+    html += '<div class="recommendation" style="cursor:pointer" data-sprint-action="drill" data-module="" data-kp="' + API.escapeAttr(kp) + '">';
+    html += '<div style="display:flex;align-items:center;gap:10px"><div class="icon-box red"><i data-lucide="alert-circle" style="width:20px;height:20px"></i></div>';
+    html += '<div style="flex:1"><div style="font-size:14px;font-weight:600;color:var(--text)">' + esc(kp) + '</div><div style="font-size:11px;color:var(--text-secondary)">掌握度 < 40%，需紧急复习</div></div>';
+    html += '<i data-lucide="chevron-right" style="width:16px;height:16px;color:var(--border)"></i></div></div>';
+  });
+  list.innerHTML = html;
+}
+
+function drillKp(module, kp) {
+  localStorage.setItem('mp-target-module', module);
+  localStorage.setItem('mp-practice-date', API.getLocalDate());
+  localStorage.setItem('mp-practice-mode', 'direct');
+  if (kp) {
+    localStorage.setItem('mp-target-kp', kp);
+    localStorage.setItem('mp-focus-kp', kp);
+  } else {
+    localStorage.removeItem('mp-target-kp');
+    localStorage.removeItem('mp-focus-kp');
+  }
+  localStorage.setItem('mp-from-tool', 'sprint');
+  API.pushPage('practice-card');
+}
+
+function startSprintPractice() {
+  if (!sprintPlan || !sprintPlan.weak_kps || sprintPlan.weak_kps.length === 0) { API.toast('暂无薄弱知识点数据'); return; }
+  drillKp(sprintPlan.weak_kps[0].module, sprintPlan.weak_kps[0].kp);
+}
+function startSprintMock() { API.switchTab('exam'); }
+function startErrorRedo() { API.switchTab('wrongbook'); }
+
+async function regeneratePlan() {
+  API.toast('重新生成冲刺计划...');
+  try {
+    sprintPlan = await Stats.generateSprintPlan();
+    renderMission(); renderWeakRank(); renderEmergency();
+    lucide.createIcons(); API.toast('冲刺计划已更新');
+  } catch(e) { API.toast('生成失败：' + e.message); }
+}
+
+function esc(s) { return API._esc(s); }
+
+var _sprintRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:sprint', _sprintRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var target = e.target.closest('[data-sprint-action]');
+      if (!target || !root.contains(target)) return;
+      var action = target.getAttribute('data-sprint-action');
+      if (action === 'back') API.goBack();
+      else if (action === 'task') API.openTaskPanel();
+      else if (action === 'intensity') setIntensity(target.getAttribute('data-level'));
+      else if (action === 'regenerate') regeneratePlan();
+      else if (action === 'practice') startSprintPractice();
+      else if (action === 'mock') startSprintMock();
+      else if (action === 'redo') startErrorRedo();
+      else if (action === 'error-report') API.pushPage('error-report');
+      else if (action === 'drill') drillKp(target.getAttribute('data-module') || '', target.getAttribute('data-kp') || '');
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  }
+});
+})();
+</script>
+</body>
+</html>

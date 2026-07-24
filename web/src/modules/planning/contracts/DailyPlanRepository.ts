@@ -1,0 +1,8 @@
+import type { TransactionContext } from '@/capabilities/database/public';
+import type { CapabilityNodeId, ExamCycleId, InstantMs, JsonObject, LocalDate } from '@/kernel/public';
+
+export interface DailyPlanRecord { readonly id:string;readonly examCycleId:ExamCycleId;readonly planDate:LocalDate;readonly version:number;readonly status:'draft'|'active'|'superseded'|'completed'|'cancelled';readonly phase:string;readonly availableMinutes:number;readonly decisionSummary:string;readonly decisionFactors:JsonObject;readonly createdBy:'system'|'tutor_ai'|'user';readonly createdAt:InstantMs;readonly supersedesPlanId?:string; }
+export interface DailyPlanItemRecord { readonly id:string;readonly dailyPlanId:string;readonly capabilityNodeId:CapabilityNodeId;readonly reviewQueueItemId?:string;readonly itemType:'lecture'|'guided_practice'|'independent_practice'|'review'|'transfer';readonly sequence:number;readonly targetMinutes:number;readonly targetCount?:number;readonly exitCriteria:JsonObject;readonly reason:string;readonly status:'pending'|'in_progress'|'completed'|'skipped'|'cancelled';readonly actualMinutes:number; }
+export interface DailyPlanAggregate { readonly plan:DailyPlanRecord;readonly items:readonly DailyPlanItemRecord[]; }
+export interface DailyPlanRepository { findCurrent(examCycleId:ExamCycleId,planDate:LocalDate):Promise<DailyPlanAggregate|undefined>; replaceCurrent(next:DailyPlanAggregate,previous:DailyPlanRecord|undefined,context:TransactionContext):Promise<void>; updateItemByReviewQueueId(reviewQueueItemId:string,patch:DailyPlanItemStatusPatch,context:TransactionContext):Promise<DailyPlanItemRecord|undefined>; }
+export interface DailyPlanItemStatusPatch { readonly status:DailyPlanItemRecord['status']; readonly actualMinutes?:number; }

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 时政月报</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .digest-head { display:flex; align-items:center; gap:9px; }
+  .digest-head i { width:20px; height:20px; color:var(--accent); }
+  .digest-month { font-size: 18px; font-weight: 850; color: var(--text); line-height: 1.2; }
+  .digest-count { font-size: 12px; color: var(--text-secondary); margin-top: 5px; text-align:left; }
+  #digest-hero { text-align:left; }
+
+  .month-selector { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0; -webkit-overflow-scrolling: touch; }
+  .month-chip { padding: 8px 16px; border-radius: var(--radius-full); font-size: 13px; font-weight: 500; border: 1.5px solid var(--border); color: var(--text-secondary); cursor: pointer; transition: all .15s; white-space: nowrap; background: var(--surface); flex-shrink: 0; }
+  .month-chip:active { transform: scale(.96); }
+  .month-chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+  .news-card { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: 14px; padding: 14px; box-shadow: var(--card-shadow); margin-bottom: 10px; }
+  body.light .news-card { border-color:rgba(0,0,0,.035); }
+  .news-title { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.5; margin-top: 6px; }
+  .news-summary { font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin-top: 6px; }
+  .news-meta { font-size: 11px; color: var(--text-secondary); margin-top: 8px; display: flex; justify-content: space-between; align-items: center; }
+
+  .cat-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .cat-name { font-size: 14px; font-weight: 700; color: var(--text); }
+  .cat-count { font-size: 11px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar tool-navbar">
+    <button data-monthly-action="back"><i data-lucide="arrow-left"></i></button>
+    <span class="title">时政月报</span>
+    <button data-task-bell data-monthly-action="task" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+  </div>
+
+  <!-- Hero -->
+  <div class="hero-card" id="digest-hero">
+    <div class="digest-head"><i data-lucide="newspaper"></i><div class="digest-month" id="digest-month-label">--</div></div>
+    <div class="digest-count" id="digest-count-label">时政热点汇总</div>
+  </div>
+
+  <!-- Month selector -->
+  <div class="month-selector" id="month-selector"></div>
+
+  <!-- Content -->
+  <div id="digest-content">
+    <div style="text-align:center;padding:24px;color:var(--text-secondary);font-size:13px">加载中...</div>
+  </div>
+
+  <!-- Actions -->
+  <div class="tool-actions">
+    <button class="btn btn-primary btn-block" data-monthly-action="practice"><i data-lucide="pen-tool" style="width:16px;height:16px"></i> 时政练习</button>
+    <button class="btn btn-secondary btn-block" data-monthly-action="ai"><i data-lucide="sparkles" style="width:16px;height:16px"></i> AI解读</button>
+  </div>
+</div>
+
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+(function() {
+API.initPage('monthly-digest');
+
+var currentMonth = '';
+var digestData = null;
+
+var catColorMap = { '政治': 'red', '经济': 'orange', '社会': 'blue', '科技': 'purple', '文化': 'green', '法律': 'red', '外交': 'blue', '综合': 'blue' };
+var catIconMap = { '政治': 'landmark', '经济': 'trending-up', '社会': 'users', '科技': 'cpu', '文化': 'book-open', '法律': 'scale', '外交': 'globe', '综合': 'layers' };
+
+(async () => {
+  var now = new Date();
+  var months = [];
+  for (var i = 0; i < 6; i++) {
+    var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    var key = d.getFullYear() + '-' + (d.getMonth() + 1 < 10 ? '0' : '') + (d.getMonth() + 1);
+    months.push({ key: key, label: (d.getMonth() + 1) + '月', year: d.getFullYear(), month: d.getMonth() + 1 });
+  }
+
+  var selHtml = '';
+  months.forEach(function(m, i) {
+    selHtml += '<div class="month-chip' + (i === 0 ? ' active' : '') + '" data-monthly-action="month" data-key="' + m.key + '" data-year="' + m.year + '" data-month="' + m.month + '">' + m.label + '</div>';
+  });
+  document.getElementById('month-selector').innerHTML = selHtml;
+
+  currentMonth = months[0].key;
+  await loadDigest(months[0].year, months[0].month);
+  lucide.createIcons();
+})();
+
+function selectMonth(key, year, month) {
+  currentMonth = key;
+  document.querySelectorAll('.month-chip').forEach(function(c) { c.classList.toggle('active', c.dataset.key === key); });
+  loadDigest(year, month);
+}
+
+async function loadDigest(year, month) {
+  document.getElementById('digest-month-label').textContent = year + '年' + month + '月';
+  document.getElementById('digest-content').innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-secondary);font-size:13px">加载中...</div>';
+
+  try { digestData = await Stats.generateMonthlyDigest(year, month); } catch(e) { console.warn('[monthly-digest] error:', e); digestData = null; }
+  renderDigest();
+  lucide.createIcons();
+}
+
+function renderDigest() {
+  if (!digestData || !digestData.items || digestData.items.length === 0) {
+    document.getElementById('digest-count-label').textContent = '暂无数据';
+    document.getElementById('digest-content').innerHTML = '<div class="empty-state"><i data-lucide="inbox"></i><div style="margin-top:8px;font-size:14px">本月暂无时政热点</div><div style="font-size:12px;margin-top:4px">完成每日热点练习后，月报会自动汇总</div></div>';
+    lucide.createIcons();
+    return;
+  }
+
+  document.getElementById('digest-count-label').textContent = digestData.items.length + ' 条热点';
+
+  // Group by category
+  var categories = {};
+  digestData.items.forEach(function(item) {
+    var cat = item.category || '综合';
+    if (!categories[cat]) categories[cat] = [];
+    categories[cat].push(item);
+  });
+
+  var html = '';
+  Object.entries(categories).forEach(function([catName, items]) {
+    var cls = catColorMap[catName] || 'blue';
+    var icon = catIconMap[catName] || 'layers';
+    html += '<div style="margin-bottom:4px">';
+    html += '<div class="cat-header">';
+    html += '<div class="icon-box ' + cls + '"><i data-lucide="' + icon + '" style="width:14px;height:14px"></i></div>';
+    html += '<div class="cat-name">' + esc(catName) + '</div>';
+    html += '<div class="cat-count">' + items.length + ' 条</div>';
+    html += '</div>';
+
+    items.forEach(function(item) {
+      html += '<div class="news-card">';
+      if (item.tags && item.tags.length > 0) {
+        item.tags.forEach(function(t) { html += '<span class="tag ' + cls + '">' + esc(t) + '</span>'; });
+      }
+      html += '<div class="news-title">' + esc(item.title) + '</div>';
+      if (item.summary) html += '<div class="news-summary">' + esc(item.summary) + '</div>';
+      html += '<div class="news-meta"><span>' + esc(item.date || '') + '</span>';
+      if (item.source) html += '<span>' + esc(item.source) + '</span>';
+      html += '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  document.getElementById('digest-content').innerHTML = html;
+}
+
+async function generateDigest() {
+  API.toast('正在生成月报...');
+  var parts = currentMonth.split('-');
+  try {
+    digestData = await Stats.generateMonthlyDigest(parseInt(parts[0]), parseInt(parts[1]));
+    renderDigest();
+    lucide.createIcons();
+    API.toast('月报已更新');
+  } catch(e) { API.toast('生成失败'); }
+}
+
+function askAIAboutDigest() {
+  API.openAIChat('请解读本月时政热点，分析哪些是公考高频考点，给出备考建议。');
+}
+
+function practiceFromDigest() {
+  localStorage.setItem('mp-target-module', '常识判断');
+  localStorage.setItem('mp-target-kp', '时政热点');
+  localStorage.setItem('mp-focus-kp', '时政热点');
+  localStorage.setItem('mp-practice-date', API.getLocalDate());
+  localStorage.setItem('mp-practice-mode', 'direct');
+  localStorage.setItem('mp-from-tool', 'monthly-digest');
+  API.pushPage('practice-card');
+}
+
+function esc(s) { return API._esc(s); }
+var _monthlyRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:monthly-digest', _monthlyRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var target = e.target.closest('[data-monthly-action]');
+      if (!target || !root.contains(target)) return;
+      var action = target.getAttribute('data-monthly-action');
+      if (action === 'back') API.goBack();
+      else if (action === 'task') API.openTaskPanel();
+      else if (action === 'practice') practiceFromDigest();
+      else if (action === 'ai') askAIAboutDigest();
+      else if (action === 'month') selectMonth(target.getAttribute('data-key'), parseInt(target.getAttribute('data-year'), 10), parseInt(target.getAttribute('data-month'), 10));
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  }
+});
+})();
+</script>
+</body>
+</html>

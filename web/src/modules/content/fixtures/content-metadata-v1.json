@@ -1,0 +1,71 @@
+{
+  "manifest": {
+    "id": "content-metadata:core:v1",
+    "version": "1.0.0",
+    "status": "published",
+    "contentHash": "sha256:d04cf58c8d9067505cddc07db5efed396335b5be778f6caff079ffe497345ec8",
+    "createdAt": 1784016000000
+  },
+  "payload": {
+    "schemaVersions": [
+      {
+        "id": "content-schema:document:v1",
+        "schemaCode": "content.document",
+        "documentType": "lecture",
+        "version": "1.0.0",
+        "status": "published",
+        "createdAt": 1784016000000,
+        "schema": {
+          "$id": "content.document.v1",
+          "type": "object",
+          "required": ["schemaVersion", "blocks"],
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "const": "content.v1" },
+            "blocks": { "type": "array", "minItems": 1 }
+          }
+        }
+      },
+      {
+        "id": "content-schema:question-single-choice:v1",
+        "schemaCode": "question.single_choice",
+        "documentType": "question",
+        "version": "1.0.0",
+        "status": "published",
+        "createdAt": 1784016000000,
+        "schema": {
+          "$id": "question.single_choice.v1",
+          "type": "object",
+          "required": ["templateCode", "schemaVersion", "prompt", "options", "correctOptionId", "explanation"],
+          "additionalProperties": false,
+          "properties": {
+            "templateCode": { "const": "single_choice" },
+            "schemaVersion": { "const": "question.single_choice.v1" },
+            "material": { "$ref": "content.document.v1" },
+            "prompt": { "$ref": "content.document.v1" },
+            "options": { "type": "array", "minItems": 2 },
+            "correctOptionId": { "type": "string", "minLength": 1 },
+            "explanation": { "$ref": "content.document.v1" }
+          }
+        }
+      }
+    ],
+    "questionTemplateVersions": [
+      {
+        "id": "question-template:single-choice:v1",
+        "templateCode": "single_choice",
+        "version": "1.0.0",
+        "rendererCode": "single_choice",
+        "contentSchemaVersionId": "content-schema:question-single-choice:v1",
+        "status": "published",
+        "createdAt": 1784016000000,
+        "config": {
+          "answerMode": "single",
+          "minOptions": 2,
+          "maxOptions": 8,
+          "regions": ["material", "prompt", "options", "explanation"]
+        }
+      }
+    ]
+  }
+}

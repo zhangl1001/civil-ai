@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 面试模拟</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .flex-col-gap { display: flex; flex-direction: column; gap: 14px; }
+  .hero-icon-text { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .hero-icon-text i { width: 32px; height: 32px; color: var(--purple); }
+  .hero-title { font-size: 28px; font-weight: 800; color: var(--purple); line-height: 1; }
+  .hero-subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 6px; }
+  .hero-stats { display: flex; justify-content: center; gap: 32px; margin-top: 16px; }
+  .hero-stat-val { font-size: 22px; font-weight: 700; }
+  .hero-stat-label { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+  .interview-type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .type-card { background: var(--surface); border-radius: var(--radius-lg); padding: 20px 16px; box-shadow: var(--card-shadow); cursor: pointer; transition: all .15s; border: 1.5px solid rgba(255,255,255,.035); text-align: center; }
+  body.light .type-card { border-color:rgba(0,0,0,.035); }
+  .type-card:active { transform: scale(.97); }
+  .type-card.selected { border-color: var(--purple); background: var(--purple-soft); }
+  .type-card .icon-box { width: 48px; height: 48px; margin: 0 auto 10px; }
+  .type-label { font-size: 15px; font-weight: 700; color: var(--text); }
+  .type-sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+  .question-types { display: flex; flex-wrap: wrap; gap: 8px; }
+  .qtype-chip { padding: 8px 16px; border-radius: var(--radius-full); font-size: 13px; font-weight: 500; border: 1.5px solid var(--border); color: var(--text-secondary); cursor: pointer; transition: all .15s; background: var(--surface); }
+  .qtype-chip.active { border-color: var(--purple); background: var(--purple-soft); color: var(--purple); }
+
+  .score-card { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--card-shadow); }
+  body.light .score-card { border-color:rgba(0,0,0,.035); }
+  .score-dim { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .score-dim:last-child { margin-bottom: 0; }
+  .score-dim-label { width: 48px; font-size: 12px; font-weight: 600; color: var(--text-secondary); flex-shrink: 0; }
+  .score-dim-track { flex: 1; height: 20px; background: var(--border); border-radius: 10px; overflow: hidden; }
+  .score-dim-fill { height: 100%; border-radius: 10px; transition: width .4s; }
+  .score-dim-val { width: 36px; text-align: right; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+
+  .history-card { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--card-shadow); display: flex; align-items: center; gap: 12px; cursor: pointer; transition: transform .15s; }
+  body.light .history-card { border-color:rgba(0,0,0,.035); }
+  .history-card:active { transform: scale(.98); }
+
+  .timer-display { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text); }
+  .timer-display.warning { color: var(--orange); }
+  .timer-display.danger { color: var(--red); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+
+  .answer-input { width: 100%; min-height: 120px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; font-size: 14px; color: var(--text); resize: vertical; font-family: inherit; }
+  .answer-input:focus { outline: none; border-color: var(--purple); }
+  body.light .answer-input { background: var(--surface2); }
+
+  .score-ring { width: 80px; height: 80px; }
+  .score-ring .score-value { font-size: 22px; }
+
+  .q-card { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--card-shadow); }
+  body.light .q-card { border-color:rgba(0,0,0,.035); }
+  .q-type-tag { display: inline-block; padding: 2px 8px; border-radius: var(--radius-full); font-size: 11px; font-weight: 600; }
+  .q-text { font-size: 15px; color: var(--text); line-height: 1.7; margin-top: 8px; }
+  .q-hint { font-size: 12px; color: var(--text-secondary); margin-top: 8px; line-height: 1.5; }
+
+  .answer-review { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--card-shadow); margin-bottom: 10px; }
+  body.light .answer-review { border-color:rgba(0,0,0,.035); }
+  .answer-review-q { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .answer-review-a { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+  .answer-review-score { font-size: 14px; font-weight: 700; color: var(--purple); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar tool-navbar">
+    <button data-interview-action="back"><i data-lucide="arrow-left"></i></button>
+    <span class="title">面试模拟</span>
+    <button data-task-bell data-interview-action="task" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+  </div>
+
+  <!-- Setup view -->
+  <div id="setup-view" class="flex-col-gap">
+    <!-- Hero -->
+    <div class="hero-card purple">
+      <div class="hero-icon-text">
+        <i data-lucide="mic"></i>
+        <div class="hero-title">面试模拟</div>
+      </div>
+      <div class="hero-subtitle">结构化面试 · 情境训练 · AI参考点评</div>
+      <div class="hero-stats">
+        <div style="text-align:center"><span class="hero-stat-val" style="color:var(--purple)" id="total-sessions">0</span><div class="hero-stat-label">练习次数</div></div>
+        <div style="text-align:center"><span class="hero-stat-val" style="color:var(--green)" id="avg-score">-</span><div class="hero-stat-label">平均得分</div></div>
+      </div>
+    </div>
+
+    <!-- Interview type -->
+    <div>
+      <div class="sec-hdr"><span class="sec-title">面试类型</span></div>
+      <div class="interview-type-grid">
+        <div class="type-card selected" data-interview-action="type" data-type="structured">
+          <div class="icon-box purple"><i data-lucide="user" style="width:20px;height:20px"></i></div>
+          <div class="type-label">结构化面试</div>
+          <div class="type-sub">单人逐题作答</div>
+        </div>
+        <div class="type-card" data-interview-action="type" data-type="group">
+          <div class="icon-box blue"><i data-lucide="users" style="width:20px;height:20px"></i></div>
+          <div class="type-label">无领导小组</div>
+          <div class="type-sub">多人讨论模拟</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Question types -->
+    <div>
+      <div class="sec-hdr"><span class="sec-title">题型选择</span><span class="sec-action" data-interview-action="toggle-all">全选/取消</span></div>
+      <div class="question-types" id="qtype-area">
+        <div class="qtype-chip active" data-type="综合分析" data-interview-action="qtype">综合分析</div>
+        <div class="qtype-chip active" data-type="计划组织" data-interview-action="qtype">计划组织</div>
+        <div class="qtype-chip active" data-type="人际沟通" data-interview-action="qtype">人际沟通</div>
+        <div class="qtype-chip active" data-type="应急应变" data-interview-action="qtype">应急应变</div>
+        <div class="qtype-chip active" data-type="岗位匹配" data-interview-action="qtype">岗位匹配</div>
+      </div>
+    </div>
+
+    <!-- Difficulty -->
+    <div>
+      <div class="sec-hdr"><span class="sec-title">难度设定</span></div>
+      <div class="intensity-bar">
+        <div class="intensity-opt" data-level="easy" data-interview-action="difficulty">基础</div>
+        <div class="intensity-opt active" data-level="medium" data-interview-action="difficulty">标准</div>
+        <div class="intensity-opt" data-level="hard" data-interview-action="difficulty">进阶</div>
+      </div>
+    </div>
+
+    <!-- Start button -->
+    <button class="btn btn-primary btn-block" style="height:48px;font-size:16px;background:var(--purple)" data-interview-action="start">
+      <i data-lucide="play" style="width:18px;height:18px"></i> 开始模拟
+    </button>
+
+    <!-- History -->
+    <div>
+      <div class="sec-hdr"><span class="sec-title">练习记录</span></div>
+      <div id="history-area">
+        <div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">暂无面试练习记录</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interview session view -->
+  <div id="session-view" class="flex-col-gap" style="display:none">
+    <!-- Timer -->
+    <div style="text-align:center">
+      <div class="timer-display" id="timer">03:00</div>
+      <div style="font-size:12px;color:var(--text-secondary)" id="timer-label">思考时间</div>
+    </div>
+
+    <!-- Question display -->
+    <div class="q-card" id="question-card">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:12px;color:var(--purple);font-weight:600" id="q-num">第 1 题</span>
+        <span class="q-type-tag" id="q-type-tag" style="background:var(--purple-soft);color:var(--purple)">综合分析</span>
+      </div>
+      <div class="q-text" id="q-text">加载中...</div>
+      <div class="q-hint" id="q-hint"></div>
+    </div>
+
+    <!-- Answer input -->
+    <div>
+      <textarea class="answer-input" id="answer-input" placeholder="在此输入你的作答..."></textarea>
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary" style="flex:1" data-interview-action="skip"><i data-lucide="skip-forward" style="width:14px;height:14px"></i> 跳过</button>
+      <button class="btn btn-primary" style="flex:2;background:var(--purple)" data-interview-action="submit"><i data-lucide="send" style="width:14px;height:14px"></i> 提交作答</button>
+    </div>
+  </div>
+
+  <!-- Result view -->
+  <div id="result-view" class="flex-col-gap" style="display:none">
+    <div style="text-align:center">
+      <div class="score-ring" id="result-ring" style="margin:0 auto">
+        <svg viewBox="0 0 80 80"><circle cx="40" cy="40" r="34" stroke="var(--border)" stroke-width="6" fill="none"/><circle cx="40" cy="40" r="34" stroke="var(--purple)" stroke-width="6" fill="none" stroke-dasharray="213.6" stroke-dashoffset="213.6" stroke-linecap="round" transform="rotate(-90 40 40)" id="result-circle"/></svg>
+        <span class="score-value" id="result-score">0</span>
+      </div>
+      <div style="font-size:14px;color:var(--text-secondary);margin-top:6px">综合评分</div>
+    </div>
+
+    <!-- Score breakdown -->
+    <div class="score-card" id="score-breakdown"></div>
+
+    <!-- Answer review -->
+    <div>
+      <div class="sec-hdr"><span class="sec-title">作答回顾</span></div>
+      <div id="answer-review-area"></div>
+    </div>
+
+    <!-- Feedback -->
+    <div id="feedback-area"></div>
+
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-secondary btn-block" data-interview-action="setup"><i data-lucide="arrow-left" style="width:14px;height:14px"></i> 返回</button>
+      <button class="btn btn-primary btn-block" style="background:var(--purple)" data-interview-action="start"><i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> 再来一次</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+(function() {
+API.initPage('interview');
+
+var interviewType = 'structured';
+var difficulty = 'medium';
+var selectedQTypes = ['综合分析','计划组织','人际沟通','应急应变','岗位匹配'];
+var timerInterval = null;
+var timeLeft = 180;
+var currentQ = 0;
+var questions = [];
+var answers = [];
+var profile = null;
+var usedIndices = [];
+
+// ── 内联题库 ─────────────────────────────────────────────
+var INTERVIEW_BANK = {
+  '综合分析': [
+    { q: '有人说"细节决定成败"，也有人说"成大事者不拘小节"，你怎么看？', hint: '可从辩证角度分析，结合具体事例说明不同情境下的适用性。' },
+    { q: '近年来，"内卷"成为社会热词，请谈谈你对内卷现象的理解和看法。', hint: '分析内卷的成因、影响，提出个人和社会层面的应对思路。' },
+    { q: '有人说"读书无用论"，也有人说"知识改变命运"，你怎么看？', hint: '辩证分析，结合时代背景和具体案例。' },
+    { q: '当前很多年轻人选择"躺平"，你如何看待这一现象？', hint: '从社会压力、价值观多元、个人选择等角度分析。' },
+    { q: '有人说"成功需要冒险"，也有人说"稳中求进才是正道"，你怎么看？', hint: '辩证分析，结合不同领域和阶段的适用性。' },
+    { q: '如何看待"网红经济"的兴起？它对社会有哪些积极和消极影响？', hint: '从经济发展、文化传播、社会价值观等角度分析。' },
+    { q: '有人说"远亲不如近邻"，也有人说"距离产生美"，你怎么看？', hint: '从人际关系、现代生活方式等角度辩证分析。' },
+    { q: '如何看待人工智能对就业市场的影响？', hint: '分析机遇与挑战，提出个人和社会的应对策略。' },
+    { q: '有人说"吃亏是福"，也有人说"不能总吃亏"，你怎么看？', hint: '辩证分析，区分不同情境下的"吃亏"含义。' },
+    { q: '如何看待当前社会上的"容貌焦虑"现象？', hint: '从社会审美、媒体影响、自我认知等角度分析。' },
+  ],
+  '计划组织': [
+    { q: '领导让你组织一次单位内部的读书分享活动，你会怎么做？', hint: '按照事前准备、事中实施、事后总结的逻辑展开。' },
+    { q: '你所在的社区要开展一次环保宣传活动，请制定活动方案。', hint: '明确目标、对象、形式、预算、效果评估等要素。' },
+    { q: '单位要组织一次新员工培训，你会如何策划？', hint: '从需求调研、内容设计、方式选择、效果评估等方面展开。' },
+    { q: '领导让你组织一次跨部门的业务交流会，你会怎么做？', hint: '注意跨部门协调的难点，强调沟通和目标对齐。' },
+    { q: '社区要举办"邻里节"活动，请制定方案。', hint: '注重居民参与、活动多样、增进邻里关系。' },
+    { q: '单位要开展一次安全生产月活动，你会如何组织？', hint: '突出安全意识、隐患排查、应急演练等关键环节。' },
+    { q: '领导让你组织一次外出调研活动，你会怎么做？', hint: '明确调研目的、对象、路线、成果输出等。' },
+    { q: '单位要举办年度总结表彰大会，请制定方案。', hint: '注重仪式感、榜样引领、凝聚士气。' },
+    { q: '社区要开展一次老年人健康体检活动，你会如何组织？', hint: '关注老年人特点，注重便利性和服务细节。' },
+    { q: '领导让你策划一次单位团建活动，你会怎么做？', hint: '兼顾团队协作、放松身心、预算控制。' },
+  ],
+  '人际沟通': [
+    { q: '你的同事经常在背后说你的坏话，你怎么办？', hint: '先反思自身，再主动沟通，以工作为重。' },
+    { q: '领导安排你和一位与你有矛盾的同事合作完成项目，你怎么办？', hint: '以大局为重，主动化解矛盾，建立良好合作关系。' },
+    { q: '你的下属工作能力很强但态度傲慢，经常不配合团队工作，你怎么办？', hint: '肯定能力，指出问题，引导融入团队。' },
+    { q: '你新到一个单位，发现同事们对你很冷淡，你怎么办？', hint: '主动融入、做好本职、以诚待人。' },
+    { q: '你的领导做出了一个你认为不正确的决定，你怎么办？', hint: '先理解意图，私下沟通建议，最终服从大局。' },
+    { q: '你和同事对工作方案有严重分歧，你怎么办？', hint: '充分沟通、求同存异、以事实和数据说话。' },
+    { q: '群众来办事时情绪激动，对你大声指责，你怎么办？', hint: '保持冷静、倾听诉求、依法依规处理。' },
+    { q: '你的同事工作失误却把责任推给你，你怎么办？', hint: '先解决问题，再澄清事实，维护团队和谐。' },
+    { q: '你的朋友找你帮忙走后门办事，你怎么办？', hint: '坚持原则、委婉拒绝、说明原因。' },
+    { q: '你发现同事在工作中存在违规行为，你怎么办？', hint: '先确认事实，视情况提醒或上报，以制度为准。' },
+  ],
+  '应急应变': [
+    { q: '你正在主持一个重要会议，突然停电了，你怎么办？', hint: '保持镇定、安抚参会者、启动应急预案。' },
+    { q: '你在窗口值班时，一位群众突然晕倒，你怎么办？', hint: '立即施救、拨打急救电话、维护秩序、报告领导。' },
+    { q: '网上出现关于你单位的负面舆情，领导让你处理，你怎么办？', hint: '快速核实、及时回应、正面引导、总结改进。' },
+    { q: '你负责的项目在截止日期前发现重大问题，你怎么办？', hint: '评估影响、及时上报、制定补救方案、调整计划。' },
+    { q: '暴雨导致你负责的社区出现内涝，你怎么办？', hint: '启动应急响应、组织转移、协调救援、灾后恢复。' },
+    { q: '你在执法过程中遇到暴力抗法，你怎么办？', hint: '保持克制、依法处置、请求支援、保护自身安全。' },
+    { q: '单位系统突然崩溃，大量群众排队等待办理业务，你怎么办？', hint: '安抚群众、启动备用方案、手工办理、加快修复。' },
+    { q: '你正在接待上级检查时，突然接到群众投诉电话，你怎么办？', hint: '礼貌接听、记录诉求、安排后续处理、不影响检查。' },
+    { q: '你组织的外出活动中，有参与者走失了，你怎么办？', hint: '立即组织寻找、联系本人、报告领导、启动应急预案。' },
+    { q: '你负责的文件在提交前发现数据有误，但截止时间临近，你怎么办？', hint: '评估错误影响、快速修正、如实上报、吸取教训。' },
+  ],
+  '岗位匹配': [
+    { q: '你为什么报考公务员？', hint: '结合个人理想、能力匹配、服务意愿真诚回答。' },
+    { q: '你认为自己有哪些优势和不足？', hint: '优势要具体，不足要真诚且有改进措施。' },
+    { q: '如果这次没有被录取，你怎么办？', hint: '正确面对、总结经验、继续努力、不轻言放弃。' },
+    { q: '你如何看待加班？', hint: '理性看待、效率优先、必要时愿意付出。' },
+    { q: '你希望在一个什么样的团队中工作？', hint: '描述积极向上的团队氛围，体现合作精神。' },
+    { q: '请谈谈你最有成就感的一件事。', hint: '选择有代表性的经历，突出过程和收获。' },
+    { q: '你如何看待基层工作？', hint: '认识到基层的重要性，表达扎根基层的决心。' },
+    { q: '你的职业规划是什么？', hint: '短期适应岗位、中期提升能力、长期服务群众。' },
+    { q: '你如何理解"为人民服务"？', hint: '结合岗位实际，体现真诚的服务意识。' },
+    { q: '你认为自己适合什么岗位？为什么？', hint: '结合自身特长和岗位需求，有理有据。' },
+  ],
+};
+
+// ── 随机选题（不重复） ──────────────────────────────────────
+function pickQuestions(count) {
+  var pool = [];
+  var types = selectedQTypes.length > 0 ? selectedQTypes : ['综合分析'];
+  types.forEach(function(t) {
+    var bank = INTERVIEW_BANK[t] || [];
+    bank.forEach(function(item, idx) {
+      pool.push({ type: t, q: item.q, hint: item.hint, bankIdx: t + '-' + idx });
+    });
+  });
+
+  // Shuffle
+  for (var i = pool.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+  }
+
+  // Prefer unused questions
+  var fresh = pool.filter(function(p) { return usedIndices.indexOf(p.bankIdx) < 0; });
+  var chosen = fresh.length >= count ? fresh.slice(0, count) : pool.slice(0, count);
+  chosen.forEach(function(c) { usedIndices.push(c.bankIdx); });
+  // Reset if all used
+  if (usedIndices.length >= pool.length) usedIndices = [];
+
+  return chosen;
+}
+
+// ── 启发式评分 ──────────────────────────────────────────────
+function scoreAnswer(answer, question) {
+  if (!answer || answer.trim().length === 0) {
+    return { content: 1, expression: 1, logic: 1, total: 3, feedback: '未作答' };
+  }
+  var len = answer.length;
+  var hasStructure = /首先|其次|再次|最后|第一|第二|第三|一方面|另一方面/.test(answer);
+  var hasExample = /比如|例如|举例|案例|经验|经历/.test(answer);
+  var hasSummary = /总之|综上|因此|所以|总的来说/.test(answer);
+
+  // Content score (1-5)
+  var content = 2;
+  if (len > 50) content++;
+  if (len > 150) content++;
+  if (hasExample) content++;
+  if (content > 5) content = 5;
+
+  // Expression score (1-5)
+  var expression = 2;
+  if (len > 30) expression++;
+  if (hasStructure) expression++;
+  if (len > 100 && hasStructure) expression++;
+  if (expression > 5) expression = 5;
+
+  // Logic score (1-5)
+  var logic = 2;
+  if (hasStructure) logic++;
+  if (hasSummary) logic++;
+  if (hasExample && hasStructure) logic++;
+  if (logic > 5) logic = 5;
+
+  var total = content + expression + logic;
+  var feedback = '';
+  if (total >= 12) feedback = '作答优秀，内容充实、条理清晰、逻辑严密。';
+  else if (total >= 9) feedback = '作答良好，建议增加具体案例和总结提升。';
+  else if (total >= 6) feedback = '作答一般，建议加强结构化表达，多用"首先、其次"等逻辑词，并补充实例。';
+  else feedback = '作答有待提升，建议：1) 充实内容 2) 使用结构化表达 3) 增加实例和总结。';
+
+  return { content: content, expression: expression, logic: logic, total: total, feedback: feedback };
+}
+
+// ── 初始化 ──────────────────────────────────────────────
+(async () => {
+  try {
+    profile = await API.fetchJSON('面试画像.json');
+    if (!profile) profile = { sessions: [] };
+    if (!profile.sessions) profile.sessions = [];
+
+    document.getElementById('total-sessions').textContent = profile.sessions.length;
+    var scores = profile.sessions.filter(function(s) { return s.total_score; }).map(function(s) { return s.total_score; });
+    if (scores.length > 0) {
+      var avg = Math.round(scores.reduce(function(a,b) { return a+b; }, 0) / scores.length);
+      document.getElementById('avg-score').textContent = avg + '/15';
+    }
+    renderHistory();
+  } catch(e) {
+    profile = { sessions: [] };
+    API.pageError('interview init', e, '面试数据加载失败，已进入空白训练模式');
+  }
+  lucide.createIcons();
+})();
+
+function selectType(el, type) {
+  interviewType = type;
+  document.querySelectorAll('.type-card').forEach(function(c) { c.classList.remove('selected'); });
+  el.classList.add('selected');
+}
+
+function toggleQType(el) {
+  el.classList.toggle('active');
+  selectedQTypes = Array.from(document.querySelectorAll('.qtype-chip.active')).map(function(c) { return c.dataset.type; });
+}
+
+function toggleAllQTypes() {
+  var allActive = document.querySelectorAll('.qtype-chip.active').length === 5;
+  document.querySelectorAll('.qtype-chip').forEach(function(c) { c.classList.toggle('active', !allActive); });
+  selectedQTypes = allActive ? [] : ['综合分析','计划组织','人际沟通','应急应变','岗位匹配'];
+}
+
+function setDiff(level) {
+  difficulty = level;
+  document.querySelectorAll('.intensity-opt').forEach(function(el) { el.classList.toggle('active', el.dataset.level === level); });
+}
+
+// ── 开始面试 ──────────────────────────────────────────────
+function startInterview() {
+  currentQ = 0;
+  answers = [];
+  questions = pickQuestions(3);
+  timeLeft = 180;
+
+  document.getElementById('setup-view').style.display = 'none';
+  document.getElementById('session-view').style.display = 'flex';
+  document.getElementById('result-view').style.display = 'none';
+
+  showCurrentQuestion();
+  startTimer();
+  lucide.createIcons();
+}
+
+function showCurrentQuestion() {
+  var q = questions[currentQ];
+  document.getElementById('q-num').textContent = '第 ' + (currentQ + 1) + ' 题 / 共 ' + questions.length + ' 题';
+  document.getElementById('q-type-tag').textContent = q.type;
+  document.getElementById('q-text').textContent = q.q;
+  document.getElementById('q-hint').textContent = '提示：' + q.hint;
+  document.getElementById('answer-input').value = '';
+  document.getElementById('answer-input').focus();
+}
+
+function startAIInterview() {
+  var types = selectedQTypes.length > 0 ? selectedQTypes.join('、') : '综合分析';
+  API.openAIChat('我需要进行面试模拟练习，请作为面试官对我进行结构化面试。题型涵盖' + types + '。先出第一题，等我作答后追问，然后评分。评分维度：内容(1-5)、表达(1-5)、综合(1-5)。');
+}
+
+function skipQuestion() {
+  answers.push({ skipped: true, answer: '', question: questions[currentQ] });
+  currentQ++;
+  if (currentQ >= questions.length) {
+    showResults();
+  } else {
+    showCurrentQuestion();
+    timeLeft = 180;
+    startTimer();
+  }
+}
+
+function submitAnswer() {
+  var text = document.getElementById('answer-input').value.trim();
+  if (!text) { API.toast('请输入作答内容'); return; }
+
+  answers.push({ skipped: false, answer: text, question: questions[currentQ] });
+  currentQ++;
+
+  if (currentQ >= questions.length) {
+    showResults();
+  } else {
+    showCurrentQuestion();
+    timeLeft = 180;
+    startTimer();
+  }
+}
+
+function startTimer() {
+  clearInterval(timerInterval);
+  updateTimerDisplay();
+  timerInterval = setInterval(function() {
+    timeLeft--;
+    updateTimerDisplay();
+    if (timeLeft <= 0) {
+      clearInterval(timerInterval);
+      API.toast('思考时间到，请尽快作答！');
+    }
+  }, 1000);
+}
+
+function updateTimerDisplay() {
+  var min = Math.floor(timeLeft / 60);
+  var sec = timeLeft % 60;
+  var display = document.getElementById('timer');
+  if (!display) return;
+  display.textContent = (min < 10 ? '0' : '') + min + ':' + (sec < 10 ? '0' : '') + sec;
+  display.className = 'timer-display' + (timeLeft <= 30 ? ' danger' : timeLeft <= 60 ? ' warning' : '');
+}
+
+// ── 结果展示 ──────────────────────────────────────────────
+function showResults() {
+  clearInterval(timerInterval);
+  document.getElementById('session-view').style.display = 'none';
+  document.getElementById('result-view').style.display = 'flex';
+
+  // Score area: placeholder while AI grades (no local scoring)
+  document.getElementById('result-score').textContent = '?';
+  document.getElementById('score-breakdown').innerHTML = '<div style="text-align:center;color:var(--text-secondary);font-size:13px;padding:16px">AI 正在给出训练参考评分，结果保存到面试画像和每日统计</div>';
+
+  // Answer review (no local score — AI grades via grade_interview)
+  var reviewHtml = '';
+  var reviewText = '';
+  answers.forEach(function(a, i) {
+    reviewHtml += '<div class="answer-review">';
+    reviewHtml += '<div class="answer-review-q">第 ' + (i + 1) + ' 题：' + esc(a.question ? a.question.q : '') + '</div>';
+    if (a.skipped) {
+      reviewHtml += '<div class="answer-review-a" style="color:var(--orange)">已跳过</div>';
+    } else {
+      reviewHtml += '<div class="answer-review-a">' + esc(a.answer) + '</div>';
+    }
+    reviewHtml += '</div>';
+    reviewText += '第' + (i+1) + '题：' + (a.question ? a.question.q : '') + '\n我的作答：' + (a.skipped ? '（跳过）' : a.answer) + '\n\n';
+  });
+  document.getElementById('answer-review-area').innerHTML = reviewHtml;
+
+  // Feedback placeholder + trigger AI grading via grade_interview tool
+  document.getElementById('feedback-area').innerHTML =
+    '<div class="recommendation" style="border-left-color:var(--purple)"><div class="rec-body">已提交 AI 参考评分，请在 AI 对话框查看结果。分数仅用于训练复盘，已通过 grade_interview 工具保存到面试画像和每日统计。</div></div>' +
+    '<button class="btn btn-secondary btn-block" style="margin-top:8px" data-interview-action="deep-review"><i data-lucide="sparkles" style="width:14px;height:14px"></i> AI深度点评</button>';
+
+  var typeLabel = interviewType === 'structured' ? '结构化' : '无领导';
+  var msg = '请对以下面试模拟作答进行评分，使用 grade_interview 工具保存评分。\n面试类型：' + typeLabel + '，共' + answers.length + '题。\n\n' + reviewText + '\n评分维度：内容(1-5)、表达(1-5)、逻辑(1-5)。请用 grade_interview 工具传入 interview_type="' + typeLabel + '"、question_count=' + answers.length + '、scores{content,expression,logic} 和 feedback。\n\n评分可信度要求：' + API.Business.scoreTrust('interview').requirements;
+  API.openAIChat(msg, { freshSession: true });
+
+  lucide.createIcons();
+}
+
+function saveSession(totalScore, content, expression, logic) {
+  if (!profile) profile = { sessions: [] };
+  if (!profile.sessions) profile.sessions = [];
+
+  profile.sessions.push({
+    date: API.getLocalDate(),
+    type: interviewType === 'structured' ? '结构化' : '无领导',
+    question_count: questions.length,
+    total_score: totalScore,
+    scores: { content: content, expression: expression, logic: logic },
+  });
+
+  // Keep last 20 sessions
+  if (profile.sessions.length > 20) profile.sessions = profile.sessions.slice(-20);
+
+  API.fetchJSON('面试画像.json').then(function(existing) {
+    var toSave = existing || {};
+    // 过滤旧版本可能写入的示例记录，只持久化真实 session
+    toSave.sessions = profile.sessions.filter(function(s){ return !s._demo; });
+    API.writeFile('面试画像.json', JSON.stringify(toSave)).catch(function(e) {
+      API.pageError('interview save', e, '面试记录保存失败');
+    });
+  }).catch(function() {
+    profile.sessions = profile.sessions.filter(function(s){ return !s._demo; });
+    API.writeFile('面试画像.json', JSON.stringify(profile)).catch(function(e) {
+      API.pageError('interview save fallback', e, '面试记录保存失败');
+    });
+  });
+}
+
+function askAIDeepReview() {
+  var reviewText = '';
+  answers.forEach(function(a, i) {
+    reviewText += '第' + (i+1) + '题：' + (a.question ? a.question.q : '') + '\n';
+    reviewText += '我的作答：' + (a.skipped ? '（跳过）' : a.answer) + '\n';
+    reviewText += '评分：内容' + (a.score ? a.score.content : '-') + ' 表达' + (a.score ? a.score.expression : '-') + ' 逻辑' + (a.score ? a.score.logic : '-') + '\n\n';
+  });
+  API.openAIChat('请对我的面试模拟作答进行深度点评：\n\n' + reviewText + '\n请从以下维度详细分析：1) 内容是否充实有深度 2) 表达是否流畅有条理 3) 逻辑是否严密 4) 有哪些亮点和不足 5) 具体改进建议。');
+}
+
+function backToSetup() {
+  document.getElementById('setup-view').style.display = 'flex';
+  document.getElementById('session-view').style.display = 'none';
+  document.getElementById('result-view').style.display = 'none';
+
+  // Refresh stats
+  document.getElementById('total-sessions').textContent = profile.sessions.length;
+  var scores = profile.sessions.filter(function(s) { return s.total_score; }).map(function(s) { return s.total_score; });
+  if (scores.length > 0) {
+    var avg = Math.round(scores.reduce(function(a,b) { return a+b; }, 0) / scores.length);
+    document.getElementById('avg-score').textContent = avg + '/15';
+  }
+  renderHistory();
+  lucide.createIcons();
+}
+
+function renderHistory() {
+  if (!profile || !profile.sessions || profile.sessions.length === 0) {
+    document.getElementById('history-area').innerHTML = '<div class="empty-state" style="padding:22px 12px"><i data-lucide="mic"></i><div style="margin-top:8px;font-size:14px">暂无面试练习记录</div><div style="font-size:12px;margin-top:4px">完成一次模拟后会自动生成复盘</div></div>';
+    lucide.createIcons();
+    return;
+  }
+  var html = '';
+  profile.sessions.slice(-5).reverse().forEach(function(s) {
+    var total = s.total_score || 0;
+    html += '<div class="history-card" style="margin-bottom:8px">';
+    html += '<div class="icon-box purple"><i data-lucide="mic" style="width:18px;height:18px"></i></div>';
+    html += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(s.date || '未知日期') + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary)">' + (s.question_count || 0) + ' 题 · ' + (s.type || '结构化') + '</div></div>';
+    html += '<div style="font-size:16px;font-weight:700;color:var(--purple);flex-shrink:0">' + total + '/15</div>';
+    html += '</div>';
+  });
+  document.getElementById('history-area').innerHTML = html;
+}
+
+function esc(s) { return API._esc(s); }
+var _interviewRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:interview', _interviewRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var target = e.target.closest('[data-interview-action]');
+      if (!target || !root.contains(target)) return;
+      var action = target.getAttribute('data-interview-action');
+      if (action === 'back') API.goBack(); else if (action === 'task') API.openTaskPanel();
+      else if (action === 'type') selectType(target, target.getAttribute('data-type'));
+      else if (action === 'toggle-all') toggleAllQTypes(); else if (action === 'qtype') toggleQType(target);
+      else if (action === 'difficulty') setDiff(target.getAttribute('data-level')); else if (action === 'start') startInterview();
+      else if (action === 'skip') skipQuestion(); else if (action === 'submit') submitAnswer();
+      else if (action === 'setup') backToSetup(); else if (action === 'deep-review') askAIDeepReview();
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  },
+  destroy: function() { if (timerInterval) { clearInterval(timerInterval); timerInterval = null; } }
+});
+})();
+</script>
+</body>
+</html>

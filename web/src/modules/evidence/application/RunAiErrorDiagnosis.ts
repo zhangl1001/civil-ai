@@ -1,0 +1,21 @@
+import type { PromptCompiler, ProviderGateway } from '@/capabilities/ai-runtime/public';
+import { errorDiagnosisPromptV1 } from '@/capabilities/ai-runtime/public';
+import type { UnitOfWork } from '@/capabilities/database/public';
+import type { AgentRunId, Clock, ErrorDiagnosisId, IdGenerator, JsonObject } from '@/kernel/public';
+import { InvokeAgentModel, TransitionAgentRun } from '@/modules/agent/public';
+import type { OutboxRepository } from '@/modules/task/public';
+import type { ErrorDiagnosisRepository } from '../contracts/LearningRepositories';
+import { ConfirmationStatus, ErrorCauseCode } from '../domain/EvidenceCodes';
+
+export class RunAiErrorDiagnosis {
+  constructor(private readonly unitOfWork:UnitOfWork,private readonly diagnoses:ErrorDiagnosisRepository,private readonly outbox:OutboxRepository,private readonly compiler:PromptCompiler,private readonly invoke:InvokeAgentModel,private readonly transition:TransitionAgentRun,private readonly clock:Clock,private readonly ids:IdGenerator){}
+  async execute(command:{agentRunId:AgentRunId;provisionalDiagnosisId:ErrorDiagnosisId;evidenceContext:JsonObject;subject:string},gateway:ProviderGateway,signal?:AbortSignal):Promise<ErrorDiagnosisId>{
+    const provisional=await this.diagnoses.find(command.provisionalDiagnosisId);if(!provisional)throw new Error(`Provisional diagnosis does not exist: ${command.provisionalDiagnosisId}`);
+    const compiled=this.compiler.compile(errorDiagnosisPromptV1.promptCode,{SUBJECT:command.subject},{provisionalDiagnosis:provisional,evidence:command.evidenceContext},errorDiagnosisPromptV1.version);
+    const response=await this.invoke.execute({agentRunId:command.agentRunId,modelRole:'error_diagnosis',system:compiled.system,user:compiled.user,promptVersionId:errorDiagnosisPromptV1.versionId,responseSchema:compiled.responseSchema,maxOutputTokens:1200},gateway,signal);
+    const output=parse(response.text);const now=this.clock.now();const diagnosis={id:this.ids.next('ErrorDiagnosisId'),sessionId:provisional.sessionId,gradingResultId:provisional.gradingResultId,attemptId:provisional.attemptId,examCycleId:provisional.examCycleId,capabilityNodeId:provisional.capabilityNodeId,causeCode:output.causeCode,errorStage:output.errorStage,detail:output.detail,confidence:output.confidence,confirmationStatus:ConfirmationStatus.Pending,prerequisiteCapabilityNodeId:undefined,recommendedActionCode:output.recommendedActionCode,source:'tutor_ai' as const,createdAt:now,idempotencyKey:`${command.agentRunId}:ai-diagnosis`};
+    await this.unitOfWork.run(async context=>{await this.diagnoses.append([diagnosis],context);await this.outbox.append({id:this.ids.next('OutboxEventId'),aggregateType:'error_diagnosis',aggregateId:diagnosis.id,eventType:'error_diagnosis.ai_proposed',payload:{diagnosisId:diagnosis.id,provisionalDiagnosisId:provisional.id,agentRunId:command.agentRunId},occurredAt:now,attemptCount:0,idempotencyKey:`${command.agentRunId}:ai-diagnosis:outbox`},context);});
+    await this.transition.execute({idempotencyKey:`${command.agentRunId}:complete`,agentRunId:command.agentRunId,action:'complete',reasonCode:'error_diagnosis.completed',payload:{diagnosisId:diagnosis.id,invocationId:response.invocationId}});return diagnosis.id;
+  }
+}
+function parse(text:string):{causeCode:typeof ErrorCauseCode[keyof typeof ErrorCauseCode];errorStage?:string;detail:string;confidence:number;recommendedActionCode:string}{let value:unknown;try{value=JSON.parse(text.trim());}catch{throw new Error('AI error diagnosis returned invalid JSON');}if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('AI error diagnosis must be an object');const v=value as Record<string,unknown>;if(!Object.values(ErrorCauseCode).includes(v.causeCode as never)||typeof v.detail!=='string'||!v.detail.trim()||typeof v.confidence!=='number'||v.confidence<0||v.confidence>0.85||typeof v.recommendedActionCode!=='string'||!v.recommendedActionCode.trim())throw new Error('AI error diagnosis violates output contract');return{causeCode:v.causeCode as typeof ErrorCauseCode[keyof typeof ErrorCauseCode],errorStage:typeof v.errorStage==='string'&&v.errorStage.trim()?v.errorStage.trim():undefined,detail:v.detail.trim(),confidence:v.confidence,recommendedActionCode:v.recommendedActionCode.trim()};}

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Zhangl Agent launcher (macOS/Linux)
+# Usage:
+#   zhanglnb             Start web server + open browser
+#   zhanglnb --web       Web server only
+#   zhanglnb [args]      Pass args to CLI
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+WEB_PORT="${ZHANGL_WEB_PORT:-8765}"
+LOG_FILE="${TMPDIR:-/tmp}/zhangl-web.log"
+MIRROR="https://mirrors.aliyun.com/pypi/simple/"
+
+# ── Find Python ──────────────────────────────────────────────────────
+PYTHON=""
+if [ -f "$PROJECT_DIR/.venv/bin/python" ]; then
+    PYTHON="$PROJECT_DIR/.venv/bin/python"
+elif command -v python3 &>/dev/null; then
+    PYTHON="$(command -v python3)"
+elif command -v python &>/dev/null; then
+    PYTHON="$(command -v python)"
+else
+    echo "ERROR: Python not found. Install Python 3.10+."
+    exit 1
+fi
+
+# ── Switch to project dir ────────────────────────────────────────────
+cd "$PROJECT_DIR"
+
+# ── Quick dep check ──────────────────────────────────────────────────
+if ! $PYTHON -c "import backend, fastapi, uvicorn" 2>/dev/null; then
+    echo "Installing dependencies..."
+    $PYTHON -m pip install -r "$PROJECT_DIR/requirements.txt" -i "$MIRROR" 2>/dev/null || \
+    $PYTHON -m pip install -r "$PROJECT_DIR/requirements.txt" || {
+        echo "ERROR: Failed to install dependencies"
+        exit 1
+    }
+    if ! $PYTHON -c "import backend, fastapi, uvicorn" 2>/dev/null; then
+        echo "ERROR: Dependencies installed but still not importable"
+        exit 1
+    fi
+    echo "Dependencies installed OK."
+fi
+
+# ── Load API credentials ─────────────────────────────────────────────
+SETTINGS_FILE="$HOME/.zhangl-agent/settings.json"
+if [ -f "$SETTINGS_FILE" ]; then
+    eval "$($PYTHON -c "
+import json, os
+try:
+    d = json.load(open(os.path.expanduser('$SETTINGS_FILE')))
+    mc = d.get('model', {})
+    api_key = mc.get('ZHANGL_AUTH_TOKEN', mc.get('auth_token', ''))
+    base_url = mc.get('ZHANGL_BASE_URL', mc.get('base_url', ''))
+    if api_key:
+        print(f'export OPENAI_API_KEY={api_key}')
+        print(f'export ANTHROPIC_AUTH_TOKEN={api_key}')
+    if base_url:
+        print(f'export OPENAI_API_BASE={base_url}')
+        print(f'export ANTHROPIC_BASE_URL={base_url}')
+except: pass
+" 2>/dev/null)"
+fi
+
+# ── Parse flags ──────────────────────────────────────────────────────
+WEB_ONLY=false
+for arg in "$@"; do
+    [ "$arg" = "--web" ] && WEB_ONLY=true
+done
+
+# ── Open browser (cross-platform) ────────────────────────────────────
+open_url() {
+    if command -v open &>/dev/null; then
+        open "$1"
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "$1"
+    fi
+}
+
+# ── Start web server ─────────────────────────────────────────────────
+start_web() {
+    STALE_PID=$(lsof -ti "tcp:$WEB_PORT" 2>/dev/null)
+    if [ -n "$STALE_PID" ]; then
+        kill "$STALE_PID" 2>/dev/null
+        sleep 1
+    fi
+
+    echo "Starting web server on http://localhost:$WEB_PORT ..."
+    nohup $PYTHON -m uvicorn backend.app:app --host 0.0.0.0 --port "$WEB_PORT" > "$LOG_FILE" 2>&1 &
+    WEB_PID=$!
+
+    printf "Waiting for server"
+    for i in $(seq 1 30); do
+        sleep 0.5
+        printf "."
+        if curl -s "http://localhost:$WEB_PORT/api/projects" > /dev/null 2>&1; then
+            echo " ready!"
+            open_url "http://localhost:$WEB_PORT"
+            return 0
+        fi
+    done
+    echo ""
+    open_url "http://localhost:$WEB_PORT"
+}
+
+cleanup() {
+    if [ -n "${WEB_PID:-}" ] && kill -0 "$WEB_PID" 2>/dev/null; then
+        kill "$WEB_PID" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM
+
+if $WEB_ONLY; then
+    echo "=== Zhangl Agent Web ==="
+    start_web
+    echo "Server PID: $WEB_PID (log: $LOG_FILE)"
+    echo "Press Ctrl+C to stop"
+    wait "$WEB_PID"
+else
+    start_web
+    echo ""
+    echo "=== Zhangl Agent ==="
+    echo "Web UI: http://localhost:$WEB_PORT"
+    echo ""
+    exec $PYTHON -m cli.main "$@"
+fi
