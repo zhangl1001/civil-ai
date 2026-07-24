@@ -35,7 +35,13 @@
     </footer>
 
     <CenterDialog v-model="showAnswerCard" title="答题卡" subtitle="点击题号可直接跳转" variant="content">
-      <div class="answer-card-grid"><button v-for="(item, itemIndex) in bundle?.questions || []" :key="item.id" :class="{ active: itemIndex === index, answered: !!answers[item.id], wrong: submitted && answers[item.id] !== item.content.correctOptionId }" type="button" @click="goTo(itemIndex)">{{ itemIndex + 1 }}</button></div>
+      <QuestionAnswerCard
+        :questions="cardQuestions"
+        :current-index="index"
+        :answers="answers"
+        :submitted="submitted"
+        @select="goTo"
+      />
     </CenterDialog>
     <ConfirmDialog v-model="showSubmitConfirm" title="确认交卷？" :description="unansweredCount ? `还有 ${unansweredCount} 题未作答，提交后将进入批改。` : '本组题目已全部作答，提交后将进入批改。'" confirm-text="确认交卷" @confirm="submit" />
   </div>
@@ -50,6 +56,7 @@ import CenterDialog from '@/components/layout/CenterDialog.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import ContentDocumentRenderer from '@/components/content/ContentDocumentRenderer.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
+import QuestionAnswerCard, { type AnswerCardQuestionItem } from '@/components/question/QuestionAnswerCard.vue';
 import { createConfiguredProviderGateway, initializeTutorRuntime } from '@/composition-root/public';
 import type { CommittedQuestionSetBundle } from '@/modules/content/public';
 import { errorCauseLabel, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
@@ -63,6 +70,13 @@ const diagnosing = ref(false); const review = ref<ObjectiveSessionReview>();
 const startedAt = Date.now(); const question = computed(() => bundle.value?.questions[index.value]);
 const answeredCount = computed(() => bundle.value?.questions.filter((item) => !!answers.value[item.id]).length ?? 0);
 const unansweredCount = computed(() => (bundle.value?.questions.length ?? 0) - answeredCount.value);
+
+const cardQuestions = computed<AnswerCardQuestionItem[]>(() =>
+  (bundle.value?.questions || []).map((item) => ({
+    id: item.id,
+    correctOptionId: item.content.correctOptionId
+  }))
+);
 
 onMounted(() => { void load(); });
 async function load() { try { const id = String(route.query.questionSetId || ''); if (!id) throw new Error('题组参数缺失。'); const runtime = await initializeTutorRuntime(); const value = await runtime.contentRepository.findQuestionSet(id as Parameters<typeof runtime.contentRepository.findQuestionSet>[0]); if (!value) throw new Error('题组不存在或已不可用。'); bundle.value = value; } catch (cause) { error.value = cause instanceof Error ? cause.message : '读取题组失败'; } }

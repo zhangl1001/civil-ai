@@ -292,6 +292,7 @@ import { dataManagementService, type DataSummary } from '@/services/DataManageme
 import { taskRuntimeSettings } from '@/tasks/TaskRuntimeSettings';
 import { THEME_PRESETS, themeService, type ThemeSettings } from '@/services/ThemeService';
 import { appVersionInfo } from '@/services/AppVersionService';
+import { profileStatsRepository } from '@/services/ProfileStatsRepository';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
   InitialDiagnosisStatus,
@@ -314,6 +315,7 @@ const exportText = ref('');
 const dataSummary = ref<DataSummary | null>(null);
 const reminderStatus = ref<LearningNotificationStatus | null>(null);
 const candidateHome = ref<CandidateHomeSnapshot | null>(null);
+const profileStats = ref<Awaited<ReturnType<typeof profileStatsRepository.getStats>> | null>(null);
 const taskConcurrency = ref(3);
 const activeSheet = ref<'profile' | 'reminder' | 'ai' | 'data' | 'appearance' | null>(null);
 const appearanceSettings = ref<ThemeSettings>(themeService.getCurrent());
@@ -378,7 +380,12 @@ onMounted(() => {
   void loadAIConfig();
   void loadTaskRuntimeSettings();
   void loadReminderStatus();
+  void loadProfileStats();
 });
+
+async function loadProfileStats() {
+  profileStats.value = await profileStatsRepository.getStats();
+}
 
 async function loadCandidateHome() {
   const runtime = await initializeTutorRuntime();
