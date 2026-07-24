@@ -2,7 +2,6 @@ import { database } from '@/db/database';
 import type { DbKeyRange } from '@/db/database';
 import { STORES, type DigestItemRecord } from '@/db/schema';
 import type { DigestItem, DigestTab } from '@/domain/digest';
-import { fileRepository } from './FileRepository';
 
 const DIR_BY_TAB: Record<DigestTab, string> = {
   news: '每日热点',
@@ -153,13 +152,10 @@ export class DigestRepository {
   async deleteDate(projectId: string, tab: DigestTab, date: string): Promise<void> {
     const items = await database.queryByIndex<DigestItemRecord>(STORES.digestItems, 'projectTypeDate', [projectId, tab, date]);
     await Promise.all(items.map((item) => database.delete(STORES.digestItems, item.id)));
-    await fileRepository.delete(projectId, compatibilityPath(tab, date));
   }
 
-  async importCompatibilityDate(projectId: string, tab: DigestTab, date: string): Promise<DigestItem[]> {
-    const markdown = await fileRepository.readText(projectId, compatibilityPath(tab, date));
-    if (!markdown) return [];
-    return this.saveFromMarkdown(projectId, tab, date, markdown);
+  async importCompatibilityDate(_projectId: string, _tab: DigestTab, _date: string): Promise<DigestItem[]> {
+    return [];
   }
 }
 
