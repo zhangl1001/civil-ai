@@ -9,7 +9,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        clearWebViewResourceCache()
         // Match the app's default light theme so a resumed WKWebView never exposes
         // a black native layer while web content is being repainted.
         applyStableWebViewBackground()

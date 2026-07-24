@@ -710,7 +710,7 @@ function roundChart(value: number): number {
 
 .radar-label {
   fill: var(--text-secondary-color);
-  font-size: 9px;
+  font-size: var(--type-size-caption);
   font-weight: var(--type-weight-semibold);
 }
 

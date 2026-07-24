@@ -34,15 +34,23 @@ public final class LearningNotificationPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    private func parseDate(_ dateString: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: dateString) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: dateString)
+    }
+
     @objc func schedule(_ call: CAPPluginCall) {
         do {
             let payload = try call.decode(LearningNotificationPayload.self)
-            let formatter = ISO8601DateFormatter()
             let center = UNUserNotificationCenter.current()
             let ids = payload.items.map { $0.id }
             center.removePendingNotificationRequests(withIdentifiers: ids)
             for item in payload.items {
-                guard let date = formatter.date(from: item.at), date > Date() else { continue }
+                guard let date = parseDate(item.at), date > Date() else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = item.title
                 content.body = item.body
