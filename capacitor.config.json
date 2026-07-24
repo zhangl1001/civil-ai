@@ -1,0 +1,18 @@
+{
+  "appId": "com.zhangl.examtutor",
+  "appName": "公考辅导",
+  "webDir": "web/dist",
+  "backgroundColor": "#F5F6FA",
+  "ios": {
+    "scheme": "ExamTutor",
+    "allowsLinkPreview": false,
+    "contentInset": "never"
+  },
+  "plugins": {
+    "StatusBar": {
+      "style": "light",
+      "overlaysWebView": true,
+      "backgroundColor": "#F5F6FA"
+    }
+  }
+}

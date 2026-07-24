@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 刷题中心</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .status-bar { padding:8px 12px; font-size:12px; color:var(--text-secondary); background:var(--accent-soft); border-radius:8px; text-align:center; }
+  .dual-cards { display:flex; gap:10px; }
+  .dual-card { flex:1; background:linear-gradient(160deg, var(--surface) 0%, var(--surface2) 100%); border-radius:14px; padding:14px 12px; box-shadow:var(--card-shadow); cursor:pointer; display:flex; flex-direction:column; gap:8px; transition:transform .12s; }
+  .dual-card:active { transform:scale(.97); }
+  .dc-icon { width:32px;height:32px;border-radius:8px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center; }
+  .dc-icon.green { background:rgba(52,199,89,.12); }
+  .dc-icon svg { width:18px;height:18px; }
+  .dc-icon svg.c-blue { color:var(--accent); }
+  .dc-icon svg.c-green { color:var(--green); }
+  .dc-title { font-size:13px;font-weight:600;color:var(--text); }
+  .dc-desc { font-size:10px;color:var(--text-secondary);line-height:1.4; }
+  .dc-btn { width:100%;height:32px;border:none;border-radius:8px;font-size:12px;font-weight:600;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:3px; }
+  .dc-btn.blue { background:var(--accent); }
+  .dc-btn.green { background:var(--green); }
+  .history-card { padding:14px 16px; }
+  .history-title { font-size:14px;font-weight:600;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px; }
+  .history-item { display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-light);cursor:pointer;gap:10px;font-size:13px }
+  .history-item:last-child { border-bottom:none }
+  .history-item:active { opacity:.7 }
+  .history-date { font-weight:600;color:var(--text);white-space:nowrap;min-width:42px }
+  .history-mod { flex:1;color:var(--text) }
+  .history-stat { color:var(--text-secondary);font-size:12px;white-space:nowrap }
+  .history-empty { color:var(--text-secondary);font-size:13px }
+  .history-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0 }
+  .history-dot.has-practice { background:var(--accent) }
+  .history-dot.no-practice { background:var(--border) }
+  .module-section-label { font-size:11px;font-weight:600;color:var(--text-secondary);margin:10px 0 6px }
+  .module-grid { display:grid;grid-template-columns:repeat(3,1fr);gap:8px }
+  .module-card { padding:14px 8px;border-radius:14px;background:var(--surface);font-size:13px;color:var(--text);cursor:pointer;text-align:center;transition:all .15s;border:none;box-shadow:var(--card-shadow); }
+  .module-card:active { transform:scale(.96); }
+  .module-card.loaded { background:var(--accent);color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(74,158,255,.25); }
+  .quick-icon.essay { background:rgba(52,199,89,.12);color:var(--green); }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar" style="justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:6px">
+      <i data-lucide="edit-3" style="color:var(--accent);width:20px;height:20px"></i>
+      <span style="font-size:15px;font-weight:600;color:var(--text)">刷题中心</span>
+    </div>
+    <div class="navbar-actions" style="display:flex;align-items:center;gap:0">
+      <button data-task-bell onclick="API.openTaskPanel()" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+      <button onclick="API.pushPage('plan')"><i data-lucide="calendar"></i></button>
+    </div>
+  </div>
+
+  <div class="status-bar" id="practice-status">加载中...</div>
+
+  <div class="dual-cards">
+    <div class="dual-card" onclick="startPractice()">
+      <div class="dc-icon"><i data-lucide="zap" class="c-blue"></i></div>
+      <div class="dc-title">今日智能推题</div>
+      <div class="dc-desc" id="smart-desc">针对薄弱点智能组卷</div>
+      <button class="dc-btn blue">开始推题 <i data-lucide="chevron-right" style="width:14px;height:14px"></i></button>
+    </div>
+    <div class="dual-card" onclick="localStorage.setItem('es-date',API.getLocalDate());API.pushPage('essay')">
+      <div class="dc-icon green"><i data-lucide="pen-tool" class="c-green"></i></div>
+      <div class="dc-title">申论智能写作</div>
+      <div class="dc-desc">大作文 / 公文写作 AI 批改</div>
+      <button class="dc-btn green">开始写作 <i data-lucide="chevron-right" style="width:14px;height:14px"></i></button>
+    </div>
+  </div>
+
+  <div class="card history-card">
+    <div class="history-title"><i data-lucide="history" style="width:16px;height:16px;color:var(--accent)"></i> 近期练习</div>
+    <div id="prac-history-list" style="color:var(--text-secondary);font-size:13px">加载中...</div>
+  </div>
+
+  <div class="quick-item" onclick="openStudy()">
+    <div class="quick-icon essay"><i data-lucide="book-open" style="width:20px;height:20px"></i></div>
+    <div style="flex:1"><div class="quick-label">先学后练</div><div class="quick-sub">看讲义 + 做配套练习，检测弱项</div></div>
+    <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--border)"></i>
+  </div>
+
+  <div class="quick-item" onclick="API.pushPage('digest')">
+    <div class="quick-icon" style="background:var(--accent-soft);color:var(--accent)"><i data-lucide="sparkles" style="width:20px;height:20px"></i></div>
+    <div style="flex:1"><div class="quick-label">每日积累</div><div class="quick-sub">时政热点 · 考点速记</div></div>
+    <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--border)"></i>
+  </div>
+
+  <div class="card">
+    <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:10px">自定义专项练习</div>
+    <div class="module-section-label">行测</div>
+    <div class="module-grid" id="xc-grid"></div>
+    <div class="module-section-label">申论</div>
+    <div class="module-grid" id="sl-grid"></div>
+  </div>
+</div>
+
+<div class="tabs"></div>
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+API.initPage('practice');
+
+var XC = API.XC_MODULES;
+var SL = API.SL_MODULES;
+
+// Render module grids
+var xcHtml = '';
+XC.forEach(m => { xcHtml += `<button class="module-card" onclick="openModule('${m}')">${m}</button>`; });
+document.getElementById('xc-grid').innerHTML = xcHtml;
+var slHtml = '';
+SL.forEach(m => { slHtml += `<button class="module-card" onclick="openEssayModule('${m}')">${m}</button>`; });
+document.getElementById('sl-grid').innerHTML = slHtml;
+
+// Status + module counts + history
+(async () => {
+  try {
+    var [stats, profile] = await Promise.all([API.fetchJSON('练习统计.json').catch(()=>null), API.fetchJSON('能力画像.json').catch(()=>null)]);
+    var total = 0;
+    if (stats && stats.records) total = stats.records.reduce(function(s,r){return s+(r.total||0)},0);
+    var pname = localStorage.getItem('zhangl-active-project') || '公考练习';
+    document.getElementById('practice-status').innerHTML = '<strong>'+pname+'</strong> · 已刷 '+total+' 题';
+
+    // Load question counts per module and update today's grid
+    var today = API.getLocalDate();
+    XC.forEach(async function(m){
+      try {
+        var text = await API.fetchText('练习/'+m+'/'+today+'.md');
+        if(text){
+          var div=document.createElement('div');div.innerHTML=text;
+          var count=div.querySelectorAll('hr').length;
+          if(count>0){
+            var cards=document.querySelectorAll('#xc-grid .module-card');
+            cards.forEach(function(c){if(c.textContent.trim()===m){c.textContent=m+' ('+count+'题)';c.classList.add('loaded')}})
+          }
+        }
+      } catch(e) {
+        API.pageError('practice module count', e, '部分练习状态加载失败');
+      }
+    });
+
+    // Smart practice: find weakest module
+    if(profile&&profile.modules){
+      var worst=null;
+      for(var mod of XC){var ms=API.moduleStats(profile,mod);if(ms.total>=3&&(!worst||ms.accuracy<worst.accuracy))worst={mod:mod,accuracy:ms.accuracy}}
+      if(worst)document.getElementById('smart-desc').textContent='针对薄弱点：'+worst.mod
+    }
+  } catch(e) {
+    document.getElementById('practice-status').textContent = '练习数据加载失败，可直接开始练习';
+    API.pageError('practice init', e, '刷题中心加载异常，已保留基础功能');
+  }
+
+  // Load recent practice history (latest 7 records)
+  loadHistory();
+})();
+
+async function loadHistory() {
+  var listEl = document.getElementById('prac-history-list');
+  if (!listEl) return;
+  listEl.textContent = '加载中...';
+  // Generate recent dates only for fallback scanning / empty placeholders.
+  var dates = [];
+  var d = new Date();
+  for (var i = 0; i < 7; i++) {
+    var y = d.getFullYear();
+    var m = String(d.getMonth() + 1).padStart(2, '0');
+    var dd = String(d.getDate()).padStart(2, '0');
+    dates.push({ str: y + '-' + m + '-' + dd, isToday: i === 0 });
+    d.setDate(d.getDate() - 1);
+  }
+
+  try {
+    // New records are served by the structured metadata index. Legacy projects
+    // without metadata retain the file-scan fallback below.
+    var indexed = await API.Index.practice({ limit: 80 });
+    var indexedRows = indexed.filter(function(item) {
+      return !item.is_mock && item.date;
+    }).map(function(item) {
+      var dateInfo = dates.find(function(dt) { return dt.str === item.date; });
+      return { date: item.date, label: dateInfo && dateInfo.isToday ? '今天' : item.date.slice(5), module: item.module, count: item.question_count, isToday: !!(dateInfo && dateInfo.isToday) };
+    }).slice(0, 7);
+    if (indexedRows.length) {
+      renderHistoryRows(indexedRows, dates, listEl);
+      return;
+    }
+    // Each row must map to one concrete file. Grouping module names by date made
+    // the old click target invalid ("资料分析、判断推理" is not a module path).
+    var rows = await Promise.all(dates.map(async function(dt) {
+      // Try all modules in parallel for this date
+      var results = await Promise.all(XC.map(async function(mod) {
+        var text = await API.fetchText('练习/' + mod + '/' + dt.str + '.md');
+        return text ? { mod: mod, text: text } : null;
+      }));
+      var found = results.filter(function(r) { return r !== null; });
+      if (found.length) {
+        return found.map(function(f) {
+          var div = document.createElement('div'); div.innerHTML = f.text;
+          var hrs = div.querySelectorAll('hr').length;
+          return { date: dt.str, label: dt.isToday ? '今天' : dt.str.slice(5), module: f.mod, count: hrs > 0 ? hrs + 1 : 0, isToday: dt.isToday };
+        });
+      }
+      return [];
+    }));
+
+    var fallbackRows = [];
+    for (var i = 0; i < rows.length; i++) {
+      var dateRows = rows[i];
+      if (dateRows.length) {
+        fallbackRows = fallbackRows.concat(dateRows);
+      }
+    }
+    renderHistoryRows(fallbackRows.slice(0, 7), dates, listEl);
+  } catch(e) {
+    API.pageError('practice history', e, '近期练习加载失败');
+    API.showInlineError(listEl, '近期练习加载失败', '不影响开始新的练习', 'loadHistory()');
+  }
+}
+
+function renderHistoryRows(rows, dates, listEl) {
+  var html = '';
+  rows = (rows || []).slice(0, 7);
+  var datesWithPractice = new Set(rows.map(function(row) { return row.date; }));
+  rows.forEach(function(r) {
+    html += '<div class="history-item" onclick="openHistory(\'' + API.escapeJs(r.module) + '\',\'' + API.escapeJs(r.date) + '\')">';
+    html += '<span class="history-dot has-practice"></span>';
+    html += '<span class="history-date">' + API._esc(r.label) + '</span>';
+    html += '<span class="history-mod">' + API._esc(r.module) + '</span>';
+    html += '<span class="history-stat">' + r.count + '题</span>';
+    html += '<i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--text-secondary)"></i></div>';
+  });
+  dates.forEach(function(dt) {
+    if (rows.length >= 7) return;
+    if (datesWithPractice.has(dt.str)) return;
+    rows.push({ date: dt.str, placeholder: true });
+    html += '<div class="history-item" style="cursor:default"><span class="history-dot no-practice"></span><span class="history-date">' + (dt.isToday ? '今天' : dt.str.slice(5)) + '</span><span class="history-empty">未练习</span></div>';
+  });
+  listEl.innerHTML = html;
+  lucide.createIcons();
+}
+
+function openHistory(mod, date) {
+  localStorage.setItem('mp-target-module', mod);
+  localStorage.setItem('mp-practice-date', date);
+  localStorage.setItem('mp-practice-mode', 'direct');
+  API.pushPage('practice-card');
+}
+
+function startPractice() {
+  var mod = XC[0];
+  // Try to find weakest from profile
+  API.fetchJSON('能力画像.json').then(function(p){
+    if(p&&p.modules){var worst=null;XC.forEach(function(m){var ms=API.moduleStats(p,m);if(ms.total>=3&&(!worst||ms.accuracy<worst.accuracy))worst={mod:m,accuracy:ms.accuracy}});if(worst)mod=worst.mod}
+    localStorage.setItem('mp-target-module',mod);localStorage.setItem('mp-practice-date',API.getLocalDate());localStorage.setItem('mp-practice-mode','smart');API.pushPage('practice-card')
+  }).catch(function(){localStorage.setItem('mp-target-module',mod);localStorage.setItem('mp-practice-date',API.getLocalDate());localStorage.setItem('mp-practice-mode','smart');API.pushPage('practice-card')})
+}
+
+function openStudy() {
+  var mod = '言语理解';
+  // Use .catch() so a failed 能力画像.json fetch still navigates — try/catch around a Promise
+  // never catches the async rejection, so a network failure left the button doing nothing (audit #3)
+  API.fetchJSON('能力画像.json').then(function(profile) {
+    if (profile && profile.modules) {
+      var worst = null;
+      for (var m in profile.modules) {
+        var ms = API.moduleStats(profile, m);
+        if (ms.total >= 3 && (!worst || ms.accuracy < worst.accuracy)) worst = { mod: m, accuracy: ms.accuracy };
+      }
+      if (worst) mod = worst.mod;
+    }
+    localStorage.setItem('mp-study-topic', mod);
+    API.pushPage('study');
+  }).catch(function() {
+    localStorage.setItem('mp-study-topic', mod);
+    API.pushPage('study');
+  });
+}
+
+function openModule(mod) {
+  localStorage.setItem('mp-target-module', mod);
+  localStorage.setItem('mp-practice-date', API.getLocalDate());
+  localStorage.setItem('mp-practice-mode', 'direct');
+  API.pushPage('practice-card');
+}
+
+function openEssayModule(mod) {
+  localStorage.setItem('essay-topic', mod);
+  localStorage.setItem('es-date', API.getLocalDate());
+  API.pushPage('essay');
+}
+</script>
+</body>
+</html>

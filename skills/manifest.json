@@ -1,0 +1,11 @@
+{
+  "enabled": [
+    "bash_ops",
+    "experts",
+    "file_ops",
+    "task_mgmt",
+    "exam-formats",
+    "exam-workflows",
+    "web_search"
+  ]
+}

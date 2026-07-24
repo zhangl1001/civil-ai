@@ -1,0 +1,578 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no"><title>公考辅导 - 我的</title><link rel="stylesheet" href="common.css"><style>.profile-header{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 16px 16px;background:linear-gradient(135deg,var(--accent-soft),rgba(74,158,255,.15));border-radius:var(--radius-lg);}
+body.light .profile-header{background:linear-gradient(135deg,var(--surface),var(--accent-soft));}.profile-header>*{max-width:100%;box-sizing:border-box}.profile-project{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stats-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;padding:14px 8px}.stat-item{min-width:0;text-align:center;padding:0 6px;border-right:1px solid var(--border-light)}.stat-item:last-child{border-right:none}.stat-val{font-size:24px;line-height:1.05;font-weight:800;color:var(--text);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.stat-label{font-size:11px;line-height:1.2;margin-top:5px;white-space:nowrap}.profile-page>.card-title,.profile-page>div>.card-title,#sc-profile>.card-title,#sc-profile>div>.card-title{padding:0 2px;margin:2px 0 7px;font-size:12px;font-weight:700;color:var(--text-secondary);text-align:left;width:100%;align-self:stretch}.profile-page .list,#sc-profile .list{width:100%;border-radius:14px}.profile-page .list-item,#sc-profile .list-item{min-height:52px;padding:0 14px;gap:10px;justify-content:flex-start;text-align:left}.profile-page .list-icon,#sc-profile .list-icon{width:18px;height:18px;display:block;flex-shrink:0;color:var(--text-secondary)}.profile-page .list-label,#sc-profile .list-label{min-width:0;flex:1;display:block;text-align:left;font-size:15px;line-height:1.25;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.profile-page .list-value,#sc-profile .list-value{max-width:96px;min-width:0;font-size:13px;line-height:1.2;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary);margin-left:auto;margin-right:0}.profile-page .list-arrow,#sc-profile .list-arrow{width:16px;height:16px;display:block;flex-shrink:0;color:var(--text-secondary);opacity:.7}.profile-page>div:not(.navbar):not(.profile-header),#sc-profile>div:not(.navbar):not(.profile-header){width:100%;align-self:stretch}.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999;display:flex;align-items:center;justify-content:center}.modal-card{background:var(--surface);border-radius:14px;padding:24px;width:90%;max-width:360px;box-shadow:0 12px 48px rgba(0,0,0,.3);max-height:90vh;overflow-y:auto}.modal-card h3{font-size:17px;margin-bottom:12px}.modal-card input,.modal-card select,.modal-card textarea{width:100%;height:40px;padding:0 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;margin-bottom:10px;font-family:inherit;box-sizing:border-box;background:var(--surface);color:var(--text)}.modal-card textarea{height:auto;min-height:60px;padding:10px 12px}.modal-card label{display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;margin-top:8px}.modal-card label:first-of-type{margin-top:0}.modal-card .btn-row{display:flex;gap:8px;margin-top:16px}.modal-card .btn-row button{flex:1;height:40px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}.btn-cancel{background:var(--surface2);color:var(--text-secondary)}.btn-confirm{background:var(--accent);color:#fff}.input-row{display:flex;gap:8px}.input-row input,.input-row select{flex:1}.input-icon-wrap{position:relative}.input-icon-wrap input{padding-right:40px}.eye-btn{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:6px;display:flex;align-items:center}.count-tag{flex:1;height:36px;border:none;border-radius:18px;background:var(--surface2);color:var(--text-secondary);font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit}.count-tag.active{background:var(--surface);box-shadow:0 1px 3px rgba(0,0,0,.08);color:var(--accent);font-weight:600}</style></head><body>
+<div class="page">
+  <div class="navbar" style="justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:6px">
+      <i data-lucide="user" style="color:var(--accent);width:20px;height:20px"></i>
+      <span class="title">我的</span>
+    </div>
+    <div class="navbar-actions">
+      <button data-task-bell onclick="API.openTaskPanel()" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+      <button data-profile-action="ai"><i data-lucide="settings"></i></button>
+    </div>
+  </div>
+  <div class="profile-header"><div style="width:64px;height:64px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700">U</div><div style="font-size:17px;font-weight:600;color:var(--text)">用户</div><div class="profile-project" style="font-size:12px;color:var(--accent);background:var(--accent-soft);padding:4px 12px;border-radius:var(--radius-full)" id="profile-project">当前工程：公考练习</div></div>
+  <div class="card stats-row"><div class="stat-item"><div class="stat-val" id="s-total">0</div><div class="stat-label">累计题数</div></div><div class="stat-item"><div class="stat-val" id="s-accuracy">--</div><div class="stat-label">正确率</div></div><div class="stat-item"><div class="stat-val" id="s-streak">0</div><div class="stat-label">连续打卡</div></div></div>
+  <div><div class="card-title">个性化</div><div class="list"><div class="list-item" data-profile-action="theme"><i data-lucide="sun-moon" class="list-icon"></i><span class="list-label">主题切换</span><span class="list-value" id="theme-val">深色</span><i data-lucide="chevron-right" class="list-arrow"></i></div><div class="list-item" data-profile-action="font"><i data-lucide="type" class="list-icon"></i><span class="list-label">阅读字号</span><span class="list-value" id="font-val">标准</span><i data-lucide="chevron-right" class="list-arrow"></i></div></div></div>
+  <div><div class="card-title">AI 与数据</div><div class="list"><div class="list-item" data-profile-action="new-project"><i data-lucide="folder-plus" class="list-icon"></i><span class="list-label">新建备考计划</span><i data-lucide="chevron-right" class="list-arrow"></i></div><div class="list-item" data-profile-action="ai"><i data-lucide="cpu" class="list-icon"></i><span class="list-label">AI 模型配置</span><i data-lucide="chevron-right" class="list-arrow"></i></div><div class="list-item" data-profile-action="sync"><i data-lucide="cloud" class="list-icon"></i><span class="list-label">工程数据同步</span><span class="list-value" id="sync-val">仅本机</span><i data-lucide="chevron-right" class="list-arrow"></i></div><div class="list-item" data-profile-action="data"><i data-lucide="database" class="list-icon"></i><span class="list-label">数据管理</span><i data-lucide="chevron-right" class="list-arrow"></i></div></div></div>
+  <div><div class="card-title">系统</div><div class="list"><div class="list-item" data-profile-action="notifications"><i data-lucide="bell-ring" class="list-icon"></i><span class="list-label">学习提醒</span><span class="list-value" id="notify-val">未开启</span><i data-lucide="chevron-right" class="list-arrow"></i></div><div class="list-item" data-profile-action="about"><i data-lucide="info" class="list-icon"></i><span class="list-label">关于应用</span><i data-lucide="chevron-right" class="list-arrow"></i></div></div></div>
+</div>
+<div class="tabs"></div>
+<script src="lucide.js"></script><script src="common.js"></script>
+<script>
+API.initPage('profile');
+var _profileRoot = document.getElementById('profile-project') && document.getElementById('profile-project').closest('.page');
+if (_profileRoot) _profileRoot.classList.add('profile-page');
+if (window.lucide) lucide.createIcons();
+
+var pname = localStorage.getItem('zhangl-active-project') || '公考练习';
+document.getElementById('profile-project').textContent = '当前工程：' + pname;
+
+function refreshSyncLabel() {
+  var el = document.getElementById('sync-val');
+  if (!el) return;
+  var s = API.Repository.getSyncState(pname);
+  el.textContent = API.Repository.isRemoteEnabled() ? ({ synced:'已同步', syncing:'同步中', pending:'待同步' }[s.status] || '已连接') : '仅本机';
+}
+refreshSyncLabel();
+refreshNotificationLabel();
+window.addEventListener('project-sync-state', refreshSyncLabel);
+API.PageRuntime.addCleanup(API.PageRuntime.currentTag, function() {
+  window.removeEventListener('project-sync-state', refreshSyncLabel);
+});
+
+async function refreshNotificationLabel() {
+  var el = document.getElementById('notify-val');
+  if (!el) return;
+  if (!API.LearningNotifications || !API.LearningNotifications.isNative()) { el.textContent = '仅 iOS'; return; }
+  try {
+    var s = await API.LearningNotifications.status();
+    el.textContent = ({ authorized: '已开启', provisional: '临时允许', denied: '已拒绝', notDetermined: '可开启' }[s.authorization] || '可开启') + (s.pending ? ' · ' + s.pending : '');
+  } catch(e) {
+    el.textContent = '可开启';
+  }
+}
+
+async function enableLearningNotifications() {
+  if (!API.LearningNotifications || !API.LearningNotifications.isNative()) { API.toast('学习提醒仅在 iOS App 内可用'); return; }
+  try {
+    var enabled = await API.LearningNotifications.enable();
+    document.getElementById('notify-val').textContent = enabled ? '已开启' : '未授权';
+    API.toast(enabled ? '学习提醒已开启' : '未获得通知权限');
+    refreshNotificationLabel();
+  } catch(e) { API.toast('提醒设置失败'); }
+}
+
+// Init theme/font labels
+document.getElementById('theme-val').textContent = document.body.classList.contains('light') ? '浅色' : '深色';
+document.getElementById('font-val').textContent = API.applyFontPreference(localStorage.getItem('zhangl-font-size') || '标准');
+
+// Stats
+(async()=>{
+  try {
+    var summary = await loadProfileStats();
+    document.getElementById('s-total').textContent = summary.total;
+    document.getElementById('s-accuracy').textContent = summary.gradedTotal > 0 ? Math.round(summary.correct / summary.gradedTotal * 100) + '%' : '--';
+    document.getElementById('s-streak').textContent = summary.streak;
+  } catch(e) {
+    API.pageError('profile stats', e, '统计数据加载失败');
+  }
+})();
+
+async function loadProfileStats() {
+  var records = [];
+  try {
+    var s = await API.fetchJSON('练习统计.json');
+    if (s && Array.isArray(s.records)) records = s.records;
+  } catch(e) {}
+
+  var total = records.reduce(function(a, r) { return a + (r.total || 0); }, 0);
+  var correct = records.reduce(function(a, r) { return a + (r.correct || 0); }, 0);
+  var gradedTotal = records.reduce(function(a, r) { return a + ((typeof r.correct === 'number' && r.total) ? r.total : 0); }, 0);
+  var dates = new Set(records.map(function(r) { return r.date; }).filter(Boolean));
+
+  if (total === 0 && API.Index && API.Index.practice) {
+    try {
+      var indexed = await API.Index.practice({ limit: 2000 });
+      indexed.filter(function(item) { return !item.is_mock; }).forEach(function(item) {
+        total += item.question_count || 0;
+        if (item.date) dates.add(item.date);
+      });
+    } catch(e) {}
+  }
+
+  if (total === 0) {
+    try {
+      var files = await API.listFiles('练习/');
+      var practiceFiles = files.filter(function(p) {
+        return /\.md$/.test(p) && p.indexOf('练习/模拟考试/') !== 0 && !/申论/.test(p);
+      });
+      await Promise.all(practiceFiles.slice(0, 500).map(async function(p) {
+        var dm = p.match(/(\d{4}-\d{2}-\d{2})\.md$/);
+        if (dm) dates.add(dm[1]);
+        try {
+          var text = await API.fetchText(p);
+          var count = (String(text || '').match(/<div class="question-block"|class=['"]question-block|^#{2,4}\s*(?:第)?\d+[题、.．]/gm) || []).length;
+          total += count || 1;
+        } catch(e) {
+          total += 1;
+        }
+      }));
+    } catch(e) {}
+  }
+
+  var sd = new Date();
+  var streakDays = 0;
+  while (dates.has(API.getLocalDate(sd))) { streakDays++; sd.setDate(sd.getDate() - 1); }
+  return { total: total, correct: correct, gradedTotal: gradedTotal, streak: streakDays };
+}
+
+function toggleTheme(){
+  var b=document.body;b.classList.toggle('light');
+  var l=b.classList.contains('light');
+  document.getElementById('theme-val').textContent = l?'浅色':'深色';
+  localStorage.setItem('zhangl-theme', l?'light':'dark');
+}
+function cycleFontSize(){
+  var sizes = [
+    {label:'小', desc:'适合大屏手机'},
+    {label:'标准', desc:'默认大小'},
+    {label:'大', desc:'更易阅读'},
+    {label:'特大', desc:'最大字体'}
+  ];
+  var current = document.getElementById('font-val').textContent;
+  var o = document.createElement('div'); o.className = 'modal-overlay';
+  var btns = sizes.map(function(s) {
+    var isCur = s.label === current;
+    return '<button style="display:flex;align-items:center;gap:10px;width:100%;padding:12px;border:none;background:'+(isCur?'var(--accent-soft)':'var(--surface)')+';color:'+(isCur?'var(--accent)':'var(--text)')+';font-size:15px;cursor:pointer;font-family:inherit;border-radius:8px" onclick="applyFontSize(\''+s.label+'\')">'+
+      '<span style="flex:1;text-align:left">'+s.label+'<span style="font-size:12px;color:var(--text-secondary);margin-left:8px">'+s.desc+'</span></span>'+
+      (isCur?'<i data-lucide="check" style="width:18px;height:18px;color:var(--accent)"></i>':'')+
+      '</button>';
+  }).join('');
+  o.innerHTML = '<div class="modal-card" style="max-width:300px"><h3>选择字号</h3><div style="display:flex;flex-direction:column;gap:4px">'+btns+'</div><button style="width:100%;height:40px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);font-size:14px;cursor:pointer;font-family:inherit;margin-top:12px" onclick="this.closest(\'.modal-overlay\').remove()">取消</button></div>';
+  o.addEventListener('click', function(e) { if (e.target === o) o.remove(); });
+  document.body.appendChild(o); lucide.createIcons();
+
+  window.applyFontSize = function(label) {
+    document.getElementById('font-val').textContent = API.applyFontPreference(label);
+    document.querySelectorAll('.modal-overlay').forEach(function(m) { m.remove(); });
+  };
+}
+
+function showSyncConfig() {
+  var o = document.createElement('div'); o.className = 'modal-overlay';
+  var configured = API.Repository.getRemoteBase();
+  var status = API.Repository.getSyncState(pname);
+  o.innerHTML = '<div class="modal-card"><h3>工程数据同步</h3><div style="font-size:12px;color:var(--text-secondary);line-height:1.55;margin-bottom:12px">后端数据为主，本机保留离线缓存。首次连接会展示同名工程的迁移预览。</div><label>后端地址</label><input id="sync-base" inputmode="url" placeholder="https://example.com" value="'+API._esc(configured)+'"><div id="sync-preview" style="font-size:12px;color:var(--text-secondary);line-height:1.55;padding:10px 0">当前状态：'+API._esc(status.status || 'local')+'</div><button id="sync-diagnostics" class="btn-cancel" style="width:100%;height:38px;border:none;border-radius:10px;margin-bottom:10px">查看同步诊断</button><div class="btn-row"><button class="btn-cancel" onclick="this.closest(\'.modal-overlay\').remove()">取消</button><button class="btn-confirm" id="sync-save">保存并同步</button></div></div>';
+  o.addEventListener('click', function(e){ if(e.target===o)o.remove(); }); document.body.appendChild(o);
+  document.getElementById('sync-diagnostics').onclick = showSyncDiagnostics;
+  function renderPreview(preview) {
+    var conflicts = preview.conflicts || [];
+    if (!conflicts.length) return '未发现同名工程。连接后将导入服务端已有工程，并同步当前工程。';
+    return conflicts.map(function(item) {
+      return '同名工程「' + API._esc(item.name) + '」：本机 ' + item.local_file_count + ' 个文件，服务端更新于 ' + API._esc(item.remote_updated_at || '未知') + (item.pending_changes ? '，有 ' + item.pending_changes + ' 条待上传修改' : '') + '。';
+    }).join('<br>');
+  }
+  function showMigrationChoice(preview, currentProject) {
+    var conflict = (preview.conflicts || []).find(function(item) { return item.name === currentProject; });
+    if (!conflict) return API.Repository.sync(currentProject);
+    var body = document.getElementById('sync-preview');
+    body.innerHTML = renderPreview(preview) + '<div style="display:flex;flex-direction:column;gap:7px;margin-top:12px"><button id="sync-merge" class="btn-confirm" style="height:40px">合并并同步</button><button id="sync-remote" class="btn-cancel" style="height:40px">使用服务端副本</button><button id="sync-later" class="btn-cancel" style="height:36px">以后处理</button></div>';
+    return new Promise(function(resolve, reject) {
+      body.querySelector('#sync-merge').onclick = function() { API.Repository.resolveMigration(currentProject, 'merge').then(resolve).catch(reject); };
+      body.querySelector('#sync-remote').onclick = function() {
+        API.confirmDanger('使用服务端副本', '将丢弃当前设备中「' + currentProject + '」未同步的缓存内容，并重新下载服务端数据。', '使用服务端', function() {
+          API.Repository.resolveMigration(currentProject, 'remote').then(resolve).catch(reject);
+        });
+      };
+      body.querySelector('#sync-later').onclick = function() { resolve(false); };
+    });
+  }
+  document.getElementById('sync-save').onclick = async function() {
+    var btn = this; var url = document.getElementById('sync-base').value.trim().replace(/\/$/, '');
+    if (!API.isAllowedApiBase(url)) { API.toast('外部服务必须使用 HTTPS；仅本机地址可用 HTTP'); return; }
+    btn.disabled = true; btn.textContent = '连接中...';
+    API.Repository.setRemoteBase(url);
+    try {
+      var preview = await API.Repository.inspectMigration();
+      document.getElementById('sync-preview').innerHTML = renderPreview(preview);
+      var ok = await showMigrationChoice(preview, pname);
+      if (!ok && (preview.conflicts || []).some(function(item) { return item.name === pname; })) { btn.disabled = false; btn.textContent = '保存并同步'; return; }
+      if (!ok) throw new Error(API.Repository.getSyncState(pname).error || '连接失败');
+      API.toast('工程已同步'); refreshSyncLabel(); o.remove();
+    } catch(e) { API.toast('同步失败：' + e.message); btn.disabled = false; btn.textContent = '保存并同步'; }
+  };
+}
+
+async function showSyncDiagnostics() {
+  try {
+    var d = await API.Repository.getSyncDiagnostics(pname);
+    var log = (d.log || []).map(function(item) {
+      return '<div style="padding:7px 0;border-bottom:1px solid var(--border-light)"><span style="font-weight:600;color:var(--text)">'+API._esc(item.status || '-')+'</span><span style="float:right;color:var(--text-secondary)">'+API._esc(API._timeAgo(item.ts))+'</span><div style="font-size:11px;color:var(--text-secondary);margin-top:3px">'+API._esc(item.message || '状态更新')+'</div></div>';
+    }).join('') || '<div style="padding:14px 0;color:var(--text-secondary);font-size:12px">暂无同步日志</div>';
+    API.UI.modal({
+      title: '同步诊断',
+      maxWidth: '360px',
+      body: '<div style="font-size:12px;line-height:1.7;color:var(--text-secondary)">'+
+        '<div>当前工程：'+API._esc(d.project)+'</div>'+
+        '<div>后端地址：'+API._esc(d.remote_base || '未配置')+'</div>'+
+        '<div>网络状态：'+(d.online ? '在线' : '离线')+'</div>'+
+        '<div>同步状态：'+API._esc((d.state && d.state.status) || 'local')+'</div>'+
+        '<div>待同步变更：'+d.queued_changes+'</div>'+
+        '<div>本机文件数：'+d.file_count+'</div>'+
+        '</div><div style="margin-top:12px;max-height:220px;overflow-y:auto">'+log+'</div>'+
+        '<button class="btn-confirm" style="width:100%;height:40px;border:none;border-radius:10px;margin-top:14px" onclick="this.closest(\'.modal-overlay\').remove()">关闭</button>'
+    });
+  } catch(e) {
+    API.toast('同步诊断失败');
+  }
+}
+// Restore font preference on load
+(function(){
+  var fz = localStorage.getItem('zhangl-font-size') || '标准';
+  document.getElementById('font-val').textContent = API.applyFontPreference(fz);
+})();
+
+// ===== AI Config Modal =====
+function showAIConfig(){
+  var o=document.createElement('div');o.className='modal-overlay';
+  o.innerHTML='<div class="modal-card">'+
+    '<h3>AI 模型配置</h3>'+
+    '<label>服务商</label><select id="aic-prov"><option value="openai">OpenAI / DeepSeek</option><option value="anthropic">Anthropic / Claude</option><option value="ollama">Ollama (本地)</option></select>'+
+    '<label>API 地址 <span style="font-weight:400;font-size:11px;color:var(--text-secondary)">（需包含 /v1）</span></label><input id="aic-base" placeholder="https://api.deepseek.com/v1">'+
+    '<label>API Key</label><div class="input-icon-wrap"><input id="aic-key" type="password" placeholder="sk-..."><button class="eye-btn" onclick="var i=document.getElementById(\'aic-key\');var t=i.type===\'password\'?\'text\':\'password\';i.type=t;this.innerHTML=t===\'text\'?\'<i data-lucide=&quot;eye&quot; style=&quot;width:18px;height:18px&quot;></i>\':\'<i data-lucide=&quot;eye-off&quot; style=&quot;width:18px;height:18px&quot;></i>\';lucide.createIcons()"><i data-lucide="eye-off" style="width:18px;height:18px"></i></button></div>'+
+    '<label>模型名称</label><input id="aic-model" placeholder="deepseek-v4-flash">'+
+    '<label>快速模型 <span style="font-weight:400;font-size:11px;color:var(--text-secondary)">（出题/批改，可选）</span></label><input id="aic-fast-model" placeholder="同主模型">'+
+    '<label>智能模型 <span style="font-weight:400;font-size:11px;color:var(--text-secondary)">（申论/分析，可选）</span></label><input id="aic-smart-model" placeholder="同主模型">'+
+    '<div class="btn-row"><button class="btn-cancel" onclick="this.closest(\'.modal-overlay\').remove()">取消</button><button class="btn-confirm" onclick="saveAIConfig(this)">保存并测试连接</button></div></div>';
+  o.addEventListener('click',function(e){if(e.target===o)o.remove()});document.body.appendChild(o);
+
+  // Load existing config
+  try {
+    var saved = API.SecureConfig ? API.SecureConfig.current() : JSON.parse(localStorage.getItem('zhangl-ai-config') || '{}');
+    if(saved.provider) document.getElementById('aic-prov').value = saved.provider;
+    if(saved.api_base) document.getElementById('aic-base').value = saved.api_base;
+    if(saved.api_key) document.getElementById('aic-key').value = saved.api_key;
+    if(saved.model) document.getElementById('aic-model').value = saved.model;
+    if(saved.fast_model) document.getElementById('aic-fast-model').value = saved.fast_model;
+    if(saved.smart_model) document.getElementById('aic-smart-model').value = saved.smart_model;
+  } catch(e) {}
+  if (API.SecureConfig) {
+    API.SecureConfig.load().then(function(saved) {
+      if(saved.provider) document.getElementById('aic-prov').value = saved.provider;
+      if(saved.api_base) document.getElementById('aic-base').value = saved.api_base;
+      if(saved.api_key) document.getElementById('aic-key').value = saved.api_key;
+      if(saved.model) document.getElementById('aic-model').value = saved.model;
+      if(saved.fast_model) document.getElementById('aic-fast-model').value = saved.fast_model;
+      if(saved.smart_model) document.getElementById('aic-smart-model').value = saved.smart_model;
+    }).catch(function(e) { API.toast('安全配置读取失败'); });
+  }
+  lucide.createIcons();
+}
+
+async function saveAIConfig(btn){
+  var p=btn.closest('.modal-card');
+  var provider = p.querySelector('#aic-prov').value;
+  var api_base = p.querySelector('#aic-base').value.trim();
+  var api_key = p.querySelector('#aic-key').value.trim();
+  var model = p.querySelector('#aic-model').value.trim();
+  var fast_model = p.querySelector('#aic-fast-model').value.trim();
+  var smart_model = p.querySelector('#aic-smart-model').value.trim();
+
+  if(!api_key) { API.toast('请输入 API Key'); return; }
+  if(!model) { API.toast('请输入模型名称'); return; }
+  if(!API.isAllowedApiBase(api_base)) { API.toast('外部服务必须使用 HTTPS；仅本机地址可用 HTTP'); return; }
+
+  // Save to localStorage
+  var config = { provider, api_base, api_key, model };
+  if (fast_model) config.fast_model = fast_model;
+  if (smart_model) config.smart_model = smart_model;
+  try {
+    await API.SecureConfig.save(config);
+  } catch(e) {
+    API.toast('安全配置保存失败：' + e.message);
+    return;
+  }
+
+  // Test connection — different endpoints per provider
+  btn.textContent = '测试中...'; btn.disabled = true;
+  var testBase = api_base.replace(/\/+$/, '');
+  var testUrl;
+  var testHeaders = {};
+  if (provider === 'anthropic') {
+    testUrl = testBase + '/messages';  // Anthropic doesn't have /models, test /messages
+    if (api_key) {
+      testHeaders['x-api-key'] = api_key;
+      testHeaders['anthropic-version'] = '2023-06-01';
+    }
+  } else {
+    testUrl = testBase + '/models';    // OpenAI compatible
+    if (api_key) testHeaders['Authorization'] = 'Bearer ' + api_key;
+  }
+
+  try {
+    var testR;
+    if (typeof CapacitorHttp !== 'undefined') {
+      var opts = { url: testUrl, method: 'GET', connectTimeout: 10000, readTimeout: 15000 };
+      if (Object.keys(testHeaders).length) opts.headers = testHeaders;
+      testR = await CapacitorHttp.request(opts);
+    } else {
+      testR = await fetch(testUrl, { headers: testHeaders });
+    }
+    // Determine success based on provider and expected response
+    var status = testR.status;
+    var ok = false;
+    var msg = '';
+    if (provider === 'anthropic') {
+      // Anthropic /messages GET: 405 = server alive (method not allowed), 401 = auth issue
+      // 200-299 unlikely for GET /messages but still OK
+      if (status >= 200 && status < 300) { ok = true; msg = '连接成功'; }
+      else if (status === 405) { ok = true; msg = '连接成功（API 可达）'; }
+      else if (status === 401 || status === 403) { ok = false; msg = 'API Key 无效或无权限 (' + status + ')'; }
+      else { ok = false; msg = '连接失败 (' + status + ')'; }
+    } else {
+      // OpenAI /models: 200 = success, 401 = bad key, 403 = no permission
+      if (status >= 200 && status < 300) { ok = true; msg = '连接成功'; }
+      else if (status === 401) { ok = false; msg = 'API Key 无效 (' + status + ')'; }
+      else if (status === 403) { ok = false; msg = '无权限访问 (' + status + ')'; }
+      else if (status === 404) { ok = false; msg = 'API 地址无效 (' + status + ')'; }
+      else { ok = false; msg = '连接失败 (' + status + ')'; }
+    }
+    if (ok) {
+      API.toast('配置已保存 ✓ ' + msg);
+    } else {
+      API.toast(msg + ' → ' + testUrl);
+    }
+  } catch(e) {
+    API.toast('连接失败: ' + e.message + ' → ' + testUrl);
+  }
+
+  p.closest('.modal-overlay').remove();
+}
+
+
+function showDataMgmt(){
+  var proj = localStorage.getItem('zhangl-active-project') || '公考练习';
+  var o = document.createElement('div');
+  o.className = 'sheet-overlay';
+  o.id = 'data-mgmt-overlay';
+  var h = '<div class="sheet-card" style="padding:22px 20px calc(22px + env(safe-area-inset-bottom))" onclick="event.stopPropagation()">';
+  h += '<div class="sheet-title">数据管理</div>';
+  h += '<div style="font-size:12px;color:var(--text-secondary);text-align:center;line-height:1.5">管理当前工程「'+esc(proj)+'」的数据</div>';
+
+  // Export
+  h += '<button class="plan-act-btn primary" style="width:100%;height:48px;border-radius:12px;font-size:15px" data-profile-action="export"><i data-lucide="download" style="width:18px;height:18px"></i> 导出数据</button>';
+
+  // Import
+  h += '<button class="plan-act-btn secondary" style="width:100%;height:48px;border-radius:12px;font-size:15px" data-profile-action="import"><i data-lucide="upload" style="width:18px;height:18px"></i> 导入数据</button>';
+
+	  // Storage info
+	  h += '<div id="dm-storage" style="font-size:12px;color:var(--text-secondary);text-align:center;padding:4px 0">正在计算存储占用...</div>';
+	  h += '<div id="dm-business" style="font-size:12px;color:var(--text-secondary);line-height:1.6;text-align:left;background:var(--surface2);border-radius:10px;padding:10px 12px">正在读取业务资产...</div>';
+
+  // Clear
+  h += '<button style="width:100%;height:44px;border:1.5px solid var(--red);border-radius:12px;background:transparent;color:var(--red);font-size:14px;font-weight:500;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px" data-profile-action="clear"><i data-lucide="trash-2" style="width:15px;height:15px"></i> 清除练习数据</button>';
+
+  h += '<button style="width:100%;height:46px;border:none;border-radius:12px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:15px;margin-top:4px" data-profile-action="close-sheet">关闭</button>';
+  h += '</div>';
+  o.innerHTML = h;
+  o.addEventListener('click', function(e) { if (e.target === o) o.remove(); });
+  document.body.appendChild(o);
+  lucide.createIcons();
+
+  // Calculate storage
+  (async function() {
+    try {
+      var total = 0;
+      var proj = API._activeProject();
+      // Get all file records to calculate sizes
+      var allFiles = await API.Repository.listFiles(proj, '');
+      // Use a rough estimate based on file count for now
+      for (var i = 0; i < allFiles.length; i++) {
+        var content = await API.Repository.readFile(proj, allFiles[i]);
+        if (content) total += content.length;
+      }
+      var sizeStr = total < 1024 ? total + ' B' : total < 1048576 ? (total/1024).toFixed(1) + ' KB' : (total/1048576).toFixed(1) + ' MB';
+      var el = document.getElementById('dm-storage');
+      if (el) el.textContent = '存储占用：' + sizeStr + ' · ' + allFiles.length + ' 个文件';
+    } catch(e) {
+      var errEl = document.getElementById('dm-storage');
+      if (errEl) errEl.textContent = '存储占用计算失败，请稍后重试';
+      API.pageError('data storage', e, '存储信息读取失败');
+    }
+	  })();
+
+	  (async function() {
+	    try {
+	      var meta = await API.fetchJSON('题目元数据.json') || {};
+	      var scores = await API.fetchJSON('评分记录.json') || {};
+	      var queue = await API.fetchJSON('复习队列.json') || {};
+	      var events = await API.fetchJSON('学习事件.json') || {};
+	      var reviews = await API.fetchJSON('复习项目.json') || {};
+	      var qCount = meta.questions ? Object.keys(meta.questions).length : 0;
+	      var sCount = scores.records ? scores.records.length : 0;
+	      var reviewList = (reviews.items || []).concat(queue.queue_v2 || []);
+	      var due = reviewList.filter(function(x){ return x.status !== 'mastered' && (!x.next_review || x.next_review <= API.getLocalDate()); }).length;
+	      var eCount = events.events ? events.events.length : 0;
+	      var bel = document.getElementById('dm-business');
+	      if (bel) bel.innerHTML = '<strong style="color:var(--text)">业务资产</strong><br>题目元数据：' + qCount + ' 条<br>评分记录：' + sCount + ' 条<br>学习事件：' + eCount + ' 条<br>题级待复习：' + due + ' 条';
+	    } catch(e) {
+	      var bel2 = document.getElementById('dm-business');
+	      if (bel2) bel2.textContent = '业务资产读取失败';
+	    }
+	  })();
+	}
+
+function doExport() {
+  var proj = localStorage.getItem('zhangl-active-project') || '公考练习';
+  API.toast('正在导出...');
+  API.Repository.exportProject(proj).then(function(data) {
+    var json = JSON.stringify(data, null, 2);
+    if (isIOSWebViewLike()) {
+      showExportSheet(proj, json);
+    } else {
+      try {
+        var blob = new Blob([json], { type: 'application/json' });
+        var a = document.createElement('a');
+        var url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = proj + '_备份.json';
+        a.click();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      } catch(e) {
+        API.pageError('export blob', e, '下载失败，已切换为复制备份');
+        showExportSheet(proj, json);
+      }
+    }
+    API.toast('导出完成');
+  }).catch(function(e) { API.toast('导出失败：' + e.message); });
+}
+
+function isIOSWebViewLike() {
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function showExportSheet(proj, json) {
+  var old = document.getElementById('export-overlay');
+  if (old) old.remove();
+  var o = document.createElement('div');
+  o.className = 'sheet-overlay';
+  o.id = 'export-overlay';
+  o.innerHTML = '<div class="sheet-card" style="max-width:560px;gap:10px;padding:20px" onclick="event.stopPropagation()">'+
+    '<div class="sheet-title">导出备份</div>'+
+    '<div style="font-size:12px;color:var(--text-secondary);line-height:1.5;text-align:center">iOS 内置浏览器可能无法直接下载文件。请复制下面内容，保存为 JSON 备份。</div>'+
+    '<textarea id="export-json" readonly style="width:100%;height:42vh;min-height:220px;box-sizing:border-box;border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text);font-family:SF Mono,Menlo,monospace;font-size:11px;line-height:1.45;padding:10px;white-space:pre;resize:none"></textarea>'+
+    '<button class="plan-act-btn primary" style="width:100%;height:44px;border-radius:12px" onclick="copyExportJson()"><i data-lucide="copy" style="width:16px;height:16px"></i> 复制备份内容</button>'+
+    '<button style="width:100%;height:42px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);font-size:14px;cursor:pointer;font-family:inherit" onclick="document.getElementById(\'export-overlay\').remove()">关闭</button>'+
+    '</div>';
+  o.addEventListener('click', function(e) { if (e.target === o) o.remove(); });
+  document.body.appendChild(o);
+  document.getElementById('export-json').value = json;
+  window.copyExportJson = function() {
+    var ta = document.getElementById('export-json');
+    if (!ta) return;
+    ta.focus();
+    ta.select();
+    API.copyText(ta.value).then(function(){ API.toast('已复制备份内容'); }).catch(function(){ API.toast('复制失败，请手动全选复制'); });
+  };
+  lucide.createIcons();
+}
+
+function doImport() {
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async function() {
+    var file = input.files[0];
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      API.toast('导入文件过大，请确认是否为本应用备份');
+      return;
+    }
+    try {
+      var text = await file.text();
+      var data = JSON.parse(text);
+      var importName = data && data.project && data.project.name ? String(data.project.name).trim() : '';
+      var fileCount = data && Array.isArray(data.files) ? data.files.length : 0;
+      if (!importName) { API.toast('导入失败：缺少 project.name'); return; }
+      var projects = await API.Repository.listProjects().catch(function(){ return []; });
+      var exists = projects.some(function(p) { return p.name === importName; });
+      var msg = '备份工程：' + importName + '，文件数：' + fileCount + '。' +
+        (exists ? '当前已有同名工程，导入会覆盖同路径文件。' : '将创建新工程并导入文件。') +
+        '请确认备份来源可信。';
+      API.confirm('导入数据', msg, async function() {
+        try {
+          var result = await API.Repository.importProject(data);
+          localStorage.setItem('zhangl-active-project', result.project.name);
+        API.toast('导入成功：' + (result.files_imported || 0) + ' 个文件');
+          location.reload();
+        } catch(e) { API.toast('导入出错：' + e.message); }
+      });
+    } catch(e) {
+      API.toast('导入失败：JSON 文件无效');
+      API.pageError('import parse', e, '导入文件解析失败');
+    }
+  };
+  input.click();
+}
+
+function doClear() {
+  var proj = localStorage.getItem('zhangl-active-project') || '公考练习';
+  API.confirmDanger('清除工程数据', '将删除当前工程「' + proj + '」下的所有本地文件，包括练习记录、计划、画像、申论和面试数据。此操作不可恢复。', proj, async function() {
+    try {
+      await API.deletePrefix('');
+      // Clear practice/essay/mock/generation state from localStorage
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && (k.indexOf('mp-') === 0 || k.indexOf('p-') === 0 || k.indexOf('es-') === 0 || k.indexOf('gen-') === 0 || k === 'p-generating')) keys.push(k);
+      }
+      keys.forEach(function(k) { localStorage.removeItem(k); });
+      API.toast('数据已清除');
+      location.reload();
+    } catch(e) { API.toast('清除出错：' + e.message); }
+  });
+}
+
+function esc(s) { return API._esc(s); }
+
+// Keep entry actions on the stable app namespace. Page-runtime cleanup can then
+// remove legacy globals without breaking visible profile controls.
+API.Profile = {
+  openAI: showAIConfig,
+  openSync: showSyncConfig,
+  openData: showDataMgmt,
+  exportData: doExport,
+  importData: doImport,
+  clearData: doClear
+};
+
+API.PageRuntime.mountController(API.PageRuntime.currentTag || 'profile', document, {
+  mount: function(root, addCleanup) {
+    var handler = function(e) {
+      var target = e.target.closest('[data-profile-action]');
+      if (!target) return;
+      var action = target.getAttribute('data-profile-action');
+      if (action === 'theme') toggleTheme();
+      else if (action === 'font') cycleFontSize();
+      else if (action === 'new-project') API.showNewProject();
+      else if (action === 'ai') API.Profile.openAI();
+      else if (action === 'sync') API.Profile.openSync();
+      else if (action === 'data') API.Profile.openData();
+      else if (action === 'export') API.Profile.exportData();
+      else if (action === 'import') API.Profile.importData();
+      else if (action === 'clear') API.Profile.clearData();
+      else if (action === 'close-sheet') {
+        var sheet = target.closest('.sheet-overlay');
+        if (sheet) sheet.remove();
+      }
+      else if (action === 'notifications') enableLearningNotifications();
+      else if (action === 'about') API.toast('公考辅导 App v1.0 | AI 大模型驱动备考');
+    };
+    root.addEventListener('click', handler);
+    addCleanup(function() { root.removeEventListener('click', handler); });
+  }
+});
+</script>
+</body></html>

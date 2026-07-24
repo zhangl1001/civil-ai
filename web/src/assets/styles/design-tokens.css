@@ -1,0 +1,124 @@
+:root,
+:root[data-theme="study-light"] {
+  color-scheme: light;
+
+  /* Typography */
+  --font-family-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --type-size-micro: 11px;
+  --type-size-caption: 12px;
+  --type-size-secondary: 13px;
+  --type-size-body: 14px;
+  --type-size-body-large: 15px;
+  --type-size-control: 16px;
+  --type-size-section-title: 17px;
+  --type-size-page-title: 20px;
+  --type-size-display: 24px;
+  --type-size-metric: 38px;
+  --type-size-metric-large: 42px;
+  --type-size-display-large: 48px;
+  --type-size-display-xlarge: 50px;
+  --type-line-compact: 1.3;
+  --type-line-title: 1.35;
+  --type-line-body: 1.65;
+  --type-weight-regular: 400;
+  --type-weight-medium: 500;
+  --type-weight-semibold: 600;
+  --type-weight-bold: 700;
+
+  /* Brand and status */
+  --color-brand: #2563c9;
+  --color-brand-rgb: 37, 99, 201;
+  --color-brand-strong: #1d4fa8;
+  --color-brand-soft: rgba(37, 99, 201, .1);
+  --color-success: #268a4b;
+  --color-success-soft: rgba(38, 138, 75, .1);
+  --color-warning: #c26d00;
+  --color-warning-soft: rgba(194, 109, 0, .1);
+  --color-danger: #d93025;
+  --color-danger-soft: rgba(217, 48, 37, .1);
+
+  /* Text */
+  --color-text-primary: #20242c;
+  --color-ink-rgb: 31, 35, 41;
+  --color-text-secondary: #646c78;
+  --color-text-tertiary: #8a919d;
+  --color-text-inverse: #ffffff;
+  --color-surface-rgb: 255, 255, 255;
+
+  /* Surfaces */
+  --surface-canvas-solid: #f5f7fa;
+  --surface-canvas:
+    radial-gradient(circle at 18% 0%, rgba(37, 99, 201, .065), transparent 30%),
+    radial-gradient(circle at 92% 14%, rgba(38, 138, 75, .05), transparent 27%),
+    linear-gradient(180deg, #f8faff 0%, #f5f7fa 48%, #fafbfd 100%);
+  --surface-card: rgba(255, 255, 255, .66);
+  --surface-card-strong: rgba(255, 255, 255, .84);
+  --surface-muted: rgba(var(--color-ink-rgb), .045);
+  --surface-control: rgba(255, 255, 255, .54);
+  --surface-header:
+    linear-gradient(180deg, rgba(248, 250, 253, .97) 0%, rgba(248, 250, 253, .91) 76%, rgba(248, 250, 253, .72) 100%);
+  --surface-sheet:
+    linear-gradient(180deg, rgba(249, 251, 254, .97), rgba(245, 248, 252, .94));
+  --surface-overlay: rgba(var(--color-ink-rgb), .14);
+
+  /* Shape, boundary and depth */
+  --border-subtle: rgba(var(--color-ink-rgb), .05);
+  --border-control: rgba(var(--color-ink-rgb), .08);
+  --border-focus: rgba(37, 99, 201, .22);
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-sheet: 20px;
+  --radius-pill: 999px;
+  --shadow-card: 0 8px 22px rgba(28, 38, 58, .05);
+  --shadow-raised: 0 14px 36px rgba(28, 38, 58, .12);
+  --shadow-dialog: 0 18px 46px rgba(28, 38, 58, .16);
+  --motion-fast: 160ms;
+  --motion-normal: 200ms;
+
+  /* Backward-compatible aliases for existing modules. */
+  --primary-color: var(--color-brand);
+  --background-color: var(--surface-canvas-solid);
+  --text-color: var(--color-text-primary);
+  --text-secondary-color: var(--color-text-secondary);
+  --border-color: var(--border-control);
+  --green-color: var(--color-success);
+  --orange-color: var(--color-warning);
+  --red-color: var(--color-danger);
+  --soft-blue: var(--color-brand-soft);
+  --soft-green: var(--color-success-soft);
+  --soft-orange: var(--color-warning-soft);
+  --app-canvas-bg: var(--surface-canvas);
+  --app-overlay-bg: var(--surface-overlay);
+  --app-sheet-bg: var(--surface-sheet);
+  --app-panel-bg: var(--surface-card);
+  --app-panel-border: var(--border-subtle);
+  --app-shadow-soft: var(--shadow-card);
+}
+
+:root[data-theme="quiet-jade"] {
+  --color-brand: #287a68;
+  --color-brand-rgb: 40, 122, 104;
+  --color-brand-strong: #1f6254;
+  --color-brand-soft: rgba(40, 122, 104, .1);
+  --surface-canvas-solid: #f4f8f7;
+  --surface-canvas:
+    radial-gradient(circle at 14% 0%, rgba(40, 122, 104, .07), transparent 31%),
+    radial-gradient(circle at 92% 18%, rgba(60, 104, 160, .05), transparent 28%),
+    linear-gradient(180deg, #f7fbfa 0%, #f4f8f7 50%, #fafcfc 100%);
+  --surface-header:
+    linear-gradient(180deg, rgba(247, 251, 250, .97) 0%, rgba(247, 251, 250, .91) 76%, rgba(247, 251, 250, .72) 100%);
+}
+
+:root[data-theme="soft-rose"] {
+  --color-brand: #a64f68;
+  --color-brand-rgb: 166, 79, 104;
+  --color-brand-strong: #833d51;
+  --color-brand-soft: rgba(166, 79, 104, .1);
+  --surface-canvas-solid: #f8f5f7;
+  --surface-canvas:
+    radial-gradient(circle at 16% 0%, rgba(166, 79, 104, .065), transparent 31%),
+    radial-gradient(circle at 90% 16%, rgba(54, 130, 120, .045), transparent 27%),
+    linear-gradient(180deg, #fcf9fb 0%, #f8f5f7 50%, #fbfafc 100%);
+  --surface-header:
+    linear-gradient(180deg, rgba(252, 249, 251, .97) 0%, rgba(252, 249, 251, .91) 76%, rgba(252, 249, 251, .72) 100%);
+}

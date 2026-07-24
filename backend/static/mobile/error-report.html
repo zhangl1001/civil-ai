@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 错因分析报告</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .report-total { font-size: 34px; font-weight: 850; color: var(--red); line-height: 1.05; min-height: 38px; display:flex; align-items:center; justify-content:flex-start; font-variant-numeric:tabular-nums; overflow:visible; }
+  .report-total-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; text-align:left; }
+  #report-hero { padding:16px; overflow:visible; text-align:left; }
+  #report-hero .tool-metric-row { justify-content:flex-start; gap:10px; margin-top:12px; }
+  #report-hero .tool-metric { min-width:0; flex:1; background:rgba(255,255,255,.04); border-radius:10px; padding:9px 6px; }
+  body.light #report-hero .tool-metric { background:rgba(0,0,0,.025); }
+
+  .distribution-card { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--card-shadow); }
+  body.light .distribution-card { border-color:rgba(0,0,0,.035); }
+  .dist-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .dist-row:last-child { margin-bottom: 0; }
+  .dist-label { width: 52px; font-size: 12px; color: var(--text-secondary); text-align: right; flex-shrink: 0; }
+  .dist-track { flex: 1; height: 22px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .dist-fill { height: 100%; border-radius: 4px; transition: width .4s; display: flex; align-items: center; padding-left: 6px; min-width: 28px; }
+  .dist-pct { font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; }
+
+  .module-section { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--card-shadow); margin-bottom: 10px; }
+  body.light .module-section { border-color:rgba(0,0,0,.035); }
+  .mod-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; min-width:0; }
+  .mod-info { flex: 1; min-width: 0; }
+  .mod-name { font-size: 15px; font-weight: 700; color: var(--text); line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; word-break:keep-all; }
+  .mod-count { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+  .kp-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border-light); }
+  .kp-row:last-child { border-bottom: none; }
+  .kp-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; line-height:1.35; }
+  .kp-bar { width: 50px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; flex-shrink: 0; }
+  .kp-bar-fill { height: 100%; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar tool-navbar">
+    <button data-error-action="back"><i data-lucide="arrow-left"></i></button>
+    <span class="title">错因分析报告</span>
+    <button data-task-bell data-error-action="task" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+  </div>
+
+  <!-- Hero -->
+  <div class="hero-card red" id="report-hero">
+    <div class="report-total" id="total-errors">0</div>
+    <div class="report-total-label">累计错题</div>
+    <div class="tool-metric-row">
+      <div class="tool-metric"><span class="value" style="color:var(--red)" id="concept-count">0</span><div class="label">概念性</div></div>
+      <div class="tool-metric"><span class="value" style="color:var(--orange)" id="understand-count">0</span><div class="label">理解性</div></div>
+      <div class="tool-metric"><span class="value" style="color:var(--accent)" id="execute-count">0</span><div class="label">执行性</div></div>
+    </div>
+  </div>
+
+  <!-- Distribution -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">错因分布</span></div>
+    <div class="distribution-card" id="distribution-area"><div style="text-align:center;padding:16px;color:var(--text-secondary);font-size:13px">加载中...</div></div>
+  </div>
+
+  <!-- Module breakdown -->
+  <div id="module-breakdown"></div>
+
+  <!-- Recommendations -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">改进建议</span></div>
+    <div id="recommendations-area"></div>
+  </div>
+
+  <!-- Actions -->
+  <div class="tool-actions">
+    <button class="btn btn-primary btn-block" data-error-action="practice"><i data-lucide="zap" style="width:16px;height:16px"></i> 按首要错因加练</button>
+    <button class="btn btn-secondary btn-block" data-error-action="redo"><i data-lucide="rotate-ccw" style="width:16px;height:16px"></i> 错题重做</button>
+  </div>
+</div>
+
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+(function() {
+API.initPage('error-report');
+
+var report = null;
+
+(async () => {
+  try { report = await Stats.generateErrorReport(); } catch(e) { console.warn('[error-report] error:', e); }
+  renderReport();
+  lucide.createIcons();
+})();
+
+function renderReport() {
+  if (!report || !report.modules || Object.keys(report.modules).length === 0) {
+    document.getElementById('total-errors').textContent = '0';
+    document.getElementById('distribution-area').innerHTML = '<div class="empty-state"><i data-lucide="inbox"></i><div style="margin-top:8px;font-size:14px">暂无错因数据</div><div style="font-size:12px;margin-top:4px">完成练习后错因分析会自动生成</div></div>';
+    lucide.createIcons(); return;
+  }
+
+  document.getElementById('total-errors').textContent = report.total_errors;
+  document.getElementById('concept-count').textContent = report.error_distribution['概念性错误'] || 0;
+  document.getElementById('understand-count').textContent = report.error_distribution['理解性错误'] || 0;
+  document.getElementById('execute-count').textContent = report.error_distribution['执行性错误'] || 0;
+
+  var totalErr = report.total_errors || 1;
+  var categories = [
+    { key: '概念性错误', label: '概念性', cls: 'fill-red' },
+    { key: '理解性错误', label: '理解性', cls: 'fill-orange' },
+    { key: '执行性错误', label: '执行性', cls: 'fill-accent' },
+  ];
+  var distHtml = '';
+  categories.forEach(function(d) {
+    var count = report.error_distribution[d.key] || 0;
+    var pct = Math.round(count / totalErr * 100);
+    distHtml += '<div class="dist-row">';
+    distHtml += '<div class="dist-label">' + d.label + '</div>';
+    distHtml += '<div class="dist-track"><div class="dist-fill ' + d.cls + '" style="width:' + Math.max(pct, 8) + '%"><span class="dist-pct">' + count + ' (' + pct + '%)</span></div></div>';
+    distHtml += '</div>';
+  });
+  document.getElementById('distribution-area').innerHTML = distHtml;
+
+  var modClasses = { '判断推理': 'blue', '言语理解': 'green', '资料分析': 'orange', '数量关系': 'purple', '常识判断': 'red', '申论': 'blue' };
+  var modHtml = '';
+  Object.entries(report.modules).forEach(function([modName, modData]) {
+    var mc = modClasses[modName] || 'blue';
+    modHtml += '<div class="module-section">';
+    modHtml += '<div class="mod-header">';
+    modHtml += '<div class="icon-box ' + mc + '"><i data-lucide="target" style="width:18px;height:18px"></i></div>';
+    modHtml += '<div class="mod-info"><div class="mod-name">' + esc(modName) + '</div><div class="mod-count">' + modData.total_errors + ' 道错题</div></div></div>';
+
+    var modTotal = modData.total_errors || 1;
+    var dominant = Object.entries(modData.error_distribution).sort(function(a,b) { return b[1] - a[1]; });
+    if (dominant.length > 0 && dominant[0][1] > 0) {
+      modHtml += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">主导错因：' + dominant[0][0].replace('错误', '') + ' (' + Math.round(dominant[0][1] / modTotal * 100) + '%)</div>';
+    }
+
+    modData.by_kp.forEach(function(kp) {
+      var barCls = kp.proficiency < 0.40 ? 'fill-red' : kp.proficiency < 0.55 ? 'fill-orange' : 'fill-accent';
+      var errTag = kp.error_type || '';
+      var tagCls = errTag.indexOf('概念') >= 0 ? ' tag red' : errTag.indexOf('理解') >= 0 ? ' tag orange' : ' tag blue';
+      modHtml += '<div class="kp-row">';
+      modHtml += '<div class="kp-name">' + esc(kp.name) + '</div>';
+      modHtml += '<div class="kp-bar"><div class="kp-bar-fill ' + barCls + '" style="width:' + Math.round(kp.proficiency * 100) + '%"></div></div>';
+      modHtml += '<span class="' + tagCls + '">' + errTag.replace('错误', '') + '</span>';
+      if (kp.plateau) modHtml += '<span class="text-orange" style="font-size:10px;flex-shrink:0">⚠高原</span>';
+      modHtml += '</div>';
+    });
+    modHtml += '</div>';
+  });
+  document.getElementById('module-breakdown').innerHTML = modHtml;
+
+  var recHtml = '';
+  (report.recommendations || []).forEach(function(rec) {
+    recHtml += '<div class="recommendation"><div class="rec-body">' + esc(rec) + '</div></div>';
+  });
+  if (!recHtml) recHtml = '<div class="empty-state"><i data-lucide="inbox"></i><div style="margin-top:8px">暂无建议</div></div>';
+  document.getElementById('recommendations-area').innerHTML = recHtml;
+
+  renderWeekTrend();
+  renderKPTop5();
+  lucide.createIcons();
+}
+
+async function regenerateReport() {
+  API.toast('重新生成报告...');
+  try { report = await Stats.generateErrorReport(); renderReport(); API.toast('报告已更新'); } catch(e) { API.toast('生成失败'); }
+}
+
+function startAIAnalysis() {
+  API.openAIChat('请对我的错题数据进行深度分析。读取能力画像.json、练习统计.json和错题本，分析错因分布和趋势，找出最薄弱的知识点，给出针对性改进建议。');
+}
+
+function startWeakPractice() {
+  if (!report || !report.modules) { API.toast('暂无数据'); return; }
+  var weakMods = Object.entries(report.modules).sort(function(a,b) { return b[1].total_errors - a[1].total_errors; });
+  if (weakMods.length === 0) { API.toast('暂无薄弱模块'); return; }
+  var modName = weakMods[0][0];
+  var modData = weakMods[0][1] || {};
+  var weakKp = (modData.by_kp || []).slice().sort(function(a,b) {
+    var ae = a.error_count || 0, be = b.error_count || 0;
+    if (be !== ae) return be - ae;
+    return (a.proficiency || 0) - (b.proficiency || 0);
+  })[0];
+  localStorage.setItem('mp-target-module', modName);
+  if (weakKp && weakKp.name) {
+    localStorage.setItem('mp-target-kp', weakKp.name);
+    localStorage.setItem('mp-focus-kp', weakKp.name);
+  } else {
+    localStorage.removeItem('mp-target-kp');
+    localStorage.removeItem('mp-focus-kp');
+  }
+  localStorage.setItem('mp-practice-date', API.getLocalDate());
+  localStorage.setItem('mp-practice-mode', 'direct');
+  localStorage.setItem('mp-from-tool', 'error-report');
+  API.pushPage('practice-card');
+}
+
+function startErrorRedo() { API.switchTab('wrongbook'); }
+function esc(s) { return API._esc(s); }
+var _errorRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:error-report', _errorRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var target = e.target.closest('[data-error-action]');
+      if (!target || !root.contains(target)) return;
+      var action = target.getAttribute('data-error-action');
+      if (action === 'back') API.goBack();
+      else if (action === 'task') API.openTaskPanel();
+      else if (action === 'practice') startWeakPractice();
+      else if (action === 'redo') startErrorRedo();
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  }
+});
+})();
+</script>
+</body>
+</html>

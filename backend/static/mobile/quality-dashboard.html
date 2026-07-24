@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 质量追踪</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .quality-hero { flex-shrink:0; padding:16px; overflow:visible; text-align:left; }
+  .dash-score { font-size: clamp(36px, 11vw, 48px); font-weight: 850; line-height: 1; min-height: 0; display:flex; align-items:center; justify-content:flex-start; font-variant-numeric:tabular-nums; overflow:visible; padding:0 0 2px; }
+  .dash-grade { font-size: 13px; font-weight: 700; line-height:1.25; margin-top: 3px; text-align:left; }
+  .dash-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 13px; align-items:stretch; }
+  .dash-stat { min-width:0; text-align: center; padding:8px 4px; border-radius:10px; background:rgba(255,255,255,.045); }
+  body.light .dash-stat { background:rgba(0,0,0,.025); }
+  .dash-stat-val { display:block; max-width:100%; font-size: clamp(15px, 4.7vw, 20px); line-height:1.2; min-height:24px; font-weight: 700; color: var(--text); font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dash-stat-label { font-size: 10px; color: var(--text-secondary); margin-top: 3px; line-height:1.2; white-space:nowrap; }
+
+  .mod-bar { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border-light); min-width:0; }
+  .mod-bar:last-child { border-bottom: none; }
+  .mod-name { font-size: 13px; font-weight: 600; color: var(--text); width: 72px; flex-shrink: 0; line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; word-break:keep-all; }
+  .mod-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .mod-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+  .mod-pct { font-size: 13px; font-weight: 700; width: 40px; text-align: right; flex-shrink: 0; }
+
+  .trend-bar { display: flex; align-items: flex-end; gap: 6px; height: 80px; padding: 8px 0; }
+  .trend-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .trend-bar-fill { width: 100%; border-radius: 4px 4px 0 0; min-height: 4px; transition: height .4s; }
+  .trend-label { font-size: 10px; color: var(--text-secondary); }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat-box { background: var(--surface); border:1px solid rgba(255,255,255,.035); border-radius: 14px; padding: 14px; box-shadow: var(--card-shadow); text-align: left; min-width:0; }
+  body.light .stat-box { border-color:rgba(0,0,0,.035); }
+  .stat-box-val { font-size: 22px; font-weight: 800; line-height:1.2; min-height:27px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stat-box-label { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .quality-list { display:flex; flex-direction:column; gap:10px; }
+  .quality-row { display:flex; align-items:center; gap:10px; padding:12px 0; border-bottom:1px solid var(--border-light); }
+  .quality-row:last-child { border-bottom:none; }
+  .quality-main { flex:1; min-width:0; }
+  .quality-name { font-size:13px; font-weight:700; color:var(--text); }
+  .quality-sub { font-size:11px; color:var(--text-secondary); margin-top:2px; line-height:1.4; }
+  .quality-value { font-size:18px; font-weight:800; color:var(--text); flex-shrink:0; line-height:1.2; max-width:76px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .quality-primary-action { flex-shrink:0; min-height:42px; }
+  @media (max-width:360px) {
+    .quality-hero { padding:16px 12px; }
+    .dash-stats { gap:6px; }
+    .dash-stat { padding:7px 2px; }
+    .dash-stat-label { font-size:9px; }
+  }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar tool-navbar">
+    <button data-quality-action="back"><i data-lucide="arrow-left"></i></button>
+    <span class="title">质量追踪</span>
+    <button data-task-bell data-quality-action="task" style="position:static"><i data-lucide="bell"></i><span class="task-badge"></span></button>
+  </div>
+
+  <!-- Hero: 综合能力分 -->
+  <div class="hero-card quality-hero">
+    <div class="dash-score" id="overall-score">--</div>
+    <div class="dash-grade" id="overall-grade">加载中</div>
+    <div class="dash-stats">
+      <div class="dash-stat"><span class="dash-stat-val" id="total-q">0</span><div class="dash-stat-label">累计题数</div></div>
+      <div class="dash-stat"><span class="dash-stat-val" id="practice-days">0</span><div class="dash-stat-label">练习天数</div></div>
+      <div class="dash-stat"><span class="dash-stat-val" id="streak">0</span><div class="dash-stat-label">连续打卡</div></div>
+    </div>
+  </div>
+
+  <!-- 各模块能力 -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">各模块能力</span></div>
+    <div class="card" id="module-area">
+      <div style="text-align:center;padding:12px;color:var(--text-secondary);font-size:13px">加载中...</div>
+    </div>
+  </div>
+
+  <!-- 正确率趋势 -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">正确率趋势</span><span class="tag blue" id="trend-tag">最近7天</span></div>
+    <div class="card" id="trend-area">
+      <div style="text-align:center;padding:12px;color:var(--text-secondary);font-size:13px">加载中...</div>
+    </div>
+  </div>
+
+  <!-- 学习统计 -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">学习统计</span></div>
+    <div class="stat-grid" id="stats-grid">
+      <div class="stat-box"><div class="stat-box-val" id="week-q">0</div><div class="stat-box-label">本周题数</div></div>
+      <div class="stat-box"><div class="stat-box-val" id="week-time">0m</div><div class="stat-box-label">本周用时</div></div>
+      <div class="stat-box"><div class="stat-box-val" id="avg-speed">--</div><div class="stat-box-label">平均秒/题</div></div>
+      <div class="stat-box"><div class="stat-box-val" id="weak-mod">--</div><div class="stat-box-label">薄弱模块</div></div>
+    </div>
+  </div>
+
+  <!-- 题目与评分质量 -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">题目与评分质量</span><span class="tag blue" id="quality-tag">业务资产</span></div>
+    <div class="tool-panel" id="quality-area">
+      <div style="text-align:center;padding:12px;color:var(--text-secondary);font-size:13px">加载中...</div>
+    </div>
+  </div>
+
+  <!-- AI 建议 -->
+  <div>
+    <div class="sec-hdr"><span class="sec-title">学习建议</span></div>
+    <div id="advice-area"></div>
+  </div>
+
+  <!-- 操作入口 -->
+  <div class="tool-actions">
+    <button class="btn btn-primary btn-block quality-primary-action" data-quality-action="practice"><i data-lucide="target" style="width:16px;height:16px"></i> 按薄弱模块练习</button>
+    <button class="btn btn-secondary btn-block" data-quality-action="ai"><i data-lucide="sparkles" style="width:16px;height:16px"></i> 学情建议</button>
+  </div>
+</div>
+
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+(function() {
+API.initPage('quality-dashboard');
+
+var profile = null, stats = null, questionMeta = null, scoreRecords = null, learningEvents = null, reviewItems = null;
+
+async function loadData() {
+  try {
+    var [p, s, qm, sr, le, ri] = await Promise.all([
+      API.fetchJSON('能力画像.json'),
+      API.fetchJSON('练习统计.json'),
+      API.fetchJSON('题目元数据.json').catch(function(){ return null; }),
+      API.fetchJSON('评分记录.json').catch(function(){ return null; }),
+      API.fetchJSON('学习事件.json').catch(function(){ return null; }),
+      API.fetchJSON('复习项目.json').catch(function(){ return null; })
+    ]);
+    profile = p || { modules: {} };
+    stats = s || { records: [] };
+    questionMeta = qm || { questions: {}, files: {} };
+    scoreRecords = sr || { records: [] };
+    learningEvents = le || { events: [] };
+    reviewItems = ri || { items: [] };
+    renderAll();
+  } catch(e) { console.warn('[dash] error:', e); }
+  lucide.createIcons();
+}
+
+function renderAll() {
+  renderHero();
+  renderModules();
+  renderTrend();
+  renderStats();
+  renderQuality();
+  renderAdvice();
+  lucide.createIcons();
+}
+
+function renderQuality() {
+  var questions = Object.values((questionMeta && questionMeta.questions) || {});
+  var scores = (scoreRecords && scoreRecords.records) || [];
+  var events = (learningEvents && learningEvents.events) || [];
+  var reviews = (reviewItems && reviewItems.items) || [];
+  var unchecked = questions.filter(function(q){ return (q.quality_status || 'unchecked') === 'unchecked'; }).length;
+  var needsReview = questions.filter(function(q){ return q.quality_status === 'needs_review'; }).length;
+  var reviewed = questions.filter(function(q){ return q.quality_status === 'checked'; }).length;
+  var issueCount = questions.reduce(function(s, q){ return s + ((q.review_points || []).length); }, 0);
+  var dueReviews = reviews.filter(function(r){ return !r.next_review || r.next_review <= API.getLocalDate(); }).length;
+  var sourceTypes = {};
+  questions.forEach(function(q){ var k = q.source_type || 'ai_generated'; sourceTypes[k] = (sourceTypes[k] || 0) + 1; });
+  var lowConfidence = scores.filter(function(s){ return (s.confidence || 'medium') === 'low'; }).length;
+  var highConfidence = scores.filter(function(s){ return (s.confidence || 'medium') === 'high'; }).length;
+  var sourceText = Object.keys(sourceTypes).length ? Object.keys(sourceTypes).map(function(k){ return k + ' ' + sourceTypes[k]; }).join(' · ') : '暂无题源记录';
+  document.getElementById('quality-tag').textContent = questions.length ? (reviewed + '/' + questions.length + ' 已审核') : '待建立';
+  document.getElementById('quality-area').innerHTML =
+    '<div class="quality-list">' +
+      qualityRow('clipboard-check', '题目资产', questions.length, sourceText, 'blue') +
+      qualityRow('shield-alert', '质检问题', issueCount, '未审核 ' + unchecked + ' · 需复核 ' + needsReview, issueCount > 0 ? 'orange' : 'green') +
+      qualityRow('scan-search', '评分记录', scores.length, '高置信 ' + highConfidence + ' · 低置信 ' + lowConfidence, lowConfidence > 0 ? 'orange' : 'purple') +
+      qualityRow('route', '学习闭环', events.length, '到期复习 ' + dueReviews + ' · 统一复习项 ' + reviews.length, dueReviews > 0 ? 'red' : 'green') +
+    '</div>';
+}
+
+function qualityRow(icon, name, value, sub, color) {
+  return '<div class="quality-row">' +
+    '<div class="icon-box ' + color + '"><i data-lucide="' + icon + '" style="width:18px;height:18px"></i></div>' +
+    '<div class="quality-main"><div class="quality-name">' + esc(name) + '</div><div class="quality-sub">' + esc(sub) + '</div></div>' +
+    '<div class="quality-value">' + esc(value) + '</div>' +
+  '</div>';
+}
+
+function renderHero() {
+  // 综合能力分 = 加权(正确率50% + 速度20% + 稳定性20% + 近期10%)
+  var records = stats.records || [];
+  var totalQ = records.reduce(function(s,r){return s+(r.total||0);},0);
+  var totalC = records.reduce(function(s,r){return s+(r.correct||0);},0);
+  var accuracy = totalQ > 0 ? totalC / totalQ : 0;
+
+  // 近期正确率（最近10条）
+  var recent = records.slice(-10);
+  var rQ = recent.reduce(function(s,r){return s+(r.total||0);},0);
+  var rC = recent.reduce(function(s,r){return s+(r.correct||0);},0);
+  var recentAcc = rQ > 0 ? rC / rQ : 0;
+
+  // 稳定性：最近正确率的标准差倒数
+  var accs = recent.filter(function(r){return r.total>0;}).map(function(r){return r.correct/r.total;});
+  var stability = 0.5;
+  if (accs.length >= 3) {
+    var mean = accs.reduce(function(a,b){return a+b;},0)/accs.length;
+    var variance = accs.reduce(function(s,a){return s+(a-mean)*(a-mean);},0)/accs.length;
+    stability = Math.max(0, 1 - Math.sqrt(variance));
+  }
+
+  // 速度分：平均用时 <60s/题 = 满分
+  var totalTime = records.reduce(function(s,r){return s+(r.time||0);},0);
+  var avgSpeed = totalQ > 0 ? totalTime/totalQ : 0;
+  var speedScore = avgSpeed > 0 ? Math.max(0, Math.min(1, 60/avgSpeed)) : 0;
+
+  var score = Math.round(accuracy * 50 + speedScore * 20 + stability * 20 + recentAcc * 10);
+  score = Math.min(100, score);
+
+  var grade = score >= 85 ? 'S' : score >= 75 ? 'A' : score >= 65 ? 'B' : score >= 55 ? 'C' : 'D';
+  var gradeColor = score >= 75 ? 'var(--green)' : score >= 55 ? 'var(--accent)' : 'var(--red)';
+
+  var el = document.getElementById('overall-score');
+  el.textContent = score;
+  el.style.color = gradeColor;
+  var gl = document.getElementById('overall-grade');
+  gl.textContent = grade + ' 级';
+  gl.style.color = gradeColor;
+
+  document.getElementById('total-q').textContent = totalQ;
+  var dates = new Set(records.map(function(r){return r.date;}));
+  document.getElementById('practice-days').textContent = dates.size;
+  var streak = 0;
+  var d = new Date();
+  while (dates.has(API.getLocalDate(d))) { streak++; d.setDate(d.getDate()-1); }
+  document.getElementById('streak').textContent = streak;
+}
+
+function renderModules() {
+  var mods = API.XC_MODULES;
+  var html = '';
+  mods.forEach(function(m) {
+    var ms = API.moduleStats(profile, m);
+    var pct = Math.round(ms.accuracy || 0);
+    pct = Math.max(0, Math.min(100, pct));
+    var color = pct >= 70 ? 'var(--green)' : pct >= 50 ? 'var(--accent)' : pct >= 30 ? 'var(--orange)' : 'var(--red)';
+    html += '<div class="mod-bar">';
+    html += '<div class="mod-name">'+m+'</div>';
+    html += '<div class="mod-track"><div class="mod-fill" style="width:'+pct+'%;background:'+color+'"></div></div>';
+    html += '<div class="mod-pct" style="color:'+color+'">'+pct+'%</div>';
+    html += '</div>';
+  });
+  if (mods.every(function(m){return API.moduleStats(profile,m).total===0;})) {
+    html = '<div class="empty-state"><i data-lucide="inbox"></i><div style="margin-top:8px;font-size:14px">暂无练习数据</div><div style="font-size:12px;margin-top:4px">完成练习后能力分析会自动生成</div></div>';
+  }
+  document.getElementById('module-area').innerHTML = html;
+}
+
+function renderTrend() {
+  var records = stats.records || [];
+  var last7 = [];
+  var today = new Date();
+  for (var i = 6; i >= 0; i--) {
+    var d = new Date(today);
+    d.setDate(d.getDate() - i);
+    var ds = API.getLocalDate(d);
+    var dayRecs = records.filter(function(r){return r.date === ds;});
+    var total = dayRecs.reduce(function(s,r){return s+(r.total||0);},0);
+    var correct = dayRecs.reduce(function(s,r){return s+(r.correct||0);},0);
+    var acc = total > 0 ? correct/total : 0;
+    last7.push({ date: ds, acc: acc, total: total, label: ds.slice(5) });
+  }
+
+  var html = '<div class="trend-bar">';
+  last7.forEach(function(d) {
+    var h = d.acc > 0 ? Math.max(8, d.acc * 64) : 0;
+    var color = d.acc >= 0.7 ? 'var(--green)' : d.acc >= 0.5 ? 'var(--accent)' : d.acc > 0 ? 'var(--orange)' : 'var(--border)';
+    html += '<div class="trend-col">';
+    if (d.acc > 0) html += '<div style="font-size:9px;font-weight:600;color:'+color+'">'+Math.round(d.acc*100)+'%</div>';
+    html += '<div class="trend-bar-fill" style="height:'+h+'px;background:'+color+'"></div>';
+    html += '<div class="trend-label">'+d.label+'</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  if (last7.every(function(d){return d.total===0;})) {
+    html = '<div class="empty-state"><i data-lucide="trending-up"></i><div style="margin-top:8px;font-size:13px">最近7天暂无练习</div></div>';
+  }
+  document.getElementById('trend-area').innerHTML = html;
+}
+
+function renderStats() {
+  var records = stats.records || [];
+  var now = new Date();
+  var weekAgo = new Date(now);
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  var weekRecs = records.filter(function(r){ return new Date(r.date) >= weekAgo; });
+  var weekQ = weekRecs.reduce(function(s,r){return s+(r.total||0);},0);
+  var weekTime = weekRecs.reduce(function(s,r){return s+(r.time||0);},0);
+  var totalTime = records.reduce(function(s,r){return s+(r.time||0);},0);
+  var totalQ = records.reduce(function(s,r){return s+(r.total||0);},0);
+  var avgSpeed = totalQ > 0 ? Math.round(totalTime/totalQ) : 0;
+
+  document.getElementById('week-q').textContent = weekQ;
+  document.getElementById('week-time').textContent = Math.round(weekTime/60) + 'm';
+  document.getElementById('avg-speed').textContent = avgSpeed > 0 ? avgSpeed + 's' : '--';
+
+  // 薄弱模块
+  var weakMod = '--';
+  var weakAcc = 101;
+  API.XC_MODULES.forEach(function(m) {
+    var ms = API.moduleStats(profile, m);
+    if (ms.total >= 3 && ms.accuracy < weakAcc) { weakAcc = ms.accuracy; weakMod = m; }
+  });
+  document.getElementById('weak-mod').textContent = weakMod;
+  document.getElementById('weak-mod').style.color = weakMod !== '--' ? 'var(--orange)' : 'var(--text)';
+}
+
+function renderAdvice() {
+  var records = stats.records || [];
+  var totalQ = records.reduce(function(s,r){return s+(r.total||0);},0);
+  if (totalQ === 0) {
+    document.getElementById('advice-area').innerHTML = '<div class="recommendation"><div class="rec-body">还没有练习记录。先完成一套练习，AI 会为你分析学情并给出针对性建议。</div></div>';
+    return;
+  }
+  // Find weakest module
+  var weakMod = '', weakAcc = 101;
+  API.XC_MODULES.forEach(function(m) {
+    var ms = API.moduleStats(profile, m);
+    if (ms.total >= 3 && ms.accuracy < weakAcc) { weakAcc = ms.accuracy; weakMod = m; }
+  });
+  var tips = [];
+  if (weakMod) tips.push('薄弱模块：<strong>'+weakMod+'</strong>（正确率 '+Math.round(weakAcc)+'%），建议优先突破');
+  // Check plateau
+  var hasPlateau = false;
+  Object.values(profile.modules||{}).forEach(function(mod){Object.values(mod).forEach(function(kp){if(kp.plateau&&kp.plateau.is_plateau)hasPlateau=true;});});
+  if (hasPlateau) tips.push('检测到知识点高原期，建议变换学习方法');
+  if (totalQ < 50) tips.push('练习量不足50题，建议增加练习频率');
+  if (tips.length === 0) tips.push('各模块发展均衡，继续保持！');
+
+  var html = '';
+  tips.forEach(function(t) {
+    html += '<div class="recommendation"><div class="rec-body">'+t+'</div></div>';
+  });
+  document.getElementById('advice-area').innerHTML = html;
+}
+
+function askAI() {
+  var records = stats.records || [];
+  var totalQ = records.reduce(function(s,r){return s+(r.total||0);},0);
+  if (totalQ === 0) { API.toast('请先完成练习'); return; }
+  var summary = API.XC_MODULES.map(function(m) {
+    var ms = API.moduleStats(profile, m);
+    return m+':'+ms.total+'题,正确率'+Math.round(ms.accuracy || 0)+'%';
+  }).join('; ');
+  API.openAIChat('请分析我的学情并给出学习建议。当前数据：'+summary+'。请从：1)各模块强弱分析 2)下一步重点 3)练习策略调整 三方面给出建议。');
+}
+
+function goPractice() {
+  var weak = findWeakestModule();
+  localStorage.setItem('mp-practice-date', API.getLocalDate());
+  localStorage.removeItem('mp-target-kp');
+  localStorage.removeItem('mp-focus-kp');
+  localStorage.setItem('mp-from-tool', 'quality-dashboard');
+  if (weak) {
+    localStorage.setItem('mp-target-module', weak);
+    localStorage.setItem('mp-practice-mode', 'direct');
+  } else {
+    localStorage.removeItem('mp-target-module');
+    localStorage.setItem('mp-practice-mode', 'smart');
+  }
+  API.pushPage('practice-card');
+}
+
+function findWeakestModule() {
+  var weakMod = '';
+  var weakAcc = 101;
+  API.XC_MODULES.forEach(function(m) {
+    var ms = API.moduleStats(profile, m);
+    if (ms.total >= 3 && ms.accuracy < weakAcc) {
+      weakAcc = ms.accuracy;
+      weakMod = m;
+    }
+  });
+  if (weakMod) return weakMod;
+  API.XC_MODULES.forEach(function(m) {
+    var ms = API.moduleStats(profile, m);
+    if (ms.total > 0 && ms.accuracy < weakAcc) {
+      weakAcc = ms.accuracy;
+      weakMod = m;
+    }
+  });
+  return weakMod;
+}
+
+function esc(s) { return API._esc(s); }
+(async () => { await loadData(); })();
+var _qualityRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:quality-dashboard', _qualityRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) { var t=e.target.closest('[data-quality-action]'); if(!t||!root.contains(t))return; var a=t.getAttribute('data-quality-action'); if(a==='back')API.goBack(); else if(a==='task')API.openTaskPanel(); else if(a==='practice')goPractice(); else if(a==='ai')askAI(); };
+    document.addEventListener('click', onClick); addCleanup(function(){document.removeEventListener('click', onClick);});
+  }
+});
+})();
+</script>
+</body>
+</html>

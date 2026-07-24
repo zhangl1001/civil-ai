@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 每日积累</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .mode-tabs { display: flex; gap: 0; background: var(--surface2); border-radius: 10px; padding: 3px; }
+  .mode-tab { flex: 1; text-align: center; padding: 8px 0; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); cursor: pointer; transition: all .15s; }
+  .mode-tab.active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .guide-card-wrap { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .guide-card { max-width: 320px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .guide-icon { width: 64px; height: 64px; border-radius: 50%; background: var(--accent-soft); display: flex; align-items: center; justify-content: center; }
+  .guide-title { font-size: 18px; font-weight: 700; color: var(--text); }
+  .guide-desc { font-size: 14px; color: var(--text-secondary); line-height: 1.6; }
+  .skeleton-wrap { display: flex; flex-direction: column; gap: 12px; }
+  .sk-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; background: var(--surface); border-radius: 14px; box-shadow: var(--card-shadow); }
+  .sk-img { height: 12px; border-radius: 4px; background: var(--surface2); width: 100%; }
+  .sk-line { height: 10px; border-radius: 4px; background: var(--surface2); }
+  .sk-line.w80 { width: 80%; } .sk-line.w60 { width: 60%; } .sk-line.w90 { width: 90%; } .sk-line.w40 { width: 40%; }
+  .sk-hint { text-align: center; font-size: 13px; color: var(--text-secondary); padding: 8px; }
+  .digest-card { padding: 16px; background: var(--surface); border-radius: 14px; box-shadow: var(--card-shadow); }
+  .digest-tag { display: inline-block; padding: 3px 10px; border-radius: var(--radius-full); font-size: 11px; font-weight: 600; margin-bottom: 8px; }
+  .digest-tag.hot { background: rgba(255,69,58,.12); color: var(--red); }
+  .digest-tag.tip { background: var(--accent-soft); color: var(--accent); }
+  .digest-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .digest-body { font-size: 14px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar" style="position:-webkit-sticky;position:sticky;top:0;z-index:100;justify-content:center">
+    <button data-digest-action="back" style="position:absolute;left:8px;z-index:1"><i data-lucide="arrow-left"></i></button>
+    <span class="title">每日积累</span>
+    <span class="navbar-actions" style="position:absolute;right:8px;display:flex;align-items:center;gap:0">
+      <button data-task-bell data-digest-action="task" style="position:static;background:none;border:none;cursor:pointer;color:var(--text-secondary);padding:4px;display:flex;align-items:center" title="消息"><i data-lucide="bell" style="width:18px;height:18px"></i><span class="task-badge"></span></button>
+      <span style="position:relative">
+        <button data-digest-action="menu" style="background:none;border:none;cursor:pointer;color:var(--text);padding:4px;display:flex;align-items:center;border-radius:50%"><i data-lucide="more-vertical" style="width:18px;height:18px"></i></button>
+        <div class="menu-dd" id="dg-menu">
+          <div class="menu-dd-item" data-digest-action="history"><i data-lucide="history"></i> 历史文件</div>
+	          <div class="menu-dd-item" data-digest-action="generate"><i data-lucide="sparkles"></i> AI 生成</div>
+          <div class="menu-dd-item" data-digest-action="refresh"><i data-lucide="refresh-cw"></i> 刷新</div>
+          <div class="menu-dd-item" data-digest-action="delete" style="color:var(--red)"><i data-lucide="trash-2"></i> 删除</div>
+        </div>
+      </span>
+    </span>
+  </div>
+
+  <div class="mode-tabs">
+    <div class="mode-tab active" id="tab-news" data-digest-action="tab" data-tab="news">热点</div>
+    <div class="mode-tab" id="tab-tips" data-digest-action="tab" data-tab="tips">知识点</div>
+  </div>
+
+  <!-- Guide card (when no content) -->
+  <div class="guide-card-wrap" id="guide">
+    <div class="guide-card">
+      <div class="guide-icon"><i data-lucide="sparkles" style="width:30px;height:30px;color:var(--accent)"></i></div>
+      <div class="guide-title">开启今日专属积累</div>
+      <div class="guide-desc">AI 将结合你的备考工程，生成专属时政与知识点</div>
+      <button class="card-btn" style="width:auto;padding:0 32px" data-digest-action="generate"><i data-lucide="sparkles"></i> 一键生成今日内容</button>
+    </div>
+  </div>
+
+  <!-- Skeleton loading -->
+  <div class="skeleton-wrap" id="skeleton" style="display:none">
+    <div class="sk-card"><div class="sk-img"></div><div class="sk-line w80"></div><div class="sk-line w60"></div><div class="sk-line w90"></div><div class="sk-line w40"></div></div>
+    <div class="sk-card"><div class="sk-img"></div><div class="sk-line w80"></div><div class="sk-line w60"></div><div class="sk-line w90"></div><div class="sk-line w40"></div></div>
+    <div class="sk-card"><div class="sk-img"></div><div class="sk-line w80"></div><div class="sk-line w60"></div><div class="sk-line w90"></div><div class="sk-line w40"></div></div>
+    <div class="sk-hint">AI 正在生成中，请稍候...</div>
+  </div>
+
+  <!-- Content list -->
+  <div id="content-list" style="display:none;flex-direction:column;gap:12px"></div>
+</div>
+
+<div class="tabs"></div>
+
+<script src="lucide.js"></script>
+<script src="marked.js"></script>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+<script>
+API.initPage('digest');
+
+function _onAicDone(e) {
+  // If AI was manually stopped, don't auto-retry
+  if (e.detail && e.detail.stopped) return;
+  setTimeout(function() {
+    if (document.getElementById('content-list')) loadTab(tab);
+  }, 600);
+}
+
+// When user manually stops AI, restore guide (remove loading spinner)
+function _onAicStopped() {
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  API.clearGenerating('digest', tab, API.getLocalDate());
+  localStorage.removeItem(digestGenMetaKey(tab, API.getLocalDate()));
+  var guide = document.getElementById('guide');
+  var contentList = document.getElementById('content-list');
+  if (contentList && contentList.querySelector('.aic-dot-pulse, [style*="spin"]')) {
+    contentList.style.display = 'none';
+    if (guide) guide.style.display = '';
+  }
+}
+document.addEventListener('aic-done', _onAicDone);
+document.addEventListener('aic-stopped', _onAicStopped);
+document.addEventListener('aic-failed', _onAicStopped);
+
+var tab = localStorage.getItem('digest-active-tab') || 'news';
+var pollTimer = null;
+
+function digestDir(t) {
+  return t === 'news' ? '每日热点' : '每日知识点';
+}
+
+function digestGenMetaKey(t, date) {
+  return 'digest-generating-' + t + '-' + date;
+}
+
+function isDigestGenerating(t, date) {
+  if (API.isGenerating('digest', t, date)) return true;
+  var raw = localStorage.getItem(digestGenMetaKey(t, date));
+  if (!raw) return false;
+  try {
+    var meta = JSON.parse(raw);
+    // Treat generation as active for up to 10 minutes after page exit; file existence
+    // is checked before this, so completed generations won't show stale loading.
+    return Date.now() - (meta.started_at || 0) < 10 * 60 * 1000;
+  } catch(e) {
+    return true;
+  }
+}
+
+function showDigestGenerating(t) {
+  document.getElementById('guide').style.display = 'none';
+  document.getElementById('content-list').style.display = 'flex';
+  API.showLoading(document.getElementById('content-list'), t === 'news' ? 'AI 正在生成热点...' : 'AI 正在生成知识点...');
+}
+
+function startDigestPolling(t, date) {
+  var dir = digestDir(t);
+  var attempts = 0;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  function _pollOnce() {
+    (async function() {
+      try {
+        const content = await API.fetchText(dir + '/' + date + '.md');
+        if (content) {
+          clearTimeout(pollTimer);
+          pollTimer = null;
+          API.clearGenerating('digest', t, date);
+          localStorage.removeItem(digestGenMetaKey(t, date));
+          if (tab === t) loadTab(t);
+          return;
+        }
+      } catch(e) { console.warn('[digest poll]', e); }
+      if (++attempts > 200) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+        API.clearGenerating('digest', t, date);
+        localStorage.removeItem(digestGenMetaKey(t, date));
+        if (tab === t) loadTab(t);
+        API.toast('生成超时，请重试');
+      } else {
+        pollTimer = setTimeout(_pollOnce, 3000);
+      }
+    })();
+  }
+  pollTimer = setTimeout(_pollOnce, 3000);
+}
+
+async function loadTab(t) {
+  tab = t;
+  localStorage.setItem('digest-active-tab', t);
+  document.getElementById('tab-news').classList.toggle('active', t === 'news');
+  document.getElementById('tab-tips').classList.toggle('active', t === 'tips');
+
+  const dir = digestDir(t);
+  const date = API.getLocalDate();
+  const text = await API.fetchText(dir + '/' + date + '.md');
+
+  if (text) {
+    API.clearGenerating('digest', t, date);
+    localStorage.removeItem(digestGenMetaKey(t, date));
+    document.getElementById('guide').style.display = 'none';
+    document.getElementById('content-list').style.display = 'flex';
+    renderDigestCards(text, t);
+  } else if (isDigestGenerating(t, date)) {
+    showDigestGenerating(t);
+    startDigestPolling(t, date);
+  } else {
+    document.getElementById('guide').style.display = '';
+    document.getElementById('skeleton').style.display = 'none';
+    document.getElementById('content-list').style.display = 'none';
+  }
+}
+
+function renderDigestCards(mdText, type) {
+  var listEl = document.getElementById('content-list');
+  var tagLabel = type === 'news' ? '热点' : '知识点';
+  var tagCls = type === 'news' ? 'hot' : 'tip';
+
+  var fullHtml = API.md(mdText);
+  var tmp = document.createElement('div');
+  tmp.innerHTML = fullHtml;
+
+  // Strip H1 title and thematic breaks before first H2
+  var beforeFirst = true;
+  var child = tmp.firstChild;
+  while (child) {
+    var next = child.nextSibling;
+    if (beforeFirst && (child.nodeType !== 1 || child.tagName === 'H1' || child.tagName === 'HR' || (child.tagName === 'BLOCKQUOTE' && child.textContent.indexOf('公考关键词') >= 0))) {
+      child.remove();
+    } else if (child.nodeType === 1 && child.tagName === 'H2') {
+      beforeFirst = false;
+    }
+    child = next;
+  }
+
+  // Split by H2 — collect nodes between H2 markers
+  var sections = [];
+  var cur = [];
+  child = tmp.firstChild;
+  while (child) {
+    var next2 = child.nextSibling;
+    if (child.nodeType === 1 && child.tagName === 'H2') {
+      if (cur.length) sections.push(cur);
+      cur = [];
+    }
+    cur.push(child);
+    child = next2;
+  }
+  if (cur.length) sections.push(cur);
+
+  // Build cards
+  listEl.innerHTML = '';
+  for (var s = 0; s < sections.length; s++) {
+    var nodes = sections[s];
+    if (!nodes.length) continue;
+    var card = document.createElement('div');
+    card.className = 'digest-card';
+    // Tag
+    var tagEl = document.createElement('span');
+    tagEl.className = 'digest-tag ' + tagCls;
+    tagEl.textContent = tagLabel;
+    card.appendChild(tagEl);
+    // Find title from H2
+    var titleText = '';
+    var bodyNodes = [];
+    for (var n = 0; n < nodes.length; n++) {
+      if (!titleText && nodes[n].nodeType === 1 && nodes[n].tagName === 'H2') {
+        titleText = nodes[n].textContent.trim();
+        continue; // skip H2 in body
+      }
+      bodyNodes.push(nodes[n]);
+    }
+    if (titleText) {
+      var titleEl = document.createElement('div');
+      titleEl.className = 'digest-title';
+      titleEl.textContent = titleText;
+      card.appendChild(titleEl);
+    }
+    // Body with all remaining content (tables, lists, paragraphs, H3, etc.)
+    var body = document.createElement('div');
+    body.className = 'md-body digest-body';
+    for (var b = 0; b < bodyNodes.length; b++) {
+      body.appendChild(bodyNodes[b].cloneNode(true));
+    }
+    card.appendChild(body);
+    listEl.appendChild(card);
+  }
+
+  if (!sections.length) {
+    listEl.innerHTML = '<div class="digest-card" style="text-align:center;padding:32px;color:var(--text-secondary)">暂无内容</div>';
+  }
+
+  lucide.createIcons();
+  if (typeof mermaid !== 'undefined') {
+    setTimeout(function() {
+      try { mermaid.run({ querySelector: '.digest-body .mermaid' }); } catch(e) {}
+    }, 200);
+  }
+}
+
+async function showDigestHistory() {
+  var overlay = document.createElement('div');
+  overlay.className = 'sheet-overlay';
+  overlay.id = 'dg-history-overlay';
+  var dir = tab === 'news' ? '每日热点' : '每日知识点';
+  var label = tab === 'news' ? '热点' : '知识点';
+  var html = '<div class="sheet-card" style="max-width:500px;gap:10px">';
+  html += '<div class="sheet-title">历史' + label + '</div>';
+  html += '<div id="dg-history-list" style="max-height:60vh;overflow-y:auto;text-align:center;padding:24px;color:var(--text-secondary)"><i data-lucide="loader" style="animation:spin 1s linear infinite;width:20px;height:20px;display:block;margin:0 auto 8px"></i></div>';
+  html += '<button data-digest-action="close-history" style="flex-shrink:0;height:42px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:14px">关闭</button></div>';
+  overlay.innerHTML = html;
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  try {
+    var paths = await API.listFiles(dir + '/');
+    var listHtml = '';
+    var files = paths.filter(function(p){return p.endsWith('.md')}).map(function(p){return {name:p.split('/').pop()}}).sort(function(a,b){return (b.name||'').localeCompare(a.name||'')});
+    var groups = {};
+    files.forEach(function(f) {
+      var d = f.name.replace('.md', '');
+        var month = d.substring(0, 7);
+        if (!groups[month]) groups[month] = [];
+        groups[month].push(d);
+      });
+      var months = Object.keys(groups).sort(function(a,b){return b.localeCompare(a)});
+      months.forEach(function(month) {
+        listHtml += '<div style="font-size:11px;font-weight:600;color:var(--text-secondary);padding:8px 0 4px">'+month+'</div>';
+        groups[month].forEach(function(d) {
+          var isCurrent = d === API.getLocalDate();
+          var day = d.substring(8);
+          listHtml += '<div data-digest-action="history-date" data-date="'+d+'" style="display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-light);cursor:pointer;font-size:14px;'+(isCurrent?'color:var(--accent);font-weight:600':'color:var(--text)')+'">'+day+'日'+(isCurrent?' · 当前':'')+' <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--border);margin-left:auto"></i></div>';
+        });
+      });
+    overlay.querySelector('#dg-history-list').innerHTML = listHtml || '<div style="text-align:center;padding:28px 16px;color:var(--text-secondary);font-size:13px"><i data-lucide="folder-open" style="width:24px;height:24px;display:block;margin:0 auto 8px;opacity:.3"></i>暂无历史文件</div>';
+  } catch(e) {
+    overlay.querySelector('#dg-history-list').innerHTML = '<div style="text-align:center;padding:28px 16px;color:var(--text-secondary);font-size:13px"><i data-lucide="folder-open" style="width:24px;height:24px;display:block;margin:0 auto 8px;opacity:.3"></i>加载失败</div>';
+  }
+  lucide.createIcons();
+}
+
+function loadDigestDate(date) {
+  // Load a specific date's content
+  var dir = tab === 'news' ? '每日热点' : '每日知识点';
+  API.fetchText(dir + '/' + date + '.md').then(function(text) {
+    if (text) {
+      document.getElementById('guide').style.display = 'none';
+      document.getElementById('content-list').style.display = 'flex';
+      renderDigestCards(text, tab);
+    } else {
+      API.toast('该日期无内容');
+    }
+  });
+}
+
+function regenerate() {
+  document.getElementById('guide').style.display = 'none';
+  document.getElementById('content-list').style.display = 'flex';
+  API.showLoading(document.getElementById('content-list'), 'AI 正在生成...');
+  API.setGenerating('digest', tab, API.getLocalDate());
+  localStorage.setItem(digestGenMetaKey(tab, API.getLocalDate()), JSON.stringify({ tab: tab, started_at: Date.now() }));
+
+  const dir = digestDir(tab);
+  const date = API.getLocalDate();
+
+  // Send via AI dialog (matching desktop format with save path)
+  var proj = localStorage.getItem('zhangl-active-project') || '公考练习';
+  var msg = tab === 'news'
+    ? '请帮我整理（日期：' + date + '）的热点新闻和社评，跟公考申论和面试相关的。包括：1）今天的重要时事政治新闻 2）人民日报/半月谈的重要评论 3）跟申论可能相关的社会热点 4）面试可能考到的时政话题。请用 web_search 工具搜索最新新闻，然后整理成每日热点简报，保存在 每日热点/' + date + '.md。'
+    : '请给我（日期：' + date + '）的碎片知识点积累，从各模块轮流选1-2个：1）言语理解：易混淆词语辨析（近义词、成语）2）判断推理：图形推理规律总结、逻辑判断公式 3）资料分析：常用速算公式和技巧 4）数量关系：经典题型公式 5）常识判断：高频考点速记。每个知识点要简短精炼（3-5句话），有例子更好。保存在 每日知识点/' + date + '.md。';
+  API.openAIChat(msg, { freshSession: true, freshName: tab === 'news' ? '每日热点' : '每日知识点' });
+
+  startDigestPolling(tab, date);
+}
+
+function toggleDigestMenu(e) {
+  if (e) e.stopPropagation();
+  var m = document.getElementById('dg-menu');
+  var wasOpen = m.classList.contains('show');
+  document.querySelectorAll('.menu-dd.show').forEach(function(x) { x.classList.remove('show'); });
+  if (!wasOpen) {
+    m.classList.add('show');
+    setTimeout(function() {
+      document.addEventListener('click', function close() {
+        m.classList.remove('show');
+        document.removeEventListener('click', close);
+      });
+    }, 0);
+  }
+}
+
+function closeDgMenu() {
+  var m = document.getElementById('dg-menu'); if (m) m.classList.remove('show');
+}
+
+function refreshDigest() {
+  document.getElementById('content-list').style.display = 'flex';
+  API.showLoading(document.getElementById('content-list'), '加载中...');
+  loadTab(tab);
+}
+window._refresh_digest = refreshDigest;
+
+async function deleteDigest() {
+  API.confirm('删除文件', '确认删除今日' + (tab === 'news' ? '热点' : '知识点') + '？', async function() {
+  var dir = tab === 'news' ? '每日热点' : '每日知识点';
+  var date = API.getLocalDate();
+  try {
+    await API.deleteFile(dir + '/' + date + '.md');
+    API.toast('已删除');
+    document.getElementById('guide').style.display = '';
+    document.getElementById('content-list').style.display = 'none';
+  } catch(e) { console.warn('[deleteDigest]', e); API.toast('删除失败'); }
+  });
+}
+
+// Init
+loadTab(tab);
+var _digestRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:digest', _digestRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var t = e.target.closest('[data-digest-action]');
+      var historyOverlay = document.getElementById('dg-history-overlay');
+      if (!t || (!root.contains(t) && !(historyOverlay && historyOverlay.contains(t)))) return;
+      var a = t.getAttribute('data-digest-action');
+      if (a === 'back') API.goBack(); else if (a === 'task') API.openTaskPanel();
+      else if (a === 'menu') toggleDigestMenu(e);
+      else if (a === 'history') { closeDgMenu(); showDigestHistory(); }
+      else if (a === 'generate') { closeDgMenu(); regenerate(); }
+      else if (a === 'refresh') { closeDgMenu(); refreshDigest(); }
+      else if (a === 'delete') { closeDgMenu(); deleteDigest(); }
+      else if (a === 'tab') loadTab(t.getAttribute('data-tab'));
+      else if (a === 'close-history') { if (historyOverlay) historyOverlay.remove(); }
+      else if (a === 'history-date') { if (historyOverlay) historyOverlay.remove(); loadDigestDate(t.getAttribute('data-date')); }
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  },
+  destroy: function() {
+    document.removeEventListener('aic-done', _onAicDone);
+    document.removeEventListener('aic-stopped', _onAicStopped);
+    document.removeEventListener('aic-failed', _onAicStopped);
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+});
+</script>
+</body>
+</html>

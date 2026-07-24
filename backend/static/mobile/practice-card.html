@@ -1,0 +1,1896 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 刷题</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  /* Empty state */
+  .empty-card{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;height:100%;min-height:300px;text-align:center;padding:0 20px}
+  .empty-icon{width:56px;height:56px;border-radius:16px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center}
+  .empty-icon svg{width:28px;height:28px;color:var(--accent)}
+  .empty-title{font-size:16px;font-weight:600;color:var(--text)}
+  .empty-desc{font-size:13px;color:var(--text-secondary);line-height:1.6}
+
+  /* Lecture tabs */
+  .mode-tabs{display:flex;gap:0;background:var(--surface2);border-radius:10px;padding:3px;flex-shrink:0}
+  .mode-tab{flex:1;text-align:center;padding:8px 0;border-radius:8px;font-size:13px;font-weight:600;color:var(--text-secondary);cursor:pointer;transition:all .15s}
+  .mode-tab.active{background:var(--surface);color:var(--accent);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .lecture-content{font-size:14px;line-height:1.75;padding:4px}
+
+  /* Question card */
+  .q-card{background:var(--surface);border-radius:14px;padding:20px 16px;box-shadow:var(--card-shadow);display:flex;flex-direction:column;gap:16px;transition:opacity .15s,transform .15s;flex:1;margin-bottom:8px;overflow:visible}
+  .q-card.sliding{opacity:0;transform:translateX(-16px)}
+  .q-header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .q-diff{font-size:13px;color:var(--orange);letter-spacing:1px}
+  .q-type-tag{font-size:11px;padding:3px 10px;border-radius:20px;background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .q-source-tag{font-size:10px;padding:3px 8px;border-radius:20px;background:var(--surface2);color:var(--text-secondary);font-weight:600}
+  .q-source-tag.high{background:rgba(52,199,89,.12);color:var(--green)}
+  .q-source-tag.low{background:rgba(255,149,0,.14);color:var(--orange)}
+  .q-num{font-size:12px;color:var(--text-secondary);margin-left:auto}
+  .q-stem{font-size:15px;line-height:1.8;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .q-stem .md-svg{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px 0}
+  .q-stem .md-svg svg{max-width:none;height:auto;display:block;min-width:200px}
+  .q-stem svg{max-width:100%;height:auto;display:block;margin:8px auto}
+  .q-stem h1,.q-stem h2,.q-stem h3,.q-stem h4{border-bottom:none;padding-bottom:0;margin:4px 0}
+  .q-card.visual-question .q-stem{line-height:1.55;white-space:normal}
+  .q-card.visual-question .q-stem .md-svg,
+  .q-card.visual-question .q-stem .mermaid{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;margin:6px 8px;max-width:none;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .q-card.visual-question .q-stem .md-svg svg,
+  .q-card.visual-question .q-stem .mermaid svg,
+  .q-card.visual-question .q-stem > svg,
+  .q-card.visual-question .q-stem img{display:inline-block;max-width:none;width:auto;max-height:170px;margin:0;vertical-align:middle}
+
+  /* Options */
+  .q-options{display:flex;flex-direction:column;gap:10px}
+  .q-opt{display:flex;align-items:flex-start;gap:12px;padding:13px 14px;border-radius:10px;background:var(--surface2);cursor:pointer;transition:background .12s,box-shadow .12s;font-size:15px;line-height:1.55;color:var(--text);-webkit-tap-highlight-color:transparent;min-width:0}
+  .q-opt:active{background:var(--accent-soft)}
+  .q-opt .opt-letter{width:26px;height:26px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;transition:all .12s;color:var(--text-secondary)}
+  .q-opt .opt-text{flex:1;padding-top:2px;min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .q-opt .opt-text svg{max-width:100%;height:auto;display:block}
+  .q-opt .opt-text .md-svg{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:4px 0}
+  .q-opt .opt-text .md-svg svg{max-width:none;height:auto;min-width:120px}
+  .q-card.visual-question .q-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .q-card.visual-question .q-opt{position:relative;min-height:124px;flex-direction:column;align-items:stretch;gap:8px;padding:12px}
+  .q-card.visual-question .q-opt .opt-letter{position:absolute;top:8px;left:8px;z-index:2;width:24px;height:24px;font-size:12px}
+  .q-card.visual-question .q-opt .opt-text{padding-top:22px;min-height:86px;display:flex;align-items:center;justify-content:center;overflow:auto;text-align:center}
+  .q-card.visual-question .q-opt .opt-text .md-svg,
+  .q-card.visual-question .q-opt .opt-text .mermaid{display:flex;align-items:center;justify-content:center;margin:0;max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch}
+  .q-card.visual-question .q-opt .opt-text svg,
+  .q-card.visual-question .q-opt .opt-text img{display:block;max-width:none;width:auto;max-height:96px;margin:0 auto}
+  .q-card.visual-question .q-opt.selected{box-shadow:inset 0 0 0 2px var(--accent)}
+  .q-card.visual-question .q-opt.correct{box-shadow:inset 0 0 0 2px var(--green)}
+  .q-card.visual-question .q-opt.wrong{box-shadow:inset 0 0 0 2px var(--red)}
+  .q-opt.selected{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+  .q-opt.selected .opt-letter{background:var(--accent);color:#fff}
+  .q-opt.correct{background:rgba(52,199,89,.12);box-shadow:inset 3px 0 0 var(--green)}
+  .q-opt.correct .opt-letter{background:var(--green);color:#fff}
+  .q-opt.wrong{background:rgba(255,69,58,.12);box-shadow:inset 3px 0 0 var(--red)}
+  .q-opt.wrong .opt-letter{background:var(--red);color:#fff}
+  .q-opt.graded{pointer-events:none}
+
+  /* Grading result banner */
+  .q-result{font-size:13px;line-height:1.5;padding:10px 14px;border-radius:10px;display:flex;align-items:flex-start;gap:8px}
+  .q-result.correct-banner{background:rgba(52,199,89,.12);color:var(--green)}
+  .q-result.wrong-banner{background:rgba(255,69,58,.12);color:var(--red)}
+  .q-result.pending-banner{background:var(--accent-soft);color:var(--accent)}
+  .q-result strong{font-weight:700}
+  .q-result-text{flex:1;min-width:0}
+  .q-ask-ai{flex-shrink:0;display:flex;align-items:center;gap:3px;padding:5px 10px;border-radius:8px;border:none;background:rgba(0,0,0,.06);color:var(--text-secondary);font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;transition:background .12s}
+  .q-ask-ai:active{background:rgba(0,0,0,.12)}
+  .q-ask-ai svg{width:13px;height:13px}
+
+  /* Answer toggle */
+  .q-answer-toggle{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--accent);cursor:pointer;padding:8px 0;font-weight:600;-webkit-tap-highlight-color:transparent;user-select:none}
+  .q-answer-toggle svg{width:14px;height:14px;transition:transform .2s}
+  .q-answer-toggle.open svg{transform:rotate(90deg)}
+  .q-answer-body{display:none;font-size:14px;line-height:1.75;padding:12px 14px;background:var(--surface2);border-radius:10px}
+  .q-answer-body.open{display:block}
+
+  /* Bottom bar — fixed at screen bottom */
+  .bottom-bar{display:flex;align-items:center;padding:0 12px;padding-bottom:env(safe-area-inset-bottom);background:var(--bg);flex-shrink:0;gap:6px}
+  .bottom-bar-inner{display:flex;align-items:center;gap:6px;width:100%;background:var(--surface);border-radius:14px;padding:8px 10px;box-shadow:var(--card-shadow);margin-top:8px}
+  .bottom-bar button{background:var(--surface2);border:none;color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:4px;font-size:14px;font-family:inherit;-webkit-tap-highlight-color:transparent;transition:background .15s,transform .1s}
+  .bottom-bar button:active{background:var(--hover);transform:scale(.96)}
+  .bottom-bar button:disabled{opacity:.35;pointer-events:none;transform:none}
+  .btn-sheet{flex:1;justify-content:center;font-weight:600;font-size:15px;gap:6px}
+  .btn-sheet .q-idx-circle{display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+  .btn-submit{margin-left:auto;padding:8px 16px;border-radius:20px;background:var(--accent);color:#fff;border:none;font-weight:600;font-size:13px}
+
+  /* Sheet overlay (shared classes in common.css, page-specific extras here) */
+  .sheet-stats{text-align:center;font-size:13px;color:var(--text-secondary)}
+  .sheet-stats strong{color:var(--accent)}
+  .sheet-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+  .sheet-q{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;cursor:pointer;transition:all .12s}
+  .sheet-q.s-unanswered{background:var(--surface2);color:var(--text-secondary)}
+  .sheet-q.s-answered{background:var(--accent-soft);color:var(--accent)}
+  .sheet-q.s-correct{background:rgba(52,199,89,.18);color:var(--green)}
+  .sheet-q.s-wrong{background:rgba(255,69,58,.18);color:var(--red)}
+  .sheet-q.s-current{box-shadow:0 0 0 2px var(--accent)}
+  .sheet-legend{display:flex;justify-content:center;gap:16px;font-size:11px;color:var(--text-secondary)}
+  .sheet-legend span{display:flex;align-items:center;gap:4px}
+  .sheet-legend .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .sheet-actions{display:flex;gap:8px}
+  .sheet-actions button{flex:1;height:42px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-secondary{background:var(--surface2);color:var(--text-secondary)}
+  .btn-primary:active,.btn-secondary:active{opacity:.85}
+
+  /* Toolbar menu items */
+  .tb-more-item{display:flex;align-items:center;justify-content:flex-start;text-align:left;gap:8px;width:100%;padding:10px 12px;border:none;border-radius:8px;background:none;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .tb-more-item:active{background:var(--hover)}
+  .tb-more-item svg{flex-shrink:0}
+
+  /* Generation sheet: long weak-point/knowledge lists must not push module cards off-screen */
+  #pc-gen-overlay .sheet-card{max-height:calc(100vh - 20px - env(safe-area-inset-top));overflow:hidden}
+  .pc-gen-scroll{min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-right:2px}
+  .pc-gen-section-label{font-size:12px;color:var(--text-secondary);margin:8px 0 4px;flex-shrink:0}
+  #pc-gen-modules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  #pc-gen-modules .gen-mod-btn{min-width:0;width:100%;height:34px;padding:0 4px;font-size:12px;font-weight:500;border:none;border-radius:8px;cursor:pointer;font-family:inherit;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #pc-gen-subtopic-list{display:flex;flex-wrap:wrap;gap:5px;max-height:180px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:2px}
+  .pc-gen-actions{display:flex;gap:8px;margin-top:12px;flex-shrink:0}
+  @media (max-height:700px){
+    #pc-gen-subtopic-list{max-height:112px}
+    #pc-gen-overlay .sheet-card{gap:10px}
+  }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <span id="pc-marker" style="display:none"></span>
+  <div class="navbar" style="position:sticky;top:0;justify-content:center">
+    <button data-pc-action="back" style="position:absolute;left:8px;z-index:1"><i data-lucide="arrow-left"></i></button>
+    <span id="pc-nav-timer" style="position:absolute;left:40px;font-size:13px;color:var(--text-secondary);font-weight:500;white-space:nowrap;z-index:2"></span>
+    <span id="nav-title" data-pc-action="module-picker" style="cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px" class="title"><span id="pc-nav-title-text">今日练习</span><i data-lucide="chevron-down" style="width:14px;height:14px;color:var(--text-secondary)"></i></span>
+    <span class="navbar-actions" style="display:flex;align-items:center;gap:0;position:absolute;right:8px">
+      <button data-task-bell data-pc-action="task" style="position:static;background:none;border:none;cursor:pointer;color:var(--text-secondary);padding:4px;display:flex;align-items:center" title="消息"><i data-lucide="bell" style="width:18px;height:18px"></i><span class="task-badge"></span></button>
+      <span style="position:relative">
+        <button data-pc-action="menu" style="background:none;border:none;cursor:pointer;color:var(--text);padding:6px;display:flex;align-items:center;border-radius:50%"><i data-lucide="more-vertical" style="width:18px;height:18px"></i></button>
+        <div id="pc-menu" style="display:none;position:absolute;right:0;top:100%;z-index:50;background:var(--surface);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);padding:4px;min-width:130px">
+          <button class="tb-more-item" data-pc-action="refresh"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> 刷新</button>
+          <button class="tb-more-item" data-pc-action="regenerate"><i data-lucide="zap" style="width:14px;height:14px"></i> 重新生成</button>
+          <button class="tb-more-item" data-pc-action="history"><i data-lucide="history" style="width:14px;height:14px"></i> 历史文件</button>
+          <button class="tb-more-item" id="pc-delete-btn" data-pc-action="delete" style="color:var(--red)"><i data-lucide="trash-2" style="width:14px;height:14px"></i> 删除</button>
+        </div>
+      </span>
+    </span>
+  </div>
+
+  <div class="mode-tabs" id="pc-mode-tabs" style="display:none">
+    <div class="mode-tab" data-mode="lecture" data-pc-action="mode-lecture">讲义</div>
+    <div class="mode-tab active" data-mode="practice" data-pc-action="mode-practice">刷题</div>
+  </div>
+
+  <div class="empty-card" id="pc-empty-state">
+    <div class="empty-icon"><i data-lucide="sparkles"></i></div>
+    <div class="empty-title" id="pc-empty-title">「<span id="pc-mod-name"></span>」题目还未生成</div>
+    <div class="empty-desc">点击下方按钮，AI 将为你生成今日练习题</div>
+    <button class="card-btn" data-pc-action="generate-plan"><i data-lucide="sparkles"></i> 每日计划</button>
+    <button class="card-btn" data-pc-action="generate" style="background:var(--surface);color:var(--text);border:1px solid var(--border);margin-top:8px"><i data-lucide="settings" style="width:14px;height:14px"></i> 自定义出题</button>
+  </div>
+
+  <div class="card md-body lecture-content" id="pc-lecture-body" style="display:none"></div>
+
+  <div id="practice-area" style="display:none">
+    <div class="q-card" id="q-card">
+      <div class="q-header">
+        <span class="q-diff" id="q-diff"></span>
+        <span class="q-type-tag" id="q-type"></span>
+        <span class="q-num" id="q-num"></span>
+      </div>
+      <div class="md-body q-stem" id="q-stem"></div>
+      <div class="q-options" id="q-options"></div>
+      <div class="q-result" id="q-result" style="display:none"></div>
+      <div class="q-answer-toggle" id="q-answer-toggle" data-pc-action="toggle-answer" style="display:none">
+        <i data-lucide="chevron-right"></i> <span id="q-toggle-label">展开解析</span>
+      </div>
+      <div class="md-body q-answer-body" id="q-answer-body"></div>
+    </div>
+  </div>
+
+  <div class="bottom-bar" id="bottom-bar" style="display:none">
+    <div class="bottom-bar-inner">
+      <button data-pc-action="prev" id="btn-prev"><i data-lucide="chevron-left" style="width:16px;height:16px"></i>上一题</button>
+      <button class="btn-sheet" data-pc-action="sheet">
+        <span class="q-idx-circle" id="btn-q-idx">1</span> 答题卡
+      </button>
+      <button data-pc-action="next" id="btn-next">下一题<i data-lucide="chevron-right" style="width:16px;height:16px"></i></button>
+    </div>
+  </div>
+</div>
+
+<div class="tabs" style="display:none"></div>
+
+<script src="lucide.js"></script>
+<script src="marked.js"></script>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+<script>
+API.initPage('practice');
+
+// ===== DEFINITIONS (must come before any usage) =====
+
+// Scope all lookups to this page's overlay (prevent cross-page ID conflicts)
+var _pcRoot = (function() {
+  // The pushPage that loaded us should have set API._lastPushEl
+  if (API._lastPushEl) return API._lastPushEl;
+  // Fallback: find the subpage-overlay that contains pc-marker (deepest/latest)
+  var markers = document.querySelectorAll('#pc-marker');
+  var best = null, bestZ = -1;
+  markers.forEach(function(m) {
+    var ov = m.closest('.subpage-overlay');
+    if (ov) { var z = parseInt(ov.style.zIndex) || 0; if (z > bestZ) { bestZ = z; best = ov; } }
+  });
+  return best || document;
+})();
+function $e(id) {
+  var el = _pcRoot.querySelector('#' + id);
+  return el; // returns null when absent — callers must null-check (was {} which broke pageAlive)
+}
+
+// pageAlive — true only while this sub-page's root is still in the DOM.
+// Previously $e returned {} so !!$e(...) was always true; now checks connectivity (audit #2).
+function pageAlive() {
+  return _pcRoot && _pcRoot.isConnected;
+}
+
+// ---- Unified localStorage key helpers (mock vs practice use DIFFERENT suffixes;
+// hand-building them in 6+ places caused read/write mismatch that lost mock progress — audit #1) ----
+function _key(suffix) {
+  // Mock state must include subject: 行测 and 申论 may be taken on the same date.
+  return _mockMode
+    ? 'p-' + suffix + '-' + PROJ + '-mock-' + _mockSubject + '-' + DATE
+    : 'p-' + suffix + '-' + PROJ + '-' + MOD + '-' + DATE;
+}
+function idxKey()     { return _key('idx'); }
+function answersKey() { return _key('answers'); }
+function submittedKey(){ return _key('submitted'); }
+// Timer uses the unified state system in common.js (see _loadTimerState/_saveTimerState)
+
+// All known practice modules (for fallback scanning)
+var ALL_MODS = API.XC_MODULES;
+
+// Find the best available module for the active training date only.
+// History is an explicit date switch; normal entry must not silently fall back to old files.
+async function findBestModule(preferred) {
+  var text = await API.fetchText('练习/' + preferred + '/' + DATE + '.md');
+  if (text) return { module: preferred, text: text };
+  for (var i = 0; i < ALL_MODS.length; i++) {
+    var m = ALL_MODS[i];
+    if (m === preferred) continue;
+    var t = await API.fetchText('练习/' + m + '/' + DATE + '.md');
+    if (t) return { module: m, text: t };
+  }
+  return null;
+}
+
+// ===== STATE VARIABLES =====
+var MOD = localStorage.getItem('mp-target-module') || '';
+var TARGET_KP = localStorage.getItem('mp-target-kp') || '';
+var PROJ = localStorage.getItem('zhangl-active-project') || '公考练习';
+var HIST_DATE = localStorage.getItem('mp-practice-date') || ''; // historical date override
+var DATE = HIST_DATE || API.getLocalDate();
+var ENTRY_MODE = localStorage.getItem('mp-practice-mode') || 'smart';
+var INITIAL_MOD = MOD;
+// Mock mode state
+var _mockMode = ENTRY_MODE === 'mock';
+var _mockSubject = MOD || '行测';
+var _timerMode = _mockMode ? 'down' : 'up';
+var _timerTotal = _mockMode ? (MOD === '申论' ? 9000 : 7200) : 0;
+var _mockWarningShown = false;
+// From-plan flag: when entering from daily plan, auto-generate on empty & on module switch
+var FROM_PLAN = !!localStorage.getItem('mp-from-plan');
+// Clean up after reading (but keep date for mock mode)
+if (HIST_DATE && !_mockMode) localStorage.removeItem('mp-practice-date');
+if (FROM_PLAN) localStorage.removeItem('mp-from-plan');
+if (TARGET_KP) localStorage.removeItem('mp-target-kp');
+if (_mockMode) { MOD = '模拟考试'; DATE = HIST_DATE || DATE; }
+$e('pc-nav-title-text').textContent = _mockMode ? (_mockSubject + '模考 · ' + DATE) : (TARGET_KP ? (MOD + ' · ' + TARGET_KP) : (FROM_PLAN ? '今日计划' : (MOD || '今日练习')));
+$e('pc-mod-name').textContent = TARGET_KP ? (MOD + ' · ' + TARGET_KP) : (MOD || '未知模块');
+
+var _mdText = '';
+var _questions = [];
+var _lecture = '';
+var _currentIdx = 0;
+var _answers = {};
+var _submitted = false;
+var _timerSec = 0;
+var _timerId = null;
+var _mode = 'practice';
+var _loading = false; // prevent concurrent loadQuestions calls
+
+// ---- Parse markdown into structured questions ----
+function parseQuestions(mdText) {
+  // Find question markers: **N.**
+  var pattern = /\*\*(\d+)\.\*\*/gm;
+  var markers = [];
+  var m;
+  while ((m = pattern.exec(mdText)) !== null) {
+    markers.push({ num: parseInt(m[1]), index: m.index });
+  }
+  // Also try ### QN | format
+  if (markers.length === 0) {
+    var p2 = /^###\s+Q(\d+)\s*\|/gm;
+    while ((m = p2.exec(mdText)) !== null) {
+      markers.push({ num: parseInt(m[1]), index: m.index });
+    }
+  }
+
+  if (markers.length === 0) return { questions: [], lecture: mdText };
+
+  // Extract lecture content (before first question, keep markdown hierarchy)
+  var preContent = mdText.substring(0, markers[0].index);
+  // Strip file-level H1 title, and cut off at 练习题/配套练习 section
+  var lecture = preContent
+    .replace(/^#\s+.+$/m, '')
+    .replace(/^##\s*练习题[\s\S]*$/m, '')
+    .replace(/^##\s*配套练习[\s\S]*$/m, '')
+    .trim();
+
+  // Parse each question block
+  var questions = [];
+  for (var i = 0; i < markers.length; i++) {
+    var start = markers[i].index;
+    var end = i + 1 < markers.length ? markers[i + 1].index : mdText.length;
+    var block = mdText.substring(start, end);
+    var q = parseOneQuestion(block, markers[i].num);
+    if (q) questions.push(q);
+  }
+
+  return { questions: questions, lecture: lecture };
+}
+
+function parseOneQuestion(block, num) {
+  // Render full block with marked.parse to preserve ALL markdown formatting
+  var html = API.md(block);
+  var container = document.createElement('div');
+  container.innerHTML = html;
+
+  // Extract difficulty/type from first text
+  var difficulty = '', type = '';
+  var allText = container.textContent || '';
+  var firstLine = allText.replace(/^\d+\.\s*/, '').replace(/^###\s*Q\d+\s*\|\s*/, '').trim();
+  var metaMatch = firstLine.match(/^（([★☆]+)\s*(.+?)）\s*(.*)/);
+  if (metaMatch) {
+    difficulty = metaMatch[1];
+    type = metaMatch[2];
+  }
+
+  var extracted = extractQuestionOptions(container);
+  var options = extracted.options;
+
+  // Extract and remove answer/grading blocks (DOM-based, like desktop)
+  var answerHtml = '', gradingHtml = '';
+  var correctAnswer = '', userAnswer = '', errorReason = '', isCorrect = false;
+  var ansDiv = container.querySelector('.answer-block');
+  var grdDiv = container.querySelector('.grading-block');
+
+  if (ansDiv) {
+    answerHtml = ansDiv.outerHTML;
+    // Parse correct answer from answer-block DOM — allow E/F for multi-select (audit #4)
+    var ansText = ansDiv.textContent.replace(/\*\*/g, '');
+    var caMatch = ansText.match(/(?:答案|正确答案)[：:\s]*([A-F])/);
+    if (caMatch) correctAnswer = caMatch[1];
+    ansDiv.remove();
+  }
+
+  if (grdDiv) {
+    gradingHtml = grdDiv.outerHTML;
+    // DOM-based: use classList for isCorrect (reliable, matches desktop)
+    isCorrect = grdDiv.classList.contains('correct');
+    // Parse from child elements structure (not regex on textContent)
+    var grdText = grdDiv.textContent.replace(/\*\*/g, '');
+    var uaMatch = grdText.match(/(?:你的答案|你选了)[：:\s]*([A-F])/);
+    if (uaMatch) userAnswer = uaMatch[1];
+    var erMatch = grdText.match(/错因[：:\s]*([\s\S]+)/);
+    if (erMatch) errorReason = erMatch[1].trim();
+    grdDiv.remove();
+  }
+
+  // Remaining HTML is the stem (full markdown preserved!)
+  var stemHtml = container.innerHTML.trim();
+
+  return {
+    num: num,
+    difficulty: difficulty,
+    type: type,
+    stem: stemHtml,        // pre-rendered HTML with all formatting
+    options: options,      // each has .html (formatted) and .text (plain)
+    answerBlock: answerHtml,
+    gradingBlock: gradingHtml,
+    correctAnswer: correctAnswer,
+    userAnswer: userAnswer,
+    errorReason: errorReason,
+    graded: gradingHtml.length > 0,
+    isCorrect: isCorrect,
+    bizMeta: API.Business.questionTrustFromText(block)
+  };
+}
+
+function extractQuestionOptions(container) {
+  var options = [];
+  var nodesToRemove = [];
+  var children = Array.prototype.slice.call(container.childNodes);
+  var seen = {};
+
+  for (var i = 0; i < children.length; i++) {
+    var node = children[i];
+    if (!isOptionLabelNode(node)) continue;
+    var el = node;
+    var txt = el.textContent.trim();
+    if (countOptionLabels(txt) > 1) continue;
+    var label = txt.match(/^([A-F])[.．、]\s*([\s\S]*)$/);
+    if (!label || seen[label[1]]) continue;
+
+    var html = stripOptionLabelHtml(el.innerHTML);
+    var captured = [el];
+    var j = i + 1;
+    while (j < children.length) {
+      var next = children[j];
+      if (isAnswerOrGradingNode(next) || isOptionLabelNode(next)) break;
+      if (isIgnorableNode(next)) { captured.push(next); j++; continue; }
+      html += nodeToHtml(next);
+      captured.push(next);
+      j++;
+    }
+    var plain = htmlToText(html) || label[2] || '';
+    options.push({ letter: label[1], text: plain, html: html.trim() || API._esc(plain) });
+    captured.forEach(function(n) { if (nodesToRemove.indexOf(n) < 0) nodesToRemove.push(n); });
+    seen[label[1]] = true;
+  }
+
+  if (options.length < 2) {
+    options = [];
+    nodesToRemove = [];
+    seen = {};
+    var allEls = container.querySelectorAll('p, li');
+    for (var k = 0; k < allEls.length; k++) {
+      var el2 = allEls[k];
+      var text = el2.textContent.trim();
+      var optMatch = text.match(/^([A-F])[.．、]\s*(.+)$/);
+      if (optMatch && !seen[optMatch[1]]) {
+        var inner = stripOptionLabelHtml(el2.innerHTML);
+        options.push({ letter: optMatch[1], text: optMatch[2], html: inner });
+        nodesToRemove.push(el2);
+        seen[optMatch[1]] = true;
+      } else if (text.match(/^[A-F][.．、]/)) {
+        var before = options.length;
+        var parts = el2.innerHTML.split(/<br\s*\/?>/i);
+        for (var p = 0; p < parts.length; p++) {
+          var pt = parts[p].replace(/<[^>]+>/g, '').trim();
+          var pm = pt.match(/^([A-F])[.．、]\s*(.+)$/);
+          if (pm && !seen[pm[1]]) {
+            var pi = stripOptionLabelHtml(parts[p]);
+            options.push({ letter: pm[1], text: pm[2], html: pi });
+            seen[pm[1]] = true;
+          }
+        }
+        if (options.length > before) nodesToRemove.push(el2);
+      }
+    }
+  }
+
+  nodesToRemove.forEach(function(n) { if (n && n.parentNode) n.parentNode.removeChild(n); });
+  options.sort(function(a, b) { return a.letter.localeCompare(b.letter); });
+  return { options: options };
+}
+
+function isOptionLabelNode(node) {
+  if (!node || node.nodeType !== 1) return false;
+  var tag = node.tagName ? node.tagName.toLowerCase() : '';
+  if (tag !== 'p' && tag !== 'li') return false;
+  return /^([A-F])[.．、]\s*/.test((node.textContent || '').trim());
+}
+
+function isAnswerOrGradingNode(node) {
+  return node && node.nodeType === 1 && node.classList && (node.classList.contains('answer-block') || node.classList.contains('grading-block'));
+}
+
+function isIgnorableNode(node) {
+  return node && node.nodeType === 3 && !String(node.textContent || '').trim();
+}
+
+function nodeToHtml(node) {
+  if (!node) return '';
+  if (node.nodeType === 3) return API._esc(node.textContent || '');
+  if (node.outerHTML) return node.outerHTML;
+  return '';
+}
+
+function htmlToText(html) {
+  var tmp = document.createElement('div');
+  tmp.innerHTML = html || '';
+  return (tmp.textContent || '').trim();
+}
+
+function stripOptionLabelHtml(html) {
+  return String(html || '')
+    .replace(/^\s*<strong>\s*([A-F])[.．、]\s*<\/strong>\s*/i, '')
+    .replace(/^\s*([A-F])[.．、]\s*/i, '');
+}
+
+function countOptionLabels(text) {
+  var m = String(text || '').match(/[A-F][.．、]/g);
+  return m ? m.length : 0;
+}
+
+// Markdown rendering uses shared API.md() from common.js
+
+// ---- Load questions ----
+async function loadQuestions() {
+  if (_loading) return;
+  _loading = true;
+  // Reset timer for new file — only restarted on success
+  stopTimer(); _timerSec = 0;
+  var timerEl = $e('pc-nav-timer'); if (timerEl) timerEl.textContent = '';
+  try {
+
+  var emptyEl = $e('pc-empty-state');
+  var practiceArea = $e('practice-area');
+  var bottomBar = $e('bottom-bar');
+  var lectureBody = $e('pc-lecture-body');
+  var modeTabs = $e('pc-mode-tabs');
+
+  // === MOCK MODE: fixed file path, no module scanning ===
+  if (_mockMode) {
+    var mockText = await API.fetchText(API.mockExamPath(_mockSubject, DATE));
+    // One-time compatibility read for pre-v3 exam records.
+    if (!mockText) mockText = await API.fetchText(API.legacyMockExamPath(DATE));
+    if (!mockText) {
+      $e('pc-empty-title').textContent = '试卷未找到';
+      $e('pc-empty-state').style.display = '';
+      practiceArea.style.display = 'none'; bottomBar.style.display = 'none';
+      lectureBody.style.display = 'none'; modeTabs.style.display = 'none';
+      _loading = false; return;
+    }
+    _mdText = mockText;
+    var parsed = parseQuestions(_mdText);
+    _questions = parsed.questions; _lecture = '';
+    API.clearGenerating('practice', MOD, DATE);
+    if (_questions.length === 0) {
+      $e('pc-empty-title').textContent = '试卷解析失败';
+      $e('pc-empty-state').style.display = '';
+      _loading = false; return;
+    }
+    restoreAnswers(); restoreTimerState();
+    modeTabs.style.display = 'none'; lectureBody.style.display = 'none';
+    emptyEl.style.display = 'none'; practiceArea.style.display = ''; bottomBar.style.display = '';
+    _mode = 'practice';
+    var mockSaved = localStorage.getItem(idxKey()) || '0';
+    var mqOverride = localStorage.getItem('mp-practice-qnum');
+    if (mqOverride) { localStorage.removeItem('mp-practice-qnum');
+      for (var mqi = 0; mqi < _questions.length; mqi++) {
+        if (_questions[mqi].num === parseInt(mqOverride.replace('Q',''))) { mockSaved = String(mqi); break; }
+      }
+    }
+    _currentIdx = Math.min(parseInt(mockSaved), _questions.length - 1);
+    renderQuestion(); startTimer(); lucide.createIcons();
+    _loading = false; return;
+  }
+
+  if (!MOD) {
+    emptyEl.style.display = ''; practiceArea.style.display = 'none';
+    bottomBar.style.display = 'none'; lectureBody.style.display = 'none';
+    modeTabs.style.display = 'none';
+    _loading = false;
+    return;
+  }
+
+  // A module that is actively generating should stay on its waiting state.
+  // Do this before smart fallback scanning, otherwise another module's old file can replace the active module.
+  if (API.isGenerating('practice', MOD, DATE)) {
+    $e('pc-nav-title-text').textContent = MOD;
+    $e('pc-mod-name').textContent = TARGET_KP ? (MOD + ' · ' + TARGET_KP) : MOD;
+    emptyEl.style.display = ''; practiceArea.style.display = 'none';
+    bottomBar.style.display = 'none'; lectureBody.style.display = 'none';
+    modeTabs.style.display = 'none';
+    _loading = false;
+    API.showLoading(emptyEl, 'AI 正在生成' + MOD + '练习题');
+    return;
+  }
+
+  // Find best available module for today: preferred first, then any with a file
+  var best;
+  if (ENTRY_MODE === 'direct') {
+    // Explicit module: only try the specified module, no fallback
+    var text = await API.fetchText('练习/' + MOD + '/' + DATE + '.md');
+    best = text ? { module: MOD, text: text } : null;
+  } else {
+    // Smart practice: scan all modules, fallback to any available
+    best = await findBestModule(MOD);
+  }
+  if (best && best.module !== MOD && (ENTRY_MODE === 'direct' || INITIAL_MOD)) {
+    best = null;
+  }
+  if (!best) {
+    // Plan mode: AI generates based on study plan
+    if (ENTRY_MODE === 'plan') {
+      $e('pc-mod-name').textContent = '今日计划';
+      emptyEl.style.display = ''; practiceArea.style.display = 'none';
+      bottomBar.style.display = 'none'; lectureBody.style.display = 'none';
+      modeTabs.style.display = 'none';
+      _loading = false;
+      API.showLoading(emptyEl, 'AI 正在根据备考计划智能出题');
+      // Register with the actual module. The completion event contains the
+      // module name, so a synthetic "今日计划" key could never be reclaimed.
+      API.setGenerating('practice', MOD, DATE);
+      API.openAIChat('每日计划（' + (MOD||'') + '，日期：' + DATE + '）');
+      return;
+    }
+    // If AI is currently generating for THIS module+date, show waiting state
+    if (API.isGenerating('practice', MOD, DATE)) {
+      $e('pc-mod-name').textContent = MOD;
+      emptyEl.style.display = ''; practiceArea.style.display = 'none';
+      bottomBar.style.display = 'none'; lectureBody.style.display = 'none';
+      modeTabs.style.display = 'none';
+      _loading = false;
+      API.showLoading(emptyEl, 'AI 正在生成题目');
+      return;
+    }
+    // From daily plan: auto-trigger generation
+    if (FROM_PLAN) {
+      $e('pc-mod-name').textContent = MOD;
+      emptyEl.style.display = ''; practiceArea.style.display = 'none';
+      bottomBar.style.display = 'none'; lectureBody.style.display = 'none';
+      modeTabs.style.display = 'none';
+      _loading = false;
+      triggerGenerate('plan');
+      return;
+    }
+    // Nothing available - show empty state with generate buttons
+    emptyEl.innerHTML = '<div class="empty-icon"><i data-lucide="sparkles"></i></div>'+
+      '<div class="empty-title" id="pc-empty-title">「<span id="pc-mod-name">'+API._esc(MOD)+'</span>」题目还未生成</div>'+
+      '<div class="empty-desc">点击下方按钮，AI 将为你生成今日练习题</div>'+
+      '<button class="card-btn" data-pc-action="generate-plan"><i data-lucide="sparkles"></i> 每日计划</button>'+
+      '<button class="card-btn" data-pc-action="generate" style="background:var(--surface);color:var(--text);border:1px solid var(--border);margin-top:8px"><i data-lucide="settings" style="width:14px;height:14px"></i> 自定义出题</button>';
+    emptyEl.style.display = ''; practiceArea.style.display = 'none';
+    bottomBar.style.display = 'none'; lectureBody.style.display = 'none';
+    modeTabs.style.display = 'none';
+    lucide.createIcons();
+    _loading = false;
+    return;
+  }
+
+  // Use the found module. Only smart entry without an explicit initial module may move to another module.
+  if (best.module !== MOD && ENTRY_MODE !== 'direct' && !INITIAL_MOD) {
+    MOD = best.module;
+    localStorage.setItem('mp-target-module', MOD);
+  }
+  // If best.date exists (from latest-file fallback), update DATE so timer/keys match
+  if (best.date && best.date !== DATE) {
+    DATE = best.date;
+  }
+  $e('pc-nav-title-text').textContent = MOD;
+  _mdText = best.text;
+
+  var parsed = parseQuestions(_mdText);
+  _questions = parsed.questions;
+  _lecture = parsed.lecture;
+  API.clearGenerating('practice', MOD, DATE);
+
+  if (_questions.length === 0) {
+    // No questions parsed - fallback: render full markdown
+    emptyEl.style.display = 'none';
+    practiceArea.style.display = 'none';
+    bottomBar.style.display = 'none';
+    modeTabs.style.display = 'none';
+    lectureBody.style.display = '';
+    lectureBody.innerHTML = API.md(_mdText);
+    setTimeout(function() {
+      try { if (typeof mermaid !== 'undefined') mermaid.run({ querySelector: '#pc-lecture-body .mermaid' }); } catch(e) {}
+    }, 300);
+    _loading = false;
+    return;
+  }
+
+  // Restore saved answers
+  restoreAnswers();
+
+  // Show/hide lecture tab
+  var hasLecture = _lecture.length > 30;
+  if (hasLecture) {
+    modeTabs.style.display = '';
+    lectureBody.innerHTML = API.md(_lecture);
+  } else {
+    modeTabs.style.display = 'none';
+  }
+
+  // Show practice
+  emptyEl.style.display = 'none';
+  lectureBody.style.display = 'none';
+  practiceArea.style.display = '';
+  bottomBar.style.display = '';
+
+  // Activate practice tab
+  _mode = 'practice';
+  if (hasLecture) {
+    modeTabs.querySelectorAll('.mode-tab').forEach(function(t) { t.classList.remove('active'); });
+    modeTabs.querySelector('[data-mode="practice"]').classList.add('active');
+  }
+
+  // Restore saved index
+  var savedIdx = localStorage.getItem(idxKey());
+  var qnumOverride = localStorage.getItem('mp-practice-qnum');
+  if (qnumOverride) {
+    localStorage.removeItem('mp-practice-qnum');
+    // Find question by num
+    for (var qi = 0; qi < _questions.length; qi++) {
+      if (_questions[qi].num === parseInt(qnumOverride.replace('Q',''))) { savedIdx = String(qi); break; }
+    }
+  }
+  _currentIdx = savedIdx ? Math.min(parseInt(savedIdx), _questions.length - 1) : 0;
+
+  renderQuestion();
+  startTimer();
+  lucide.createIcons();
+  } catch(e) { /* silent - page handles missing elements gracefully */ }
+  _loading = false;
+}
+
+// ---- Render current question ----
+function renderQuestion() {
+  if (_currentIdx < 0 || _currentIdx >= _questions.length) return;
+
+  var q = _questions[_currentIdx];
+  var total = _questions.length;
+  var visualQuestion = isVisualQuestion(q);
+  var cardEl = $e('q-card');
+  if (cardEl) cardEl.classList.toggle('visual-question', visualQuestion);
+
+  // Question header
+  $e('q-diff').textContent = q.difficulty || '';
+  $e('q-type').textContent = q.type || '';
+  var sourceTag = $e('q-source-tag');
+  if (!sourceTag) {
+    sourceTag = document.createElement('span');
+    sourceTag.id = 'q-source-tag';
+    sourceTag.className = 'q-source-tag';
+    var header = $e('q-diff').parentNode;
+    header.insertBefore(sourceTag, $e('q-num'));
+  }
+  var trust = q.bizMeta || API.Business.questionTrustFromText(q.stem + q.answerBlock);
+  sourceTag.textContent = trust.label;
+  sourceTag.className = 'q-source-tag ' + trust.level;
+  sourceTag.title = trust.note || '';
+  $e('q-num').textContent = (q.num || (_currentIdx + 1)) + '/' + total;
+
+  // Stem (already pre-rendered HTML from marked.parse) — sanitize to strip on* handlers / script tags
+  $e('q-stem').innerHTML = API._sanitize(q.stem);
+
+  // Options (use pre-rendered HTML to preserve formatting)
+  var optHtml = '';
+  var selectedLetter = _answers[q.num];
+  for (var i = 0; i < q.options.length; i++) {
+    var opt = q.options[i];
+    var cls = 'q-opt';
+    if (q.graded) {
+      cls += ' graded';
+      if (opt.letter === q.correctAnswer) cls += ' correct';
+      if (opt.letter === q.userAnswer && q.userAnswer !== q.correctAnswer) cls += ' wrong';
+    } else if (selectedLetter === opt.letter) {
+      cls += ' selected';
+    }
+    optHtml += '<div class="' + cls + '" data-opt="' + opt.letter + '" data-pc-action="option" data-letter="' + opt.letter + '">';
+    optHtml += '<span class="opt-letter">' + opt.letter + '</span>';
+    optHtml += '<span class="opt-text">' + (API._sanitize(opt.html) || API._esc(opt.text)) + '</span>';
+    optHtml += '</div>';
+  }
+  $e('q-options').innerHTML = optHtml;
+
+  // Grading result (only show after AI graded)
+  var resultEl = $e('q-result');
+  resultEl.style.background = ''; resultEl.style.color = '';
+  if (q.graded) {
+    resultEl.style.display = '';
+    resultEl.className = 'q-result ' + (q.isCorrect ? 'correct-banner' : 'wrong-banner');
+    var resultText = '';
+    if (q.isCorrect) {
+      resultText = '<i data-lucide="check-circle" style="width:18px;height:18px;color:var(--green);vertical-align:-4px"></i> 回答正确';
+    } else {
+      resultText = '<i data-lucide="x-circle" style="width:18px;height:18px;color:var(--red);vertical-align:-4px"></i> 你的答案 <strong>' + q.userAnswer + '</strong>，正确答案 <strong>' + q.correctAnswer + '</strong>';
+      if (q.errorReason) resultText += '<div style="font-size:12px;margin-top:4px;opacity:.7;line-height:1.6">' + API._esc(q.errorReason).replace(/\n/g, '<br>') + '</div>';
+    }
+    resultEl.innerHTML = '<div class="q-result-text">' + resultText + '</div><button class="q-ask-ai" data-pc-action="ask-ai" data-index="' + _currentIdx + '"><i data-lucide="message-circle"></i>问AI</button>';
+  } else {
+    resultEl.style.display = 'none';
+  }
+
+  // Answer body
+  var answerBody = $e('q-answer-body');
+  var answerToggle = $e('q-answer-toggle');
+  var toggleLabel = $e('q-toggle-label');
+
+  if (q.answerBlock) {
+    answerToggle.style.display = '';
+    answerBody.innerHTML = q.answerBlock;
+    // Default: open if graded, closed if not
+    if (q.graded) {
+      answerBody.classList.add('open');
+      answerToggle.classList.add('open');
+      toggleLabel.textContent = '收起解析';
+    } else {
+      answerBody.classList.remove('open');
+      answerToggle.classList.remove('open');
+      toggleLabel.textContent = '展开解析';
+    }
+  } else {
+    answerToggle.style.display = 'none';
+    answerBody.classList.remove('open');
+  }
+
+  // Update bottom bar
+  $e('btn-q-idx').textContent = _currentIdx + 1;
+  $e('btn-prev').disabled = _currentIdx === 0;
+  var btnNext = $e('btn-next');
+  if (_currentIdx === total - 1) {
+    btnNext.innerHTML = '交卷';
+    btnNext.style.color = 'var(--accent)'; btnNext.style.fontWeight = '600';
+  } else {
+    btnNext.innerHTML = '<i data-lucide="chevron-right" style="width:18px;height:18px"></i>';
+    btnNext.style.color = ''; btnNext.style.fontWeight = '';
+  }
+
+  // Save current index
+  localStorage.setItem(idxKey(), _currentIdx);
+
+  lucide.createIcons();
+}
+
+function isVisualQuestion(q) {
+  if (!q) return false;
+  var typeText = [q.type || '', q.stem || ''].join(' ');
+  var optionHtml = (q.options || []).map(function(o) { return (o.html || '') + ' ' + (o.text || ''); }).join(' ');
+  return /图形|图推|图形推理|空间重构|立体图形/.test(typeText + ' ' + optionHtml) || /<svg\b|<img\b|class=["']md-svg|class=["']mermaid/.test(q.stem + optionHtml);
+}
+
+var _advanceTimer = null;
+
+// ---- Select option ----
+function selectOption(letter) {
+  var q = _questions[_currentIdx];
+  if (q.graded) return;
+
+  _answers[q.num] = letter;
+  saveAnswers();
+  renderQuestion();
+
+  // Clear any pending auto-advance before setting a new one
+  if (_advanceTimer) { clearTimeout(_advanceTimer); _advanceTimer = null; }
+
+  // Auto-advance to next question (skip if last question)
+  if (_currentIdx < _questions.length - 1) {
+    var targetIdx = _currentIdx + 1;
+    _advanceTimer = setTimeout(function() {
+      _advanceTimer = null;
+      // Guard: only advance if user hasn't manually navigated
+      if (_currentIdx === targetIdx - 1) {
+        _currentIdx = targetIdx;
+        renderQuestion();
+      }
+    }, 800);
+  }
+}
+
+// ---- Save / Restore answers ----
+function saveAnswers() {
+  localStorage.setItem(answersKey(), JSON.stringify(_answers));
+}
+
+function restoreAnswers() {
+  var raw = localStorage.getItem(answersKey());
+  if (raw) {
+    try { _answers = JSON.parse(raw); } catch(e) { _answers = {}; }
+  }
+  // Also parse from file's 答案区 — guard against answers for Q-numbers outside the current
+  // question set (was inflating the answer-sheet "answered" count — audit #13)
+  var ansMatch = _mdText.match(/##\s*答案区[^\n]*\n([\s\S]*)$/);
+  if (ansMatch) {
+    var lines = ansMatch[1].split('\n');
+    lines.forEach(function(line) {
+      var m = line.match(/Q(\d+):([A-F])/i);
+      if (m) {
+        var qnum = parseInt(m[1]);
+        if (!_answers[qnum]) _answers[qnum] = m[2].toUpperCase();
+      }
+    });
+  }
+  // Check if already submitted
+  _submitted = !!localStorage.getItem(submittedKey());
+}
+
+function restoreTimerState() {
+  // Use the unified timer state system (not the old simple key)
+  var saved = _loadTimerState();
+  if (saved) {
+    _timerSec = saved.elapsed || 0;
+    _timerMode = saved.mode || _timerMode;
+    _timerTotal = saved.total || _timerTotal;
+  } else if (_mockMode) {
+    // Legacy fallback for old mock timer format
+    var oldSaved = localStorage.getItem('p-timer-' + PROJ + '-mock-' + DATE);
+    _timerSec = oldSaved ? parseInt(oldSaved) : _timerTotal;
+  }
+}
+
+// ---- Navigation ----
+var _navLock = false;  // 防止快速滑动触发多次导航
+
+function goPrev() {
+  if (_navLock) return;
+  if (_currentIdx > 0) {
+    _navLock = true;
+    _currentIdx--;
+    animateCard(-1, function() { _navLock = false; });
+  }
+}
+
+function goNext() {
+  if (_navLock) return;
+  if (_currentIdx < _questions.length - 1) {
+    _navLock = true;
+    _currentIdx++;
+    animateCard(1, function() { _navLock = false; });
+  } else {
+    // Last question: submit (with re-entry guard inside submitAnswers)
+    submitAnswers();
+  }
+}
+
+function animateCard(dir, onDone) {
+  var card = $e('q-card');
+  card.classList.add('sliding');
+  setTimeout(function() {
+    renderQuestion();
+    card.classList.remove('sliding');
+    if (onDone) onDone();
+  }, 150);
+}
+
+// ---- Swipe support (only on question card, not lecture) ----
+(function() {
+  var touchStartX = 0, touchStartY = 0, touchStartTime = 0, swiping = false;
+  function onTouchStart(e) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    touchStartTime = Date.now();
+    swiping = false;
+  }
+  function onTouchMove(e) {
+    if (swiping) return;
+    var dx = e.touches[0].clientX - touchStartX;
+    var dy = e.touches[0].clientY - touchStartY;
+    if (Math.abs(dx) > 20 && Math.abs(dx) > Math.abs(dy) * 2) {
+      swiping = true; // confirmed horizontal swipe
+    }
+  }
+  function onTouchEnd(e) {
+    if (!swiping) return;
+    swiping = false;
+    var elapsed = Date.now() - touchStartTime;
+    if (elapsed < 50 || elapsed > 1500) return; // ignore too fast/slow
+    var card = _pcRoot ? _pcRoot.querySelector('#q-card') : document.getElementById('q-card');
+    if (!card || card.style.display === 'none') return;
+    var dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 80) {
+      if (dx < 0) goNext();
+      else goPrev();
+    }
+  }
+  document.addEventListener('touchstart', onTouchStart, { passive: true });
+  document.addEventListener('touchmove', onTouchMove, { passive: true });
+  document.addEventListener('touchend', onTouchEnd);
+  // Clean up on page exit to prevent ghost listeners
+  API._onPageExit('practice-card', function() {
+    document.removeEventListener('touchstart', onTouchStart);
+    document.removeEventListener('touchmove', onTouchMove);
+    document.removeEventListener('touchend', onTouchEnd);
+  });
+})();
+
+// ---- Answer toggle ----
+function toggleAnswer() {
+  var body = $e('q-answer-body');
+  var toggle = $e('q-answer-toggle');
+  var label = $e('q-toggle-label');
+  var open = !body.classList.contains('open');
+  if (open) {
+    body.classList.add('open');
+    toggle.classList.add('open');
+    label.textContent = '收起解析';
+  } else {
+    body.classList.remove('open');
+    toggle.classList.remove('open');
+    label.textContent = '展开解析';
+  }
+}
+
+// ---- Ask AI about current question ----
+function askAIAboutQuestion(idx) {
+  var q = _questions[idx];
+  if (!q) return;
+
+  // Extract plain text from stem HTML
+  var tmp = document.createElement('div');
+  tmp.innerHTML = q.stem;
+  var stemText = tmp.textContent.trim();
+
+  // Build options text
+  var optsText = q.options.map(function(o) { return o.letter + '. ' + o.text; }).join('\n');
+
+  // Build message with full context
+  var msg = '';
+  msg += '> Q' + q.num + ' ' + stemText + '\n';
+  if (optsText) msg += '> ' + optsText.replace(/\n/g, '\n> ') + '\n';
+  if (q.graded) {
+    if (q.userAnswer) msg += '> 我的答案：' + q.userAnswer + '\n';
+    if (q.correctAnswer) msg += '> 正确答案：' + q.correctAnswer + '\n';
+    if (q.errorReason) msg += '> 错因：' + q.errorReason + '\n';
+  } else {
+    var myAns = _answers[q.num];
+    if (myAns) msg += '> 我的答案：' + myAns + '\n';
+  }
+  msg += '\n请帮我详细分析这道题的解题思路、知识点和易错点，让我能深入理解。';
+  var filePath = _mockMode ? API.mockExamPath(_mockSubject, DATE) : '练习/' + MOD + '/' + DATE + '.md';
+  msg += '（来源：' + filePath + '）';
+
+  API.openAIChat(msg, { freshSession: true });
+}
+
+// ---- Answer Sheet Modal ----
+function showAnswerSheet() {
+  var total = _questions.length;
+  // Only count answers for questions in the current set (not stale answers from other dates/files)
+  var answered = _questions.filter(function(q) { return _answers[q.num]; }).length;
+
+  var html = '<div style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10001;display:flex;align-items:flex-end;justify-content:center;padding-bottom:48px" id="pc-sheet-overlay">';
+  html += '<div style="background:var(--surface);border-radius:14px;padding:20px 16px;width:90%;max-width:340px;box-shadow:var(--card-shadow);display:flex;flex-direction:column;gap:10px">';
+  html += '<div style="font-size:15px;font-weight:700;color:var(--text);text-align:center">答题卡</div>';
+  html += '<div style="text-align:center;font-size:12px;color:var(--text-secondary)">已答 <strong>' + answered + '</strong> / ' + total + ' 题</div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">';
+
+  for (var i = 0; i < _questions.length; i++) {
+    var q = _questions[i];
+    var cls = 'sheet-q';
+    if (i === _currentIdx) cls += ' s-current';
+    if (q.graded) {
+      cls += q.isCorrect ? ' s-correct' : ' s-wrong';
+    } else if (_answers[q.num]) {
+      cls += ' s-answered';
+    } else {
+      cls += ' s-unanswered';
+    }
+    html += '<div class="' + cls + '" data-pc-action="jump" data-index="' + i + '" style="width:36px;height:36px;font-size:13px">' + q.num + '</div>';
+  }
+
+  html += '</div>';
+  html += '<div style="display:flex;justify-content:center;gap:12px;font-size:11px;color:var(--text-secondary)">';
+  html += '<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:var(--surface2);flex-shrink:0"></span>未答</span>';
+  html += '<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:var(--accent-soft);flex-shrink:0"></span>已答</span>';
+  html += '<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:rgba(52,199,89,.4);flex-shrink:0"></span>正确</span>';
+  html += '<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:50%;background:rgba(255,69,58,.4);flex-shrink:0"></span>错误</span>';
+  html += '</div>';
+  html += '<div style="display:flex;gap:6px">';
+  if (!_mockMode) html += '<button data-pc-action="generate" style="flex:1;height:38px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">+ 加练 5 题</button>';
+  html += _submitted
+    ? '<button disabled style="flex:1;height:38px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;opacity:.5">已提交批改</button>'
+    : '<button data-pc-action="submit" style="flex:1;height:38px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">提交批改</button>';
+  html += '</div>';
+  html += '</div></div>';
+
+  var overlay = document.createElement('div');
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay.firstElementChild);
+
+  document.getElementById('pc-sheet-overlay').addEventListener('click', function(e) {
+    if (e.target === this) this.remove();
+  });
+}
+
+function jumpToQuestion(idx) {
+  _currentIdx = idx;
+  renderQuestion();
+  var overlay = document.getElementById('pc-sheet-overlay');
+  if (overlay) overlay.remove();
+}
+
+// ---- Submit for grading ----
+var _submitInFlight = false;  // 防止确认弹窗重复弹出
+
+function submitAnswers(skipConfirm) {
+  if (_submitted) { API.toast('已提交过批改，请等待 AI 处理'); return; }
+  if (_submitInFlight) return;  // 防重入：确认弹窗已显示时不重复弹
+  if (!skipConfirm) {
+    _submitInFlight = true;  // 标记确认弹窗已弹出
+    var answered = _questions.filter(function(q) { return _answers[q.num]; }).length;
+    API.confirm('提交批改', '已答 ' + answered + '/' + _questions.length + ' 题，确认提交吗？提交后不可修改答案。', function() { _doSubmit(); }, function() { _submitInFlight = false; });
+    return;
+  }
+  _doSubmit();
+
+  function _doSubmit() {
+  _submitInFlight = false;  // 重置防重入标志
+  var overlay = document.getElementById('pc-sheet-overlay');
+  if (overlay) overlay.remove();
+
+  // === MOCK MODE: save answers to file, send AI grading in desktop format ===
+  if (_mockMode) {
+    stopTimer();
+    var total = _questions.length;
+    var answered = 0;
+    var answerItems = [];
+    for (var i = 0; i < _questions.length; i++) {
+      var q = _questions[i];
+      var ans = _answers[q.num] || '未答';
+      if (ans !== '未答') answered++;
+      answerItems.push('Q' + q.num + ':' + ans);
+    }
+    var answersStr = answerItems.join('  ');
+    var timeUsed = _timerTotal - _timerSec;
+    var minUsed = Math.max(0, Math.floor(timeUsed / 60));
+
+    // Save answers to exam file — awaited so the AI grading message isn't sent before
+    // the file is written (was a fire-and-forget IIFE; AI could read a stale file — audit #3)
+    (async function() {
+      try {
+        var mockPath = API.mockExamPath(_mockSubject, DATE);
+        var content = await API.fetchText(mockPath);
+        if (content === null) content = await API.fetchText(API.legacyMockExamPath(DATE));
+        if (content !== null) {
+          var answerBlock = '\n\n## 答案区（用户作答）\n\n' + answersStr + '\n\n> 已答 ' + answered + '/' + total + ' 题';
+          if (content.indexOf('## 答案区') !== -1) {
+            // Non-greedy: stop at the next top-level section so later sections (错题本/笔记) survive
+            content = content.replace(/## 答案区[\s\S]*?(?=\n##\s|$)/, answerBlock);
+          } else {
+            content = content.trimEnd() + answerBlock;
+          }
+          await API.writeFile(mockPath, content);
+        }
+      } catch(e) { console.warn('[mock submit] save answers', e); }
+
+      // Now that the file is persisted, send the grading message
+      var trust = API.Business.scoreTrust('mock');
+      var msg = '批改模拟考试 ' + DATE + '\n\n' + answersStr + '\n\n用时：' + minUsed + '分钟\n已答：' + answered + '/' + total + '题\n\n评分可信度要求：' + trust.requirements;
+      _submitted = true;
+      freezeTimer();
+      localStorage.setItem(submittedKey(), '1');
+      API.openAIChat(msg, { freshSession: true });
+    })();
+
+    return;
+  }
+
+  var total = _questions.length;
+  var answered = _questions.filter(function(q) { return _answers[q.num]; }).length;
+
+  if (answered === 0) {
+    API.toast('请先作答再提交');
+    return;
+  }
+
+  // Build answer string
+  var answerLines = [];
+  var answeredNums = [];
+  for (var i = 0; i < _questions.length; i++) {
+    var q = _questions[i];
+    if (_answers[q.num] && !q.graded) {
+      answerLines.push('Q' + q.num + ':' + _answers[q.num]);
+      answeredNums.push(q.num);
+    }
+  }
+
+  if (answeredNums.length === 0) {
+    API.toast('没有新的答案需要批改');
+    return;
+  }
+
+  // Mark submitted
+  _submitted = true;
+  freezeTimer();
+  localStorage.setItem(submittedKey(), '1');
+
+  // Build message — match desktop format exactly
+  var tm = Math.floor(_timerSec / 60), ts = _timerSec % 60;
+  var timeStr = _timerSec > 0 ? '（用时 ' + tm + '分' + ts + '秒）' : '';
+  var msg = '批改答案 ' + timeStr + '\n\n';
+  msg += '文件：练习/' + MOD + '/' + DATE + '.md\n';
+  msg += '题号：' + answeredNums.join(', ') + '\n\n';
+  msg += answerLines.join('  ');
+  msg += '\n\n评分可信度要求：' + API.Business.scoreTrust('practice').requirements;
+
+  API.openAIChat(msg, { freshSession: true });
+  }
+}
+
+// ---- Custom generation modal (matching desktop showCustomGenModal) ----
+var GEN_MODS = API.XC_MODULES;
+
+function showGenModal(opt) {
+  opt = opt || {};
+  var selMod = opt.module || MOD || GEN_MODS[0];
+  var selCount = opt.count || 10;
+  var selDate = opt.date || DATE;
+  var isRegen = !!opt.regen;
+
+  var html = '<div class="sheet-overlay" id="pc-gen-overlay">';
+  html += '<div class="sheet-card" style="max-width:380px">';
+  html += '<div class="sheet-title">' + (isRegen ? '重新生成' : '自定义出题') + '</div>';
+  html += '<div class="pc-gen-scroll">';
+
+  // Module selector
+  html += '<div class="pc-gen-section-label">选择模块</div>';
+  html += '<div id="pc-gen-modules">';
+  GEN_MODS.forEach(function(m) {
+    var active = m === selMod;
+    html += '<button class="gen-mod-btn" data-pc-action="gen-module" data-mod="' + API.escapeAttr(m) + '" style="background:' + (active ? 'var(--surface);box-shadow:0 1px 3px rgba(0,0,0,.08)' : 'var(--surface2)') + ';color:' + (active ? 'var(--accent)' : 'var(--text-secondary)') + '">' + m + '</button>';
+  });
+  html += '</div>';
+
+  // Sub-topic selector (populated dynamically)
+  html += '<div id="pc-gen-subtopics" style="display:none;margin-top:8px">';
+  html += '<div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px">知识点 <span style="font-weight:400">（可选，不选则全部）</span></div>';
+  html += '<div id="pc-gen-subtopic-list"></div>';
+  html += '</div>';
+
+  // Count selector
+  html += '<div class="pc-gen-section-label" style="margin-top:14px">题目数量</div>';
+  html += '<div id="pc-gen-counts" style="display:flex;gap:6px">';
+  [5,10,15,20,25].forEach(function(n) {
+    var active = n === selCount;
+    html += '<button class="gen-count-btn" data-pc-action="gen-count" data-count="' + n + '" style="flex:1;padding:8px 4px;font-size:13px;font-weight:600;border:none;border-radius:8px;background:' + (active ? 'var(--surface);box-shadow:0 1px 3px rgba(0,0,0,.08)' : 'var(--surface2)') + ';color:' + (active ? 'var(--accent)' : 'var(--text-secondary)') + ';cursor:pointer;font-family:inherit;text-align:center">' + n + '</button>';
+  });
+  html += '</div>';
+
+  // Date picker
+  html += '<div class="pc-gen-section-label" style="margin-top:14px">日期</div>';
+  html += '<div style="overflow:hidden;border-radius:8px">';
+  html += '<input type="date" id="pc-gen-date" value="' + selDate + '" style="display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;padding:8px 10px;font-size:13px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-family:inherit">';
+  html += '</div>';
+  html += '</div>';
+
+  // Actions
+  html += '<div class="pc-gen-actions">';
+  html += '<button data-pc-action="close-gen" style="flex:1;height:42px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:14px">取消</button>';
+  html += '<button data-pc-action="gen-confirm" style="flex:1;height:42px;border:none;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;font-family:inherit;font-size:14px;font-weight:600" id="pc-gen-confirm">生成</button>';
+  html += '</div></div></div>';
+
+  var div = document.createElement('div');
+  div.innerHTML = html;
+  document.body.appendChild(div.firstElementChild);
+  var overlay = document.getElementById('pc-gen-overlay');
+  if (overlay) {
+    overlay.dataset.selectedModule = selMod;
+    overlay.dataset.selectedCount = String(selCount);
+    overlay.dataset.selectedTopics = '[]';
+  }
+
+  // Load sub-topics for initial module on open
+  renderPracticeGenSubTopics(selMod);
+
+
+  document.getElementById('pc-gen-overlay').addEventListener('click', function(e) {
+    if (e.target === this) this.remove();
+  });
+}
+
+function renderPracticeGenSubTopics(mod) {
+  var subEl = document.getElementById('pc-gen-subtopics');
+  var listEl = document.getElementById('pc-gen-subtopic-list');
+  if (!subEl || !listEl) return;
+  API.fetchJSON('知识体系.json').then(function(tree) {
+    if (!tree || !tree[mod]) { subEl.style.display = 'none'; return; }
+    subEl.style.display = '';
+    listEl.innerHTML = '';
+    var groups = tree[mod];
+    for (var g in groups) {
+      var label = document.createElement('div');
+      label.textContent = g;
+      label.style.cssText = 'font-size:10px;color:var(--text-secondary);width:100%;margin-top:4px;margin-bottom:2px';
+      listEl.appendChild(label);
+      groups[g].forEach(function(kp) {
+        var tag = document.createElement('span');
+        tag.textContent = kp;
+        tag.setAttribute('data-pc-action', 'gen-topic');
+        tag.setAttribute('data-kp', kp);
+        tag.style.cssText = 'padding:4px 8px;border-radius:6px;font-size:11px;cursor:pointer;border:none;color:var(--text-secondary);margin-bottom:2px;background:var(--surface2)';
+        listEl.appendChild(tag);
+      });
+    }
+  });
+}
+
+function selectPracticeGenModule(btn) {
+  var overlay = document.getElementById('pc-gen-overlay');
+  if (!overlay || !btn) return;
+  document.querySelectorAll('#pc-gen-modules .gen-mod-btn').forEach(function(b) {
+    b.style.background = 'var(--surface2)'; b.style.boxShadow = 'none'; b.style.color = 'var(--text-secondary)';
+  });
+  btn.style.background = 'var(--surface)';
+  btn.style.boxShadow = '0 1px 3px rgba(0,0,0,.08)';
+  btn.style.color = 'var(--accent)';
+  overlay.dataset.selectedModule = btn.dataset.mod || MOD;
+  overlay.dataset.selectedTopics = '[]';
+  renderPracticeGenSubTopics(overlay.dataset.selectedModule);
+}
+
+function togglePracticeGenTopic(btn) {
+  var overlay = document.getElementById('pc-gen-overlay');
+  if (!overlay || !btn) return;
+  var kp = btn.dataset.kp || '';
+  var topics = [];
+  try { topics = JSON.parse(overlay.dataset.selectedTopics || '[]'); } catch(e) { topics = []; }
+  var idx = topics.indexOf(kp);
+  if (idx >= 0) {
+    topics.splice(idx, 1);
+    btn.style.color = 'var(--text-secondary)';
+    btn.style.background = 'var(--surface2)';
+  } else {
+    topics.push(kp);
+    btn.style.color = 'var(--accent)';
+    btn.style.background = 'var(--accent-soft)';
+  }
+  overlay.dataset.selectedTopics = JSON.stringify(topics);
+}
+
+function selectPracticeGenCount(btn) {
+  var overlay = document.getElementById('pc-gen-overlay');
+  if (!overlay || !btn) return;
+  document.querySelectorAll('#pc-gen-counts .gen-count-btn').forEach(function(b) {
+    b.style.background = 'var(--surface2)'; b.style.boxShadow = 'none'; b.style.color = 'var(--text-secondary)';
+  });
+  btn.style.background = 'var(--surface)';
+  btn.style.boxShadow = '0 1px 3px rgba(0,0,0,.08)';
+  btn.style.color = 'var(--accent)';
+  overlay.dataset.selectedCount = String(parseInt(btn.dataset.count, 10) || 10);
+}
+
+function confirmPracticeGen() {
+  var overlay = document.getElementById('pc-gen-overlay');
+  if (!overlay) return;
+  var dateInput = document.getElementById('pc-gen-date');
+  var pickedDate = (dateInput && dateInput.value) || DATE || API.getLocalDate();
+  var selMod = overlay.dataset.selectedModule || MOD;
+  var selCount = parseInt(overlay.dataset.selectedCount, 10) || 10;
+  var selSubTopics = [];
+  try { selSubTopics = JSON.parse(overlay.dataset.selectedTopics || '[]'); } catch(e) { selSubTopics = []; }
+  overlay.remove();
+
+  localStorage.setItem('custom-gen-module', selMod);
+  localStorage.setItem('custom-gen-count', String(selCount));
+
+  var emptyEl = $e('pc-empty-state');
+  if (emptyEl && emptyEl.style && emptyEl.style.display !== 'none') {
+    API.showLoading(emptyEl, 'AI 正在生成题目');
+  }
+  if (selMod !== MOD) {
+    MOD = selMod;
+    localStorage.setItem('mp-target-module', MOD);
+    $e('pc-nav-title-text').textContent = MOD;
+  }
+  if (pickedDate !== DATE) DATE = pickedDate;
+
+  var topicHint = TARGET_KP ? '，必须围绕大纲考点「' + TARGET_KP + '」出题，write_questions 每题 knowledge_point 都填「' + TARGET_KP + '」，source_type 填 ai_generated' : (selSubTopics.length ? '，重点出' + selSubTopics.join('、') + '相关题目' : '');
+  var msg = ENTRY_MODE === 'smart'
+    ? '每日练习：根据能力画像和考试大纲薄弱点，出' + selMod + '的题目，共' + selCount + '题，日期：' + pickedDate + topicHint
+    : '自定义出题：' + selMod + ' ' + selCount + '题（日期：' + pickedDate + '）' + topicHint;
+  msg += generationQualityRule();
+  API.setGenerating('practice', selMod, pickedDate);
+  API.openAIChat(msg);
+}
+
+// Entry: empty state generate button → plan mode or gen modal
+function triggerGenerate(mode) {
+  var overlay = document.getElementById('pc-sheet-overlay');
+  if (overlay) overlay.remove();
+
+  if (_questions.length > 0) {
+    showCountPicker(); // 加练
+    return;
+  }
+
+  if (mode === 'plan') {
+    // Daily plan: AI generates based on study plan for THIS module
+    var loadingEl = $e('pc-empty-state');
+    if (loadingEl) API.showLoading(loadingEl, 'AI 正在生成' + MOD + '练习题');
+    localStorage.setItem('mp-target-module', MOD);
+    localStorage.setItem('mp-practice-mode', 'direct');
+    ENTRY_MODE = 'direct';
+    API.setGenerating('practice', MOD, DATE);
+	    var planMsg = ENTRY_MODE === 'direct'
+	      ? '每日练习：请生成' + MOD + '的练习题，日期：' + DATE
+	      : '每日计划（' + (MOD||'') + '，日期：' + DATE + '）';
+	    if (TARGET_KP) planMsg += '\n目标大纲考点：' + TARGET_KP + '。请只围绕这个考点进行针对性训练，题目必须覆盖概念、常见陷阱和典型题型；调用 write_questions 时每题 knowledge_point 填「' + TARGET_KP + '」，source_type 填 ai_generated。';
+	    planMsg += generationQualityRule();
+	    API.openAIChat(planMsg);
+    return;
+  }
+
+  showGenModal({ count: 10 }); // 自定义出题
+}
+
+function showCountPicker() {
+  var html = '<div class="sheet-overlay" id="pc-gc-overlay">';
+  html += '<div class="sheet-card">';
+  html += '<div class="sheet-title">加练题目数量</div>';
+  html += '<div style="display:flex;gap:8px;margin:8px 0" id="pc-gc-btns">';
+  [5, 10, 15].forEach(function(n, i) {
+    html += '<button data-pc-action="gc-count" style="flex:1;padding:10px;border:none;border-radius:10px;background:' + (i === 0 ? 'var(--accent-soft)' : 'var(--surface2)') + ';color:' + (i === 0 ? 'var(--accent)' : 'var(--text-secondary)') + ';font-weight:600;cursor:pointer;font-family:inherit;font-size:15px" data-n="' + n + '">' + n + '题</button>';
+  });
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;margin-top:8px">';
+  html += '<button data-pc-action="close-count" style="flex:1;height:40px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit">取消</button>';
+  html += '<button data-pc-action="gc-confirm" style="flex:1;height:40px;border:none;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;font-family:inherit;font-weight:600" id="pc-gc-confirm">生成</button>';
+  html += '</div></div></div>';
+
+  var div = document.createElement('div');
+  div.innerHTML = html;
+  document.body.appendChild(div.firstElementChild);
+  var overlay = document.getElementById('pc-gc-overlay');
+  if (overlay) overlay.dataset.selectedCount = '5';
+  document.getElementById('pc-gc-overlay').addEventListener('click', function(e) {
+    if (e.target === this) this.remove();
+  });
+}
+
+function selectPracticeAddCount(btn) {
+  var overlay = document.getElementById('pc-gc-overlay');
+  if (!overlay || !btn) return;
+  document.querySelectorAll('#pc-gc-btns button').forEach(function(x) {
+    x.style.background = 'var(--surface2)'; x.style.color = 'var(--text-secondary)';
+  });
+  btn.style.background = 'var(--accent-soft)';
+  btn.style.color = 'var(--accent)';
+  overlay.dataset.selectedCount = String(parseInt(btn.dataset.n, 10) || 5);
+}
+
+function confirmPracticeAddCount() {
+  var overlay = document.getElementById('pc-gc-overlay');
+  if (!overlay) return;
+  var selCount = parseInt(overlay.dataset.selectedCount, 10) || 5;
+  overlay.remove();
+  var msg2 = (ENTRY_MODE === 'smart')
+    ? '每日练习：根据能力画像和考试大纲薄弱点，追加' + MOD + '的题目，共' + selCount + '题，日期：' + DATE
+    : '每日练习：请追加' + MOD + '的题目，共' + selCount + '题，日期：' + DATE;
+  if (TARGET_KP) msg2 += '\n目标大纲考点：' + TARGET_KP + '。请继续围绕该考点生成变式训练；调用 write_questions 时每题 knowledge_point 填「' + TARGET_KP + '」。';
+  msg2 += generationQualityRule();
+  API.setGenerating('practice', MOD, DATE);
+  var qa = $e('practice-area');
+  if (qa) API.showLoading(qa, 'AI 正在追加题目');
+  API.openAIChat(msg2);
+}
+
+function generationQualityRule() {
+  return '\n\n出题质量硬性要求：调用 write_questions 时，每题必须包含 knowledge_point、difficulty、answer、solution/explanation；选项必须为4个；图形推理/空间重构题必须提供可渲染的 SVG 或图片素材，选项图形必须分别放入 A-D 四个选项，不要只用文字描述；source_type 填 ai_generated。';
+}
+
+// ---- Navbar: module picker ----
+function showModulePicker() {
+  var html = '<div class="sheet-overlay" id="pc-modpicker-overlay">';
+  html += '<div class="sheet-card">';
+  html += '<div class="sheet-title">选择模块</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:4px">';
+  ALL_MODS.forEach(function(m) {
+    var isActive = m === MOD;
+    html += '<div data-pc-action="switch-module" data-module="' + API.escapeAttr(m) + '" style="padding:12px 14px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:15px;' + (isActive ? 'background:var(--accent-soft);color:var(--accent);font-weight:600' : 'color:var(--text)') + '">';
+    html += '<span style="flex:1">' + m + '</span>';
+    if (isActive) html += '<i data-lucide="check" style="width:16px;height:16px;color:var(--accent)"></i>';
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '<button data-pc-action="close-module" style="width:100%;height:40px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:14px;margin-top:4px">取消</button>';
+  html += '</div></div>';
+
+  var div = document.createElement('div');
+  div.innerHTML = html;
+  document.body.appendChild(div.firstElementChild);
+  lucide.createIcons();
+  document.getElementById('pc-modpicker-overlay').addEventListener('click', function(e) {
+    if (e.target === this) this.remove();
+  });
+}
+
+function switchToModule(mod) {
+  var overlay = document.getElementById('pc-modpicker-overlay');
+  if (overlay) overlay.remove();
+  if (mod === MOD) return;
+  MOD = mod;
+  localStorage.setItem('mp-target-module', MOD);
+  localStorage.setItem('mp-practice-mode', 'direct');
+  ENTRY_MODE = 'direct';
+  $e('pc-nav-title-text').textContent = MOD;
+  _mdText = ''; _questions = []; _answers = {}; _currentIdx = 0; _timerSec = 0; _submitted = false;
+  stopTimer();
+  // Clear any loading state from the previous module before reloading
+  var prevEmpty = $e('pc-empty-state');
+  if (prevEmpty) {
+    prevEmpty.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:160px"><div style="width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;opacity:.5"></div></div>';
+    prevEmpty.style.display = '';
+  }
+  loadQuestions();
+}
+
+// ---- Navbar: three-dot menu ----
+function toggleMenu(e) {
+  if (e) e.stopPropagation();
+  var menu = $e('pc-menu');
+  if (!menu.style) return;
+  var wasOpen = menu.style.display === 'block';
+  document.querySelectorAll('.menu-dd.show').forEach(function(x) { x.classList.remove('show'); });
+  if (!wasOpen) {
+    var delBtn = $e('pc-delete-btn');
+    if (delBtn.style) delBtn.style.display = _mdText ? '' : 'none';
+    menu.style.display = 'block';
+    setTimeout(function() {
+      document.addEventListener('click', function close(ev) {
+        if (!menu.contains(ev.target)) {
+          menu.style.display = 'none';
+          document.removeEventListener('click', close);
+        }
+      });
+    }, 0);
+  } else {
+    menu.style.display = 'none';
+  }
+}
+
+// Show history files for current module
+async function showHistory() {
+  var menu = $e('pc-menu'); if (menu.style) menu.style.display = 'none';
+  var overlay = document.createElement('div');
+  overlay.className = 'sheet-overlay';
+  overlay.id = 'pc-history-overlay';
+  var html = '<div class="sheet-card" style="max-width:500px;gap:10px">';
+  html += '<div class="sheet-title">历史练习 · ' + MOD + '</div>';
+  html += '<div id="pc-history-list" style="max-height:60vh;overflow-y:auto;text-align:center;padding:24px;color:var(--text-secondary)"><i data-lucide="loader" style="animation:spin 1s linear infinite;width:20px;height:20px;display:block;margin:0 auto 8px"></i></div>';
+  html += '<button data-pc-action="close-history" style="flex-shrink:0;height:42px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:14px">关闭</button></div>';
+  overlay.innerHTML = html;
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  // Load file list
+  try {
+    var allPaths = await API.listFiles('练习/' + MOD + '/');
+    var listHtml = '';
+    var files = allPaths.filter(function(p) { return p.endsWith('.md'); }).sort(function(a,b) { return b.localeCompare(a); });
+    // Group by month
+    var groups = {};
+    files.forEach(function(p) {
+      var fname = p.split('/').pop();
+      var d = fname.replace('.md', '');
+      var month = d.substring(0, 7); // YYYY-MM
+      if (!groups[month]) groups[month] = [];
+      groups[month].push(d);
+    });
+    var months = Object.keys(groups).sort(function(a,b){return b.localeCompare(a)});
+    months.forEach(function(month) {
+      listHtml += '<div style="font-size:11px;font-weight:600;color:var(--text-secondary);padding:8px 0 4px">'+month+'</div>';
+      groups[month].forEach(function(d) {
+        var isCurrent = d === DATE;
+        var day = d.substring(8);
+        listHtml += '<div data-pc-action="history-date" data-date="'+d+'" style="display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-light);cursor:pointer;font-size:14px;'+(isCurrent?'color:var(--accent);font-weight:600':'color:var(--text)')+'">'+day+'日'+(isCurrent?' · 当前':'')+' <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--border);margin-left:auto"></i></div>';
+      });
+    });
+    overlay.querySelector('#pc-history-list').innerHTML = listHtml || '<div style="text-align:center;padding:28px 16px;color:var(--text-secondary);font-size:13px"><i data-lucide="folder-open" style="width:24px;height:24px;display:block;margin:0 auto 8px;opacity:.3"></i>暂无历史文件</div>';
+  } catch(e) {
+    overlay.querySelector('#pc-history-list').innerHTML = '<div style="text-align:center;padding:28px 16px;color:var(--text-secondary);font-size:13px"><i data-lucide="folder-open" style="width:24px;height:24px;display:block;margin:0 auto 8px;opacity:.3"></i>加载失败</div>';
+  }
+  lucide.createIcons();
+}
+
+function refreshFile() {
+  var menu = $e('pc-menu'); if (menu.style) menu.style.display = 'none';
+  _mdText = ''; _questions = []; _answers = {}; _currentIdx = 0; _timerSec = 0;
+  _clearTimerState();
+  $e('pc-nav-timer').textContent = '';
+  stopTimer();
+  loadQuestions();
+}
+
+function regenerateFile() {
+  var menu = $e('pc-menu'); if (menu.style) menu.style.display = 'none';
+  // Clear old state so regenerated file can be submitted fresh
+  localStorage.removeItem(submittedKey());
+  localStorage.removeItem(answersKey());
+  localStorage.removeItem(idxKey());
+  _submitted = false;
+  var msg = '每日练习：请重新生成' + MOD + '的题目，共10题，日期：' + DATE;
+  if (ENTRY_MODE === 'smart') msg = '请根据我的能力画像和考试大纲，针对薄弱点重新出' + MOD + '的题目，共10题，日期：' + DATE;
+  if (TARGET_KP) msg += '\n目标大纲考点：' + TARGET_KP + '。请只围绕这个考点生成针对性训练；调用 write_questions 时每题 knowledge_point 填「' + TARGET_KP + '」。';
+  API.setGenerating('practice', MOD, DATE);
+  var qa2 = $e('practice-area');
+  if (qa2) API.showLoading(qa2, 'AI 正在重新出题');
+  API.openAIChat(msg);
+}
+
+function deleteFile() {
+  var menu = $e('pc-menu'); if (menu.style) menu.style.display = 'none';
+  API.confirm('删除文件', '确认删除 ' + MOD + ' ' + DATE + ' 的练习文件？', async function() {
+    try {
+      await API.deleteFile('练习/' + MOD + '/' + DATE + '.md');
+      API.toast('已删除');
+      _mdText = ''; _questions = []; _answers = {}; _currentIdx = 0; _timerSec = 0; _submitted = false;
+      localStorage.removeItem(submittedKey());
+      localStorage.removeItem(answersKey());
+      localStorage.removeItem(idxKey());
+      _clearTimerState();
+      $e('pc-nav-timer').textContent = '';
+      stopTimer();
+      loadQuestions();
+    } catch(e) { API.toast('删除失败'); }
+  });
+}
+
+// Close menu on outside click
+function _pcCloseMenuOnOutside(e) {
+  var menu = $e('pc-menu');
+  if (!menu) return;
+  if (menu.style.display === 'block' && !e.target.closest('#pc-menu') && !e.target.closest('button')) {
+    menu.style.display = 'none';
+  }
+}
+document.addEventListener('click', _pcCloseMenuOnOutside);
+
+// ---- Mode switch (讲义/刷题) ----
+function switchMode(mode) {
+  _mode = mode;
+  var tabs = _pcRoot.querySelectorAll('#pc-mode-tabs .mode-tab');
+  tabs.forEach(function(t) { t.classList.remove('active'); });
+  var activeTab = _pcRoot.querySelector('#pc-mode-tabs [data-mode="' + mode + '"]');
+  if (activeTab) activeTab.classList.add('active');
+
+  var lectureBody = $e('pc-lecture-body');
+  var practiceArea = $e('practice-area');
+  var bottomBar = $e('bottom-bar');
+
+  if (mode === 'lecture') {
+    lectureBody.style.display = '';
+    practiceArea.style.display = 'none';
+    bottomBar.style.display = 'none';
+    stopTimer();
+  } else {
+    lectureBody.style.display = 'none';
+    practiceArea.style.display = '';
+    bottomBar.style.display = '';
+    renderQuestion();
+    startTimer();
+  }
+}
+
+// ---- Timer (redesigned) ----
+// Persistence key per module+date
+function _timerKey() { return 'p-timer-' + PROJ + '-' + (_mockMode ? ('模拟考试-' + _mockSubject) : MOD) + '-' + DATE; }
+
+// Save timer state to localStorage
+function _saveTimerState(state) {
+  var data = { elapsed: _timerSec, state: state, lastTick: Date.now(), mode: _timerMode, total: _timerTotal };
+  localStorage.setItem(_timerKey(), JSON.stringify(data));
+}
+
+// Load saved timer state
+function _loadTimerState() {
+  try {
+    var raw = localStorage.getItem(_timerKey());
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch(e) { return null; }
+}
+
+// Clear timer state (on file delete)
+function _clearTimerState() {
+  localStorage.removeItem(_timerKey());
+}
+
+function startTimer() {
+  // Clear any existing interval — check both local var and root dataset (handles re-eval)
+  if (_timerId) { clearInterval(_timerId); _timerId = null; }
+  if (_pcRoot && _pcRoot._pcTimerId) { clearInterval(_pcRoot._pcTimerId); _pcRoot._pcTimerId = null; }
+
+  // Check if timer should be stopped (already submitted)
+  var saved = _loadTimerState();
+  if (saved && saved.state === 'stopped') {
+    _timerSec = saved.elapsed;
+    var el = $e('pc-nav-timer'); if (el) { el.textContent = formatTime(_timerSec); el.style.color = 'var(--text-secondary)'; }
+    return;
+  }
+
+  // Resume from saved state (for app restart / page re-entry)
+  // Non-mock: just resume from where we left off (don't add offline time)
+  if (saved && saved.state === 'running' && !_mockMode) {
+    _timerSec = saved.elapsed || 0;
+    _saveTimerState('running');
+  }
+
+  // Mock mode: restore countdown and account for elapsed offline time
+  if (_mockMode && saved && saved.state === 'running') {
+    var elapsedSinceSave = Math.floor((Date.now() - (saved.lastTick || Date.now())) / 1000);
+    _timerSec = Math.max(0, (saved.elapsed || _timerTotal) - elapsedSinceSave);
+  }
+
+  var root = _pcRoot;
+  _timerId = setInterval(function() {
+    var el = $e('pc-nav-timer');
+    if (!el || !document.contains(root)) { clearInterval(_timerId); _timerId = null; root._pcTimerId = null; return; }
+
+    if (_timerMode === 'down') {
+      _timerSec--;
+      if (_timerSec <= 0) { stopTimer(); el.textContent = '00:00'; el.style.color = 'var(--red)'; _saveTimerState('stopped'); submitAnswers(true); return; }
+      if (_timerSec < 300) el.style.color = 'var(--red)';
+      else if (_timerSec < 600) el.style.color = 'var(--orange)';
+      else el.style.color = 'var(--text-secondary)';
+      if (_timerSec <= 60 && !_mockWarningShown) { _mockWarningShown = true; API.toast('距离交卷不到1分钟！'); }
+    } else {
+      _timerSec++;
+    }
+
+    el.textContent = formatTime(_timerSec);
+    if (_timerSec % 10 === 0) _saveTimerState('running');
+  }, 1000);
+  // Store on root so any re-eval can find and clear it
+  root._pcTimerId = _timerId;
+}
+
+function stopTimer() {
+  if (_timerId) { clearInterval(_timerId); _timerId = null; }
+  if (_pcRoot && _pcRoot._pcTimerId) { _pcRoot._pcTimerId = null; }
+}
+
+// Freeze timer after grading
+function freezeTimer() {
+  stopTimer();
+  _saveTimerState('stopped');
+  var el = $e('pc-nav-timer');
+  if (el) { el.textContent = formatTime(_timerSec); el.style.color = 'var(--text-secondary)'; }
+}
+
+// Pause on visibility change, resume with accurate time
+function _pcHandleVisibilityChange() {
+  if (!pageAlive()) return;
+  if (document.hidden) {
+    if (_timerId) { stopTimer(); _saveTimerState('running'); }
+  } else {
+    if (!_timerId && !_submitted) {
+      if (!_submitted) startTimer();
+    }
+  }
+}
+document.addEventListener('visibilitychange', _pcHandleVisibilityChange);
+
+function formatTime(sec) {
+  var m = Math.floor(sec / 60);
+  var s = sec % 60;
+  return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+// ---- Init ----
+// Move bottom-bar out of scroll container to fix it at screen bottom
+(function() {
+  var bar = _pcRoot.querySelector('#bottom-bar');
+  if (bar && _pcRoot !== document) {
+    _pcRoot.appendChild(bar); // append as direct child of overlay (after subpage-content)
+  }
+})();
+if (MOD) loadQuestions();
+
+// Refresh on AI completion (with delay for file write, check page alive)
+function _pcHandleAiDone(e) {
+  // If AI was manually stopped, don't auto-retry
+  if (e.detail && e.detail.stopped) return;
+  // Only handle events related to this page's practice module
+  if (e.detail && e.detail.type && ['generate','grade','redo','mock','practice'].indexOf(e.detail.type) < 0) return;
+  var doneModule = (e.detail && e.detail.module) || '';
+  var doneDate = (e.detail && e.detail.date) || DATE;
+  // Clear generating state for the completed module (regardless of current view)
+  if (doneModule) API.clearGenerating('practice', doneModule, doneDate);
+  // Only refresh the view if the completed module is what's currently displayed
+  if (doneModule && MOD && doneModule !== MOD) return;
+  setTimeout(async function() {
+    if (!pageAlive()) return;
+    // If was a grading submission, show summary
+    if (_submitted) {
+      try {
+        var txt = await API.fetchText('练习/' + MOD + '/' + DATE + '.md');
+        if (txt) {
+          var d2 = document.createElement('div'); d2.innerHTML = txt;
+          var corrects = d2.querySelectorAll('.grading-block.correct').length;
+          var wrongs = d2.querySelectorAll('.grading-block.wrong').length;
+          var total = corrects + wrongs;
+          if (total > 0) {
+            var pct = Math.round(corrects/total*100);
+            API.toast('批改完成：' + corrects + '/' + total + ' 正确 (' + pct + '%)');
+            // The grading tool emits a persisted LearningEvent. PlanProgressReducer
+            // consumes that event, including when this page is no longer mounted.
+          }
+        }
+      } catch(e) {}
+      _submitted = false;
+      localStorage.removeItem(submittedKey());
+    }
+    loadQuestions();
+  }, 600);
+}
+document.addEventListener('aic-done', _pcHandleAiDone);
+
+// When user manually stops AI, restore empty state (remove loading spinner)
+function _pcHandleAiStopped() {
+  if (!pageAlive()) return;
+  var emptyEl = $e('pc-empty-state');
+  if (emptyEl && emptyEl.querySelector('.aic-dot-pulse, [style*="spin"]')) {
+    // Loading spinner is showing in empty-state — restore with generate buttons
+    emptyEl.innerHTML = '<div class="empty-icon"><i data-lucide="sparkles"></i></div>'+
+      '<div class="empty-title" id="pc-empty-title">「<span id="pc-mod-name">'+API._esc(MOD)+'</span>」题目还未生成</div>'+
+      '<div class="empty-desc">点击下方按钮，AI 将为你生成今日练习题</div>'+
+      '<button class="card-btn" data-pc-action="generate-plan"><i data-lucide="sparkles"></i> 每日计划</button>'+
+      '<button class="card-btn" data-pc-action="generate" style="background:var(--surface);color:var(--text);border:1px solid var(--border);margin-top:8px"><i data-lucide="settings" style="width:14px;height:14px"></i> 自定义出题</button>';
+    lucide.createIcons();
+  }
+  // Also check practice-area (used by "加练" and "重新出题")
+  var qa = $e('practice-area');
+  if (qa && qa.querySelector('.aic-dot-pulse, [style*="spin"]')) {
+    // Just reload questions to restore proper state
+    loadQuestions();
+    return; // loadQuestions sets _loading itself
+  }
+  _loading = false;
+}
+document.addEventListener('aic-stopped', _pcHandleAiStopped);
+document.addEventListener('aic-failed', _pcHandleAiStopped);
+
+API._onPageExit('practice-card', function() {
+  document.removeEventListener('click', _pcCloseMenuOnOutside);
+  document.removeEventListener('visibilitychange', _pcHandleVisibilityChange);
+  document.removeEventListener('aic-done', _pcHandleAiDone);
+  document.removeEventListener('aic-stopped', _pcHandleAiStopped);
+  document.removeEventListener('aic-failed', _pcHandleAiStopped);
+  stopTimer();
+});
+
+// Page controller for the primary practice workflow. Dynamic question content
+// is migrated through the same action vocabulary as it is rendered.
+API.PageRuntime.mountController('push:practice-card', _pcRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var target = e.target.closest('[data-pc-action]');
+      var ownedOverlay = e.target.closest('#pc-sheet-overlay,#pc-gen-overlay,#pc-gc-overlay,#pc-modpicker-overlay,#pc-history-overlay');
+      if (!target || (!root.contains(target) && !ownedOverlay)) return;
+      var action = target.getAttribute('data-pc-action');
+      if (action === 'back') API.goBack();
+      else if (action === 'task') API.openTaskPanel();
+      else if (action === 'module-picker') { if (!_mockMode) showModulePicker(); }
+      else if (action === 'menu') toggleMenu(e);
+      else if (action === 'refresh') refreshFile();
+      else if (action === 'regenerate') regenerateFile();
+      else if (action === 'history') showHistory();
+      else if (action === 'delete') deleteFile();
+      else if (action === 'mode-lecture') switchMode('lecture');
+      else if (action === 'mode-practice') switchMode('practice');
+      else if (action === 'generate-plan') triggerGenerate('plan');
+      else if (action === 'generate') triggerGenerate();
+      else if (action === 'toggle-answer') toggleAnswer();
+      else if (action === 'option') selectOption(target.getAttribute('data-letter'));
+      else if (action === 'ask-ai') askAIAboutQuestion(parseInt(target.getAttribute('data-index'), 10));
+      else if (action === 'jump') jumpToQuestion(parseInt(target.getAttribute('data-index'), 10));
+      else if (action === 'submit') submitAnswers();
+      else if (action === 'switch-module') switchToModule(target.getAttribute('data-module'));
+      else if (action === 'history-date') { var historyDate = target.getAttribute('data-date'); var historyOverlay = document.getElementById('pc-history-overlay'); if (historyOverlay) historyOverlay.remove(); DATE = historyDate; localStorage.setItem('mp-practice-date', DATE); loadQuestions(); }
+      else if (action === 'close-history') { var historyClose = document.getElementById('pc-history-overlay'); if (historyClose) historyClose.remove(); }
+      else if (action === 'close-gen') { var genClose = document.getElementById('pc-gen-overlay'); if (genClose) genClose.remove(); }
+      else if (action === 'close-count') { var countClose = document.getElementById('pc-gc-overlay'); if (countClose) countClose.remove(); }
+      else if (action === 'close-module') { var moduleClose = document.getElementById('pc-modpicker-overlay'); if (moduleClose) moduleClose.remove(); }
+      else if (action === 'gen-module') selectPracticeGenModule(target);
+      else if (action === 'gen-topic') togglePracticeGenTopic(target);
+      else if (action === 'gen-count') selectPracticeGenCount(target);
+      else if (action === 'gen-confirm') confirmPracticeGen();
+      else if (action === 'gc-count') selectPracticeAddCount(target);
+      else if (action === 'gc-confirm') confirmPracticeAddCount();
+      else if (action === 'prev') goPrev();
+      else if (action === 'sheet') showAnswerSheet();
+      else if (action === 'next') goNext();
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  }
+});
+</script>
+</body>
+</html>

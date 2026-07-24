@@ -1,0 +1,22 @@
+.DS_Store
+
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Build outputs and local packaging
+build/
+dist/
+*.ipa
+*.xcarchive
+src-tauri/target/
+ios/App/build/
+ios/App/build-ipa/
+ios/App/DerivedData/
+
+# Local logs and temp files
+*.log
+tmp/
+.tmp/

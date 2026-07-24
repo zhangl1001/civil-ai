@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 练习日历</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .cal-stats { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 4px 0; }
+  .month-nav { display: flex; align-items: center; justify-content: space-between; padding: 0; }
+  .month-nav button { background: none; border: none; cursor: pointer; color: var(--text-secondary); padding: 6px 8px; display: flex; align-items: center; border-radius: 50%; }
+  .month-nav button:active { background: var(--hover); }
+  .month-nav span { font-size: 15px; font-weight: 600; color: var(--text); }
+  .cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 11px; color: var(--text-secondary); font-weight: 600; padding: 8px 0 4px; }
+  .cal-body { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .cal-cell { min-height: 50px; padding: 4px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; border: 1.5px solid transparent; background: var(--surface); }
+  .cal-cell.empty { background: transparent; cursor: default; border: none; }
+  .cal-cell.today { border-color: var(--accent); }
+  .cal-cell.selected { background: var(--accent-soft); border-color: var(--accent); }
+  .cal-cell:active { background: var(--hover); }
+  .cal-date { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 1px; }
+  .cal-badges { display: flex; gap: 2px; flex-wrap: wrap; }
+  .cal-badge { font-size: 8px; padding: 1px 4px; border-radius: 3px; font-weight: 600; line-height: 1.4; }
+  .cal-badge.exam { background: rgba(255,59,48,.12); color: var(--red); }
+  .cal-badge.practice { background: var(--accent-soft); color: var(--accent); }
+  .cal-badge.essay { background: rgba(52,199,89,.12); color: var(--green); }
+  .cal-score { font-size: 9px; padding: 1px 3px; border-radius: 3px; text-align: center; margin-top: auto; font-weight: 600; }
+  .cal-score.grade-s { color: var(--green); }
+  .cal-score.grade-a { color: var(--green); }
+  .cal-score.grade-b { color: #C9A94E; }
+  .cal-score.grade-c { color: var(--orange); }
+  .cal-score.grade-d { color: var(--red); }
+  .cal-score.has { color: var(--accent); font-size: 9px; }
+  .cal-score.none { color: var(--text-secondary); }
+  .detail-section { padding: 16px; }
+  .detail-date { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .detail-date span:first-child { font-size: 15px; font-weight: 700; color: var(--text); }
+  .detail-today-tag { font-size: 10px; background: var(--accent); color: #fff; padding: 2px 8px; border-radius: 99px; font-weight: 600; }
+  .detail-score { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+  .detail-score-val { font-size: 28px; font-weight: 700; }
+  .detail-score-grade { font-size: 13px; color: var(--text-secondary); }
+  .detail-section-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .task-item { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border-light); font-size: 13px; }
+  .task-item:last-child { border-bottom: none; }
+  .task-icon { flex-shrink: 0; }
+  .task-name { flex: 1; font-weight: 500; color: var(--text); }
+  .task-meta { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+  .task-link { font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface); color: var(--accent); cursor: pointer; white-space: nowrap; }
+  .warning-card { font-size: 12px; padding: 8px 10px; background: rgba(255,149,0,.06); border-radius: 8px; border-left: 3px solid var(--orange); color: var(--text-secondary); margin: 8px 0; }
+  .comment-card { font-size: 12px; padding: 8px 10px; background: var(--surface2); border-radius: 8px; border-left: 3px solid var(--accent); color: var(--text-secondary); margin: 4px 0; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="page" id="page">
+  <div class="navbar">
+    <button data-calendar-action="back"><i data-lucide="arrow-left"></i></button>
+    <span class="title">练习日历</span>
+    <span></span>
+  </div>
+
+  <!-- Statistics bar -->
+  <div class="cal-stats" id="cal-stats">加载中...</div>
+
+  <!-- Calendar card -->
+  <div class="card" style="padding: 12px 12px 8px;">
+    <div class="month-nav">
+      <button data-calendar-action="month" data-delta="-1"><i data-lucide="chevron-left"></i></button>
+      <span id="month-label"></span>
+      <button data-calendar-action="month" data-delta="1"><i data-lucide="chevron-right"></i></button>
+    </div>
+    <div class="cal-weekdays"><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div><div>日</div></div>
+    <div class="cal-body" id="cal-body"></div>
+  </div>
+
+  <!-- Day detail card -->
+  <div class="card detail-section" id="detail" style="display:none"></div>
+</div>
+
+<div class="tabs"></div>
+
+<script src="lucide.js"></script>
+<script src="common.js"></script>
+<script>
+(function() {
+API.initPage('calendar');
+
+// State — derive y/m from API.getLocalDate() so the calendar grid and date strings share a timezone (audit #12)
+var _todayStr0 = API.getLocalDate();
+var y = parseInt(_todayStr0.substring(0,4)), m = parseInt(_todayStr0.substring(5,7))-1;
+var selectedDate = API.getLocalDate();
+var _records = {}, _practiceMap = {}, _practiceRows = {}, _essayDates = new Set(), _examDates = new Set(), _qCounts = {};
+
+var XC_MODULES = API.XC_MODULES;
+var WEEKDAYS = ['一','二','三','四','五','六','日'];
+
+// ===== Data loading =====
+async function loadAllData() {
+  _records = {}; _practiceMap = {}; _practiceRows = {}; _essayDates = new Set(); _examDates = new Set();
+  var hasPracticeIndex = false;
+  var hasEssayIndex = false;
+  var hasMockIndex = false;
+
+  // New writes are indexed. Read these first so the calendar remains complete
+  // after the data model migration; old directory scans below remain a fallback.
+  try {
+    const rows = await API.Index.practice();
+    (rows || []).forEach(function(row) {
+      if (!row || !row.date) return;
+      if (row.is_mock) {
+        _examDates.add(row.date);
+        hasMockIndex = true;
+        return;
+      }
+      if (row.module === '申论') {
+        _essayDates.add(row.date);
+        hasEssayIndex = true;
+        return;
+      }
+      if (!row.module) return;
+      if (!_practiceMap[row.date]) _practiceMap[row.date] = new Set();
+      _practiceMap[row.date].add(row.module);
+      _practiceRows[row.date + '|' + row.module] = row;
+      hasPracticeIndex = true;
+    });
+  } catch(e) { console.warn('[calendar practice index]', e); }
+  try {
+    const mocks = await API.Index.mocks();
+    (mocks || []).forEach(function(row) {
+      var date = row && (row.date || row.created_at && String(row.created_at).slice(0, 10));
+      if (date) { _examDates.add(date); hasMockIndex = true; }
+    });
+  } catch(e) { console.warn('[calendar mock index]', e); }
+  try {
+    const events = await API.Index.learningEvents({ limit: 2000 });
+    (events || []).forEach(function(event) {
+      if (!event || !event.date) return;
+      if (event.type === 'essay' || event.mode === 'essay' || event.module === '申论') {
+        _essayDates.add(event.date);
+        hasEssayIndex = true;
+      }
+      if (event.mode === 'mock_exam' || event.type === 'mock_exam') {
+        _examDates.add(event.date);
+        hasMockIndex = true;
+      }
+    });
+  } catch(e) { console.warn('[calendar event index]', e); }
+
+  try {
+    const dailyRows = await API.Index.dailyCompletions();
+    (dailyRows || []).forEach(function(row) {
+      if (row && row.date) _records[row.date] = row;
+    });
+  } catch(e) { console.warn('[calendar daily index]', e); }
+
+  if (!hasPracticeIndex) try {
+    // Practice modules — listDir returns subdirectory names (判断推理/, 资料分析/, ...)
+    const practiceListRaw = await API.listDir('练习/');
+    const practiceList = practiceListRaw.map(p => p.replace(/\/$/, '').split('/').pop());
+    for (const mn of (practiceList||[])) {
+      if (mn==='申论' || mn==='错题重做' || mn==='模拟考试') continue;
+      try {
+        const subListRaw = await API.listFiles('练习/' + mn + '/');
+        const subList = subListRaw.map(p => p.split('/').pop());
+        for (const sub of (subList||[])) {
+          const dm = sub.match(/^(\d{4}-\d{2}-\d{2})/);
+          if (dm) { if (!_practiceMap[dm[1]]) _practiceMap[dm[1]] = new Set(); _practiceMap[dm[1]].add(mn); }
+        }
+      } catch(e) {}
+    }
+  } catch(e) {}
+
+  if (!hasEssayIndex) try { const elRaw = await API.listFiles('练习/申论/'); const el = elRaw.map(p=>({name:p.split('/').pop()})); for (const f of (el||[])) { const dm = f.name.match(/^(\d{4}-\d{2}-\d{2})/); if (dm) _essayDates.add(dm[1]); } } catch(e) {}
+  if (!hasMockIndex) try { const elRaw2 = await API.listFiles('练习/模拟考试/'); const el = elRaw2.map(p=>({name:p.split('/').pop()})); for (const f of (el||[])) { const dm = f.name.match(/^(\d{4}-\d{2}-\d{2})/); if (dm) _examDates.add(dm[1]); } } catch(e) {}
+}
+
+async function render() {
+  document.getElementById('month-label').textContent = y + '年' + (m+1) + '月';
+
+  const today = API.getLocalDate();
+  const firstDay = new Date(y, m, 1);
+  const lastDay = new Date(y, m+1, 0);
+  const daysInMonth = lastDay.getDate();
+  let startOffset = firstDay.getDay() - 1;
+  if (startOffset < 0) startOffset = 6;
+
+  let html = '';
+  for (let i = 0; i < startOffset; i++) html += '<div class="cal-cell empty"></div>';
+
+  // Streak calc — hard upper bound to avoid infinite loop on anomalous data (audit #6)
+  let streak = 0;
+  const d2 = new Date();
+  let streakCap = 1000;
+  while (streakCap-- > 0) {
+    const ds = API.getLocalDate(d2);
+    if (_records[ds] || (_practiceMap[ds] && _practiceMap[ds].size) || _essayDates.has(ds) || _examDates.has(ds)) {
+      streak++; d2.setDate(d2.getDate() - 1);
+    } else break;
+  }
+  if (!_records[today] && !_practiceMap[today] && !_essayDates.has(today) && !_examDates.has(today)) streak = 0;
+
+  // Monthly stats
+  const prefix = y + '-' + String(m+1).padStart(2,'0');
+  const monthActive = new Set();
+  for (const dt of Object.keys(_practiceMap)) { if (dt.startsWith(prefix)) monthActive.add(dt); }
+  for (const dt of _essayDates) { if (dt.startsWith(prefix)) monthActive.add(dt); }
+  for (const dt of _examDates) { if (dt.startsWith(prefix)) monthActive.add(dt); }
+  for (const dt of Object.keys(_records)) { if (dt.startsWith(prefix)) monthActive.add(dt); }
+  let mScoreSum = 0, mScoreDays = 0;
+  for (const [dt, rec] of Object.entries(_records)) {
+    if (!dt.startsWith(prefix)) continue;
+    if (rec.overall && rec.overall.score !== undefined) { mScoreSum += rec.overall.score; mScoreDays++; }
+  }
+  const mAvg = mScoreDays > 0 ? Math.round(mScoreSum/mScoreDays) : 0;
+  const scorePart = mAvg > 0 ? ' · 均分' + mAvg : '';
+  document.getElementById('cal-stats').textContent = streak > 0
+    ? '连续' + streak + '天 · 本月练了' + monthActive.size + '天' + scorePart
+    : '本月练了' + monthActive.size + '天' + scorePart;
+
+  // Calendar cells
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = y + '-' + String(m+1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+    const rec = _records[ds];
+    const mods = _practiceMap[ds];
+    const hasE = _essayDates.has(ds);
+    const hasX = _examDates.has(ds);
+    const active = rec || (mods && mods.size) || hasE || hasX;
+    const isToday = ds === today;
+    const isSel = ds === selectedDate;
+
+    let badges = '';
+    if (hasX) badges += '<span class="cal-badge exam">模</span>';
+    if (mods && mods.size) badges += '<span class="cal-badge practice">测</span>';
+    if (hasE) badges += '<span class="cal-badge essay">申</span>';
+
+    let scoreHtml;
+    if (rec && rec.overall && rec.overall.score !== undefined) {
+      const g = (rec.overall.grade||'d').charAt(0).toLowerCase();
+      // Escape server-provided fields (audit #1) — coerce score to number, escape grade
+      scoreHtml = '<div class="cal-score grade-'+esc(g)+'">'+esc(rec.overall.score)+'·'+esc(rec.overall.grade)+'</div>';
+    } else if (active) {
+      scoreHtml = '<div class="cal-score has">待批</div>';
+    } else {
+      scoreHtml = '<div class="cal-score none">—</div>';
+    }
+
+    html += '<div class="cal-cell'+(isToday?' today':'')+(isSel?' selected':'')+'" data-calendar-action="day" data-date="'+ds+'"><div class="cal-date">'+d+'</div><div class="cal-badges">'+badges+'</div>'+scoreHtml+'</div>';
+  }
+
+  document.getElementById('cal-body').innerHTML = html;
+  // Restore selection
+  if (selectedDate && selectedDate.startsWith(prefix)) showDayDetail(selectedDate);
+}
+
+async function showDayDetail(ds) {
+  selectedDate = ds;
+  // Update grid selection visuals
+  document.querySelectorAll('.cal-cell').forEach(el => {
+    el.classList.toggle('selected', el.dataset.date === ds);
+  });
+
+  const recRaw = _records[ds] || null;
+  const rec = recRaw && recRaw.modules && Array.isArray(recRaw.modules)
+    ? { ...recRaw, modules: Object.fromEntries(recRaw.modules.map(m => [m.name, m])) }
+    : recRaw;
+  const mods = _practiceMap[ds] ? [..._practiceMap[ds]] : [];
+  const hasEssay = _essayDates.has(ds);
+  const hasExam = _examDates.has(ds);
+  const isToday = ds === API.getLocalDate();
+  const hasActivity = rec || mods.length || hasEssay || hasExam;
+
+  const detail = document.getElementById('detail');
+
+  if (!hasActivity) {
+    const tip = isToday ? '今天还没有练习，去刷题吧' : ds + ' 无练习记录';
+    detail.innerHTML = '<div style="font-size:13px;color:var(--text-secondary);padding:8px 0">'+tip+'</div>';
+    detail.style.display = '';
+    return;
+  }
+
+  detail.innerHTML = '<div style="padding:8px 0;color:var(--text-secondary);font-size:14px">加载中...</div>';
+  detail.style.display = '';
+
+  // Fetch question counts for each module
+  const qCounts = {};
+  if (mods.length) {
+    const cacheKey = ds;
+    if (!_qCounts[cacheKey]) {
+      const missing = [];
+      mods.forEach(function(mn) {
+        var indexed = _practiceRows[ds + '|' + mn];
+        if (indexed && indexed.question_count !== undefined) qCounts[mn] = indexed.question_count || 0;
+        else missing.push(mn);
+      });
+      const promises = missing.map(async (mn) => {
+        try {
+          const text = await API.fetchText('练习/'+mn+'/'+ds+'.md');
+          if (!text) return;
+          qCounts[mn] = (text.match(/\*\*Q?\d+\.?\*\*/gm) || []).length;
+        } catch(e) {}
+      });
+      await Promise.all(promises);
+      _qCounts[cacheKey] = qCounts;
+    } else {
+      Object.assign(qCounts, _qCounts[cacheKey]);
+    }
+  }
+
+  // Build detail HTML
+  let html = '<div class="detail-date"><span>'+ds+'</span>'+(isToday?'<span class="detail-today-tag">今天</span>':'')+'</div>';
+
+  // Score card
+  if (rec && rec.overall && rec.overall.score !== undefined) {
+    const gc = {s:'var(--green)',a:'var(--green)',b:'var(--accent)',c:'var(--orange)',d:'var(--red)'};
+    const g = (rec.overall.grade||'d').charAt(0).toLowerCase();
+    html += '<div class="detail-score"><span class="detail-score-val" style="color:'+(gc[g]||'var(--text)')+'">'+rec.overall.score+'分</span><span class="detail-score-grade">'+rec.overall.grade+'级</span></div>';
+  }
+
+  // Task list
+  html += '<div class="detail-section-title">当日任务</div>';
+
+  if (mods.length) {
+    for (const mn of mods) {
+      const modRec = rec && rec.modules && rec.modules[mn];
+      const done = modRec && (modRec.accuracy !== undefined || modRec.correct !== undefined);
+      const icon = done
+        ? '<i data-lucide="check-circle" style="width:14px;height:14px;color:var(--green)"></i>'
+        : '<i data-lucide="circle" style="width:14px;height:14px;color:var(--text-secondary)"></i>';
+      const qc = qCounts[mn] || 0;
+      const qcText = qc > 0 ? ' '+qc+'题' : '';
+      html += '<div class="task-item"><span class="task-icon">'+icon+'</span><span class="task-name">行测 · '+esc(mn)+'</span><span class="task-meta">'+qcText+'</span>';
+      if (done) {
+        const acc = Math.round((modRec.accuracy||0)*100);
+        html += '<span class="task-meta">正确率'+acc+'% ('+(modRec.correct||0)+'/'+(modRec.total||0)+') · '+(modRec.grade||'-')+'级</span>';
+      } else {
+        html += '<span class="task-meta" style="color:var(--text-secondary)">待批改</span>';
+      }
+      html += '<button class="task-link" data-calendar-action="practice" data-module="'+API.escapeAttr(mn)+'" data-date="'+ds+'">查看</button></div>';
+    }
+  }
+  if (hasEssay) {
+    html += '<div class="task-item"><span class="task-icon"><i data-lucide="pen-tool" style="width:14px;height:14px;color:var(--text-secondary)"></i></span><span class="task-name">申论练习</span><span class="task-meta">'+(rec&&rec.essay_done?'已批改':'待批改')+'</span></div>';
+  }
+  if (hasExam) {
+    html += '<div class="task-item"><span class="task-icon"><i data-lucide="monitor" style="width:14px;height:14px;color:var(--text-secondary)"></i></span><span class="task-name">模拟考试</span><span class="task-meta">'+(rec&&rec.exam_done?'已批改':'待批改')+'</span></div>';
+  }
+
+  // Weak modules
+  if (rec && rec.modules) {
+    const weak = Object.entries(rec.modules)
+      .filter(([,md]) => (md.accuracy||0) < 0.6)
+      .map(([name, md]) => name+'('+Math.round((md.accuracy||0)*100)+'%)');
+    if (weak.length) {
+      html += '<div class="warning-card"><strong>重点关注：</strong>'+esc(weak.join('、'))+'</div>';
+    }
+  }
+
+  // AI comment
+  const comment = (rec && rec.overall) ? (rec.overall.comment || rec.overall.overall_assessment || rec.overall.ai_comment) : '';
+  if (comment) {
+    html += '<div class="comment-card">'+esc(comment)+'</div>';
+  }
+
+  detail.innerHTML = html;
+  lucide.createIcons();
+}
+
+function esc(s) {
+  return API._esc(s);
+}
+
+async function changeMonth(delta) {
+  m += delta;
+  if (m < 0) { m = 11; y--; }
+  if (m > 11) { m = 0; y++; }
+  selectedDate = null;
+  _qCounts = {};
+  document.getElementById('detail').style.display = 'none';
+  render();
+}
+
+function selectDay(ds) {
+  selectedDate = ds;
+  showDayDetail(ds);
+}
+
+function openPractice(mod, dateStr) {
+  localStorage.setItem('mp-target-module', mod);
+  localStorage.setItem('mp-practice-date', dateStr);  // 修正 key：与 practice-card.html 一致
+  API.pushPage('practice-card');
+}
+
+// ===== Init =====
+(async function() {
+  // Always paint the current month first. Storage failures must not result in a
+  // blank page while the user is deciding where to practice next.
+  await render();
+  try {
+    await loadAllData();
+    await render();
+  } catch(e) {
+    console.warn('[calendar init]', e);
+    var stat = document.getElementById('cal-stats');
+    if (stat) stat.textContent = '日历已打开，练习记录暂时加载失败';
+    API.pageError('calendar init', e, '练习日历加载失败');
+  }
+})();
+var _calendarRoot = document.querySelector('.subpage-overlay') || document;
+API.PageRuntime.mountController('push:calendar', _calendarRoot, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var t = e.target.closest('[data-calendar-action]');
+      if (!t || !root.contains(t)) return;
+      var action = t.getAttribute('data-calendar-action');
+      if (action === 'back') API.goBack();
+      else if (action === 'month') changeMonth(parseInt(t.getAttribute('data-delta'), 10));
+      else if (action === 'day') selectDay(t.getAttribute('data-date'));
+      else if (action === 'practice') openPractice(t.getAttribute('data-module'), t.getAttribute('data-date'));
+    };
+    document.addEventListener('click', onClick);
+    addCleanup(function() { document.removeEventListener('click', onClick); });
+  }
+});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>公考辅导 - 申论</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  /* ----- Question area (scroll handled by .subpage-overlay) ----- */
+  .q-area { flex: 1; min-height: 0; padding-bottom: 70px; }
+
+  /* Empty state */
+  .q-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; height: 100%; min-height: 300px; text-align: center; }
+  .q-empty-icon { width: 56px; height: 56px; border-radius: 16px; background: var(--accent-soft); display: flex; align-items: center; justify-content: center; }
+  .q-empty-icon svg { width: 28px; height: 28px; color: var(--accent); }
+  .q-empty h3 { font-size: 16px; font-weight: 600; color: var(--text); margin: 0; }
+  .q-empty p { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.6; }
+
+  /* Loading */
+  .q-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 60px 0; color: var(--text-secondary); font-size: 14px; }
+  .q-loading-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: qDotPulse 1.2s ease-in-out infinite; }
+  @keyframes qDotPulse { 0%,100%{opacity:.3;transform:scale(1)} 50%{opacity:1;transform:scale(1.5)} }
+
+  /* Question card */
+  .q-card { margin: 0 !important; }
+  .q-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border-light); }
+  .q-type-tag { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .q-card-date { font-size: 12px; color: var(--text-secondary); }
+
+  /* Mode tabs (讲义 | 题目) */
+  .mode-tabs { display: flex; gap: 0; background: var(--surface2); border-radius: 10px; padding: 3px; flex-shrink: 0; }
+  .mode-tab { flex: 1; text-align: center; padding: 8px 0; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); cursor: pointer; transition: all .15s; }
+  .mode-tab.active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+
+  .q-content { font-size: 15px; line-height: 1.85; }
+  .lecture-body { display: none; }
+  .question-body { display: none; }
+  .lecture-body.active { display: block; }
+  .question-body.active { display: block; }
+  .lecture-body > h1:first-child, .question-body > h1:first-child { display: none; }
+
+  /* ----- Start button ----- */
+  .start-bar { flex-shrink: 0; padding: 8px 0 4px; position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg); z-index: 50; box-shadow: 0 -2px 8px rgba(0,0,0,.08); }
+  .start-btn { width: 100%; height: 50px; border: none; border-radius: 14px; background: var(--accent); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; font-family: inherit; box-shadow: 0 2px 12px rgba(74,158,255,.25); }
+  .start-btn:active { opacity: .85; }
+  .start-btn:disabled { background: var(--border); color: var(--text-secondary); cursor: not-allowed; box-shadow: none; }
+  .start-btn.hidden { display: none; }
+
+  /* ----- Backdrop & Sheet ----- */
+  .es-backdrop { position: fixed; inset: 0; z-index: 10001; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .3s; }
+  .es-backdrop.open { opacity: 1; pointer-events: auto; }
+  .es-sheet { position: fixed; z-index: 10002; left: 0; right: 0; bottom: 0; top: 60%; background: var(--bg); border-radius: 16px 16px 0 0; display: flex; flex-direction: column; transform: translateY(110%); box-shadow: 0 -6px 30px rgba(0,0,0,.25); overflow: hidden; }
+  .es-sheet.anim { transition: transform .35s cubic-bezier(.32,.72,0,1); }
+  .es-sheet.open { transform: translateY(0); }
+  .es-handle { display: flex; justify-content: center; padding: 10px 0 4px; flex-shrink: 0; }
+  .es-handle::after { content: ''; width: 36px; height: 4px; border-radius: 2px; background: var(--border); }
+  .es-hd { display: flex; align-items: center; justify-content: space-between; padding: 4px 16px 10px; flex-shrink: 0; }
+  .es-hd-l { display: flex; align-items: center; gap: 8px; }
+  .es-hd-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .es-hd-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .es-hd-r { display: flex; align-items: center; gap: 8px; }
+  .es-hd-wc { font-size: 12px; color: var(--text-secondary); }
+  .es-hd-close { width: 28px; height: 28px; border: none; border-radius: 50%; background: var(--surface2); color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .es-body { flex: 1; min-height: 0; padding: 0 16px 8px; display: flex; }
+  .es-textarea { flex: 1; min-height: 0; width: 100%; border: none; outline: none; resize: none; font-size: 15px; line-height: 1.85; color: var(--text); font-family: inherit; background: transparent; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .es-textarea::placeholder { color: var(--text-secondary); opacity: .35; }
+  .es-ft { display: flex; align-items: center; gap: 8px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border-light); flex-shrink: 0; }
+  .es-ft-wc { font-size: 12px; color: var(--text-secondary); min-width: 44px; }
+  .es-spc { flex: 1; }
+  .es-btn { height: 38px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; padding: 0 18px; font-family: inherit; display: flex; align-items: center; gap: 5px; }
+  .es-btn.go { background: transparent; color: var(--text-secondary); }
+  .es-btn.cta { background: var(--accent); color: #fff; }
+
+  /* ----- Answer toggle in question content (like practice-card) ----- */
+  .q-answer-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--accent); cursor: pointer; padding: 8px 0; font-weight: 600; user-select: none; }
+  .q-answer-toggle svg { width: 14px; height: 14px; transition: transform .2s; }
+  .q-answer-toggle.open svg { transform: rotate(90deg); }
+
+  /* ----- Timer in navbar ----- */
+  .nav-timer { font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; gap: 3px; white-space: nowrap; padding: 4px 8px; border-radius: var(--radius-lg); background: var(--surface2); }
+  .nav-timer.running { color: var(--accent); font-weight: 600; background: var(--accent-soft); }
+
+  /* ----- Type modal ----- */
+  .type-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 500; display: flex; align-items: center; justify-content: center; }
+  .type-card { background: var(--surface); border-radius: 14px; padding: 24px; width: 90%; max-width: 300px; }
+  .type-btn { flex: 1; height: 40px; border: 2px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text-secondary); font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .type-btn.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <!-- Navbar -->
+  <div class="navbar" style="position:-webkit-sticky;position:sticky;top:0;z-index:100;justify-content:center">
+    <button data-es-action="back" style="position:absolute;left:8px;z-index:1"><i data-lucide="arrow-left"></i></button>
+    <span class="nav-timer" id="es-nav-timer" data-es-action="timer" style="position:absolute;left:40px;display:none;font-size:13px;font-weight:500;color:var(--text-secondary);cursor:pointer;white-space:nowrap;padding:4px 8px;border-radius:var(--radius-lg);background:var(--surface2);align-items:center;gap:3px;z-index:2;flex-shrink:0">
+      <i data-lucide="clock" style="width:13px;height:13px"></i>
+      <span id="timer-text">00:00</span>
+    </span>
+    <span data-es-action="module-picker" style="cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px" class="title" id="es-nav-title-text">申论写作 <i data-lucide="chevron-down" style="width:14px;height:14px;color:var(--text-secondary)"></i></span>
+    <span class="navbar-actions" style="position:absolute;right:8px;display:flex;align-items:center;gap:0">
+      <button data-task-bell data-es-action="task" style="position:static;background:none;border:none;cursor:pointer;color:var(--text-secondary);padding:4px;display:flex;align-items:center" title="消息"><i data-lucide="bell" style="width:18px;height:18px"></i><span class="task-badge"></span></button>
+      <span style="position:relative">
+        <button data-es-action="menu" style="background:none;border:none;cursor:pointer;color:var(--text);padding:4px;display:flex;align-items:center;border-radius:50%"><i data-lucide="more-vertical" style="width:18px;height:18px"></i></button>
+        <div class="menu-dd" id="menu">
+          <div class="menu-dd-item" data-es-action="type"><i data-lucide="file-text"></i> 题型偏好<span style="font-size:11px;color:var(--text-secondary);margin-left:auto" id="menu-type-label">小题</span></div>
+          <div class="menu-dd-item" data-es-action="refresh"><i data-lucide="refresh-cw"></i> 刷新</div>
+          <div class="menu-dd-item" data-es-action="regenerate"><i data-lucide="zap"></i> 重新生成</div>
+          <div class="menu-dd-item" data-es-action="generate"><i data-lucide="plus-circle"></i> 加练新题型</div>
+          <div class="menu-dd-item" data-es-action="history"><i data-lucide="history"></i> 历史文件</div>
+          <div class="menu-dd-item" data-es-action="delete" style="color:var(--red)"><i data-lucide="trash-2"></i> 删除</div>
+        </div>
+      </span>
+    </span>
+  </div>
+
+  <!-- Question area -->
+  <div class="q-area" id="q-area">
+    <div style="display:flex;align-items:center;gap:8px;padding:0 4px 8px;display:none" id="es-q-meta">
+      <span class="q-type-tag" id="es-q-type-tag"></span>
+      <span style="font-size:12px;color:var(--text-secondary)" id="es-q-date"></span>
+    </div>
+    <div class="q-empty" id="es-q-empty">
+      <div class="q-empty-icon"><i data-lucide="pen-tool"></i></div>
+      <h3>申论练习</h3>
+      <p>AI 智能生成题目材料，支持批改反馈</p>
+      <button class="card-btn" data-es-action="generate-plan"><i data-lucide="sparkles"></i> 每日计划</button>
+      <button class="card-btn" data-es-action="generate" style="background:var(--surface);color:var(--text);border:1px solid var(--border);font-weight:600"><i data-lucide="settings" style="width:16px;height:16px"></i> 自定义</button>
+    </div>
+    <!-- Mode tabs (like practice-card) -->
+    <div class="mode-tabs" id="es-mode-tabs" style="display:none">
+      <div class="mode-tab active" data-tab="lecture" data-es-action="tab-lecture">讲义</div>
+      <div class="mode-tab" data-tab="question" data-es-action="tab-question">题目</div>
+    </div>
+    <div class="card q-card md-body lecture-body active" id="es-lecture-body" style="display:none"></div>
+    <div class="card q-card md-body question-body" id="es-question-body" style="display:none"></div>
+    <div class="q-loading" id="es-q-loading" style="display:none">
+      <i data-lucide="loader" style="width:24px;height:24px;color:var(--accent);animation:spin 1s linear infinite"></i>
+      <span>AI 正在生成题目...</span>
+    </div>
+  </div>
+
+  <!-- Start button -->
+  <div class="start-bar">
+    <button class="start-btn" id="es-start-btn" data-es-action="open-sheet" style="display:none">
+      <i data-lucide="edit-3" style="width:18px;height:18px"></i> 开始作答
+    </button>
+  </div>
+
+  <!-- Backdrop -->
+  <div class="es-backdrop" id="es-backdrop" data-es-action="close-sheet"></div>
+
+  <!-- Answer sheet -->
+  <div class="es-sheet anim" id="es-sheet">
+    <div class="es-handle"></div>
+    <div class="es-hd">
+      <div class="es-hd-l">
+        <span class="es-hd-dot"></span>
+        <span class="es-hd-title">作答区</span>
+      </div>
+      <div class="es-hd-r">
+        <span class="es-hd-wc" id="es-wc-top">0 字</span>
+        <button class="es-hd-close" data-es-action="close-sheet"><i data-lucide="chevron-down" style="width:18px;height:18px"></i></button>
+      </div>
+    </div>
+    <div class="es-body">
+      <textarea class="es-textarea" id="es-answer" placeholder="在此输入你的申论答案..."></textarea>
+    </div>
+    <div class="es-ft">
+      <span class="es-ft-wc" id="es-wc-bottom">0 字</span>
+      <span class="es-spc"></span>
+      <button class="es-btn go" data-es-action="close-sheet"><i data-lucide="eye" style="width:14px;height:14px"></i> 收起</button>
+      <button class="es-btn cta" data-es-action="submit"><i data-lucide="send" style="width:14px;height:14px"></i> 提交批改</button>
+    </div>
+  </div>
+</div>
+
+<div class="tabs"></div>
+
+<script src="lucide.js"></script>
+<script src="marked.js"></script>
+<script src="common.js"></script>
+<script>
+API.initPage('practice');
+
+// --- State ---
+var etype = 'short';
+var essayTopic = localStorage.getItem('essay-topic') || ''; // from practice.html module card
+// Active date honors a historical override (es-date from history list / task bell).
+// Previously es-date was only ever written, never read, so history navigation was a no-op.
+var ESSAY_DATE = API.getActiveDate();
+// Consume the override after reading so a later fresh entry isn't pinned to the old date
+localStorage.removeItem('es-date');
+
+// Local date for this page — use ESSAY_DATE everywhere instead of getLocalDate()
+var _esDate = function() { return ESSAY_DATE; };
+
+// Check if already submitted for this date
+var esSubmitted = localStorage.getItem(_esSubmittedKey());
+if (esSubmitted) {
+  var sbtn = $('es-start-btn');
+  if (sbtn) { sbtn.textContent = '今日已批改'; sbtn.disabled = true; sbtn.style.opacity = '.5'; }
+}
+
+// Check if AI is currently generating for this page
+if (API.isGenerating('essay', essayTopic||'', _esDate())) {
+  var qe2 = $('es-q-empty'); if (qe2) {
+    API.showLoading(qe2, 'AI 正在生成题目...');
+  }
+}
+
+// Auto-set type based on topic
+if (essayTopic) {
+  if (essayTopic === '申发论述') etype = 'long';
+  else if (essayTopic === '贯彻执行') etype = 'short'; // 公文 also short answer format
+  else etype = 'short'; // 归纳概括/综合分析/提出对策 -> 小题
+}
+var timerSec = 0, timerRunning = false, timerInterval = null;
+var pollTimer = null;
+var questionLoaded = false;
+var sheetOpen = false;
+var _esRestoring = false; // prevent duplicate empty-state rebuild
+
+// Rebuild q-area empty state (called after showLoading destroyed it)
+// Shared q-area skeleton — single source of truth for the 5 places that previously
+// each hand-built this HTML (and refreshFile forgot q-empty, causing a crash — audit #2/#10)
+function _qAreaSkeleton(includeEmpty) {
+  var html = '';
+  if (includeEmpty) {
+    html += '<div class="q-empty" id="es-q-empty">'+
+      '<div class="q-empty-icon"><i data-lucide="pen-tool"></i></div>'+
+      '<h3>申论练习</h3>'+
+      '<p>AI 智能生成题目材料，支持批改反馈</p>'+
+      '<button class="card-btn" data-es-action="generate-plan"><i data-lucide="sparkles"></i> 每日计划</button>'+
+      '<button class="card-btn" data-es-action="generate" style="background:var(--surface);color:var(--text);border:1px solid var(--border);font-weight:600"><i data-lucide="settings" style="width:16px;height:16px"></i> 自定义</button>'+
+      '</div>';
+  } else {
+    html += '<div class="q-empty" id="es-q-empty" style="display:none"></div>';
+  }
+  html += '<div class="mode-tabs" id="es-mode-tabs" style="display:none">'+
+    '<div class="mode-tab active" data-tab="lecture" data-es-action="tab-lecture">讲义</div>'+
+    '<div class="mode-tab" data-tab="question" data-es-action="tab-question">题目</div>'+
+    '</div>'+
+    '<div class="card q-card md-body lecture-body active" id="es-lecture-body" style="display:none"></div>'+
+    '<div class="card q-card md-body question-body" id="es-question-body" style="display:none"></div>'+
+    '<div class="q-loading" id="es-q-loading" style="display:none">'+
+    '<i data-lucide="loader" style="width:24px;height:24px;color:var(--accent);animation:spin 1s linear infinite"></i>'+
+    '<span>AI 正在生成题目...</span></div>';
+  return html;
+}
+
+function _restoreEsEmpty() {
+  if (_esRestoring) return;
+  _esRestoring = true;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  API.clearGenerating('essay', essayTopic||'申论', _esDate());
+  $('q-area').innerHTML = _qAreaSkeleton(true);
+  $('es-start-btn').style.display = 'none';
+  questionLoaded = false;
+  lucide.createIcons();
+}
+
+// Reload essay content for a historical date (from history list) — avoids full shell reload
+function _loadEssayForDate(date) {
+  ESSAY_DATE = date;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  $('es-lecture-body').style.display = 'none';
+  $('es-question-body').style.display = 'none';
+  $('es-mode-tabs').style.display = 'none';
+  $('es-q-empty').style.display = '';
+  $('es-start-btn').style.display = 'none';
+  questionLoaded = false;
+  API.fetchText('练习/申论/' + date + '.md').then(function(text) {
+    if (text) {
+      $('es-q-empty').style.display = 'none';
+      renderSplitContent(API.md(text));
+      questionLoaded = true;
+      restoreDraft();
+    } else {
+      _restoreEsEmpty();
+    }
+  }).catch(function(e) {
+    API.pageError('essay load date', e, '申论练习加载失败');
+    _restoreEsEmpty();
+  });
+  lucide.createIcons();
+}
+
+// --- Scoped element lookup (returns null if not found) ---
+function $(id) { return document.getElementById(id); }
+
+// --- Menu ---
+function toggleMenu(e) {
+  if (e) e.stopPropagation();
+  var m = $('menu');
+  var wasOpen = m.classList.contains('show');
+  document.querySelectorAll('.menu-dd.show').forEach(function(x) { x.classList.remove('show'); });
+  if (!wasOpen) {
+    $('menu-type-label').textContent = etype === 'short' ? '小题' : '大作文';
+    m.classList.add('show');
+    setTimeout(function() {
+      document.addEventListener('click', function close() {
+        m.classList.remove('show');
+        document.removeEventListener('click', close);
+      });
+    }, 0);
+  }
+}
+
+function closeMenu() {
+  var m = $('menu'); if (m) m.classList.remove('show');
+}
+
+// --- Type modal ---
+function showTypeModal() {
+  var ov = document.createElement('div');
+  ov.className = 'type-overlay';
+  ov.id = 'essay-type-overlay';
+  ov.innerHTML = '<div class="type-card">'+
+    '<h3 style="margin:0 0 14px;font-size:16px;color:var(--text)">题型偏好</h3>'+
+    '<div style="display:flex;gap:10px;padding:6px 0 18px">'+
+    '<button class="type-btn'+(etype==='short'?' sel':'')+'" data-es-action="type-short" id="ty-short">小题</button>'+
+    '<button class="type-btn'+(etype==='long'?' sel':'')+'" data-es-action="type-long" id="ty-long">大作文</button>'+
+    '</div>'+
+    '<button data-es-action="close-type" style="width:100%;height:40px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);font-size:14px;cursor:pointer;font-family:inherit" id="ty-cancel">取消</button>'+
+    '</div>';
+  ov.addEventListener('click', function(e) { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
+function updateTypeUI() {
+  var tag = $('es-q-type-tag');
+  if (tag) tag.textContent = etype === 'short' ? '小题' : '大作文';
+  var metaRow = $('es-q-meta');
+  if (metaRow && tag) metaRow.style.display = '';
+  var ml = $('menu-type-label');
+  if (ml) ml.textContent = etype === 'short' ? '小题' : '大作文';
+  // Clear topic when user manually changes type
+  essayTopic = '';
+  localStorage.removeItem('essay-topic');
+  $('es-nav-title-text').innerHTML = '申论写作' + ' <i data-lucide="chevron-down" style="width:14px;height:14px;color:var(--text-secondary)"></i>';
+  lucide.createIcons();
+}
+
+// --- Timer (persistent per topic+date) ---
+function _esTimerKey() { return 'es-timer-' + (essayTopic || '申论') + '-' + _esDate(); }
+
+function updateTimer() {
+  var m = Math.floor(timerSec / 60), s = timerSec % 60;
+  var el = $('timer-text'); if (el) el.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+// Save current timer state to localStorage
+function _saveEsTimer(state) {
+  localStorage.setItem(_esTimerKey(), JSON.stringify({elapsed:timerSec, state:state, lastTick:Date.now()}));
+}
+
+// Start timer (called from openSheet)
+function _startEsTimer() {
+  // If already frozen (submitted), don't restart
+  var saved = JSON.parse(localStorage.getItem(_esTimerKey()) || 'null');
+  if (saved && saved.state === 'stopped') {
+    timerSec = saved.elapsed; updateTimer();
+    var nt = $('es-nav-timer'); if (nt) { nt.style.display = 'flex'; nt.classList.remove('running'); }
+    return;
+  }
+  // Resume from saved state (account for time passed while away)
+  if (saved && (saved.state === 'running' || saved.state === 'paused')) {
+    var extra = (saved.state === 'running') ? Math.floor((Date.now() - (saved.lastTick || Date.now())) / 1000) : 0;
+    timerSec = (saved.elapsed || 0) + Math.max(0, extra);
+  }
+  updateTimer();
+  var nt = $('es-nav-timer'); if (nt) { nt.style.display = 'flex'; nt.classList.add('running'); }
+  timerRunning = true;
+  timerInterval = setInterval(function() {
+    timerSec++; updateTimer();
+    if (timerSec % 10 === 0) _saveEsTimer('running');
+  }, 1000);
+}
+
+// Pause timer (called from closeSheet)
+function _pauseEsTimer() {
+  if (!timerRunning) return;
+  timerRunning = false; clearInterval(timerInterval);
+  _saveEsTimer('paused');
+  var nt = $('es-nav-timer'); if (nt) nt.classList.remove('running');
+}
+
+// Freeze after grading (called from submit)
+function freezeEssayTimer() {
+  timerRunning = false; clearInterval(timerInterval);
+  _saveEsTimer('stopped');
+  var nt = $('es-nav-timer'); if (nt) nt.classList.remove('running');
+}
+
+// Pause timer when page not visible
+function _essayHandleVisibilityChange() {
+  if (document.hidden && timerRunning) _pauseEsTimer();
+}
+document.addEventListener('visibilitychange', _essayHandleVisibilityChange);
+
+// Manual click on timer display
+function toggleTimer() {
+  if (timerRunning) _pauseEsTimer(); else _startEsTimer();
+}
+
+// Reset timer (called from generate/delete/regenerate)
+function resetTimer() {
+  timerRunning = false; clearInterval(timerInterval);
+  timerSec = 0; updateTimer();
+  localStorage.removeItem(_esTimerKey());
+  // Key must match the one written at submit() — it includes the topic segment.
+  // Previously reset cleared 'es-submitted-<date>' (no topic) so the submitted flag
+  // never cleared and the start button stayed disabled after regenerate (audit #1).
+  localStorage.removeItem('es-submitted-' + (essayTopic || '申论') + '-' + _esDate());
+  var nt = $('es-nav-timer'); if (nt) { nt.style.display = 'none'; nt.classList.remove('running'); }
+  var sbtn2 = $('es-start-btn');
+  if (sbtn2) { sbtn2.textContent = '开始作答'; sbtn2.disabled = false; sbtn2.style.opacity = ''; }
+}
+
+// --- Word count ---
+// Draft key includes the topic so switching 归纳概括 → 申发论述 doesn't cross-pollute drafts (audit #6)
+function _esDraftKey() { return 'es-draft-' + (essayTopic || '申论') + '-' + _esDate(); }
+function _esSubmittedKey() { return 'es-submitted-' + (essayTopic || '申论') + '-' + _esDate(); }
+
+function onEsInput() {
+  var n = $('es-answer').value.length;
+  var wt = $('es-wc-top'); if (wt) wt.textContent = n + ' 字';
+  var wb = $('es-wc-bottom'); if (wb) wb.textContent = n + ' 字';
+  // Auto-save draft every 3s
+  clearTimeout(window._esDraftTimer);
+  window._esDraftTimer = setTimeout(function() {
+    var ta = $('es-answer');
+    var v = ta ? ta.value : '';
+    if (v) localStorage.setItem(_esDraftKey(), v);
+  }, 3000);
+}
+
+// Restore draft on load
+function restoreDraft() {
+  var draft = localStorage.getItem(_esDraftKey());
+  if (draft) { var ta = $('es-answer'); if (ta) { ta.value = draft; onEsInput(); } }
+}
+
+// --- Sheet open/close ---
+function openSheet() {
+  if (!questionLoaded) return;
+  sheetOpen = true;
+  _startEsTimer();
+  $('es-backdrop').classList.add('open');
+  $('es-sheet').classList.add('open');
+  setTimeout(function() { var ta = $('es-answer'); if (ta) ta.focus(); }, 400);
+  lucide.createIcons();
+}
+
+// Adjust sheet when keyboard shows/hides
+var _sheetTop = '60%';
+if (window.visualViewport) {
+  var _vvResizeHandler = function() {
+    if (!sheetOpen) return;
+    var keyboardH = window.innerHeight - window.visualViewport.height;
+    var sheet = $('es-sheet');
+    if (sheet) {
+      sheet.style.top = keyboardH > 100 ? '40%' : _sheetTop;
+    }
+  };
+  window.visualViewport.addEventListener('resize', _vvResizeHandler);
+  API._onPageExit('essay', function() {
+    window.visualViewport.removeEventListener('resize', _vvResizeHandler);
+    document.removeEventListener('aic-done', _onAicDone);
+    document.removeEventListener('aic-stopped', _onAicStopped);
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  });
+}
+
+function closeSheet() {
+  sheetOpen = false;
+  _pauseEsTimer();
+  $('es-backdrop').classList.remove('open');
+  $('es-sheet').classList.remove('open');
+  $('es-sheet').style.transform = '';
+}
+
+// Module picker for 申论 sub-types
+function showEssayModPicker() {
+  var types = [
+    {label:'小题', children:['归纳概括','综合分析','提出对策','贯彻执行']},
+    {label:'大作文', children:['申发论述']}
+  ];
+  var html = '<div class="sheet-overlay" id="essay-mod-overlay">';
+  html += '<div class="sheet-card" style="padding:22px 20px calc(22px + env(safe-area-inset-bottom))">';
+  html += '<div class="sheet-title">选择题型</div>';
+  html += '<div style="display:flex;flex-direction:column;gap:6px">';
+  types.forEach(function(g) {
+    html += '<div style="font-size:12px;color:var(--text-secondary);font-weight:600;padding:8px 0 2px">'+g.label+'</div>';
+    g.children.forEach(function(t) {
+      var isActive = essayTopic === t;
+      html += '<div data-es-action="select-module" data-topic="'+API.escapeAttr(t)+'" style="padding:14px 16px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:15px;'+(isActive?'background:var(--accent-soft);color:var(--accent);font-weight:600':'color:var(--text)')+'">';
+      html += '<span style="flex:1">'+t+'</span>';
+      if (isActive) html += '<i data-lucide="check" style="width:16px;height:16px;color:var(--accent)"></i>';
+      html += '</div>';
+    });
+  });
+  html += '</div>';
+  html += '<button data-es-action="close-module" style="width:100%;height:44px;border:none;border-radius:12px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:15px;margin-top:8px">取消</button>';
+  html += '</div></div>';
+  var div = document.createElement('div');
+  div.innerHTML = html;
+  document.body.appendChild(div.firstElementChild);
+  lucide.createIcons();
+  document.getElementById('essay-mod-overlay').addEventListener('click', function(e) {
+    if (e.target === this) this.remove();
+  });
+}
+function selectEssayMod(t) {
+  var ov = document.getElementById('essay-mod-overlay'); if (ov) ov.remove();
+  if (sheetOpen) closeSheet();
+  resetTimer();
+  if (essayTopic && essayTopic !== t) API.clearGenerating('essay', essayTopic, API.getLocalDate());
+  essayTopic = t;
+  etype = (t === '申发论述') ? 'long' : 'short';
+  $('es-nav-title-text').innerHTML = t + ' <i data-lucide="chevron-down" style="width:14px;height:14px;color:var(--text-secondary)"></i>';
+  localStorage.setItem('essay-topic', t);
+  // Switching topic resets the date override — load today's content for the new topic
+  localStorage.removeItem('es-date');
+  // Reload content for new topic
+  var date = API.getLocalDate();  // Always use today after topic switch
+  $('es-lecture-body').style.display = 'none';
+  $('es-question-body').style.display = 'none';
+  $('es-mode-tabs').style.display = 'none';
+  $('es-q-empty').style.display = '';
+  $('es-start-btn').style.display = 'none';
+  questionLoaded = false;
+  // Re-enable the textarea in case a previous topic's submission disabled it (audit #12)
+  var ta = $('es-answer'); if (ta) ta.disabled = false;
+  API.fetchText('练习/申论/' + date + '.md').then(function(text) {
+    if (text) {
+      $('es-q-empty').style.display = 'none';
+      renderSplitContent(API.md(text));
+      // start-btn visibility is now controlled by renderSplitContent (hidden on lecture tab)
+      questionLoaded = true;
+      // Restore the draft for THIS topic (was missing — behavior diverged from generate() path; audit #11)
+      restoreDraft();
+    }
+  }).catch(function(e) {
+    API.pageError('essay topic switch', e, '申论内容加载失败');
+    _restoreEsEmpty();
+  });
+  lucide.createIcons();
+}
+
+// --- Generate ---
+async function generate(mode) {
+  _esRestoring = false; // reset rebuild guard for new generation
+  var qe = $('es-q-empty'); if (qe) qe.style.display = 'none';
+  var lb = $('es-lecture-body'); if (lb) lb.style.display = 'none';
+  var qb = $('es-question-body'); if (qb) qb.style.display = 'none';
+  $('es-mode-tabs').style.display = 'none';
+  API.showLoading($('q-area'), 'AI 正在生成题目...');
+  $('es-start-btn').style.display = 'none';
+  resetTimer();
+  var ta = $('es-answer'); if (ta) ta.value = '';
+  onEsInput();
+  lucide.createIcons();
+
+  var date = _esDate();
+  var topic = essayTopic;
+  var typeHint = etype === 'short' ? '小题' : '大作文';
+
+  var msg;
+  if (mode === 'plan') {
+    // Daily plan: matches desktop format
+    msg = '申论每日练习（' + typeHint + '，日期：' + date + '）';
+  } else {
+    // Custom topic — include the count selected in the gen modal if available (audit #9)
+    var cnt = window._esGenCount;
+    if (cnt) { window._esGenCount = 0; }
+    msg = topic
+      ? '申论每日练习：' + topic + '（' + typeHint + (cnt ? '，共 ' + cnt + ' 题' : '') + '，日期：' + date + '）'
+      : '申论每日练习（' + typeHint + (cnt ? '，共 ' + cnt + ' 题' : '') + '，日期：' + date + '）';
+  }
+  API.setGenerating('essay', essayTopic||'申论', date);
+  API.openAIChat(msg);
+
+  // Poll for the generated file — use recursive setTimeout instead of setInterval to prevent
+  // overlapping async callbacks that both rebuild the DOM (audit #7/#19)
+  var attempts = 0;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  function _pollOnce() {
+    if (questionLoaded) return; // already loaded by aic-done or another path
+    (async function() {
+      try {
+        var text = await API.fetchText('练习/申论/' + date + '.md');
+        if (text && !questionLoaded) {
+          if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+          // Rebuild q-area DOM (destroyed by showLoading) before rendering
+          $('q-area').innerHTML = _qAreaSkeleton(false);
+          renderSplitContent(API.md(text));
+          questionLoaded = true;
+          API.clearGenerating('essay', essayTopic||'申论', _esDate());
+          restoreDraft();
+          lucide.createIcons();
+          if (typeof mermaid !== 'undefined') {
+            setTimeout(function() { try { mermaid.run({ querySelector: '#es-lecture-body .mermaid, #es-question-body .mermaid' }); } catch(e) {} }, 200);
+          }
+          return; // done polling
+        }
+      } catch(e) { console.warn('[essay poll]', e); }
+      if (++attempts > 90) {
+        _restoreEsEmpty();
+        // Replace default empty text with timeout message
+        var qe2 = $('es-q-empty');
+        if (qe2) qe2.innerHTML = '<div class="q-empty-icon"><i data-lucide="alert-circle" style="width:28px;height:28px;color:var(--text-secondary)"></i></div><h3>生成超时</h3><p>请检查网络后重试</p><button class="card-btn" data-es-action="generate-plan"><i data-lucide="refresh-cw" style="width:16px;height:16px"></i> 重新生成</button>';
+        lucide.createIcons();
+      } else if (!questionLoaded) {
+        pollTimer = setTimeout(_pollOnce, 3000);
+      }
+    })();
+  }
+  pollTimer = setTimeout(_pollOnce, 3000);
+}
+
+// Listen for aic-done to reload when AI finishes generating
+function _onAicDone(e) {
+  // If AI was manually stopped, don't auto-retry
+  if (e.detail && e.detail.stopped) return;
+  if (!pageAlive()) return;
+  setTimeout(async function() {
+    // Re-check questionLoaded after the await — pollTimer may have already loaded the content
+    // (audit #7: aic-done vs pollTimer race). Previously both paths rebuilt the DOM independently.
+    if (questionLoaded) return;
+    var date = _esDate();
+    try {
+      var text = await API.fetchText('练习/申论/' + date + '.md');
+      if (questionLoaded) return; // double-check after await
+      if (text) {
+        if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+        $('q-area').innerHTML = _qAreaSkeleton(false);
+        renderSplitContent(API.md(text));
+        questionLoaded = true;
+        API.clearGenerating('essay', essayTopic||'申论', _esDate());
+        restoreDraft();
+        lucide.createIcons();
+      } else {
+        // AI stopped/cancelled — restore empty state
+        _restoreEsEmpty();
+      }
+    } catch(e) {
+      API.pageError('essay aic done', e, '申论结果加载失败');
+      _restoreEsEmpty();
+    }
+  }, 600);
+}
+document.addEventListener('aic-done', _onAicDone);
+
+// When user manually stops AI, restore empty state (remove loading spinner) —
+// but only if nothing has been loaded yet, otherwise we'd wipe already-loaded content (audit #4)
+function _onAicStopped() {
+  if (!pageAlive()) return;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  if (!questionLoaded) _restoreEsEmpty();
+}
+document.addEventListener('aic-stopped', _onAicStopped);
+document.addEventListener('aic-failed', _onAicStopped);
+
+API._onPageExit('essay', function() {
+  document.removeEventListener('visibilitychange', _essayHandleVisibilityChange);
+  document.removeEventListener('aic-done', _onAicDone);
+  document.removeEventListener('aic-stopped', _onAicStopped);
+  document.removeEventListener('aic-failed', _onAicStopped);
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+});
+
+function pageAlive() {
+  return !!document.getElementById('q-area');
+}
+
+async function showEssayHistory() {
+  var o = document.createElement('div'); o.className = 'sheet-overlay'; o.id = 'essay-hist-overlay';
+  var h = '<div class="sheet-card" style="max-width:500px;gap:10px">';
+  h += '<div class="sheet-title">历史申论练习</div><div id="essay-hist-list" style="max-height:60vh;overflow-y:auto;text-align:center;padding:24px"><i data-lucide="loader" style="animation:spin 1s linear infinite;width:20px;height:20px"></i></div>';
+  h += '<button data-es-action="close-history" style="height:42px;border:none;border-radius:10px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:14px">关闭</button></div>';
+  o.innerHTML = h; o.addEventListener('click', function(e){if(e.target===o)o.remove()}); document.body.appendChild(o);
+  try {
+    var paths = await API.listFiles('练习/申论/');
+    var l = '';
+    var files = paths.filter(function(p){return p.endsWith('.md')}).map(function(p){return {name:p.split('/').pop()}}).sort(function(a,b){return(b.name||'').localeCompare(a.name||'')});
+    var g={}; files.forEach(function(f){var d=f.name.replace('.md','');var m=d.substring(0,7);if(!g[m])g[m]=[];g[m].push(d)});
+    Object.keys(g).sort(function(a,b){return b.localeCompare(a)}).forEach(function(m){l+='<div style="font-size:11px;font-weight:600;color:var(--text-secondary);padding:8px 0 4px">'+m+'</div>';g[m].forEach(function(d){l+='<div data-es-action="history-date" data-date="'+API.escapeAttr(d)+'" style="padding:10px 0;border-bottom:1px solid var(--border-light);cursor:pointer;font-size:14px">'+d.substring(8)+'日 <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--border);float:right"></i></div>'});});
+    o.querySelector('#essay-hist-list').innerHTML = l||'<div style="text-align:center;padding:28px 16px;color:var(--text-secondary);font-size:13px"><i data-lucide="folder-open" style="width:24px;height:24px;display:block;margin:0 auto 8px;opacity:.3"></i>暂无历史文件</div>';
+  } catch(e) { o.querySelector('#essay-hist-list').innerHTML = '<div style="text-align:center;padding:28px 16px;color:var(--text-secondary);font-size:13px"><i data-lucide="folder-open" style="width:24px;height:24px;display:block;margin:0 auto 8px;opacity:.3"></i>加载失败</div>'; }
+  lucide.createIcons();
+}
+
+function refreshFile() {
+  var date = _esDate();
+  var qe0 = $('es-q-empty'); if (qe0) qe0.style.display = 'none';
+  API.showLoading($('q-area'), '加载中...');
+  API.fetchText('练习/申论/' + date + '.md').then(function(text) {
+    // Rebuild q-area DOM (destroyed by showLoading) — skeleton now always includes a q-empty
+    // placeholder so the else branch below can show it without crashing (audit #2)
+    $('q-area').innerHTML = _qAreaSkeleton(false);
+    if (text) {
+      renderSplitContent(API.md(text));
+      // start-btn visibility controlled by renderSplitContent
+      questionLoaded = true;
+    } else {
+      var mt = $('es-mode-tabs'); if (mt) mt.style.display = 'none';
+      var qe = $('es-q-empty'); if (qe) qe.style.display = '';
+      $('es-start-btn').style.display = 'none';
+      questionLoaded = false;
+    }
+  }).catch(function(e){
+    API.pageError('refreshFile', e, '刷新申论文件失败');
+    $('q-area').innerHTML = _qAreaSkeleton(true);
+    questionLoaded = false;
+    lucide.createIcons();
+  });
+}
+// window._refresh_essay = refreshFile; // disabled - no pull-to-refresh in sub-page
+
+function deleteFile() {
+  API.confirm('删除文件', '确认删除当前申论练习文件？', async function() {
+    var date = _esDate();
+    try {
+      await API.deleteFile('练习/申论/' + date + '.md');
+      API.toast('已删除');
+    if (sheetOpen) closeSheet();
+    resetTimer();
+    $('es-answer').value = '';
+    onEsInput();
+    $('es-lecture-body').style.display = 'none';
+    $('es-question-body').style.display = 'none';
+    $('es-mode-tabs').style.display = 'none';
+    $('es-q-empty').style.display = '';
+    $('es-start-btn').style.display = 'none';
+    questionLoaded = false;
+    } catch(e) { API.toast('删除失败'); }
+  });
+}
+
+// Custom generation modal — pick 申论 sub-type + count
+function showEssayGenModal() {
+  var overlay = document.createElement('div');
+  overlay.className = 'sheet-overlay';
+  overlay.id = 'essay-gen-overlay';
+  overlay.dataset.selectedType = '';
+  overlay.dataset.selectedCount = '1';
+  var types = [
+    { name: '归纳概括', desc: '提炼要点，概括主旨' },
+    { name: '综合分析', desc: '多角度分析，逻辑推理' },
+    { name: '提出对策', desc: '问题导向，方案可行' },
+    { name: '贯彻执行', desc: '公文写作，格式规范' },
+    { name: '申发论述', desc: '立意深刻，论证充分' }
+  ];
+  var h = '<div class="sheet-card" style="padding:22px 20px calc(22px + env(safe-area-inset-bottom))">';
+  h += '<div class="sheet-title">申论自定义生题</div>';
+
+  // 题型选择 — 卡片式
+  h += '<div style="font-size:12px;color:var(--text-secondary)">选择题型</div>';
+  h += '<div id="essay-gen-types" style="display:flex;flex-direction:column;gap:8px">';
+  types.forEach(function(t, i) {
+    var sel = i === 0;
+    h += '<button data-es-action="gen-type" data-type="'+API.escapeAttr(t.name)+'" class="es-type-btn" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border-radius:12px;font-family:inherit;cursor:pointer;text-align:left;border:none;background:'+(sel?'var(--accent-soft)':'var(--surface2)')+';transition:all .12s">';
+    h += '<span class="es-num" style="width:32px;height:32px;border-radius:8px;background:'+(sel?'var(--accent)':'var(--border)')+';display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:14px;font-weight:700;transition:background .12s">'+(i+1)+'</span>';
+    h += '<span style="flex:1"><span class="es-label" style="display:block;font-size:14px;font-weight:600;color:'+(sel?'var(--accent)':'var(--text)')+';transition:color .12s">'+t.name+'</span>';
+    h += '<span style="display:block;font-size:11px;color:var(--text-secondary);margin-top:1px">'+t.desc+'</span></span>';
+    h += '<span class="es-radio" style="width:18px;height:18px;border-radius:50%;border:1.5px solid '+(sel?'var(--accent)':'var(--border)')+';display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .12s">'+(sel?'<span style="width:10px;height:10px;border-radius:50%;background:var(--accent);display:block"></span>':'')+'</span>';
+    h += '</button>';
+  });
+  h += '</div>';
+
+  // 数量选择
+  h += '<div style="font-size:12px;color:var(--text-secondary)">题目数量</div>';
+  h += '<div style="display:flex;gap:10px" id="essay-gen-counts">';
+  [1,2,3].forEach(function(n, i) {
+    var sel = i === 0;
+    h += '<button data-es-action="gen-count" data-count="'+n+'" class="es-count-btn" style="flex:1;height:46px;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;border:none;background:'+(sel?'var(--accent-soft)':'var(--surface2)')+';color:'+(sel?'var(--accent)':'var(--text-secondary)')+';font-family:inherit;transition:all .12s">'+n+' 题</button>';
+  });
+  h += '</div>';
+
+  // 操作按钮
+  h += '<div style="display:flex;gap:8px">';
+  h += '<button data-es-action="close-gen" style="flex:1;height:46px;border:none;border-radius:12px;background:var(--surface2);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:15px">取消</button>';
+  h += '<button id="essay-gen-confirm" data-es-action="gen-confirm" style="flex:1;height:46px;border:none;border-radius:12px;background:var(--accent);color:#fff;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600">开始生成</button>';
+  h += '</div></div>';
+  overlay.innerHTML = h;
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  overlay.dataset.selectedType = types[0].name;
+}
+
+function selectEssayGenType(btn) {
+  var overlay = document.getElementById('essay-gen-overlay');
+  if (!overlay || !btn) return;
+  overlay.querySelectorAll('#essay-gen-types .es-type-btn').forEach(function(b) {
+    b.style.background = 'var(--surface2)';
+    b.querySelector('.es-num').style.background = 'var(--border)';
+    b.querySelector('.es-label').style.color = 'var(--text)';
+    var rd = b.querySelector('.es-radio');
+    rd.style.borderColor = 'var(--border)'; rd.innerHTML = '';
+  });
+  btn.style.background = 'var(--accent-soft)';
+  btn.querySelector('.es-num').style.background = 'var(--accent)';
+  btn.querySelector('.es-label').style.color = 'var(--accent)';
+  var rd = btn.querySelector('.es-radio');
+  rd.style.borderColor = 'var(--accent)'; rd.innerHTML = '<span style="width:10px;height:10px;border-radius:50%;background:var(--accent);display:block"></span>';
+  overlay.dataset.selectedType = btn.dataset.type || '';
+}
+
+function selectEssayGenCount(btn) {
+  var overlay = document.getElementById('essay-gen-overlay');
+  if (!overlay || !btn) return;
+  overlay.querySelectorAll('#essay-gen-counts .es-count-btn').forEach(function(b) {
+    b.style.background = 'var(--surface2)'; b.style.color = 'var(--text-secondary)';
+  });
+  btn.style.background = 'var(--accent-soft)'; btn.style.color = 'var(--accent)';
+  overlay.dataset.selectedCount = String(parseInt(btn.dataset.count, 10) || 1);
+}
+
+function confirmEssayGen() {
+  var overlay = document.getElementById('essay-gen-overlay');
+  if (!overlay) return;
+  var selType = overlay.dataset.selectedType || '归纳概括';
+  var selCount = parseInt(overlay.dataset.selectedCount, 10) || 1;
+  essayTopic = selType;
+  etype = (selType === '申发论述') ? 'long' : 'short';
+  // Passed via a module-level var the generate() path reads for custom mode.
+  window._esGenCount = selCount;
+  overlay.remove();
+  generate('custom');
+}
+
+async function regenerate() {
+  if (sheetOpen) closeSheet();
+  resetTimer();
+  $('es-answer').value = '';
+  onEsInput();
+  await generate('custom');
+}
+
+// --- Submit ---
+function submit() {
+  var answer = $('es-answer').value;
+  if (!answer.trim()) { API.toast('请先输入答案'); return; }
+  if (!questionLoaded) { API.toast('请先生成题目'); return; }
+
+  API.confirm('提交批改', '确认提交申论答案吗？提交后不可修改。', function() {
+    freezeEssayTimer();
+    localStorage.setItem(_esSubmittedKey(), '1');
+    // Freeze the textarea and clear the draft so it can't be re-edited and won't
+    // leak into another topic's draft slot (audit #6/#12)
+    var ta = $('es-answer'); if (ta) ta.disabled = true;
+    localStorage.removeItem(_esDraftKey());
+    var sbtn = $('es-start-btn'); if (sbtn) { sbtn.textContent = '已提交批改'; sbtn.disabled = true; sbtn.style.opacity = '.5'; }
+    var date = _esDate();
+    var msg = '批改申论答案（日期：' + date + '）\n文件：练习/申论/' + date + '.md\n\n用户作答：\n' + answer + '\n\n请使用 grade_essay 工具批改，传入 file=练习/申论/' + date + '.md、essay_type、scores{total,coverage,logic,expression,max_total}、missing_points、highlights、feedback。评分结论请表述为训练参考，不要声称等同官方阅卷。\n\n评分可信度要求：' + API.Business.scoreTrust('essay').requirements;
+    API.openAIChat(msg, { freshSession: true });
+    API.toast('已提交批改，AI 分数仅作训练参考');
+  });
+}
+
+// --- Split & render lecture + question (like practice-card tabs) ---
+function renderSplitContent(html) {
+  var tmp = document.createElement('div');
+  tmp.innerHTML = html;
+
+  // Extract question-block and answer-block
+  var qBlock = tmp.querySelector('.question-block');
+  var aBlock = tmp.querySelector('.answer-block');
+
+  // Lecture = everything before question-block
+  var lectureHtml = '';
+  if (qBlock) {
+    var wrapper = document.createElement('div');
+    // Collect all nodes before question-block
+    var node = tmp.firstChild;
+    while (node && node !== qBlock) {
+      var next = node.nextSibling;
+      wrapper.appendChild(node);
+      node = next;
+    }
+    lectureHtml = wrapper.innerHTML.trim();
+    // Remove question-block from tmp for later extraction
+    qBlock.remove();
+  }
+  if (!lectureHtml) { lectureHtml = tmp.innerHTML.trim(); }
+
+  // Clean up lecture: remove trailing h2 headings that are section dividers
+  // (e.g., "## 练习题" which sits between lecture content and question-block)
+  // These divider headings have no content after them (next sibling is question-block)
+  // Strategy: remove any trailing h2 that has no content siblings after it
+  var lectureTmp = document.createElement('div');
+  lectureTmp.innerHTML = lectureHtml;
+  // Walk backward and remove trailing h2 elements with no substantial content after them
+  var children = Array.prototype.slice.call(lectureTmp.childNodes);
+  for (var ci = children.length - 1; ci >= 0; ci--) {
+    var child = children[ci];
+    // Skip whitespace text nodes
+    if (child.nodeType === 3 && !child.textContent.trim()) continue;
+    // If it's an h2 with no content after it, remove it
+    if (child.nodeType === 1 && child.tagName === 'H2') {
+      child.remove();
+    } else {
+      // Found real content — stop
+      break;
+    }
+  }
+  lectureHtml = lectureTmp.innerHTML.trim();
+
+  // Question = question-block + answer-block
+  var questionHtml = '';
+  if (qBlock) questionHtml += qBlock.outerHTML;
+  if (aBlock) questionHtml += aBlock.outerHTML;
+  if (!questionHtml) questionHtml = html; // fallback
+
+  // Render
+  var lb = $('es-lecture-body'), qb = $('es-question-body');
+  if (lb) lb.innerHTML = lectureHtml;
+  if (qb) qb.innerHTML = questionHtml;
+
+  // Show tabs if lecture exists
+  var hasLecture = lectureHtml.length > 50;
+  $('es-mode-tabs').style.display = hasLecture ? '' : 'none';
+  // Clear inline display:none so CSS .active class can take effect
+  if (lb) lb.style.display = '';
+  if (qb) qb.style.display = '';
+  // Clear inline display:none on start-btn so .hidden CSS class can control visibility
+  var startBtn = $('es-start-btn');
+  if (startBtn) startBtn.style.display = '';
+  if (hasLecture) {
+    lb.classList.add('active');
+    qb.classList.remove('active');
+    // Start button should be hidden on lecture tab initially
+    if (startBtn) startBtn.classList.add('hidden');
+  } else {
+    qb.classList.add('active');
+    if (startBtn) startBtn.classList.remove('hidden');
+  }
+
+  // Collapse answer-block in question tab
+  collapseAnswerBlocks();
+  lucide.createIcons();
+}
+
+function switchEssayTab(tab) {
+  var tabs = $('es-mode-tabs').querySelectorAll('.mode-tab');
+  tabs.forEach(function(t) { t.classList.toggle('active', t.dataset.tab === tab); });
+  $('es-lecture-body').classList.toggle('active', tab === 'lecture');
+  $('es-question-body').classList.toggle('active', tab === 'question');
+  // Hide "start" button on lecture tab, show on question tab
+  var startBtn = document.getElementById('es-start-btn');
+  if (startBtn) {
+    startBtn.style.display = ''; // clear inline style so .hidden CSS class controls visibility
+    startBtn.classList.toggle('hidden', tab === 'lecture');
+  }
+}
+
+// Swipe left/right to switch tabs
+(function() {
+  var area = document.getElementById('q-area');
+  if (!area) return;
+  var startX = 0, startY = 0;
+  area.addEventListener('touchstart', function(e) {
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+  area.addEventListener('touchend', function(e) {
+    var dx = e.changedTouches[0].clientX - startX;
+    var dy = e.changedTouches[0].clientY - startY;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return; // too short or vertical scroll
+    var tabs = document.getElementById('es-mode-tabs');
+    if (!tabs || tabs.style.display === 'none') return;
+    if (dx > 0) {
+      switchEssayTab('lecture'); // swipe right → 讲义
+    } else {
+      switchEssayTab('question'); // swipe left → 题目
+    }
+  });
+})();
+
+// --- Collapse answer-block (same convention as practice-card) ---
+function collapseAnswerBlocks() {
+  var qb = $('es-question-body'); if (!qb) return;
+  var blocks = qb.querySelectorAll('.answer-block');
+  blocks.forEach(function(block) {
+    var label = '展开解析';
+    var prev = block.previousElementSibling;
+    while (prev && (prev.tagName === 'HR' || /^H[2-4]$/.test(prev.tagName))) {
+      if (/^H[2-4]$/.test(prev.tagName)) { label = '展开' + prev.textContent.trim(); break; }
+      prev = prev.previousElementSibling;
+    }
+    block.style.display = 'none';
+    var toggle = document.createElement('div');
+    toggle.className = 'q-answer-toggle';
+    toggle.setAttribute('data-es-action', 'toggle-answer-block');
+    toggle.innerHTML = '<i data-lucide="chevron-right"></i> <span>' + label + '</span>';
+    block.parentNode.insertBefore(toggle, block);
+  });
+  lucide.createIcons();
+}
+
+function toggleEssayAnswerBlock(toggle) {
+  if (!toggle) return;
+  var block = toggle.nextElementSibling;
+  if (!block || !block.classList || !block.classList.contains('answer-block')) return;
+  var labelNode = toggle.querySelector('span');
+  var label = labelNode ? labelNode.textContent : '解析';
+  var open = block.style.display !== 'none';
+  block.style.display = open ? 'none' : 'block';
+  toggle.classList.toggle('open', !open);
+  if (labelNode) labelNode.textContent = (open ? '展开' : '收起') + label.replace('展开', '').replace('收起', '');
+  lucide.createIcons();
+}
+
+// --- Init ---
+if (essayTopic) {
+  $('es-nav-title-text').innerHTML = essayTopic + ' <i data-lucide="chevron-down" style="width:14px;height:14px;color:var(--text-secondary)"></i>';
+  var tg0 = $('es-q-type-tag'); if (tg0) tg0.textContent = etype === 'short' ? '小题' : '大作文';
+}
+
+(async function() {
+  var date = _esDate();
+  var text = await API.fetchText('练习/申论/' + date + '.md');
+  if (text) {
+    $('es-q-empty').style.display = 'none';
+    renderSplitContent(API.md(text));
+    var tg = $('es-q-type-tag'); if (tg) tg.textContent = etype === 'short' ? '小题' : '大作文';
+    var dt2 = $('es-q-date'); if (dt2) dt2.textContent = date;
+    var metaRow = $('es-q-meta'); if (metaRow) metaRow.style.display = '';
+    // Show start-btn only if on question tab (renderSplitContent handles hidden class)
+    var startBtn = $('es-start-btn');
+    if (startBtn && !startBtn.classList.contains('hidden')) {
+      startBtn.style.display = '';
+    }
+    questionLoaded = true;
+    lucide.createIcons();
+  }
+})();
+
+API.PageRuntime.mountController('push:essay', API._lastPushEl || document.querySelector('.subpage-overlay[data-page-name="essay"]') || document, {
+  mount: function(root, addCleanup) {
+    var onClick = function(e) {
+      var target = e.target.closest('[data-es-action]');
+      var ownedOverlay = e.target.closest('#essay-type-overlay,#essay-mod-overlay,#essay-hist-overlay,#essay-gen-overlay');
+      if (!target || (!root.contains(target) && !ownedOverlay)) return;
+      var action = target.getAttribute('data-es-action');
+      if (action === 'back') { e.preventDefault(); e.stopPropagation(); API.goBack(); }
+      else if (action === 'task') API.openTaskPanel();
+      else if (action === 'menu') toggleMenu(e);
+      else if (action === 'type') { closeMenu(); showTypeModal(); }
+      else if (action === 'type-short') { etype = 'short'; updateTypeUI(); var typeShort = document.getElementById('essay-type-overlay'); if (typeShort) typeShort.remove(); }
+      else if (action === 'type-long') { etype = 'long'; updateTypeUI(); var typeLong = document.getElementById('essay-type-overlay'); if (typeLong) typeLong.remove(); }
+      else if (action === 'close-type') { var typeClose = document.getElementById('essay-type-overlay'); if (typeClose) typeClose.remove(); }
+      else if (action === 'refresh') { closeMenu(); refreshFile(); }
+      else if (action === 'regenerate') { closeMenu(); regenerate(); }
+      else if (action === 'history') { closeMenu(); showEssayHistory(); }
+      else if (action === 'delete') { closeMenu(); deleteFile(); }
+      else if (action === 'timer') toggleTimer();
+      else if (action === 'module-picker') showEssayModPicker();
+      else if (action === 'generate-plan') generate('plan');
+      else if (action === 'generate') showEssayGenModal();
+      else if (action === 'tab-lecture') switchEssayTab('lecture');
+      else if (action === 'tab-question') switchEssayTab('question');
+      else if (action === 'open-sheet') openSheet();
+      else if (action === 'close-sheet') closeSheet();
+      else if (action === 'submit') submit();
+      else if (action === 'select-module') selectEssayMod(target.getAttribute('data-topic'));
+      else if (action === 'close-module') { var mod = document.getElementById('essay-mod-overlay'); if (mod) mod.remove(); }
+      else if (action === 'close-history') { var hist = document.getElementById('essay-hist-overlay'); if (hist) hist.remove(); }
+      else if (action === 'history-date') {
+        var d = target.getAttribute('data-date');
+        var hist2 = document.getElementById('essay-hist-overlay'); if (hist2) hist2.remove();
+        if (d) _loadEssayForDate(d);
+      }
+      else if (action === 'close-gen') { var gen = document.getElementById('essay-gen-overlay'); if (gen) gen.remove(); }
+      else if (action === 'gen-type') selectEssayGenType(target);
+      else if (action === 'gen-count') selectEssayGenCount(target);
+      else if (action === 'gen-confirm') confirmEssayGen();
+      else if (action === 'toggle-answer-block') toggleEssayAnswerBlock(target);
+    };
+    var answer = document.getElementById('es-answer');
+    var onInput = function() { onEsInput(); };
+    document.addEventListener('click', onClick);
+    if (answer) answer.addEventListener('input', onInput);
+    addCleanup(function() {
+      document.removeEventListener('click', onClick);
+      if (answer) answer.removeEventListener('input', onInput);
+    });
+  }
+});
+</script>
+</body>
+</html>
