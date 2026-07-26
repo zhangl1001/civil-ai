@@ -1,4 +1,8 @@
-import type { TransactionContext, UnitOfWork } from '../../contracts/UnitOfWork';
+import type {
+  TransactionContext,
+  UnitOfWork,
+  UnitOfWorkOptions
+} from '../../contracts/UnitOfWork';
 import type { IndexedDbWriteOperation } from './TutorIndexedDb';
 import { TutorIndexedDb } from './TutorIndexedDb';
 
@@ -30,38 +34,40 @@ export class IndexedDbTransactionScope {
 }
 
 export class IndexedDbUnitOfWork implements UnitOfWork {
-  private commitTail: Promise<void> = Promise.resolve();
+  private transactionTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly database: TutorIndexedDb,
     private readonly scope: IndexedDbTransactionScope
   ) {}
 
-  async run<T>(work: (context: TransactionContext) => Promise<T>): Promise<T> {
-    const context = this.scope.bind();
-    let result: T;
-    try {
-      result = await work(context);
-    } catch (error) {
-      this.scope.discard(context);
-      throw error;
-    }
-    const operations = this.scope.release(context);
-    await this.commitExclusive(() => this.database.writeBatch(operations));
-    return result;
-  }
-
-  private async commitExclusive(work: () => Promise<void>): Promise<void> {
-    const previous = this.commitTail;
+  async run<T>(
+    work: (context: TransactionContext) => Promise<T>,
+    _options?: UnitOfWorkOptions
+  ): Promise<T> {
+    const previous = this.transactionTail;
     let release: (() => void) | undefined;
-    this.commitTail = new Promise<void>((resolve) => {
+    this.transactionTail = new Promise<void>((resolve) => {
       release = resolve;
     });
     await previous;
     try {
-      await work();
+      const context = this.scope.bind();
+      try {
+        const result = await work(context);
+        await this.database.writeBatch(this.scope.release(context));
+        return result;
+      } catch (error) {
+        this.scope.discard(context);
+        throw error;
+      }
     } finally {
       release?.();
     }
+  }
+
+  runAutocommit<T>(work: (context: TransactionContext) => Promise<T>): Promise<T> {
+    // IndexedDB requires a browser transaction for writes; retain the same atomic batch semantics.
+    return this.run(work);
   }
 }

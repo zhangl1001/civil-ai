@@ -2,11 +2,15 @@
   <div class="app-container">
     <AppBackground :key="backgroundRenderKey" />
     <main :class="['main-content', { 'with-bottom-nav': showBottomNav }]">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <ViewErrorBoundary :key="route.fullPath">
+          <component :is="Component" />
+        </ViewErrorBoundary>
+      </router-view>
     </main>
-    <PageGuideFab v-if="!isLegacyRoute" />
-    <TaskToast v-if="!isLegacyRoute" />
-    <AIChatSheet v-if="!isLegacyRoute" />
+    <PageGuideFab />
+    <TaskToast />
+    <AIChatSheet />
     <nav v-if="showBottomNav" class="bottom-nav">
       <router-link to="/" class="nav-item">
         <i class="icon"><HomeIcon /></i>
@@ -41,10 +45,10 @@ import AIChatSheet from '@/components/AIChatSheet.vue';
 import AppBackground from '@/components/layout/AppBackground.vue';
 import PageGuideFab from '@/components/layout/PageGuideFab.vue';
 import TaskToast from '@/components/TaskToast.vue';
+import ViewErrorBoundary from '@/components/layout/ViewErrorBoundary.vue';
 
 const route = useRoute();
-const isLegacyRoute = computed(() => route.meta.legacy === true);
-const showBottomNav = computed(() => !isLegacyRoute.value && route.meta.tabRoot === true);
+const showBottomNav = computed(() => route.meta.tabRoot === true);
 const backgroundRenderKey = ref(0);
 
 function refreshBackgroundLayer() {
@@ -83,8 +87,19 @@ onBeforeUnmount(() => {
   -webkit-overflow-scrolling: touch;
 }
 
-.main-content.with-bottom-nav :deep(.page-container) {
+.main-content.with-bottom-nav :deep(.page-container),
+.main-content.with-bottom-nav :deep(.app-page-scroll) {
   padding-bottom: var(--app-bottom-nav-reserved);
+  scroll-padding-bottom: var(--app-bottom-nav-reserved);
+}
+
+.main-content.with-bottom-nav {
+  --pull-refresh-bottom-reserved: var(--app-bottom-nav-reserved);
+}
+
+.main-content.with-bottom-nav :deep(.app-page-scroll.pull-refresh) {
+  padding-bottom: 0;
+  scroll-padding-bottom: var(--app-bottom-nav-reserved);
 }
 
 .bottom-nav {

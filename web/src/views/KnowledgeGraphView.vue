@@ -96,13 +96,19 @@ function toggleModule(name: string) {
 }
 
 function startWeakest() {
-  knowledgeGraphService.startPractice(dashboard.value?.weakest);
-  router.push('/vue/practice/session');
+  const point = dashboard.value?.weakest;
+  router.push({
+    path: '/vue/practice/session',
+    query: { mode: 'self', capabilityNodeId: point?.id || '' }
+  });
 }
 
 function startPoint(point: KnowledgePointNode) {
-  knowledgeGraphService.startPractice(point);
-  router.push('/vue/practice/session');
+  selectedPoint.value = null;
+  router.push({
+    path: '/vue/practice/session',
+    query: { mode: 'self', capabilityNodeId: point.id }
+  });
 }
 
 function goBack() {

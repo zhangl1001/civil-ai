@@ -21,6 +21,7 @@ xcodebuild \
   -scheme App \
   -configuration Release \
   -destination 'generic/platform=iOS' \
+  -allowProvisioningUpdates \
   -derivedDataPath "$BUILD_DIR/DerivedData" \
   -archivePath "$ARCHIVE_PATH" \
   archive

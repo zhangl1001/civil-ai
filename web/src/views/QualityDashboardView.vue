@@ -133,10 +133,14 @@ import { ActivityIcon, RouteIcon, ShieldAlertIcon, TargetIcon } from 'lucide-vue
 import PageHeader from '@/components/layout/PageHeader.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import type { ProfileInsight } from '@/domain/profileAnalysis';
 import { profileInsightService } from '@/services/ProfileInsightService';
-import { qualityDashboardService, type QualityDashboard } from '@/services/QualityDashboardService';
-import type { DiagnosisType } from '@/services/AbilityDiagnosisService';
+import {
+  qualityDashboardService,
+  type DiagnosisType,
+  type QualityDashboard
+} from '@/services/QualityDashboardService';
 
 const router = useRouter();
 const dashboard = ref<QualityDashboard | null>(null);
@@ -167,8 +171,10 @@ async function generateInsight() {
 }
 
 function startWeakPractice() {
-  qualityDashboardService.startWeakPractice(dashboard.value?.weakestModule?.name);
-  router.push('/vue/practice/session');
+  router.push(practiceDetailLocation({
+    mode: 'self',
+    module: dashboard.value?.weakestModule?.name
+  }));
 }
 
 function diagnosisTypeText(type: DiagnosisType): string {

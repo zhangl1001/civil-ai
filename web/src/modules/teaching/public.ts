@@ -22,5 +22,5 @@ export {
   type LearningThreadAction as LearningThreadActionCode,
   type TransitionLearningThreadCommand
 } from './application/TransitionLearningThread';
-export { StartWeakeningTeaching } from './application/StartWeakeningTeaching';
-export { RequestWeakeningPractice } from './application/RequestWeakeningPractice';
+export { StartStructuredTeaching } from './application/StartStructuredTeaching';
+export { RequestStructuredPractice } from './application/RequestStructuredPractice';

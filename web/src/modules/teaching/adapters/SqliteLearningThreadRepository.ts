@@ -38,6 +38,13 @@ export class SqliteLearningThreadRepository implements LearningThreadRepository 
     await insertEvent(transaction, event);
   }
 
+  async restore(aggregate: LearningThreadAggregate, context: TransactionContext): Promise<void> {
+    if (!aggregate.events.length) throw new Error('Restored learning thread must contain at least one event');
+    const transaction = this.transactionScope.resolve(context);
+    await insertThread(transaction, aggregate.thread);
+    for (const event of aggregate.events) await insertEvent(transaction, event);
+  }
+
   async replace(
     thread: LearningThreadRecord,
     expectedVersion: number,

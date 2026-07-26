@@ -5,8 +5,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
-const ipa = path.resolve(process.argv[2] || path.join(root, 'build/ios/release/export/App.ipa'));
-const legacySource = path.join(root, 'backend/static/mobile');
+const ipa = path.resolve(process.argv[2] || path.join(root, 'build/ios/vue-release/export/App.ipa'));
 const vueSource = path.join(root, 'web/dist');
 
 function fail(message) { console.error('verify-ios-ipa:', message); process.exit(1); }
@@ -31,31 +30,27 @@ const archivedIndex = archivedFile('index.html');
 if (archivedIndex.status !== 0) fail('missing public/index.html');
 
 const indexText = Buffer.from(archivedIndex.stdout).toString('utf8');
-const source = indexText.includes('./assets/') ? vueSource : legacySource;
-const isVuePackage = source === vueSource;
-if (!fs.existsSync(source)) fail(`missing source directory: ${path.relative(root, source)}`);
-
-if (isVuePackage) {
-  const legacyProbe = archivedFile('legacy/index.html');
-  if (legacyProbe.status === 0) fail('Vue IPA unexpectedly contains legacy fallback assets');
-  const capacitorConfig = archivedAppFile('capacitor.config.json');
-  if (capacitorConfig.status !== 0) fail('missing capacitor.config.json');
-  let parsedConfig;
-  try {
-    parsedConfig = JSON.parse(Buffer.from(capacitorConfig.stdout).toString('utf8'));
-  } catch (error) {
-    fail(`invalid capacitor.config.json: ${error.message}`);
-  }
-  if (!Array.isArray(parsedConfig.packageClassList) || !parsedConfig.packageClassList.includes('CapacitorSQLitePlugin')) {
-    fail('Vue IPA does not register CapacitorSQLitePlugin');
-  }
+if (!indexText.includes('./assets/')) fail('IPA does not contain the current Vue entrypoint');
+if (!fs.existsSync(vueSource)) fail('missing Vue build directory');
+const legacyProbe = archivedFile('legacy/index.html');
+if (legacyProbe.status === 0) fail('IPA unexpectedly contains removed legacy assets');
+const capacitorConfig = archivedAppFile('capacitor.config.json');
+if (capacitorConfig.status !== 0) fail('missing capacitor.config.json');
+let parsedConfig;
+try {
+  parsedConfig = JSON.parse(Buffer.from(capacitorConfig.stdout).toString('utf8'));
+} catch (error) {
+  fail(`invalid capacitor.config.json: ${error.message}`);
+}
+if (!Array.isArray(parsedConfig.packageClassList) || !parsedConfig.packageClassList.includes('CapacitorSQLitePlugin')) {
+  fail('IPA does not register CapacitorSQLitePlugin');
 }
 
-for (const file of walk(source).filter((file) => !file.startsWith('cordova'))) {
-  const expected = fs.readFileSync(path.join(source, file));
+for (const file of walk(vueSource)) {
+  const expected = fs.readFileSync(path.join(vueSource, file));
   const archived = archivedFile(file);
   if (archived.status !== 0) fail(`missing public/${file}`);
   if (!Buffer.from(archived.stdout).equals(expected)) fail(`source mismatch: ${file}`);
 }
 
-console.log(`IPA resources verified (${path.relative(root, source)}): ${path.basename(ipa)}`);
+console.log(`IPA resources verified (${path.relative(root, vueSource)}): ${path.basename(ipa)}`);

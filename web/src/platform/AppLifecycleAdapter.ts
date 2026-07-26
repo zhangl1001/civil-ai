@@ -23,7 +23,8 @@ type Listener = (event: AppLifecycleEvent) => void;
 
 export class AppLifecycleAdapter {
   private initialized = false;
-  private listeners = new Set<Listener>();
+  private activeListeners = new Set<Listener>();
+  private changeListeners = new Set<Listener>();
   private lastEvent: AppLifecycleEvent = {
     state: document.hidden ? 'background' : 'active',
     reason: 'visibility',
@@ -58,8 +59,13 @@ export class AppLifecycleAdapter {
   }
 
   onActive(listener: Listener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.activeListeners.add(listener);
+    return () => this.activeListeners.delete(listener);
+  }
+
+  onChange(listener: Listener): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
   }
 
   current(): AppLifecycleEvent {
@@ -70,8 +76,9 @@ export class AppLifecycleAdapter {
     const event: AppLifecycleEvent = { state, reason, at: Date.now() };
     this.lastEvent = event;
     window.dispatchEvent(new CustomEvent('zhangl-app-lifecycle', { detail: event }));
+    this.changeListeners.forEach((listener) => listener(event));
     if (state !== 'active') return;
-    this.listeners.forEach((listener) => listener(event));
+    this.activeListeners.forEach((listener) => listener(event));
     window.dispatchEvent(new CustomEvent('zhangl-app-active', { detail: event }));
   }
 }

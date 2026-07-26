@@ -2,9 +2,15 @@ import { digestService } from '@/services/DigestService';
 import { essayFlowService } from '@/services/EssayFlowService';
 import { examFlowService } from '@/services/ExamFlowService';
 import { monthlyDigestService } from '@/services/MonthlyDigestService';
-import { practiceFlowService, type PracticeStartContext } from '@/services/PracticeFlowService';
-import { taskStore } from '@/tasks/TaskStore';
-import type { EnqueueResult } from '@/tasks/taskTypes';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import { practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
+import { AssessmentRole } from '@/kernel/public';
+import { QuestionSetEntryMode } from '@/modules/content/public';
+import type { CapabilityNode } from '@/modules/curriculum/public';
+import type { MasteryTrack } from '@/modules/mastery/public';
+import { StructuredPracticeTaskCenter } from '@/features/practice/StructuredPracticeTaskCenter';
+import { selectPriorityOrCoverageCapability } from '@/features/practice/CapabilitySelection';
+import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 
 export type AIBusinessToolName =
   | 'generate_practice'
@@ -60,6 +66,7 @@ export const AI_BUSINESS_TOOLS: AIBusinessToolDefinition[] = [
       required: ['module'],
       properties: {
         module: { type: 'string', description: '行测模块', enum: ['资料分析', '判断推理', '言语理解', '数量关系', '常识判断'] },
+        knowledgePoint: { type: 'string', description: '用户明确指定的细分知识点；未指定时省略，由学习档案选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 120 },
         difficulty: { type: 'string', description: '难度', enum: ['基础', '标准', '进阶'], default: '标准' }
       }
@@ -97,6 +104,7 @@ export const AI_BUSINESS_TOOLS: AIBusinessToolDefinition[] = [
       required: [],
       properties: {
         module: { type: 'string', description: '错题模块', enum: ['资料分析', '判断推理', '言语理解', '数量关系', '常识判断'] },
+        knowledgePoint: { type: 'string', description: '用户明确指定的错题知识点；未指定时根据能力轨迹选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 60 }
       }
     }
@@ -143,7 +151,7 @@ function asNumber(value: unknown, fallback: number): number {
   return Number.isFinite(next) && next > 0 ? next : fallback;
 }
 
-function taskReply(result: EnqueueResult, label: string): string {
+function taskReply(result: AgentTaskEnqueueResult, label: string): string {
   return result.reused
     ? `${label}已经在任务栏里执行中，我不会重复派发。`
     : `已开始${label}，你可以在任务栏查看进度，完成后点击任务进入对应页面。`;
@@ -157,21 +165,46 @@ export class AIBusinessTools {
   async execute(call: AIBusinessToolCall, meta: AIBusinessToolExecuteMeta = {}): Promise<AIBusinessToolResult> {
     const args = call.arguments || {};
     if (call.name === 'generate_practice' || call.name === 'redo_wrongbook') {
-      const mode = call.name === 'redo_wrongbook' ? 'review' : 'practice';
-      const context: PracticeStartContext = practiceFlowService.writeStartContext({
-        module: asString(args.module) || '资料分析',
-        date: today(),
-        mode,
-        source: 'practice-center',
-        questionCount: asNumber(args.questionCount, 10),
-        difficulty: asString(args.difficulty) || undefined,
-        needsGeneration: true
+      const runtime = await initializeTutorRuntime();
+      const cycle = await runtime.candidateRepository.findCurrentCycle();
+      if (!cycle) throw new Error('请先建立备考档案。');
+      const curriculum = await runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId);
+      if (!curriculum) throw new Error('当前考试大纲未安装。');
+      const review = call.name === 'redo_wrongbook';
+      const requestedModule = asString(args.module);
+      const knowledgePoint = asString(args.knowledgePoint);
+      const tracks = await runtime.masteryRepository.listPriorityTracks(cycle.examCycle.id, 100);
+      const capability = resolvePracticeCapability(
+        curriculum.capabilityNodes,
+        requestedModule,
+        knowledgePoint,
+        tracks
+      );
+      const moduleLabel = capability?.module ? practiceModuleLabel(capability.module) : requestedModule || '行测';
+      if (!capability) throw new Error(`当前大纲还没有可训练的“${requestedModule}”细分能力，请换一个已开放模块。`);
+      const count = Math.min(20, Math.max(1, Math.round(asNumber(args.questionCount, review ? 6 : 8))));
+      const scopeKey = `practice:${review ? 'review' : 'chat'}:${capability.id}`;
+      const task = await new StructuredPracticeTaskCenter(runtime).start({
+        idempotencyKey: `${scopeKey}:${crypto.randomUUID()}`,
+        scopeKey,
+        title: review ? `${capability.name}错题变式训练` : `${capability.name}专项练习`,
+        detail: `${moduleLabel} · ${count}题 · ${asString(args.difficulty) || '标准'}`,
+        entryMode: review ? QuestionSetEntryMode.Tutor : QuestionSetEntryMode.Self,
+        source: review ? 'review' : 'custom',
+        capabilityNodeId: capability.id,
+        capabilityCode: capability.code,
+        capabilityName: capability.name,
+        module: capability.module,
+        assessmentRole: review ? AssessmentRole.Retention : AssessmentRole.Practice,
+        requestedCount: count,
+        difficultyMin: difficultyRange(args.difficulty)[0],
+        difficultyMax: difficultyRange(args.difficulty)[1],
+        goal: review ? `围绕${capability.name}的历史错因完成变式复习` : `完成${capability.name}专项训练`,
+        chatSessionId: meta.sessionId
       });
-      const result = await practiceFlowService.enqueueGeneration(context);
-      await attachSessionToTask(result, meta.sessionId);
       return {
-        taskId: result.task.id,
-        reply: taskReply(result, mode === 'review' ? '错题重练' : `${context.module}练习`)
+        taskId: task.id,
+        reply: `已开始${review ? '错题变式训练' : `${moduleLabel}练习`}，任务栏会持续显示生成、校验和保存状态。`
       };
     }
 
@@ -184,7 +217,6 @@ export class AIBusinessTools {
         tags: [],
         essayType: 'short'
       });
-      await attachSessionToTask(result, meta.sessionId);
       return { taskId: result.task.id, reply: taskReply(result, '行测模考') };
     }
 
@@ -199,21 +231,18 @@ export class AIBusinessTools {
       const result = await essayFlowService.enqueueQuestionGeneration(context, {
         questionCount: asNumber(args.questionCount, 1)
       });
-      await attachSessionToTask(result, meta.sessionId);
       return { taskId: result.task.id, reply: taskReply(result, `${context.topic}申论题`) };
     }
 
     if (call.name === 'generate_digest') {
       const tab = args.digestTab === 'tips' ? 'tips' : 'news';
       const result = await digestService.enqueueGenerate(tab, today());
-      await attachSessionToTask(result, meta.sessionId);
       return { taskId: result.task.id, reply: taskReply(result, tab === 'tips' ? '每日知识点' : '每日热点') };
     }
 
     if (call.name === 'generate_monthly_digest') {
       const { year, month } = monthlyDigestService.currentMonth();
       const result = await monthlyDigestService.enqueueReport(year, month);
-      await attachSessionToTask(result, meta.sessionId);
       return { taskId: result.task.id, reply: taskReply(result, '时政月报') };
     }
 
@@ -229,14 +258,41 @@ export class AIBusinessTools {
   }
 }
 
-async function attachSessionToTask(result: EnqueueResult, sessionId?: string): Promise<void> {
-  if (!sessionId) return;
-  await taskStore.update(result.task.id, {
-    payload: {
-      ...(result.task.payload || {}),
-      sessionId
-    }
-  });
+function resolvePracticeCapability(
+  nodes: readonly CapabilityNode[],
+  requestedModule: string,
+  knowledgePoint: string,
+  tracks: readonly MasteryTrack[]
+): CapabilityNode | undefined {
+  const moduleCode = practiceModuleCode(requestedModule);
+  const trainable = nodes
+    .filter((node) => (
+      node.status === 'active'
+      && node.subject === 'aptitude'
+      && (!moduleCode || node.module === moduleCode)
+      && (node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point')
+    ))
+    .sort((left, right) => left.sequence - right.sequence);
+  if (knowledgePoint) {
+    const exact = trainable.find((node) => (
+      node.code === knowledgePoint
+      || node.name === knowledgePoint
+    ));
+    if (exact) return exact;
+    const fuzzy = trainable.find((node) => (
+      node.name.includes(knowledgePoint)
+      || knowledgePoint.includes(node.name)
+      || node.code.includes(knowledgePoint)
+    ));
+    if (fuzzy) return fuzzy;
+  }
+  return selectPriorityOrCoverageCapability(trainable, tracks);
+}
+
+function difficultyRange(value: unknown): readonly [number, number] {
+  if (value === '基础') return [0.2, 0.48];
+  if (value === '进阶') return [0.58, 0.85];
+  return [0.35, 0.68];
 }
 
 export const aiBusinessTools = new AIBusinessTools();

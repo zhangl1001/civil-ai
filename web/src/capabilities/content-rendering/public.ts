@@ -2,6 +2,7 @@ export {
   MARKDOWN_RENDERER_VERSION,
   MarkdownEngine,
   escapeHtml,
+  normalizeMarkdownSource,
   type MarkdownRenderWarning,
   type RenderedMarkdown
 } from './markdown/MarkdownEngine';

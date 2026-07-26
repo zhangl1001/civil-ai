@@ -7,7 +7,10 @@ export {
   ContentAssetStatus,
   PublishedAssetStatus,
   QuestionQualityStatus,
+  QuestionSetEntryMode,
+  GenerationSelectionAuthority,
   QuestionSetPurpose,
+  QuestionSetPracticeStatus,
   QuestionSetStatus,
   GenerationWorkflowStatus,
   GenerationWorkflowStep,
@@ -19,6 +22,9 @@ export {
   type ContentAlignment as ContentAlignmentCode,
   type ContentBlockType as ContentBlockTypeCode,
   type ContentDocumentType as ContentDocumentTypeCode,
+  type GenerationSelectionAuthority as GenerationSelectionAuthorityCode,
+  type QuestionSetEntryMode as QuestionSetEntryModeCode,
+  type QuestionSetPracticeStatus as QuestionSetPracticeStatusCode,
   type QuestionTemplateCode as QuestionTemplateCodeValue
 } from './domain/ContentCodes';
 export type {
@@ -32,6 +38,7 @@ export type {
   LectureRecord,
   QuestionCapabilityLink,
   QuestionRecord,
+  QuestionSetLibraryEntry,
   QuestionSetRecord,
   QuestionTemplateVersion
 } from './contracts/ContentRepository';
@@ -46,14 +53,31 @@ export type {
   DataTableColumn,
   FormulaBlock,
   ImageBlock,
-  MarkdownBlock,
+  TextBlock,
   SvgDiagramBlock
 } from './contracts/ContentDocument';
+export { contentBlockText, contentDocumentText } from './domain/ContentDocumentText';
+export { questionSetPracticeStatusLabel } from './domain/QuestionSetPracticePresentation';
 export type {
   QuestionContent,
   SingleChoiceOption,
   SingleChoiceQuestionContent
 } from './contracts/QuestionContent';
+export {
+  LearningAssetKind,
+  LearningAssetStatus,
+  type LearningAssetKind as LearningAssetKindCode,
+  type LearningAssetStatus as LearningAssetStatusCode
+} from './domain/LearningAssetCodes';
+export type {
+  LearningAssetQuery,
+  LearningAssetRecord,
+  LearningAssetRepository
+} from './contracts/LearningAssetRepository';
+export {
+  LearningAssetStore,
+  type SaveLearningAssetCommand
+} from './application/LearningAssetStore';
 export {
   ContentSchemaValidator,
   type ContentValidationFailure,
@@ -78,16 +102,16 @@ export {
   type GeneratedLectureQuestionSet
 } from './application/GeneratedContentParser';
 export {
-  WeakeningContentQualityValidator,
-  documentText,
+  StructuredObjectiveContentQualityValidator,
   type ContentQualityIssue,
   type ContentQualityReport
-} from './application/WeakeningContentQualityValidator';
+} from './application/StructuredObjectiveContentQualityValidator';
 export { GeneratedContentCommitBuilder } from './application/GeneratedContentCommitBuilder';
 export {
-  RunWeakeningGenerationWorkflow,
+  RunStructuredObjectiveGenerationWorkflow,
+  type GenerationWorkflowProgress,
   type GenerationWorkflowResult
-} from './application/RunWeakeningGenerationWorkflow';
+} from './application/RunStructuredObjectiveGenerationWorkflow';
 export {
   GetGenerationStatus,
   type GenerationStatusView

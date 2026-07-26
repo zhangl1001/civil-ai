@@ -8,7 +8,7 @@ import type {
   DataTableColumn,
   FormulaBlock,
   ImageBlock,
-  MarkdownBlock,
+  TextBlock,
   SvgDiagramBlock
 } from '../contracts/ContentDocument';
 import type { SingleChoiceOption, SingleChoiceQuestionContent } from '../contracts/QuestionContent';
@@ -46,20 +46,26 @@ export class ContentSchemaValidator {
       issue(issues, 'question.template_unsupported', '$.templateCode', 'Only single_choice is supported by this schema version');
     }
     const schemaVersion = readString(record.schemaVersion, '$.schemaVersion', issues);
+    const capabilityCode = readString(record.capabilityCode, '$.capabilityCode', issues);
     const prompt = parseDocument(record.prompt, '$.prompt', issues, 0);
     const explanation = parseDocument(record.explanation, '$.explanation', issues, 0);
-    const material = record.material === undefined ? undefined : parseDocument(record.material, '$.material', issues, 0);
+    const material = record.material === undefined || record.material === null
+      ? undefined
+      : parseDocument(record.material, '$.material', issues, 0);
+    const materialGroupId = readOptionalString(record.materialGroupId, '$.materialGroupId', issues);
     const options = parseOptions(record.options, issues);
     const correctOptionId = readString(record.correctOptionId, '$.correctOptionId', issues);
     if (options && correctOptionId && !options.some((option) => option.id === correctOptionId)) {
       issue(issues, 'question.answer_missing', '$.correctOptionId', 'Correct option must reference one option id');
     }
-    if (issues.length || !schemaVersion || !prompt || !explanation || !options || !correctOptionId) {
+    if (issues.length || !schemaVersion || !capabilityCode || !prompt || !explanation || !options || !correctOptionId) {
       return failure({ code: 'content.schema_invalid', issues });
     }
     return success({
       templateCode: QuestionTemplateCode.SingleChoice,
       schemaVersion,
+      capabilityCode,
+      materialGroupId,
       material,
       prompt,
       options,
@@ -87,6 +93,7 @@ function parseDocument(
     return undefined;
   }
   const blocks = record.blocks.map((block, index) => parseBlock(block, `${path}.blocks[${index}]`, issues, depth));
+  validateSiblingBlockIds(blocks, `${path}.blocks`, issues);
   if (!schemaVersion || blocks.some((block) => !block)) return undefined;
   return { schemaVersion, blocks: blocks as ContentBlock[] };
 }
@@ -106,9 +113,9 @@ function parseBlock(
     return undefined;
   }
   if (!id) return undefined;
-  if (type === ContentBlockType.Markdown) {
+  if (type === ContentBlockType.Text) {
     const source = readString(record.source, `${path}.source`, issues, true);
-    return source === undefined ? undefined : { id, type, source } satisfies MarkdownBlock;
+    return source === undefined ? undefined : { id, type, source } satisfies TextBlock;
   }
   if (type === ContentBlockType.DataTable) return parseDataTable(id, record, path, issues);
   if (type === ContentBlockType.SvgDiagram) {
@@ -136,10 +143,31 @@ function parseBlock(
   const blocks = Array.isArray(record.blocks)
     ? record.blocks.map((block, index) => parseBlock(block, `${path}.blocks[${index}]`, issues, depth + 1))
     : [];
+  validateSiblingBlockIds(blocks, `${path}.blocks`, issues);
   const title = readOptionalString(record.title, `${path}.title`, issues);
   return kind && calloutKinds.has(kind) && blocks.every(Boolean)
     ? { id, type: ContentBlockType.Callout, kind: kind as CalloutBlock['kind'], title, blocks: blocks as ContentBlock[] }
     : undefined;
+}
+
+function validateSiblingBlockIds(
+  blocks: readonly (ContentBlock | undefined)[],
+  path: string,
+  issues: ContentValidationIssue[]
+): void {
+  const seen = new Set<string>();
+  blocks.forEach((block, index) => {
+    if (!block) return;
+    if (seen.has(block.id)) {
+      issue(
+        issues,
+        'content.block_id_duplicate',
+        `${path}[${index}].id`,
+        'Sibling content block ids must be unique'
+      );
+    }
+    seen.add(block.id);
+  });
 }
 
 function parseDataTable(
@@ -248,11 +276,10 @@ function readString(
 }
 
 function readOptionalString(input: unknown, path: string, issues: ContentValidationIssue[]): string | undefined {
-  if (input === undefined) return undefined;
+  if (input === undefined || input === null) return undefined;
   return readString(input, path, issues);
 }
 
 function issue(issues: ContentValidationIssue[], code: string, path: string, message: string): void {
   issues.push({ code, path, message });
 }
-

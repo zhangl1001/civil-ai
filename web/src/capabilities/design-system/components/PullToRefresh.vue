@@ -81,6 +81,8 @@ function resetPull() {
 
 .pull-refresh-content {
   min-height: 100%;
+  padding-bottom: var(--pull-refresh-bottom-reserved, 0px);
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: inherit;

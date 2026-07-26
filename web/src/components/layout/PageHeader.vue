@@ -8,12 +8,20 @@
         </button>
       </div>
       <div class="page-header-main">
-        <slot name="title">
-          <h3>{{ displayTitle }}</h3>
-        </slot>
-        <slot name="meta">
-          <span v-if="displayMeta">{{ displayMeta }}</span>
-        </slot>
+        <slot v-if="$slots.title" name="title"></slot>
+        <template v-else>
+          <div class="page-header-title-line">
+            <span v-if="displayIcon" class="page-header-route-icon">
+              <component :is="displayIcon" />
+            </span>
+            <div class="page-header-title-copy">
+              <h3>{{ displayTitle }}</h3>
+              <slot name="meta">
+                <span v-if="displayMeta">{{ displayMeta }}</span>
+              </slot>
+            </div>
+          </div>
+        </template>
       </div>
       <div class="page-header-actions">
         <TaskDock inline />
@@ -25,11 +33,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ChevronLeftIcon } from 'lucide-vue-next';
+import {
+  BookMarkedIcon,
+  BookOpenIcon,
+  ChevronLeftIcon,
+  GraduationCapIcon,
+  PencilLineIcon,
+  UserIcon
+} from 'lucide-vue-next';
 import { goBackOrHome } from '@/router/navigation';
 import TaskDock from '@/components/TaskDock.vue';
+import { PageHeaderIcon, type PageHeaderIcon as PageHeaderIconCode } from './PageHeaderCodes';
 
 const props = defineProps<{
   title?: string;
@@ -43,6 +59,19 @@ const headerLevel = computed(() => props.level ?? Number(route.meta.level || 1))
 const showBack = computed(() => headerLevel.value >= 2);
 const displayTitle = computed(() => props.title || (typeof route.meta.title === 'string' ? route.meta.title : ''));
 const displayMeta = computed(() => props.meta || (typeof route.meta.subtitle === 'string' ? route.meta.subtitle : ''));
+const headerIcons: Readonly<Record<PageHeaderIconCode, Component>> = {
+  [PageHeaderIcon.Home]: GraduationCapIcon,
+  [PageHeaderIcon.Practice]: PencilLineIcon,
+  [PageHeaderIcon.Study]: BookOpenIcon,
+  [PageHeaderIcon.WrongBook]: BookMarkedIcon,
+  [PageHeaderIcon.Profile]: UserIcon
+};
+const displayIcon = computed(() => {
+  const code = route.meta.headerIcon;
+  return typeof code === 'string' && code in headerIcons
+    ? headerIcons[code as PageHeaderIconCode]
+    : undefined;
+});
 const hasHeaderRow = computed(() => Boolean(showBack.value || displayTitle.value || displayMeta.value));
 
 function goBack() {
@@ -57,9 +86,18 @@ function goBack() {
   z-index: 3;
   padding: calc(8px + var(--app-safe-top)) var(--page-x) 8px;
   background: var(--surface-header);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 4px 14px rgba(var(--color-ink-rgb), .018);
   backdrop-filter: blur(14px) saturate(1.05);
   -webkit-backdrop-filter: blur(14px) saturate(1.05);
+}
+
+.page-header::after {
+  content: '';
+  position: absolute;
+  inset: 100% 0 auto;
+  height: 14px;
+  pointer-events: none;
+  background: var(--surface-header-edge);
 }
 
 .page-header-compact {
@@ -71,7 +109,7 @@ function goBack() {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 38px;
+  min-height: 42px;
   min-width: 0;
 }
 
@@ -88,7 +126,7 @@ function goBack() {
   font-size: var(--type-size-body-large);
 }
 
-.page-header-compact .page-header-main span {
+.page-header-compact .page-header-title-copy > span {
   font-size: var(--type-size-micro);
 }
 
@@ -106,7 +144,41 @@ function goBack() {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 3px;
+}
+
+.page-header-title-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.page-header-title-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   gap: 2px;
+}
+
+.page-header-route-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 12px;
+  color: var(--primary-color);
+  background: rgba(var(--color-brand-rgb), .1);
+}
+
+.page-header-route-icon :deep(svg) {
+  width: 19px;
+  height: 19px;
+  color: inherit;
+  stroke: currentColor;
+  stroke-width: 1.9;
 }
 
 .page-header-main h3 {
@@ -120,10 +192,11 @@ function goBack() {
   white-space: nowrap;
 }
 
-.page-header-main span {
+.page-header-title-copy > span {
   color: var(--text-secondary-color);
-  font-size: var(--type-size-caption);
-  font-weight: var(--type-weight-regular);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+  line-height: var(--type-line-title);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

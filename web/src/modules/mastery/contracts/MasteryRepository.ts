@@ -5,4 +5,17 @@ import type { MasteryState, ReviewStatus, ReviewType } from '../domain/MasteryCo
 export interface MasteryTrack { readonly id:string;readonly examCycleId:ExamCycleId;readonly capabilityNodeId:CapabilityNodeId;readonly state:MasteryState;readonly concept:number;readonly recognition:number;readonly method:number;readonly accuracy:number;readonly speed:number;readonly retention:number;readonly transfer:number;readonly stability:number;readonly confidence:number;readonly effectiveSample:number;readonly lastEvidenceAt?:InstantMs;readonly lastStateChangeAt:InstantMs;readonly algorithmVersion:string;readonly version:number;readonly createdAt:InstantMs;readonly updatedAt:InstantMs; }
 export interface ReviewQueueItem { readonly id:ReviewQueueItemId;readonly examCycleId:ExamCycleId;readonly capabilityNodeId:CapabilityNodeId;readonly masteryTrackId:string;readonly reviewType:ReviewType;readonly dueAt:InstantMs;readonly priority:number;readonly intervalDays:number;readonly stabilityBefore:number;readonly status:ReviewStatus;readonly reason:string;readonly sourceEvidenceId?:EvidenceId;readonly claimedAt?:InstantMs;readonly completedAt?:InstantMs;readonly failureCode?:string;readonly version:number;readonly updatedAt:InstantMs; }
 export interface MasterySnapshot { readonly id:string;readonly masteryTrackId:string;readonly examCycleId:ExamCycleId;readonly snapshot:JsonObject;readonly algorithmVersion:string;readonly evidenceCutoffAt:InstantMs;readonly createdAt:InstantMs; }
-export interface MasteryRepository { findTrack(examCycleId:ExamCycleId,capabilityNodeId:CapabilityNodeId):Promise<MasteryTrack|undefined>; upsertTrack(track:MasteryTrack,expectedVersion:number|undefined,context:TransactionContext):Promise<void>; appendSnapshot(snapshot:MasterySnapshot,context:TransactionContext):Promise<void>; scheduleReview(item:ReviewQueueItem,context:TransactionContext):Promise<void>; findReview(reviewQueueItemId:ReviewQueueItemId):Promise<ReviewQueueItem|undefined>; replaceReview(item:ReviewQueueItem,expectedVersion:number,context:TransactionContext):Promise<void>; listDueReviews(examCycleId:ExamCycleId,now:InstantMs,limit:number):Promise<readonly ReviewQueueItem[]>; listPriorityTracks(examCycleId:ExamCycleId,limit:number):Promise<readonly MasteryTrack[]>; }
+export interface MasteryRepository {
+  findTrack(examCycleId:ExamCycleId,capabilityNodeId:CapabilityNodeId):Promise<MasteryTrack|undefined>;
+  upsertTrack(track:MasteryTrack,expectedVersion:number|undefined,context:TransactionContext):Promise<void>;
+  appendSnapshot(snapshot:MasterySnapshot,context:TransactionContext):Promise<void>;
+  scheduleReview(item:ReviewQueueItem,context:TransactionContext):Promise<void>;
+  findReview(reviewQueueItemId:ReviewQueueItemId):Promise<ReviewQueueItem|undefined>;
+  replaceReview(item:ReviewQueueItem,expectedVersion:number,context:TransactionContext):Promise<void>;
+  listDueReviews(examCycleId:ExamCycleId,now:InstantMs,limit:number):Promise<readonly ReviewQueueItem[]>;
+  listReviews(examCycleId:ExamCycleId,limit:number):Promise<readonly ReviewQueueItem[]>;
+  listAllReviews(examCycleId:ExamCycleId):Promise<readonly ReviewQueueItem[]>;
+  listPriorityTracks(examCycleId:ExamCycleId,limit:number):Promise<readonly MasteryTrack[]>;
+  listTracks(examCycleId:ExamCycleId,limit:number):Promise<readonly MasteryTrack[]>;
+  listAllTracks(examCycleId:ExamCycleId):Promise<readonly MasteryTrack[]>;
+}

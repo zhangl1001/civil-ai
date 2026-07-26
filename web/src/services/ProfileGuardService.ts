@@ -1,4 +1,3 @@
-import { examProfileRepository } from './ExamProfileRepository';
 import { projectRepository } from './ProjectRepository';
 import type { GenerationIntent } from './GenerationTaskService';
 
@@ -24,10 +23,9 @@ export class ProfileGuardService {
 
   async ensureActiveProfile(intent: GenerationIntent): Promise<void> {
     if (!this.needsProfile(intent)) return;
-    const project = await projectRepository.getActiveProject();
-    if (project.status === 'onboarding') throw new ProfileRequiredError();
-    const profile = await examProfileRepository.getActiveProfile(project.id);
-    if (!profile) throw new ProfileRequiredError('当前工程还没有完整备考档案，请先补全目标、现状和学习时间。');
+    await projectRepository.getActiveProject().catch(() => {
+      throw new ProfileRequiredError('当前还没有完整备考档案，请先补全目标、现状和学习时间。');
+    });
   }
 }
 

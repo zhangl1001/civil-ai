@@ -1,20 +1,12 @@
 import { appLifecycleAdapter } from './AppLifecycleAdapter';
 import type { AppLifecycleEvent } from './AppLifecycleAdapter';
 
-const CANVAS_BACKGROUND = [
-  'radial-gradient(circle at 18% 0%, rgba(26, 115, 232, .08), transparent 30%)',
-  'radial-gradient(circle at 92% 14%, rgba(52, 199, 89, .07), transparent 27%)',
-  'linear-gradient(180deg, #f7faff 0%, #f5f6fa 48%, #fafbfd 100%)'
-].join(',');
-
 function forceCanvasBackground(): void {
   const root = document.documentElement;
-  root.style.setProperty('--background-color', '#F5F6FA');
-  root.style.setProperty('--app-canvas-bg', CANVAS_BACKGROUND);
-  root.style.background = CANVAS_BACKGROUND;
-  document.body.style.background = CANVAS_BACKGROUND;
-  const appRoot = document.getElementById('app');
-  if (appRoot) appRoot.style.background = CANVAS_BACKGROUND;
+  const styles = getComputedStyle(root);
+  const solid = styles.getPropertyValue('--surface-canvas-solid').trim() || '#F5F6FA';
+  root.style.backgroundColor = solid;
+  document.body.style.backgroundColor = solid;
 }
 
 function logRenderHealth(label: string, lifecycle?: AppLifecycleEvent): void {
@@ -51,6 +43,12 @@ function logRenderHealth(label: string, lifecycle?: AppLifecycleEvent): void {
 function repaint(): void {
   forceCanvasBackground();
   document.body.classList.remove('ios-system-transition');
+  const appRoot = document.getElementById('app');
+  if (appRoot) {
+    appRoot.style.transform = 'translateZ(0)';
+    void appRoot.offsetHeight;
+    requestAnimationFrame(() => appRoot.style.removeProperty('transform'));
+  }
   window.dispatchEvent(new CustomEvent('zhangl-webview-repaint', { detail: { at: Date.now() } }));
 }
 

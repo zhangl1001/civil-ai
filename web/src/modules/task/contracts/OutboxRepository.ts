@@ -17,6 +17,7 @@ export interface ClaimOutboxOptions {
   readonly now: InstantMs;
   readonly leaseExpiresAt: InstantMs;
   readonly limit: number;
+  readonly eventTypes?: readonly string[];
 }
 
 export interface OutboxRepository {

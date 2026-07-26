@@ -8,7 +8,7 @@ import { LearningThreadOrigin, LearningThreadStage } from '@/modules/teaching/pu
 export class ReviewPracticeFeature {
   constructor(private readonly runtime: TutorDatabaseRuntime) {}
 
-  async start(reviewQueueItemId: ReviewQueueItemId, gateway: ProviderGateway) {
+  async start(reviewQueueItemId: ReviewQueueItemId, gateway: ProviderGateway, signal?: AbortSignal) {
     const current = await this.runtime.masteryRepository.findReview(reviewQueueItemId);
     if (current?.status === ReviewStatus.Failed) {
       await this.runtime.retryReviewQueueItem.execute(reviewQueueItemId);
@@ -40,7 +40,7 @@ export class ReviewPracticeFeature {
         difficultyMax: review.reviewType === 'transfer' ? 0.8 : 0.65,
         constraints: { reviewQueueItemId: review.id, reviewType: review.reviewType, reason: review.reason, attemptVersion: review.version }
       });
-      const result = await this.runtime.runWeakeningGenerationWorkflow.execute(aggregate.workflow.id, gateway);
+      const result = await this.runtime.runStructuredObjectiveGenerationWorkflow.execute(aggregate.workflow.id, gateway, signal);
       if (!result.questionSetId) throw new Error('复习题组未能发布。');
       return { review, thread: thread.thread, questionSetId: result.questionSetId };
     } catch (cause) {

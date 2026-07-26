@@ -1,3 +1,0 @@
-{
-  "enabled": ["core", "knowledge.py", "interaction.py", "parser.py", "misc"]
-}

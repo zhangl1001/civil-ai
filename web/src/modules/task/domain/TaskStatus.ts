@@ -1,13 +1,10 @@
 export const TaskStatus = {
   Queued: 'queued',
   Running: 'running',
-  WaitingForUser: 'waiting_for_user',
-  Paused: 'paused',
-  Resumable: 'resumable',
-  Cancelling: 'cancelling',
-  Cancelled: 'cancelled',
+  WaitingForUser: 'waiting_user',
+  Completed: 'completed',
   Failed: 'failed',
-  Completed: 'completed'
+  Cancelled: 'cancelled',
 } as const;
 
 export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];

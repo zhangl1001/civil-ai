@@ -1,7 +1,7 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
-export const TUTOR_INDEXEDDB_VERSION = 15;
+export const TUTOR_INDEXEDDB_VERSION = 23;
 
 export const TutorIndexedDbStore = {
   CandidateCycleBundles: 'candidate_cycle_bundles',
@@ -24,7 +24,10 @@ export const TutorIndexedDbStore = {
   MasterySnapshots: 'mastery_snapshots',
   ReviewQueue: 'review_queue',
   DailyPlanAggregates: 'daily_plan_aggregates',
-  LearningEvidenceAggregates: 'learning_evidence_aggregates'
+  LearningEvidenceAggregates: 'learning_evidence_aggregates',
+  SystemMessages: 'system_messages',
+  ProactiveSignals: 'proactive_signals',
+  LearningAssets: 'learning_assets'
 } as const;
 
 export type TutorIndexedDbStore = typeof TutorIndexedDbStore[keyof typeof TutorIndexedDbStore];
@@ -94,6 +97,16 @@ export class TutorIndexedDb {
     return requestResult<Value[]>(transaction.objectStore(storeName).getAll());
   }
 
+  async getAllByIndex<Value>(
+    storeName: TutorIndexedDbStore,
+    indexName: string,
+    key: IDBValidKey
+  ): Promise<readonly Value[]> {
+    await this.open();
+    const transaction = this.requireDatabase().transaction(storeName, 'readonly');
+    return requestResult<Value[]>(transaction.objectStore(storeName).index(indexName).getAll(key));
+  }
+
   async writeBatch(operations: readonly IndexedDbWriteOperation[]): Promise<void> {
     if (operations.length === 0) return;
     await this.open();
@@ -149,7 +162,7 @@ export class TutorIndexedDb {
     if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB is not available in this environment'));
     return new Promise((resolve, reject) => {
       const request = globalThis.indexedDB.open(TUTOR_INDEXEDDB_NAME, TUTOR_INDEXEDDB_VERSION);
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = (event) => {
         const database = request.result;
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.CandidateCycleBundles)) {
           database.createObjectStore(TutorIndexedDbStore.CandidateCycleBundles, { keyPath: 'projectId' });
@@ -187,6 +200,10 @@ export class TutorIndexedDb {
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.LearningSessionFacts)) {
           database.createObjectStore(TutorIndexedDbStore.LearningSessionFacts, { keyPath: 'sessionId' });
         }
+        const sessionStore = request.transaction?.objectStore(TutorIndexedDbStore.LearningSessionFacts);
+        if (sessionStore && !sessionStore.indexNames.contains('by_question_set')) {
+          sessionStore.createIndex('by_question_set', 'session.questionSetId', { unique: false });
+        }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.ErrorDiagnoses)) {
           database.createObjectStore(TutorIndexedDbStore.ErrorDiagnoses, { keyPath: 'id' });
         }
@@ -199,12 +216,31 @@ export class TutorIndexedDb {
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.AgentRunAggregates)) {
           database.createObjectStore(TutorIndexedDbStore.AgentRunAggregates, { keyPath: 'runId' });
         }
+        const agentRunStore = request.transaction?.objectStore(TutorIndexedDbStore.AgentRunAggregates);
+        if (agentRunStore && !agentRunStore.indexNames.contains('by_target')) {
+          agentRunStore.createIndex('by_target', ['run.targetResourceType', 'run.targetResourceId'], { unique: false });
+        }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.MasteryTracks)) database.createObjectStore(TutorIndexedDbStore.MasteryTracks, { keyPath: 'id' });
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.MasterySnapshots)) database.createObjectStore(TutorIndexedDbStore.MasterySnapshots, { keyPath: 'id' });
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.ReviewQueue)) database.createObjectStore(TutorIndexedDbStore.ReviewQueue, { keyPath: 'id' });
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.DailyPlanAggregates)) database.createObjectStore(TutorIndexedDbStore.DailyPlanAggregates, { keyPath: 'plan.id' });
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.LearningEvidenceAggregates)) {
           database.createObjectStore(TutorIndexedDbStore.LearningEvidenceAggregates, { keyPath: 'evidenceId' });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.SystemMessages)) {
+          database.createObjectStore(TutorIndexedDbStore.SystemMessages, { keyPath: 'id' });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.ProactiveSignals)) {
+          database.createObjectStore(TutorIndexedDbStore.ProactiveSignals, { keyPath: 'id' });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.LearningAssets)) {
+          database.createObjectStore(TutorIndexedDbStore.LearningAssets, { keyPath: 'id' });
+        }
+        if (event.oldVersion < 23 && database.objectStoreNames.contains('conversation_sessions')) {
+          database.deleteObjectStore('conversation_sessions');
+        }
+        if (event.oldVersion < 23 && database.objectStoreNames.contains('conversation_messages')) {
+          database.deleteObjectStore('conversation_messages');
         }
       };
       request.onsuccess = () => {

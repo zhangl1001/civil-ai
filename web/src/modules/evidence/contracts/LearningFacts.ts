@@ -17,12 +17,15 @@ import type {
   QuestionId,
   QuestionSetId
 } from '@/kernel/public';
+import type { DecisionObservationType } from '../domain/EvidenceCodes';
 import type { AssessmentRole } from '../domain/AssessmentRole';
 import type { EvidenceValidity } from '../domain/EvidenceValidity';
 import type {
   AttemptResult,
   ConfirmationStatus,
   ErrorCauseCode,
+  ErrorDiagnosisDimensionCode,
+  ErrorDiagnosisDimensionStatus,
   ErrorDiagnosisConfirmationAction,
   EvidenceCorrectionAction,
   EvidenceSource,
@@ -32,6 +35,19 @@ import type {
   LearningSessionType,
   QuestionExposureType
 } from '../domain/EvidenceCodes';
+
+export interface ErrorDiagnosisDimension {
+  readonly code: ErrorDiagnosisDimensionCode;
+  readonly status: ErrorDiagnosisDimensionStatus;
+  readonly evidence: string;
+}
+
+export interface ErrorCorrectionPlan {
+  readonly objective: string;
+  readonly steps: readonly string[];
+  readonly practiceFocus: string;
+  readonly successCriteria: string;
+}
 
 export interface LearningSessionRecord {
   readonly id: LearningSessionId;
@@ -89,7 +105,7 @@ export interface AttemptRecord {
 export interface DecisionObservationRecord {
   readonly id: DecisionObservationId;
   readonly attemptId: AttemptId;
-  readonly observationType: string;
+  readonly observationType: DecisionObservationType;
   readonly valueCode: string;
   readonly value: JsonObject;
   readonly source: 'user' | 'system' | 'tutor_ai';
@@ -126,6 +142,8 @@ export interface ErrorDiagnosisRecord {
   readonly confirmationStatus: Exclude<ConfirmationStatus, 'not_required'>;
   readonly prerequisiteCapabilityNodeId?: CapabilityNodeId;
   readonly recommendedActionCode: string;
+  readonly dimensions: readonly ErrorDiagnosisDimension[];
+  readonly correctionPlan: ErrorCorrectionPlan;
   readonly source: 'deterministic' | 'tutor_ai' | 'user';
   readonly createdAt: InstantMs;
   readonly idempotencyKey: string;

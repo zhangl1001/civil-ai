@@ -19,7 +19,8 @@ interface PlanRow extends SqlRow {
 interface ItemRow extends SqlRow {
   id:string; daily_plan_id:string; capability_node_id:string; review_queue_item_id:string|null; item_type:DailyPlanItemRecord['itemType'];
   sequence:number; target_minutes:number; target_count:number|null; exit_criteria_json:string; reason:string;
-  status:DailyPlanItemRecord['status']; actual_minutes:number;
+  status:DailyPlanItemRecord['status']; actual_minutes:number; result_summary_json:string|null;
+  failure_code:string|null; failure_message:string|null; finished_at:number|null;
 }
 
 export class SqliteDailyPlanRepository implements DailyPlanRepository {
@@ -35,6 +36,20 @@ export class SqliteDailyPlanRepository implements DailyPlanRepository {
     return { plan: plan(rows[0]), items: items.map(item) };
   }
 
+  async listAll(cycle: ExamCycleId): Promise<readonly DailyPlanAggregate[]> {
+    const rows = await this.db.query<PlanRow>(
+      'SELECT * FROM daily_plans WHERE exam_cycle_id=? ORDER BY created_at DESC,version DESC,id DESC',
+      [cycle]
+    );
+    return Promise.all(rows.map(async (row) => {
+      const items = await this.db.query<ItemRow>(
+        'SELECT * FROM daily_plan_items WHERE daily_plan_id=? ORDER BY sequence',
+        [row.id]
+      );
+      return { plan: plan(row), items: items.map(item) };
+    }));
+  }
+
   async replaceCurrent(next: DailyPlanAggregate, previous: DailyPlanRecord | undefined, context: TransactionContext): Promise<void> {
     const tx = this.scope.resolve(context);
     if (previous) {
@@ -48,23 +63,49 @@ export class SqliteDailyPlanRepository implements DailyPlanRepository {
     );
     for (const i of next.items) {
       await tx.run(
-        'INSERT INTO daily_plan_items(id,daily_plan_id,capability_node_id,review_queue_item_id,item_type,sequence,target_minutes,target_count,exit_criteria_json,reason,status,actual_minutes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-        [i.id,i.dailyPlanId,i.capabilityNodeId,i.reviewQueueItemId??null,i.itemType,i.sequence,i.targetMinutes,i.targetCount??null,JSON.stringify(i.exitCriteria),i.reason,i.status,i.actualMinutes]
+        'INSERT INTO daily_plan_items(id,daily_plan_id,capability_node_id,review_queue_item_id,item_type,sequence,target_minutes,target_count,exit_criteria_json,reason,status,actual_minutes,result_summary_json,failure_code,failure_message,finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [i.id,i.dailyPlanId,i.capabilityNodeId,i.reviewQueueItemId??null,i.itemType,i.sequence,i.targetMinutes,i.targetCount??null,JSON.stringify(i.exitCriteria),i.reason,i.status,i.actualMinutes,i.resultSummary?JSON.stringify(i.resultSummary):null,i.failureCode??null,i.failureMessage??null,i.finishedAt??null]
       );
     }
   }
 
+  async updateItemById(dailyPlanItemId: string, patch: DailyPlanItemStatusPatch, context: TransactionContext): Promise<DailyPlanItemRecord | undefined> {
+    const transaction = this.scope.resolve(context);
+    const rows = await transaction.query<ItemRow>(
+      "SELECT i.* FROM daily_plan_items i JOIN daily_plans p ON p.id=i.daily_plan_id WHERE i.id=? AND p.status='active' LIMIT 1",
+      [dailyPlanItemId]
+    );
+    return this.updateItem(rows[0], patch, context);
+  }
+
   async updateItemByReviewQueueId(reviewQueueItemId: string, patch: DailyPlanItemStatusPatch, context: TransactionContext): Promise<DailyPlanItemRecord | undefined> {
-    const rows = await this.db.query<ItemRow>(
+    const transaction = this.scope.resolve(context);
+    const rows = await transaction.query<ItemRow>(
       "SELECT i.* FROM daily_plan_items i JOIN daily_plans p ON p.id=i.daily_plan_id WHERE i.review_queue_item_id=? AND p.status='active' ORDER BY p.version DESC, i.sequence LIMIT 1",
       [reviewQueueItemId]
     );
-    if (!rows[0]) return undefined;
-    const current = item(rows[0]);
+    return this.updateItem(rows[0], patch, context);
+  }
+
+  private async updateItem(row: ItemRow | undefined, patch: DailyPlanItemStatusPatch, context: TransactionContext): Promise<DailyPlanItemRecord | undefined> {
+    if (!row) return undefined;
+    const current = item(row);
     const actualMinutes = patch.actualMinutes ?? current.actualMinutes;
+    const resultSummary = patch.resultSummary ?? current.resultSummary;
     const tx = this.scope.resolve(context);
-    await tx.run('UPDATE daily_plan_items SET status=?, actual_minutes=? WHERE id=?', [patch.status, actualMinutes, current.id]);
-    return { ...current, status: patch.status, actualMinutes };
+    await tx.run(
+      'UPDATE daily_plan_items SET status=?, actual_minutes=?, result_summary_json=?, failure_code=?, failure_message=?, finished_at=? WHERE id=?',
+      [patch.status,actualMinutes,resultSummary?JSON.stringify(resultSummary):null,patch.failureCode??null,patch.failureMessage??null,patch.finishedAt??null,current.id]
+    );
+    return {
+      ...current,
+      status:patch.status,
+      actualMinutes,
+      resultSummary,
+      failureCode:patch.failureCode,
+      failureMessage:patch.failureMessage,
+      finishedAt:patch.finishedAt
+    };
   }
 }
 
@@ -82,6 +123,8 @@ function item(r: ItemRow): DailyPlanItemRecord {
     id:r.id, dailyPlanId:r.daily_plan_id, capabilityNodeId:r.capability_node_id as DailyPlanItemRecord['capabilityNodeId'],
     reviewQueueItemId:r.review_queue_item_id??undefined, itemType:r.item_type, sequence:r.sequence, targetMinutes:r.target_minutes,
     targetCount:r.target_count??undefined, exitCriteria:JSON.parse(r.exit_criteria_json), reason:r.reason, status:r.status,
-    actualMinutes:r.actual_minutes
+    actualMinutes:r.actual_minutes, resultSummary:r.result_summary_json?JSON.parse(r.result_summary_json):undefined,
+    failureCode:r.failure_code??undefined, failureMessage:r.failure_message??undefined,
+    finishedAt:r.finished_at as DailyPlanItemRecord['finishedAt']??undefined
   };
 }

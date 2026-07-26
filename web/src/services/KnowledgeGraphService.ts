@@ -1,13 +1,10 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { AbilityProfile } from '@/domain/learning';
-import type { WrongItem } from '@/domain/wrongbook';
-import { DEFAULT_KNOWLEDGE_TREE } from './KnowledgeDefaults';
-import { practiceFlowService } from './PracticeFlowService';
-import { projectRepository } from './ProjectRepository';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import type { CapabilityNode } from '@/modules/curriculum/public';
+import type { MasteryState, MasteryTrack } from '@/modules/mastery/public';
 
 export interface KnowledgePointNode {
   id: string;
+  moduleCode: string;
   module: string;
   group: string;
   name: string;
@@ -15,11 +12,13 @@ export interface KnowledgePointNode {
   correct: number;
   accuracy: number;
   proficiency: number;
+  confidence: number;
   status: '未学' | '学习中' | '已掌握' | '薄弱';
   wrongCount: number;
 }
 
 export interface KnowledgeModuleNode {
+  code: string;
   name: string;
   total: number;
   correct: number;
@@ -37,76 +36,58 @@ export interface KnowledgeGraphDashboard {
   weakest?: KnowledgePointNode;
 }
 
-function today(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
-function statusFor(total: number, accuracy: number): KnowledgePointNode['status'] {
-  if (total <= 0) return '未学';
-  if (accuracy >= 75) return '已掌握';
-  if (accuracy < 55) return '薄弱';
-  return '学习中';
-}
-
 export class KnowledgeGraphService {
   async dashboard(): Promise<KnowledgeGraphDashboard> {
-    const project = await projectRepository.getActiveProject();
-    const [profiles, wrongItems] = await Promise.all([
-      database.queryByIndex<AbilityProfile>(STORES.abilityProfiles, 'projectId', project.id),
-      database.queryByIndex<WrongItem>(STORES.wrongItems, 'projectId', project.id)
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先建立备考档案。');
+    const [curriculum, tracks, wrongEntries] = await Promise.all([
+      runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
+      runtime.masteryRepository.listTracks(cycle.examCycle.id, 100),
+      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 })
     ]);
-    const profileByModule = new Map(profiles.map((profile) => [profile.module, profile]));
-    const wrongByModule = new Map<string, number>();
-    wrongItems.forEach((item) => {
-      if (!item.module || item.status === 'mastered') return;
-      wrongByModule.set(item.module, (wrongByModule.get(item.module) || 0) + item.wrongCount);
-    });
+    if (!curriculum) throw new Error('当前考试大纲不可用。');
 
-    const modules = Object.entries(DEFAULT_KNOWLEDGE_TREE).map(([moduleName, groups]) => {
-      const profile = profileByModule.get(moduleName);
-      const groupEntries = Object.entries(groups);
-      const pointNames = groupEntries.flatMap(([, points]) => points);
-      const total = profile?.total || 0;
-      const correct = profile?.correct || 0;
-      const baseAccuracy = profile?.accuracy || 0;
-      const perPointTotal = pointNames.length && total ? Math.max(1, Math.floor(total / pointNames.length)) : 0;
-      const points = groupEntries.flatMap(([group, names]) => names.map((name, index) => {
-        const drift = ((index % 5) - 2) * 4;
-        const accuracy = total ? Math.max(0, Math.min(100, baseAccuracy + drift)) : 0;
-        const pointTotal = perPointTotal;
-        const pointCorrect = Math.round(pointTotal * accuracy / 100);
-        const wrongCount = moduleName === profile?.module ? Math.round((wrongByModule.get(moduleName) || 0) / Math.max(1, pointNames.length)) : 0;
-        const status = statusFor(pointTotal, accuracy);
-        return {
-          id: `${moduleName}:${name}`,
-          module: moduleName,
-          group,
-          name,
-          total: pointTotal,
-          correct: pointCorrect,
-          accuracy,
-          proficiency: accuracy,
-          status,
-          wrongCount
-        } satisfies KnowledgePointNode;
-      }));
+    const nodesById = new Map(curriculum.capabilityNodes.map((node) => [node.id, node]));
+    const tracksByCapability = new Map(tracks.map((track) => [track.capabilityNodeId, track]));
+    const wrongByCapability = new Map<string, number>();
+    wrongEntries.forEach((entry) => {
+      const capabilityId = entry.attempt.capabilityNodeId;
+      wrongByCapability.set(capabilityId, (wrongByCapability.get(capabilityId) || 0) + 1);
+    });
+    const moduleNames = new Map(curriculum.capabilityNodes
+      .filter((node) => node.nodeType === 'module')
+      .map((node) => [node.module, node.name]));
+    const pointNodes = curriculum.capabilityNodes.filter((node) => (
+      node.status === 'active'
+      && (node.nodeType === 'knowledge_point' || node.nodeType === 'sub_point')
+    ));
+    const moduleCodes = [...new Set(pointNodes.map((node) => node.module))];
+    const modules = moduleCodes.map((code) => {
+      const points = pointNodes
+        .filter((node) => node.module === code)
+        .map((node) => toPoint(node, tracksByCapability.get(node.id), nodesById, moduleNames, wrongByCapability))
+        .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
+      const total = points.reduce((sum, point) => sum + point.total, 0);
+      const correct = points.reduce((sum, point) => sum + point.correct, 0);
       return {
-        name: moduleName,
+        code,
+        name: moduleNames.get(code) || code,
         total,
         correct,
-        accuracy: baseAccuracy,
+        accuracy: total ? Math.round(correct / total * 100) : 0,
         mastered: points.filter((point) => point.status === '已掌握').length,
         weak: points.filter((point) => point.status === '薄弱').length,
         points
       } satisfies KnowledgeModuleNode;
-    });
-
+    }).sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
     const allPoints = modules.flatMap((module) => module.points);
-    const trainedPoints = allPoints.filter((point) => point.total > 0);
-    const weakest = trainedPoints.length
-      ? [...trainedPoints].sort((a, b) => a.proficiency - b.proficiency || b.wrongCount - a.wrongCount)[0]
-      : undefined;
+    const measured = allPoints.filter((point) => point.total > 0);
+    const weakest = measured.slice().sort((left, right) => (
+      left.proficiency - right.proficiency
+      || left.confidence - right.confidence
+      || right.wrongCount - left.wrongCount
+    ))[0];
 
     return {
       totalPoints: allPoints.length,
@@ -116,17 +97,38 @@ export class KnowledgeGraphService {
       weakest
     };
   }
+}
 
-  startPractice(point?: KnowledgePointNode): void {
-    practiceFlowService.writeStartContext({
-      module: point?.module || '资料分析',
-      knowledgePoint: point?.name,
-      date: today(),
-      mode: 'practice',
-      source: 'practice-center',
-      questionCount: 10
-    });
-  }
+function toPoint(
+  node: CapabilityNode,
+  track: MasteryTrack | undefined,
+  nodesById: ReadonlyMap<string, CapabilityNode>,
+  moduleNames: ReadonlyMap<string, string>,
+  wrongByCapability: ReadonlyMap<string, number>
+): KnowledgePointNode {
+  const total = track ? Math.max(0, Math.round(track.effectiveSample)) : 0;
+  const accuracy = track ? Math.round(track.accuracy * 100) : 0;
+  return {
+    id: node.id,
+    moduleCode: node.module,
+    module: moduleNames.get(node.module) || node.module,
+    group: node.parentId ? nodesById.get(node.parentId)?.name || '能力大纲' : '能力大纲',
+    name: node.name,
+    total,
+    correct: Math.round(total * accuracy / 100),
+    accuracy,
+    proficiency: track ? Math.round(track.stability * 100) : 0,
+    confidence: track?.confidence ?? 0,
+    status: statusFor(track?.state),
+    wrongCount: wrongByCapability.get(node.id) || 0
+  };
+}
+
+function statusFor(state: MasteryState | undefined): KnowledgePointNode['status'] {
+  if (!state || state === 'unassessed') return '未学';
+  if (state === 'regressed') return '薄弱';
+  if (state === 'mastered' || state === 'maintaining') return '已掌握';
+  return '学习中';
 }
 
 export const knowledgeGraphService = new KnowledgeGraphService();

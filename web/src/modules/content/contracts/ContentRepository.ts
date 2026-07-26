@@ -26,8 +26,10 @@ import type {
   GenerationWorkflowStep,
   PublishedAssetStatus,
   QuestionQualityStatus,
+  QuestionSetPracticeStatus,
   QuestionSetPurpose,
   QuestionSetStatus,
+  QuestionSetEntryMode,
   QuestionTemplateCode
 } from '../domain/ContentCodes';
 
@@ -137,9 +139,26 @@ export interface QuestionSetRecord {
   readonly assessmentRole: AssessmentRole;
   readonly module: string;
   readonly status: QuestionSetStatus;
+  readonly practiceStatus: QuestionSetPracticeStatus;
   readonly questionCount: number;
   readonly contentHash?: string;
   readonly contentVersion: number;
+  readonly createdAt: InstantMs;
+}
+
+/** Lightweight read model for library navigation. It must not load question or lecture bodies. */
+export interface QuestionSetLibraryEntry {
+  readonly id: QuestionSetId;
+  readonly examCycleId: ExamCycleId;
+  readonly learningThreadId?: LearningThreadId;
+  readonly capabilityNodeId: CapabilityNodeId;
+  readonly purpose: QuestionSetPurpose;
+  readonly assessmentRole: AssessmentRole;
+  readonly module: string;
+  readonly questionCount: number;
+  readonly practiceStatus: QuestionSetPracticeStatus;
+  readonly entryMode: QuestionSetEntryMode;
+  readonly source?: string;
   readonly createdAt: InstantMs;
 }
 
@@ -197,5 +216,15 @@ export interface ContentRepository {
   findQuestionSetByGenerationSpec(
     generationSpecId: GenerationSpecId
   ): Promise<CommittedQuestionSetBundle | undefined>;
+  listQuestionSetLibrary(
+    examCycleId: ExamCycleId,
+    limit: number
+  ): Promise<readonly QuestionSetLibraryEntry[]>;
   listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]>;
+  listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]>;
+  updateQuestionSetPracticeStatus(
+    questionSetId: QuestionSetId,
+    status: QuestionSetPracticeStatus,
+    context: TransactionContext
+  ): Promise<void>;
 }

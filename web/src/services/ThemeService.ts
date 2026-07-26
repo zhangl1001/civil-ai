@@ -126,11 +126,13 @@ export class ThemeService {
     const root = document.documentElement;
     root.dataset.theme = settings.preset;
     if (settings.backgroundImage) {
+      root.dataset.customBackground = 'true';
       root.style.setProperty('--theme-background-image', `url(${settings.backgroundImage})`);
       root.style.setProperty('--theme-background-image-opacity', String(settings.backgroundStrength / 100));
       root.style.setProperty('--theme-background-scrim', 'rgba(248, 250, 253, .3)');
       root.style.setProperty('--theme-grid-opacity', '.12');
     } else {
+      delete root.dataset.customBackground;
       root.style.removeProperty('--theme-background-image');
       root.style.setProperty('--theme-background-image-opacity', '0');
       root.style.setProperty('--theme-background-scrim', 'transparent');

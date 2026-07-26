@@ -25,11 +25,14 @@
         <ShieldCheckIcon />
         <p>自报成绩只用于确定起点。达到最低可信度前，系统只显示“数据不足”，不会生成虚假的精确掌握率。</p>
       </section>
+      <p v-if="error" class="diagnosis-error">{{ error }}</p>
     </main>
 
     <StickyActionBar>
       <button type="button" @click="router.replace('/')">稍后进行</button>
-      <button class="primary" type="button" disabled>诊断题准备中</button>
+      <button class="primary" type="button" :disabled="isStarting" @click="startDiagnosis">
+        {{ primaryActionLabel }}
+      </button>
     </StickyActionBar>
   </div>
 </template>
@@ -45,9 +48,13 @@ import {
   InitialDiagnosisStatus,
   type InitialDiagnosisStatusCode
 } from '@/modules/candidate/public';
+import { QuestionSetEntryMode } from '@/modules/content/public';
+import { InitialDiagnosisFeature } from './InitialDiagnosisFeature';
 
 const router = useRouter();
 const status = ref<InitialDiagnosisStatusCode>(InitialDiagnosisStatus.NotStarted);
+const isStarting = ref(false);
+const error = ref('');
 
 const flow = [
   { title: '模块锚定', detail: '少量覆盖面广的题，先判断行测与申论的能力区间。' },
@@ -64,6 +71,13 @@ const statusDetail = computed(() => status.value === InitialDiagnosisStatus.Suff
   ? '后续训练会持续校准能力判断和目标分差。'
   : '当前成绩主要来自建档自报，不能直接当作长期能力画像。');
 
+const primaryActionLabel = computed(() => {
+  if (isStarting.value) return '正在准备诊断...';
+  if (status.value === InitialDiagnosisStatus.Sufficient) return '查看能力画像';
+  if (status.value === InitialDiagnosisStatus.InProgress) return '继续诊断';
+  return '开始诊断';
+});
+
 onMounted(async () => {
   const runtime = await initializeTutorRuntime();
   const snapshot = await runtime.getCandidateHome.execute();
@@ -73,6 +87,37 @@ onMounted(async () => {
   }
   status.value = snapshot.diagnosisStatus;
 });
+
+async function startDiagnosis() {
+  if (isStarting.value) return;
+  if (status.value === InitialDiagnosisStatus.Sufficient) {
+    await router.replace('/');
+    return;
+  }
+  isStarting.value = true;
+  error.value = '';
+  try {
+    const runtime = await initializeTutorRuntime();
+    const result = await new InitialDiagnosisFeature(runtime).start();
+    if (!result) {
+      await router.replace('/vue/onboarding');
+      return;
+    }
+    await router.push({
+      path: '/vue/practice/session',
+      query: {
+        mode: QuestionSetEntryMode.Tutor,
+        diagnosis: '1',
+        scopeKey: result.scopeKey,
+        capabilityNodeId: result.capabilityNodeId
+      }
+    });
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '诊断任务启动失败';
+  } finally {
+    isStarting.value = false;
+  }
+}
 </script>
 
 <style scoped>
@@ -96,5 +141,5 @@ onMounted(async () => {
 .diagnosis-note { margin-top: 14px; display: flex; align-items: flex-start; gap: 9px; padding: 12px 14px; border-radius: var(--radius-card); background: var(--surface-muted); }
 .diagnosis-note svg { width: 18px; height: 18px; margin-top: 3px; flex-shrink: 0; color: var(--color-success); }
 .diagnosis-note p { margin: 0; }
+.diagnosis-error { width:min(100%,560px); margin:12px auto 0; color:var(--red-color); font-size:var(--type-size-caption); text-align:center; }
 </style>
-

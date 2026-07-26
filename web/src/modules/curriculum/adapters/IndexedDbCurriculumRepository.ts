@@ -33,6 +33,19 @@ export class IndexedDbCurriculumRepository implements CurriculumRepository {
     });
   }
 
+  async synchronizeBundle(bundle: CurriculumBundle, context: TransactionContext): Promise<void> {
+    this.transactionScope.stage(context, {
+      type: 'put',
+      store: TutorIndexedDbStore.CurriculumBundles,
+      value: {
+        curriculumVersionId: bundle.curriculum.id,
+        metadataPackageId: bundle.metadataPackage.id,
+        status: bundle.curriculum.status,
+        bundle
+      } satisfies StoredCurriculumBundle
+    });
+  }
+
   async findBundle(curriculumVersionId: CurriculumVersionId): Promise<CurriculumBundle | undefined> {
     const stored = await this.database.get<StoredCurriculumBundle>(
       TutorIndexedDbStore.CurriculumBundles,

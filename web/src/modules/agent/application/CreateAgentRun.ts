@@ -2,11 +2,17 @@ import type { UnitOfWork } from '@/capabilities/database/public';
 import type { Clock, ExamCycleId, IdGenerator, InstantMs, JsonObject, LearningThreadId } from '@/kernel/public';
 import type { OutboxRepository } from '@/modules/task/public';
 import type { AgentRunAggregate, AgentRunRepository } from '../contracts/AgentRunRepository';
-import { AgentRunStatus, type AgentRunType } from '../domain/AgentRunCodes';
+import {
+  AgentRunStatus,
+  resolveAgentWorkPool,
+  type AgentRunType,
+  type AgentWorkPool
+} from '../domain/AgentRunCodes';
 
 export interface CreateAgentRunCommand {
   readonly idempotencyKey: string;
   readonly runType: AgentRunType;
+  readonly workPool?: AgentWorkPool;
   readonly examCycleId?: ExamCycleId;
   readonly learningThreadId?: LearningThreadId;
   readonly targetResourceType?: string;
@@ -22,9 +28,27 @@ export class CreateAgentRun {
     const existing = await this.repository.findByIdempotencyKey(command.idempotencyKey);
     if (existing) return existing;
     const now = this.clock.now();
-    const run = { id:this.ids.next('AgentRunId'), runType:command.runType, status:AgentRunStatus.Queued, examCycleId:command.examCycleId, learningThreadId:command.learningThreadId, targetResourceType:command.targetResourceType?.trim()||undefined, targetResourceId:command.targetResourceId?.trim()||undefined, inputSnapshot:command.inputSnapshot, checkpoint:{}, attemptCount:0, nextRunAt:command.nextRunAt, idempotencyKey:command.idempotencyKey, createdAt:now, updatedAt:now, version:1 };
+    const targetResourceType = command.targetResourceType?.trim() || undefined;
+    const run = {
+      id: this.ids.next('AgentRunId'),
+      runType: command.runType,
+      workPool: command.workPool ?? resolveAgentWorkPool(command.runType, targetResourceType, command.inputSnapshot),
+      status: AgentRunStatus.Queued,
+      examCycleId: command.examCycleId,
+      learningThreadId: command.learningThreadId,
+      targetResourceType,
+      targetResourceId: command.targetResourceId?.trim() || undefined,
+      inputSnapshot: command.inputSnapshot,
+      checkpoint: {},
+      attemptCount: 0,
+      nextRunAt: command.nextRunAt,
+      idempotencyKey: command.idempotencyKey,
+      createdAt: now,
+      updatedAt: now,
+      version: 1
+    };
     const event = { id:this.ids.next('AgentRunEventId'), agentRunId:run.id, eventType:'created' as const, toStatus:run.status, reasonCode:`agent_run.${run.runType}.created`, payload:{}, occurredAt:now, idempotencyKey:`${command.idempotencyKey}:created` };
-    try { await this.unitOfWork.run(async context => { await this.repository.create(run,event,context); await this.outbox.append({id:this.ids.next('OutboxEventId'),aggregateType:'tutor_agent_run',aggregateId:run.id,eventType:'tutor_agent_run.created',payload:{agentRunId:run.id,runType:run.runType,examCycleId:run.examCycleId??null},occurredAt:now,attemptCount:0,idempotencyKey:`${command.idempotencyKey}:outbox`},context); }); return {run,events:[event]}; }
+    try { await this.unitOfWork.run(async context => { await this.repository.create(run,event,context); await this.outbox.append({id:this.ids.next('OutboxEventId'),aggregateType:'tutor_agent_run',aggregateId:run.id,eventType:'tutor_agent_run.created',payload:{agentRunId:run.id,runType:run.runType,workPool:run.workPool,examCycleId:run.examCycleId??null},occurredAt:now,attemptCount:0,idempotencyKey:`${command.idempotencyKey}:outbox`},context); }); return {run,events:[event]}; }
     catch(error){ const concurrent=await this.repository.findByIdempotencyKey(command.idempotencyKey); if(concurrent)return concurrent; throw error; }
   }
 }

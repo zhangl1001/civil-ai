@@ -171,11 +171,11 @@ import {
   ExplanationDepth,
   ProactiveLevel,
   StudyMode,
-  TeachingOrder,
-  candidateOnboardingPolicy
+  TeachingOrder
 } from '@/modules/candidate/public';
-import type { InstantMs, JsonObject, LocalDate, SubjectCode, TimeZoneId } from '@/kernel/public';
+import type { JsonObject, LocalDate, SubjectCode, TimeZoneId } from '@/kernel/public';
 import { OnboardingMessage, resolveOnboardingError } from './onboardingMessages';
+import { OnboardingDraftFeature } from './OnboardingDraftFeature';
 
 const OnboardingStep = {
   Goal: 1,
@@ -190,6 +190,7 @@ const submitting = ref(false);
 const submitMessage = ref('');
 const draftCreatedAt = ref(Date.now());
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let draftFeaturePromise: Promise<OnboardingDraftFeature> | undefined;
 
 const form = reactive({
   projectName: '',
@@ -276,8 +277,7 @@ function draftId(): string {
 
 async function restoreDraft() {
   try {
-    const runtime = await initializeTutorRuntime();
-    const saved = await runtime.candidateRepository.findOnboardingDraft(draftId());
+    const saved = await (await draftFeature()).load(draftId());
     if (!saved) return;
     draftCreatedAt.value = saved.createdAt;
     const data = saved.data;
@@ -299,19 +299,19 @@ function scheduleDraftSave() {
 
 async function saveDraft() {
   try {
-    const runtime = await initializeTutorRuntime();
-    const now = Date.now();
-    await runtime.candidateRepository.saveOnboardingDraft({
-      id: draftId(),
-      stepCode: `onboarding.step.${step.value}`,
+    await (await draftFeature()).save({
+      draftId: draftId(),
+      step: step.value,
       data: JSON.parse(JSON.stringify(form)) as JsonObject,
-      createdAt: draftCreatedAt.value as InstantMs,
-      updatedAt: now as InstantMs,
-      expiresAt: (now + candidateOnboardingPolicy.draftRetentionMs) as InstantMs
+      createdAt: draftCreatedAt.value
     });
   } catch {
     submitMessage.value = OnboardingMessage.SaveFailed;
   }
+}
+function draftFeature(): Promise<OnboardingDraftFeature> {
+  draftFeaturePromise ??= initializeTutorRuntime().then((runtime) => new OnboardingDraftFeature(runtime));
+  return draftFeaturePromise;
 }
 
 function goToStep(target: number) {

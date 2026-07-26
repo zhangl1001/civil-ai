@@ -58,10 +58,14 @@ export {
 export {
   GetCandidateHome,
   type CandidateHomeScore,
-  type CandidateHomeSnapshot
+  type CandidateHomeSnapshot,
+  type InitialDiagnosisEvidencePort,
+  type InitialDiagnosisEvidenceSummary
 } from './application/GetCandidateHome';
 export {
   UpdateScoreTargets,
   type ScoreTargetChange,
   type UpdateScoreTargetsCommand
 } from './application/UpdateScoreTargets';
+export { UpdateLearningPreferences } from './application/UpdateLearningPreferences';
+export { AlignCandidateCurriculum } from './application/AlignCandidateCurriculum';

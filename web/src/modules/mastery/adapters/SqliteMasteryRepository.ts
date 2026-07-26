@@ -51,9 +51,35 @@ export class SqliteMasteryRepository implements MasteryRepository {
     return rows.map(review);
   }
 
+  async listReviews(examCycleId: ExamCycleId, limit: number): Promise<readonly ReviewQueueItem[]> {
+    assertLimit(limit, 'Review');
+    return (await this.listAllReviews(examCycleId)).slice(0, limit);
+  }
+
+  async listAllReviews(examCycleId: ExamCycleId): Promise<readonly ReviewQueueItem[]> {
+    const rows = await this.database.query<ReviewRow>(
+      'SELECT * FROM review_queue WHERE exam_cycle_id = ? ORDER BY updated_at DESC, id',
+      [examCycleId]
+    );
+    return rows.map(review);
+  }
+
   async listPriorityTracks(examCycleId: ExamCycleId, limit: number): Promise<readonly MasteryTrack[]> {
     assertLimit(limit, 'Track');
     const rows = await this.database.query<TrackRow>("SELECT * FROM mastery_tracks WHERE exam_cycle_id = ? ORDER BY CASE state WHEN 'regressed' THEN 0 WHEN 'learning' THEN 1 WHEN 'practicing' THEN 2 WHEN 'consolidating' THEN 3 ELSE 4 END, stability ASC, confidence ASC, updated_at ASC LIMIT ?", [examCycleId, limit]);
+    return rows.map(track);
+  }
+
+  async listTracks(examCycleId: ExamCycleId, limit: number): Promise<readonly MasteryTrack[]> {
+    assertLimit(limit, 'Track');
+    return (await this.listAllTracks(examCycleId)).slice(0, limit);
+  }
+
+  async listAllTracks(examCycleId: ExamCycleId): Promise<readonly MasteryTrack[]> {
+    const rows = await this.database.query<TrackRow>(
+      'SELECT * FROM mastery_tracks WHERE exam_cycle_id = ? ORDER BY updated_at DESC, id',
+      [examCycleId]
+    );
     return rows.map(track);
   }
 }

@@ -1,5 +1,6 @@
-import { database } from '@/db/database';
-import { STORES, type InterviewSessionRecord } from '@/db/schema';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import type { JsonObject } from '@/kernel/public';
+import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
 import type {
   InterviewAnswer,
   InterviewDifficulty,
@@ -10,9 +11,8 @@ import type {
   InterviewStats,
   InterviewType
 } from '@/domain/interview';
-import { projectRepository } from './ProjectRepository';
 import { generationTaskService } from './GenerationTaskService';
-import type { EnqueueResult } from '@/tasks/taskTypes';
+import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 
 export const INTERVIEW_QUESTION_TYPES: InterviewQuestionType[] = ['综合分析', '计划组织', '人际沟通', '应急应变', '岗位匹配'];
 
@@ -51,6 +51,10 @@ function id(prefix: string): string {
 function today(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function businessKey(sessionId: string): string {
+  return `interview:${sessionId}`;
 }
 
 function shuffle<T>(items: T[]): T[] {
@@ -130,13 +134,15 @@ export class InterviewRepository {
     questionTypes: InterviewQuestionType[];
     answers: InterviewAnswer[];
   }): Promise<InterviewSession> {
-    const project = await projectRepository.getActiveProject();
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
     const now = Date.now();
     const scoredAnswers = this.scoreAnswers(input.answers);
     const score = averageScore(scoredAnswers.map((answer) => answer.score).filter(Boolean) as InterviewScore[]);
     const session: InterviewSession = {
       id: id('interview_session'),
-      projectId: project.id,
+      projectId: cycle.project.id,
       date: today(),
       interviewType: input.interviewType,
       difficulty: input.difficulty,
@@ -147,13 +153,26 @@ export class InterviewRepository {
       createdAt: now,
       updatedAt: now
     };
-    await database.put<InterviewSessionRecord>(STORES.interviewSessions, session);
+    await runtime.learningAssetStore.save({
+      examCycleId: cycle.examCycle.id,
+      kind: LearningAssetKind.InterviewSession,
+      businessKey: businessKey(session.id),
+      title: `面试训练 · ${session.date}`,
+      payload: session as unknown as JsonObject
+    });
     return session;
   }
 
   async getSession(sessionId: string): Promise<InterviewSession | undefined> {
-    const session = await database.get<InterviewSessionRecord>(STORES.interviewSessions, sessionId);
-    return session as InterviewSession | undefined;
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return undefined;
+    const asset = await runtime.learningAssetStore.findLatest(
+      cycle.examCycle.id,
+      LearningAssetKind.InterviewSession,
+      businessKey(sessionId)
+    );
+    return asset?.payload as unknown as InterviewSession | undefined;
   }
 
   async saveAiFeedback(sessionId: string, aiFeedback: string): Promise<InterviewSession | undefined> {
@@ -164,11 +183,20 @@ export class InterviewRepository {
       aiFeedback,
       updatedAt: Date.now()
     };
-    await database.put<InterviewSessionRecord>(STORES.interviewSessions, next);
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    await runtime.learningAssetStore.save({
+      examCycleId: cycle.examCycle.id,
+      kind: LearningAssetKind.InterviewSession,
+      businessKey: businessKey(sessionId),
+      title: `面试训练 · ${next.date}`,
+      payload: next as unknown as JsonObject
+    });
     return next;
   }
 
-  async enqueueAiReview(session: InterviewSession): Promise<EnqueueResult> {
+  async enqueueAiReview(session: InterviewSession): Promise<AgentTaskEnqueueResult> {
     return generationTaskService.enqueue({
       intent: 'interviewReview',
       title: '面试深度点评',
@@ -181,15 +209,28 @@ export class InterviewRepository {
   }
 
   async latest(limit = 5): Promise<InterviewSession[]> {
-    const project = await projectRepository.getActiveProject();
-    const sessions = await database.queryByIndex<InterviewSessionRecord>(STORES.interviewSessions, 'projectId', project.id);
-    return sessions.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit) as InterviewSession[];
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return [];
+    const assets = await runtime.learningAssetStore.list({
+      examCycleId: cycle.examCycle.id,
+      kinds: [LearningAssetKind.InterviewSession],
+      status: LearningAssetStatus.Ready,
+      limit: Math.min(500, Math.max(limit * 4, 20))
+    });
+    const latest = new Map<string, InterviewSession>();
+    assets.forEach((asset) => {
+      if (!latest.has(asset.businessKey)) {
+        latest.set(asset.businessKey, asset.payload as unknown as InterviewSession);
+      }
+    });
+    return Array.from(latest.values())
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, limit);
   }
 
   async stats(): Promise<InterviewStats> {
-    const project = await projectRepository.getActiveProject();
-    const sessions = (await database.queryByIndex<InterviewSessionRecord>(STORES.interviewSessions, 'projectId', project.id))
-      .sort((a, b) => b.createdAt - a.createdAt) as InterviewSession[];
+    const sessions = await this.latest(500);
     const averageScore = sessions.length ? Math.round(sessions.reduce((sum, session) => sum + session.score.total, 0) / sessions.length) : 0;
     return {
       totalSessions: sessions.length,

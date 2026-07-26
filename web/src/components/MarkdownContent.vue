@@ -28,10 +28,12 @@ const html = computed(() => {
     .replace(/\n?\s*（已中断）\s*$/g, '')
     .replace(/\n?\s*（已停止）\s*$/g, '')
     .trim();
-  let rendered = `<p class="markdown-stopped-empty">${escapeHtml(props.stoppedLabel)}</p>`;
-  if (clean) {
-    rendered = markdownEngine.render(clean).html;
+  if (!clean) {
+    return stopped
+      ? htmlPolicy.sanitize(`<p class="markdown-stopped-empty">${escapeHtml(props.stoppedLabel)}</p>`)
+      : '';
   }
+  const rendered = markdownEngine.render(clean).html;
   const withStatus = stopped && clean
     ? `${rendered}<p class="markdown-stopped-note">（${props.stoppedLabel}）</p>`
     : rendered;

@@ -57,6 +57,9 @@ export class SqliteOutboxRepository implements OutboxRepository {
     }
 
     return this.database.transaction(async (transaction) => {
+      const eventTypeClause = options.eventTypes?.length
+        ? ` AND event_type IN (${options.eventTypes.map(() => '?').join(', ')})`
+        : '';
       const candidates = await transaction.query<OutboxRow>(
         `SELECT id, aggregate_type, aggregate_id, event_type, payload_json,
                 occurred_at, attempt_count, idempotency_key
@@ -64,9 +67,10 @@ export class SqliteOutboxRepository implements OutboxRepository {
          WHERE published_at IS NULL
            AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
            AND (claimed_by IS NULL OR claim_expires_at <= ?)
+           ${eventTypeClause}
          ORDER BY occurred_at ASC
          LIMIT ?`,
-        [options.now, options.now, options.limit]
+        [options.now, options.now, ...(options.eventTypes ?? []), options.limit]
       );
       const claimed: OutboxEvent[] = [];
       for (const candidate of candidates) {

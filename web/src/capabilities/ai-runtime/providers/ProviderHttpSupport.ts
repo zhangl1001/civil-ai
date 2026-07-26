@@ -32,7 +32,7 @@ export async function assertProviderResponse(response: Response): Promise<void> 
 }
 
 export function assertNonEmptyProviderResult(response: ProviderResponse): ProviderResponse {
-  if (!response.text.trim()) {
+  if (!response.text.trim() && !response.toolCalls?.length) {
     throw new ProviderGatewayError('AI provider returned empty content', ProviderErrorKind.EmptyResponse);
   }
   return { ...response, text: response.text.trim() };

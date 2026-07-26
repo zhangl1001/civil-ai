@@ -15,15 +15,41 @@ const server = await createServer({
 });
 
 try {
-  const runtime = await server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts');
+  const [runtime, sqlitePrompt] = await Promise.all([
+    server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts'),
+    server.ssrLoadModule('/src/capabilities/ai-runtime/adapters/SqlitePromptRepository.ts')
+  ]);
   const registry = new runtime.PromptRegistry();
-  const { contentHash, ...hashPayload } = runtime.weakeningQuestionPromptV1;
-  const expectedHash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(hashPayload)).digest('hex')}`;
-  assert.equal(contentHash, expectedHash, `prompt content hash mismatch; expected ${expectedHash}`);
-  registry.register(runtime.weakeningQuestionPromptV1);
+  for (const prompt of [
+    runtime.structuredObjectivePromptV2,
+    runtime.errorDiagnosisPromptV1,
+    runtime.errorDiagnosisBatchPromptV1
+  ]) {
+    const { contentHash, ...hashPayload } = prompt;
+    const expectedHash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(hashPayload)).digest('hex')}`;
+    assert.equal(contentHash, expectedHash, `prompt ${prompt.promptCode} content hash mismatch; expected ${expectedHash}`);
+  }
+  for (const bundle of runtime.businessTutorPromptCatalog) {
+    const { contentHash: businessHash, ...businessHashPayload } = bundle;
+    const expectedBusinessHash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(businessHashPayload)).digest('hex')}`;
+    assert.equal(
+      businessHash,
+      expectedBusinessHash,
+      `prompt ${bundle.promptCode} content hash mismatch; expected ${expectedBusinessHash}`
+    );
+    registry.register(bundle);
+    const businessCompiled = new runtime.PromptCompiler(registry).compile(
+      bundle.promptCode,
+      {},
+      { audit: true }
+    );
+    assert(businessCompiled.system.startsWith('# 第1章'));
+    assert(businessCompiled.user.includes('"audit": true'));
+  }
+  registry.register(runtime.structuredObjectivePromptV2);
   const compiler = new runtime.PromptCompiler(registry);
   const compiled = compiler.compile(
-    runtime.weakeningQuestionPromptV1.promptCode,
+    runtime.structuredObjectivePromptV2.promptCode,
     {
       QUESTION_COUNT: 5,
       ASSESSMENT_ROLE: 'practice',
@@ -39,17 +65,116 @@ try {
   assert(compiled.system.includes('# 第6章 提交前质检'));
   assert(compiled.system.includes('本次生成 5 道题'));
   assert(!compiled.system.includes('{{QUESTION_COUNT}}'));
-  assert.equal(compiled.version, '1.1.0');
+  assert.equal(compiled.version, '2.0.0');
+  assert.equal(compiled.responseSchema.properties.questions.items.properties.capabilityCode, undefined);
+  assert(compiled.system.includes('由应用按照当前 GenerationSpec 统一注入'));
+  assert(compiled.system.includes('不要求凑齐全部 kind'));
+  assert.equal(compiled.responseSchema.properties.lecture.properties.sections.minItems, 1);
+  assert.equal(
+    compiled.responseSchema.properties.questions.items.properties.explanation.properties.pitfalls.minItems,
+    0
+  );
   assert.equal(compiled.responseSchema.type, 'object');
+
+  const essayGeneration = runtime.businessTutorPromptCatalog.find(
+    (item) => item.promptCode === runtime.BusinessTutorPromptCode.EssayGeneration
+  );
+  assert(essayGeneration);
+  assert.equal(
+    essayGeneration.responseSchema.properties.lecture.properties.clues.minItems,
+    undefined,
+    'teaching list length is an AI decision, not a structural requirement'
+  );
+  assert.equal(essayGeneration.responseSchema.properties.lecture.properties.clues.maxItems, 8);
+  const dailyDigest = runtime.businessTutorPromptCatalog.find(
+    (item) => item.promptCode === runtime.BusinessTutorPromptCode.DailyDigest
+  );
+  assert(dailyDigest);
+  const compiledDigest = compiler.compile(dailyDigest.promptCode, {}, { date: '2026-07-26', type: 'tips' }, dailyDigest.version);
+  assert(compiledDigest.system.includes('主题数量、栏目、篇幅和例子数量由信息价值与当天学习负担决定'));
+  assert(!compiledDigest.system.includes('3 至 5 个二级主题'));
+
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    const conflictRepository = {
+      find: async () => ({
+        ...runtime.structuredObjectivePromptV2,
+        contentHash: 'sha256:installed-different-content'
+      }),
+      install: async () => {
+        throw new Error('conflicting prompt metadata must not be overwritten');
+      }
+    };
+    const immediateUnitOfWork = {
+      run: async (work) => work({ transactionId: 'prompt-test' })
+    };
+    const conflictStatus = await new runtime.EnsurePromptBundle(
+      immediateUnitOfWork,
+      conflictRepository
+    ).execute(runtime.structuredObjectivePromptV2);
+    assert.equal(
+      conflictStatus,
+      runtime.PromptBundleEnsureStatus.Conflict,
+      'prompt metadata conflicts must not block app initialization'
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  registry.register(runtime.errorDiagnosisPromptV1);
+  const diagnosisPrompt = compiler.compile(
+    runtime.errorDiagnosisPromptV1.promptCode,
+    { SUBJECT: '行测判断推理' },
+    {
+      standardAnswer: 'B',
+      userAnswer: 'A',
+      explanation: 'B 直接削弱论证'
+    },
+    runtime.errorDiagnosisPromptV1.version
+  );
+  assert(diagnosisPrompt.system.includes('行测判断推理私教'));
+  assert(diagnosisPrompt.system.includes('只有题目和误选项证据时不得高于 0.55'));
+  registry.register(runtime.errorDiagnosisBatchPromptV1);
+  const diagnosisBatchPrompt = compiler.compile(
+    runtime.errorDiagnosisBatchPromptV1.promptCode,
+    { SUBJECT: '行测判断推理' },
+    {
+      items: [{
+        provisionalDiagnosisId: 'ErrorDiagnosisId:test',
+        evidence: { standardAnswer: 'B', userAnswer: 'A' }
+      }]
+    },
+    runtime.errorDiagnosisBatchPromptV1.version
+  );
+  assert(diagnosisBatchPrompt.system.includes('ID 一一对应且无重复'));
+  assert.equal(diagnosisBatchPrompt.responseSchema.properties.diagnoses.type, 'array');
   assert.throws(() => compiler.compile(
-    runtime.weakeningQuestionPromptV1.promptCode,
+    runtime.structuredObjectivePromptV2.promptCode,
     { QUESTION_COUNT: 5 },
     {}
   ), /missing variables/);
   assert.throws(() => registry.register({
-    ...runtime.weakeningQuestionPromptV1,
+    ...runtime.structuredObjectivePromptV2,
     contentHash: 'sha256:different-content'
   }), /different content/);
+  const promptInstallStatements = [];
+  const sqlitePromptRepository = new sqlitePrompt.SqlitePromptRepository(
+    {},
+    {
+      resolve() {
+        return {
+          async run(sql, params) {
+            promptInstallStatements.push({ sql, params });
+          }
+        };
+      }
+    }
+  );
+  await sqlitePromptRepository.install(runtime.errorDiagnosisPromptV1, { transactionId: 'prompt-install:test' });
+  assert.match(promptInstallStatements[0].sql, /ON CONFLICT\(prompt_code\) DO UPDATE/);
+  assert.match(promptInstallStatements[1].sql, /SELECT id FROM prompt_definitions WHERE prompt_code = \?/);
+  assert.equal(promptInstallStatements[1].params[1], runtime.errorDiagnosisPromptV1.promptCode);
   console.log('Prompt compiler verification passed.');
 } finally {
   await server.close();

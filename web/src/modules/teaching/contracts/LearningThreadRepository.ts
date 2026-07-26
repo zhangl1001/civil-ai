@@ -55,6 +55,7 @@ export interface LearningThreadAggregate {
 
 export interface LearningThreadRepository {
   create(thread: LearningThreadRecord, event: LearningThreadEventRecord, context: TransactionContext): Promise<void>;
+  restore(aggregate: LearningThreadAggregate, context: TransactionContext): Promise<void>;
   replace(
     thread: LearningThreadRecord,
     expectedVersion: number,

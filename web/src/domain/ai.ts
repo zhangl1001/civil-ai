@@ -20,7 +20,10 @@ export interface AIMessage {
   createdAt: number;
 }
 
-export type AIProviderType = 'openai' | 'anthropic' | 'custom';
+export type AIProviderType = 'openai' | 'anthropic';
+
+export const AI_TASK_CONCURRENCY_OPTIONS = [1, 2, 3] as const;
+export type AITaskConcurrency = typeof AI_TASK_CONCURRENCY_OPTIONS[number];
 
 export interface AIConfig {
   provider: AIProviderType;
@@ -28,5 +31,6 @@ export interface AIConfig {
   baseUrl?: string;
   model: string;
   streamingEnabled?: boolean;
+  maxConcurrentTasks: AITaskConcurrency;
   updatedAt: number;
 }

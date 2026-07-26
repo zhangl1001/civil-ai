@@ -8,6 +8,8 @@ export interface SingleChoiceOption {
 export interface SingleChoiceQuestionContent {
   readonly templateCode: 'single_choice';
   readonly schemaVersion: string;
+  readonly capabilityCode: string;
+  readonly materialGroupId?: string;
   readonly material?: ContentDocument;
   readonly prompt: ContentDocument;
   readonly options: readonly SingleChoiceOption[];
@@ -16,4 +18,3 @@ export interface SingleChoiceQuestionContent {
 }
 
 export type QuestionContent = SingleChoiceQuestionContent;
-

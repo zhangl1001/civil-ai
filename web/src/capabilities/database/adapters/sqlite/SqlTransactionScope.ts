@@ -1,5 +1,9 @@
 import type { SqlDatabase, SqlTransaction } from '../../contracts/SqlDatabase';
-import type { TransactionContext, UnitOfWork } from '../../contracts/UnitOfWork';
+import type {
+  TransactionContext,
+  UnitOfWork,
+  UnitOfWorkOptions
+} from '../../contracts/UnitOfWork';
 
 export class SqlTransactionScope {
   private readonly transactions = new WeakMap<TransactionContext, SqlTransaction>();
@@ -27,7 +31,7 @@ export class SqlUnitOfWork implements UnitOfWork {
     private readonly scope: SqlTransactionScope
   ) {}
 
-  run<T>(work: (context: TransactionContext) => Promise<T>): Promise<T> {
+  run<T>(work: (context: TransactionContext) => Promise<T>, options?: UnitOfWorkOptions): Promise<T> {
     return this.database.transaction(async (transaction) => {
       const context = this.scope.bind(transaction);
       try {
@@ -35,6 +39,15 @@ export class SqlUnitOfWork implements UnitOfWork {
       } finally {
         this.scope.release(context);
       }
-    });
+    }, options);
+  }
+
+  async runAutocommit<T>(work: (context: TransactionContext) => Promise<T>): Promise<T> {
+    const context = this.scope.bind(this.database);
+    try {
+      return await work(context);
+    } finally {
+      this.scope.release(context);
+    }
   }
 }

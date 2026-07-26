@@ -23,12 +23,26 @@ export interface CandidateHomeSnapshot {
   readonly scores: readonly CandidateHomeScore[];
 }
 
+export interface InitialDiagnosisEvidenceSummary {
+  readonly capabilityNodeId?: string;
+  readonly effectiveSample: number;
+  readonly confidence: number;
+}
+
+export interface InitialDiagnosisEvidencePort {
+  list(examCycleId: ExamCycleId): Promise<readonly InitialDiagnosisEvidenceSummary[]>;
+}
+
 export class GetCandidateHome {
-  constructor(private readonly candidateRepository: CandidateRepository) {}
+  constructor(
+    private readonly candidateRepository: CandidateRepository,
+    private readonly diagnosisEvidence?: InitialDiagnosisEvidencePort
+  ) {}
 
   async execute(): Promise<CandidateHomeSnapshot | undefined> {
     const cycle = await this.candidateRepository.findCurrentCycle();
     if (!cycle) return undefined;
+    const diagnosisEvidence = await this.diagnosisEvidence?.list(cycle.examCycle.id) ?? [];
 
     const scores = cycle.scoreTargets
       .filter((target) => target.status === 'active')
@@ -53,7 +67,7 @@ export class GetCandidateHome {
       examName: cycle.examCycle.examName || cycle.examCycle.examType,
       examDate: cycle.examCycle.examDate,
       phase: cycle.examCycle.phase,
-      diagnosisStatus: resolveDiagnosisStatus(scores),
+      diagnosisStatus: resolveDiagnosisStatus(scores, diagnosisEvidence),
       scores
     };
   }
@@ -70,7 +84,19 @@ function latestMeasurement(
     ), undefined);
 }
 
-function resolveDiagnosisStatus(scores: readonly CandidateHomeScore[]): InitialDiagnosisStatusCode {
+function resolveDiagnosisStatus(
+  scores: readonly CandidateHomeScore[],
+  evidence: readonly InitialDiagnosisEvidenceSummary[]
+): InitialDiagnosisStatusCode {
+  const effectiveSample = evidence.reduce((sum, item) => sum + item.effectiveSample, 0);
+  const reliableCapabilities = evidence.filter((item) => item.effectiveSample >= 2 && item.confidence >= 0.2);
+  const confidence = reliableCapabilities.length
+    ? reliableCapabilities.reduce((sum, item) => sum + item.confidence, 0) / reliableCapabilities.length
+    : 0;
+  if (effectiveSample >= 12 && reliableCapabilities.length >= 3 && confidence >= 0.3) {
+    return InitialDiagnosisStatus.Sufficient;
+  }
+  if (effectiveSample > 0) return InitialDiagnosisStatus.InProgress;
   if (!scores.length || scores.every((score) => score.evidenceLabel === 'missing')) {
     return InitialDiagnosisStatus.NotStarted;
   }

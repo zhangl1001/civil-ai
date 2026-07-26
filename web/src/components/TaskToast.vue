@@ -5,7 +5,7 @@
       :key="toast.id"
       :class="['task-toast', toast.kind]"
       type="button"
-      @click="openTask(toast.taskId)"
+      @click="openToast(toast)"
     >
       <span class="toast-icon">
         <component :is="toast.icon" />
@@ -19,20 +19,23 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
-import { CheckCircle2Icon, CircleAlertIcon, LoaderCircleIcon, PauseCircleIcon, PlayCircleIcon, RotateCcwIcon, XCircleIcon } from 'lucide-vue-next';
+import { CheckCircle2Icon, CircleAlertIcon, LoaderCircleIcon, PauseCircleIcon, PlayCircleIcon, XCircleIcon } from 'lucide-vue-next';
 import type { Component } from 'vue';
-import type { LocalTask, TaskStatus } from '@/domain/task';
-import { TASK_CHANGED_EVENT, taskStore } from '@/tasks/TaskStore';
-import { openTaskTarget } from '@/tasks/TaskNavigation';
-import { taskBrief } from '@/tasks/TaskPresenter';
+import type { AgentRunStatus, AgentRunView } from '@/modules/agent/public';
+import { useTaskCenterStore } from '@/stores/taskCenter';
+import { TaskToastLifecycle } from './TaskToastLifecycle';
 
 type ToastKind = 'info' | 'running' | 'success' | 'warning' | 'error';
 
 interface TaskToastItem {
   id: string;
   taskId: string;
+  agentRunId?: AgentRunView['id'];
+  actionRoute?: string;
+  actionParams?: AgentRunView['actionParams'];
   title: string;
   message: string;
   kind: ToastKind;
@@ -41,17 +44,18 @@ interface TaskToastItem {
 
 const toasts = ref<TaskToastItem[]>([]);
 const router = useRouter();
-const knownStatuses = new Map<string, TaskStatus>();
+const taskCenter = useTaskCenterStore();
+const { runs: agentRuns, initialized: taskCenterInitialized } = storeToRefs(taskCenter);
+const lifecycle = new TaskToastLifecycle();
 const timers = new Map<string, number>();
 
-function toastMeta(task: LocalTask): { title: string; kind: ToastKind; icon: Component } | null {
-  if (task.status === 'queued') return { title: '任务已加入', kind: 'info', icon: LoaderCircleIcon };
-  if (task.status === 'running') return { title: '任务开始执行', kind: 'running', icon: PlayCircleIcon };
-  if (task.status === 'retrying') return { title: '任务等待重试', kind: 'warning', icon: RotateCcwIcon };
-  if (task.status === 'paused') return { title: '任务已暂停', kind: 'warning', icon: PauseCircleIcon };
-  if (task.status === 'done') return { title: '任务已完成', kind: 'success', icon: CheckCircle2Icon };
-  if (task.status === 'failed') return { title: '任务失败', kind: 'error', icon: CircleAlertIcon };
-  if (task.status === 'cancelled') return { title: '任务已取消', kind: 'warning', icon: XCircleIcon };
+function toastMeta(status: AgentRunStatus): { title: string; kind: ToastKind; icon: Component } | null {
+  if (status === 'queued') return { title: '任务已加入', kind: 'info', icon: LoaderCircleIcon };
+  if (status === 'running') return { title: '任务开始执行', kind: 'running', icon: PlayCircleIcon };
+  if (status === 'waiting_user') return { title: '任务等待确认', kind: 'warning', icon: PauseCircleIcon };
+  if (status === 'completed') return { title: '任务已完成', kind: 'success', icon: CheckCircle2Icon };
+  if (status === 'failed') return { title: '任务失败', kind: 'error', icon: CircleAlertIcon };
+  if (status === 'cancelled') return { title: '任务已取消', kind: 'warning', icon: XCircleIcon };
   return null;
 }
 
@@ -62,54 +66,64 @@ function removeToast(id: string): void {
   timers.delete(id);
 }
 
-function pushToast(task: LocalTask): void {
-  const meta = toastMeta(task);
+function pushAgentToast(run: AgentRunView): void {
+  const meta = toastMeta(run.status);
   if (!meta) return;
-  const id = `${task.id}:${task.status}:${task.updatedAt}`;
-  const message = [task.title, taskBrief(task)].filter(Boolean).join(' · ');
+  const id = `${run.id}:${run.status}:${run.updatedAt}`;
   toasts.value = [
     {
       id,
-      taskId: task.id,
+      taskId: run.id,
+      agentRunId: run.id,
+      actionRoute: run.actionRoute,
+      actionParams: run.actionParams,
       title: meta.title,
-      message,
+      message: [run.title, run.detail].filter(Boolean).join(' · '),
       kind: meta.kind,
       icon: meta.icon
     },
-    ...toasts.value.filter((toast) => toast.taskId !== task.id || toast.title !== meta.title)
+    ...toasts.value.filter((toast) => toast.taskId !== run.id || toast.title !== meta.title)
   ].slice(0, 3);
-  const duration = task.status === 'failed' ? 5200 : 3200;
+  const duration = run.status === 'failed' ? 5200 : 3200;
   timers.set(id, window.setTimeout(() => removeToast(id), duration));
 }
 
-async function handleTaskChanged(event: Event): Promise<void> {
-  const taskId = (event as CustomEvent<{ taskId?: string }>).detail?.taskId;
-  if (!taskId) return;
-  const task = await taskStore.get(taskId);
-  if (!task) return;
-  const previous = knownStatuses.get(task.id);
-  if (previous === task.status) return;
-  knownStatuses.set(task.id, task.status);
-  pushToast(task);
+function openToast(toast: TaskToastItem): void {
+  removeToast(toast.id);
+  if (toast.actionRoute) {
+    const query = Object.fromEntries(
+      Object.entries(toast.actionParams || {})
+        .filter((entry): entry is [string, string | number | boolean] => (
+          typeof entry[1] === 'string' || typeof entry[1] === 'number' || typeof entry[1] === 'boolean'
+        ))
+        .map(([key, value]) => [key, String(value)])
+    );
+    void router.push({ path: toast.actionRoute, query });
+    return;
+  }
 }
 
-function openTask(taskId: string): void {
-  const toast = toasts.value.find((item) => item.taskId === taskId);
-  if (toast) removeToast(toast.id);
-  taskStore.get(taskId).then((task) => {
-    if (task) void openTaskTarget(task, router);
-  });
+function observeAgentRuns(ready: boolean, runs: readonly AgentRunView[]): void {
+  lifecycle.observe(ready, runs)
+    .filter((run) => run.targetResourceType !== 'chat_tool')
+    .forEach(pushAgentToast);
 }
 
 onMounted(() => {
-  window.addEventListener(TASK_CHANGED_EVENT, handleTaskChanged);
+  taskCenter.connect();
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener(TASK_CHANGED_EVENT, handleTaskChanged);
+  taskCenter.disconnect();
   timers.forEach((timer) => window.clearTimeout(timer));
   timers.clear();
 });
+
+watch(
+  [taskCenterInitialized, agentRuns],
+  ([ready, runs]) => observeAgentRuns(ready, runs),
+  { immediate: true }
+);
 </script>
 
 <style scoped>

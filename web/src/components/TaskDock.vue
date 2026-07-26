@@ -3,7 +3,7 @@
     <button
       :class="['task-bell', latest?.status, { running: hasRunning }]"
       type="button"
-      aria-label="打开任务消息"
+      aria-label="打开消息中心"
       @click="openPanel"
     >
       <BellIcon />
@@ -16,42 +16,31 @@
       <Transition name="task-overlay">
         <div v-if="isOpen" class="task-panel-overlay" @click.self="isOpen = false">
           <Transition name="task-panel" appear>
-            <section class="task-panel" role="dialog" aria-modal="true" aria-label="任务消息">
+            <section class="task-panel" role="dialog" aria-modal="true" aria-label="消息中心">
               <header class="task-panel-header">
                 <div class="task-panel-title">
-                  <strong>任务消息</strong>
+                  <strong>消息中心</strong>
                   <span>{{ panelSubtitle }}</span>
                 </div>
-                <button class="task-icon-action" type="button" aria-label="清除已完成任务消息" @click="tasksStore.clearCompleted()">
-                  <Trash2Icon />
+                <button class="task-text-action" type="button" aria-label="清空全部消息" @click="archiveAllMessages">
+                  清空
                 </button>
               </header>
 
-              <div v-if="panelTasks.length || panelAgentRuns.length" class="task-panel-list">
-                <article v-for="task in panelTasks" :key="task.id" :class="['task-row', task.status]" @click="openTask(task)">
-                  <span :class="['task-dot', task.status]" aria-hidden="true"></span>
-                  <div class="task-main">
-                    <strong>{{ task.title }}</strong>
-                    <span v-if="taskContent(task)">{{ taskContent(task) }}</span>
-                  </div>
-                  <em :class="['task-status', task.status]">{{ task.statusText }}</em>
-                  <button
-                    v-if="task.canCancel"
-                    class="task-cancel"
-                    type="button"
-                    @click.stop="tasksStore.cancel(task.id)"
-                  >
-                    取消
-                  </button>
-                  <button
-                    v-else
-                    class="task-clear"
-                    type="button"
-                    @click.stop="tasksStore.hideTask(task.id)"
-                  >
-                    清除
-                  </button>
-                </article>
+              <nav v-if="businessFilters.length > 1" class="message-filters" aria-label="消息业务分类">
+                <button
+                  v-for="filter in businessFilters"
+                  :key="filter.code"
+                  type="button"
+                  :class="{ active: selectedBusinessLine === filter.code }"
+                  @click="selectedBusinessLine = filter.code"
+                >
+                  {{ filter.label }}
+                </button>
+              </nav>
+
+              <div v-if="panelAgentRuns.length || filteredMessages.length" class="task-panel-list">
+                <div v-if="panelAgentRuns.length" class="message-group-label">进行中的任务</div>
                 <article v-for="run in panelAgentRuns" :key="run.id" :class="['task-row', agentStatusClass(run.status)]" @click="openAgentRun(run)">
                   <span :class="['task-dot', agentStatusClass(run.status)]" aria-hidden="true"></span>
                   <div class="task-main">
@@ -68,8 +57,33 @@
                     取消
                   </button>
                 </article>
+                <div v-if="filteredMessages.length" class="message-group-label">业务消息</div>
+                <article
+                  v-for="message in filteredMessages"
+                  :key="message.id"
+                  :class="['task-row', 'message-row', message.severity, { unread: message.status === 'unread' }]"
+                  @click="openMessage(message)"
+                >
+                  <span :class="['task-dot', message.severity]" aria-hidden="true"></span>
+                  <div class="task-main">
+                    <span class="message-meta">
+                      {{ businessLineLabel[message.businessLine] }}
+                      · {{ categoryLabel[message.category] }}
+                    </span>
+                    <strong>{{ message.title }}</strong>
+                    <span>{{ message.content }}</span>
+                  </div>
+                  <button
+                    class="task-clear"
+                    type="button"
+                    aria-label="归档消息"
+                    @click.stop="archiveMessage(message.id)"
+                  >
+                    <Trash2Icon />
+                  </button>
+                </article>
               </div>
-              <div v-else class="task-empty">暂无任务消息</div>
+              <div v-else class="task-empty">暂无消息</div>
             </section>
           </Transition>
         </div>
@@ -80,83 +94,118 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useRouter } from 'vue-router';
 import { BellIcon, Trash2Icon } from 'lucide-vue-next';
-import { useTasksStore } from '@/stores/tasks';
-import { taskContentText, toTaskViewModel, visibleTaskRows, type TaskViewModel } from '@/tasks/TaskPresenter';
-import { openTaskTarget } from '@/tasks/TaskNavigation';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import type { AgentRunId } from '@/kernel/public';
 import type { AgentRunStatus, AgentRunView } from '@/modules/agent/public';
+import { useTaskCenterStore } from '@/stores/taskCenter';
+import {
+  MessageBusinessLineLabel,
+  MessageCategoryLabel,
+  type MessageBusinessLineCode,
+  type SystemMessageRecord
+} from '@/modules/message-center/public';
 
-const tasksStore = useTasksStore();
 const router = useRouter();
+const taskCenter = useTaskCenterStore();
+const { runs: agentRuns, messages, unreadCount } = storeToRefs(taskCenter);
 const isOpen = ref(false);
-const agentRuns = ref<readonly AgentRunView[]>([]);
-let agentPoll: number | undefined;
+const selectedBusinessLine = ref<'all' | MessageBusinessLineCode>('all');
+const businessLineLabel = MessageBusinessLineLabel;
+const categoryLabel = MessageCategoryLabel;
 defineProps<{
   inline?: boolean;
 }>();
 
 onMounted(() => {
-  void tasksStore.init();
-  void refreshAgentRuns();
-  agentPoll = window.setInterval(() => {
-    void refreshAgentRuns();
-  }, 6000);
+  taskCenter.connect();
 });
 
 onBeforeUnmount(() => {
-  if (agentPoll) window.clearInterval(agentPoll);
+  taskCenter.disconnect();
 });
 
-const latest = computed(() => tasksStore.latestTask);
-const activeCount = computed(() => tasksStore.activeTasks.length);
-const activeAgentRuns = computed(() => agentRuns.value.filter((run) => run.isActive));
-const hasRunning = computed(() => tasksStore.activeTasks.some((task) => ['running', 'retrying', 'queued'].includes(task.status)) || activeAgentRuns.value.length > 0);
-const unreadCount = computed(() => tasksStore.unreadCount());
-const bellCount = computed(() => Math.min(activeCount.value + activeAgentRuns.value.length || unreadCount.value, 9));
-const panelTasks = computed(() => visibleTaskRows(tasksStore.visibleTasks, 6).map(toTaskViewModel));
-const panelAgentRuns = computed(() => agentRuns.value.slice(0, Math.max(0, 6 - panelTasks.value.length)));
+const taskAgentRuns = computed(() => agentRuns.value.filter((run) => run.targetResourceType !== 'chat_tool'));
+const latest = computed(() => taskAgentRuns.value[0]);
+const activeAgentRuns = computed(() => taskAgentRuns.value.filter((run) => run.isActive));
+const hasRunning = computed(() => activeAgentRuns.value.length > 0);
+const bellCount = computed(() => Math.min(activeAgentRuns.value.length + unreadCount.value, 9));
+const panelAgentRuns = computed(() => taskAgentRuns.value.filter((run) => run.isActive).slice(0, 6));
+const filteredMessages = computed(() => messages.value
+  .filter((message) => selectedBusinessLine.value === 'all' || message.businessLine === selectedBusinessLine.value)
+  .slice(0, 20));
+const businessFilters = computed(() => {
+  const present = new Set(messages.value.map((message) => message.businessLine));
+  return [
+    { code: 'all' as const, label: '全部' },
+    ...Object.entries(MessageBusinessLineLabel)
+      .filter(([code]) => present.has(code as MessageBusinessLineCode))
+      .map(([code, label]) => ({ code: code as MessageBusinessLineCode, label }))
+  ];
+});
 const panelLatestText = computed(() => {
-  if (!latest.value && agentRuns.value[0]) return [agentRuns.value[0].title, agentRuns.value[0].detail, agentRuns.value[0].statusText].filter(Boolean).join(' · ');
-  const task = latest.value;
-  if (!task) return '';
-  const view = toTaskViewModel(task);
-  const detail = taskContent(view);
-  return [view.title, detail, view.statusText].filter(Boolean).join(' · ');
+  const run = latest.value;
+  return run ? [run.title, run.detail, run.statusText].filter(Boolean).join(' · ') : '';
 });
 const panelSubtitle = computed(() => {
-  const totalActive = activeCount.value + activeAgentRuns.value.length;
+  const totalActive = activeAgentRuns.value.length;
   if (totalActive) return `${totalActive} 个任务进行中`;
   return panelLatestText.value || '最近任务';
 });
 
 function openPanel() {
   isOpen.value = true;
-  tasksStore.markVisibleRead();
   void refreshAgentRuns();
-}
-
-async function openTask(task: TaskViewModel) {
-  const opened = await openTaskTarget(task.raw, router);
-  if (opened) {
-    isOpen.value = false;
-    tasksStore.markVisibleRead();
-  }
-}
-
-function taskContent(task: TaskViewModel): string {
-  return taskContentText(task);
+  void markMessagesRead();
 }
 
 async function refreshAgentRuns() {
+  await taskCenter.refresh();
+}
+
+async function refreshMessages() {
+  await taskCenter.refresh();
+}
+
+async function markMessagesRead() {
   try {
     const runtime = await initializeTutorRuntime();
-    agentRuns.value = await runtime.getAgentRunViews.execute({ limit: 6 });
+    await runtime.messageCenter.markAllRead();
+    await refreshMessages();
   } catch {
-    agentRuns.value = [];
+    // The next poll retries without blocking the task center.
   }
+}
+
+async function archiveMessage(messageId: string) {
+  const runtime = await initializeTutorRuntime();
+  await runtime.messageCenter.archive(messageId);
+  await refreshMessages();
+}
+
+async function archiveAllMessages() {
+  const runtime = await initializeTutorRuntime();
+  await runtime.messageCenter.archiveAll();
+  await refreshMessages();
+}
+
+async function openMessage(message: SystemMessageRecord) {
+  const runtime = await initializeTutorRuntime();
+  await runtime.messageCenter.markRead(message.id);
+  if (message.actionRoute) {
+    const query = Object.fromEntries(
+      Object.entries(message.actionParams)
+        .filter((entry): entry is [string, string | number | boolean] => (
+          typeof entry[1] === 'string' || typeof entry[1] === 'number' || typeof entry[1] === 'boolean'
+        ))
+        .map(([key, value]) => [key, String(value)])
+    );
+    await router.push({ path: message.actionRoute, query });
+    isOpen.value = false;
+  }
+  await refreshMessages();
 }
 
 async function cancelAgentRun(runId: AgentRunId) {
@@ -166,11 +215,14 @@ async function cancelAgentRun(runId: AgentRunId) {
 }
 
 async function openAgentRun(run: AgentRunView) {
-  if (!run.linkedTaskId) return;
-  const task = tasksStore.tasks.find((item) => item.id === run.linkedTaskId);
-  if (!task) return;
-  const opened = await openTaskTarget(task, router);
-  if (opened) isOpen.value = false;
+  if (run.actionRoute) {
+    await router.push({
+      path: run.actionRoute,
+      query: Object.fromEntries(Object.entries(run.actionParams).map(([key, value]) => [key, String(value)]))
+    });
+    isOpen.value = false;
+    return;
+  }
 }
 
 function agentStatusClass(status: AgentRunStatus): string {
@@ -329,22 +381,51 @@ function agentStatusClass(status: AgentRunStatus): string {
   white-space: nowrap;
 }
 
-.task-icon-action {
-  width: 30px;
+.task-text-action {
+  width: auto;
   height: 30px;
+  padding: 0 9px;
   border: none;
-  border-radius: 12px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--text-secondary-color);
   background: rgba(var(--color-ink-rgb), .045);
+  font: inherit;
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-medium);
   flex-shrink: 0;
 }
 
-.task-icon-action svg {
-  width: 16px;
-  height: 16px;
+.message-filters {
+  display: flex;
+  gap: 6px;
+  padding: 5px 12px 7px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.message-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.message-filters button {
+  min-width: max-content;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  color: var(--text-secondary-color);
+  background: rgba(var(--color-ink-rgb), .045);
+  font: inherit;
+  font-size: var(--type-size-micro);
+}
+
+.message-filters button.active {
+  color: var(--primary-color);
+  background: rgba(var(--color-brand-rgb), .1);
+  font-weight: var(--type-weight-semibold);
 }
 
 .task-panel-list {
@@ -355,6 +436,38 @@ function agentStatusClass(status: AgentRunStatus): string {
   overflow-y: auto;
   padding: 10px 10px calc(12px + env(safe-area-inset-bottom));
   overscroll-behavior: contain;
+}
+
+.message-group-label {
+  padding: 4px 8px 1px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+}
+
+.message-row.unread {
+  background: rgba(var(--color-brand-rgb), .045);
+}
+
+.task-dot.info {
+  background: var(--primary-color);
+}
+
+.task-dot.success {
+  background: var(--green-color);
+}
+
+.task-dot.warning {
+  background: #e8960a;
+}
+
+.task-dot.error {
+  background: var(--red-color);
+}
+
+.task-main .message-meta {
+  color: var(--primary-color);
+  font-size: var(--type-size-micro);
 }
 .task-empty {
   padding: 26px 16px;
@@ -488,6 +601,11 @@ function agentStatusClass(status: AgentRunStatus): string {
   font-weight: var(--type-weight-semibold);
   font-family: inherit;
   flex-shrink: 0;
+}
+
+.task-clear svg {
+  width: 14px;
+  height: 14px;
 }
 
 .task-overlay-enter-active,

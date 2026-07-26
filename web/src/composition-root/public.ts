@@ -1,4 +1,4 @@
-// Concrete adapters are registered here as new vertical slices replace legacy runtime paths.
+// Concrete adapters are registered here; business modules depend only on their public ports.
 export { createNativeTutorDatabase } from './database/createNativeTutorDatabase';
 export type { NativeTutorDatabaseRuntime } from './database/createNativeTutorDatabase';
 export { createWebTutorDatabase } from './database/createWebTutorDatabase';
@@ -7,3 +7,10 @@ export { createTutorDatabaseRuntime } from './database/createTutorDatabaseRuntim
 export type { TutorDatabaseRuntime } from './database/createTutorDatabaseRuntime';
 export { getTutorRuntime, initializeTutorRuntime } from './TutorRuntimeProvider';
 export { createConfiguredProviderGateway } from './ai/createConfiguredProviderGateway';
+export { agentWorkerCoordinator } from './agent/AgentWorkerCoordinator';
+export {
+  ConfiguredAIClient,
+  configuredAIClient,
+  type AITextMessage,
+  type AITextRequestOptions
+} from './ai/ConfiguredAIClient';

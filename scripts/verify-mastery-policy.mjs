@@ -93,15 +93,116 @@ try {
     async updateItemByReviewQueueId(id, patch) {
       const item = planItems.get(id);
       if (!item) return undefined;
-      const updated = { ...item, status: patch.status, actualMinutes: patch.actualMinutes ?? item.actualMinutes };
+      const updated = {
+        ...item,
+        status: patch.status,
+        actualMinutes: patch.actualMinutes ?? item.actualMinutes,
+        resultSummary: patch.resultSummary ?? item.resultSummary,
+        failureCode: patch.failureCode,
+        failureMessage: patch.failureMessage,
+        finishedAt: patch.finishedAt
+      };
       planItems.set(id, updated);
       return updated;
     }
   };
-  const updatePlanItem = new planning.UpdateDailyPlanItemStatus(unitOfWork, planRepository);
+  const updatePlanItem = new planning.UpdateDailyPlanItemStatus(unitOfWork, planRepository, clock);
   assert.equal((await updatePlanItem.execute({ reviewQueueItemId: 'review:state', status: 'in_progress' })).status, 'in_progress');
-  const finishedPlanItem = await updatePlanItem.execute({ reviewQueueItemId: 'review:state', status: 'completed', actualMinutes: 8 });
+  const failedPlanItem = await updatePlanItem.execute({
+    reviewQueueItemId: 'review:state',
+    status: 'pending',
+    failureCode: 'provider_timeout',
+    failureMessage: '模型响应超时'
+  });
+  assert.equal(failedPlanItem.failureCode, 'provider_timeout');
+  const finishedPlanItem = await updatePlanItem.execute({
+    reviewQueueItemId: 'review:state',
+    status: 'completed',
+    actualMinutes: 8,
+    resultSummary: { correct: 3, total: 4 }
+  });
   assert.equal(finishedPlanItem.status, 'completed');
   assert.equal(finishedPlanItem.actualMinutes, 8);
+  assert.ok(finishedPlanItem.finishedAt);
+
+  let currentPlan = {
+    plan: {
+      id: 'daily:1', examCycleId: 'cycle:1', planDate: '2027-01-15', version: 1, status: 'active',
+      phase: 'foundation', availableMinutes: 35, decisionSummary: 'initial', decisionFactors: {},
+      createdBy: 'system', createdAt: now
+    },
+    items: [
+      { ...finishedPlanItem, id: 'done:1', dailyPlanId: 'daily:1', reviewQueueItemId: undefined },
+      { ...finishedPlanItem, id: 'pending:1', dailyPlanId: 'daily:1', status: 'pending', actualMinutes: 0, finishedAt: undefined }
+    ]
+  };
+  const replanRepository = {
+    async findCurrent() { return currentPlan; },
+    async replaceCurrent(next, previous) {
+      assert.equal(previous.id, currentPlan.plan.id);
+      currentPlan = next;
+    }
+  };
+  let generatedId = 0;
+  const ids = { next(type) { generatedId += 1; return `${type}:${generatedId}`; } };
+  const persistPlan = new planning.PersistDailyPlanProposal(unitOfWork, replanRepository, clock, ids);
+  const rebalance = new planning.RebalanceDailyPlanAfterLearning(
+    {
+      async findCycle() {
+        return {
+          examCycle: { id: 'cycle:1', phase: 'foundation', timeZone: 'Asia/Shanghai' },
+          studyConstraints: { weekdayMinutes: 35, weekendMinutes: 35 }
+        };
+      }
+    },
+    replanRepository,
+    {
+      async execute({ examCycleId, availableMinutes }) {
+        return {
+          examCycleId,
+          availableMinutes,
+          plannedMinutes: 12,
+          items: [{ capabilityNodeId: 'node:next', action: 'review', targetMinutes: 12, reasonCode: 'latest_evidence' }],
+          rationale: ['根据最新作答结果调整剩余安排。']
+        };
+      }
+    },
+    persistPlan,
+    { now() { return Date.parse('2027-01-15T08:00:00+08:00'); } }
+  );
+  const rebalanced = await rebalance.execute({
+    examCycleId: 'cycle:1',
+    reason: planning.DailyPlanRebalanceReason.LearningResult,
+    sourceId: 'session:1'
+  });
+  assert.equal(rebalanced.plan.version, 2);
+  assert.equal(rebalanced.items[0].status, 'completed');
+  assert.equal(rebalanced.items[1].capabilityNodeId, 'node:next');
+  assert.equal(rebalanced.plan.decisionFactors.rebalanceReason, 'learning_result');
+
+  const proactive = await server.ssrLoadModule('/src/modules/proactive/public.ts');
+  const preferences = {
+    id: 'preferences:1', examCycleId: 'cycle:1', teachingOrder: 'explain_first', explanationDepth: 'balanced',
+    proactiveLevel: 'balanced', companionTone: 'supportive', quietHours: [], accessibility: {}, extension: {},
+    updatedAt: now, version: 1
+  };
+  const allowed = await proactive.decideProactiveDelivery({
+    preferences, signalType: proactive.ProactiveSignalType.ReviewDue, priority: 85, now,
+    repository: { async findLatestByType() { return undefined; } }
+  });
+  assert.equal(allowed.allowed, true);
+  const cooledDown = await proactive.decideProactiveDelivery({
+    preferences, signalType: proactive.ProactiveSignalType.ReviewDue, priority: 85, now,
+    repository: { async findLatestByType() { return { createdAt: now - 60 * 60 * 1000 }; } }
+  });
+  assert.equal(cooledDown.allowed, false);
+  const quiet = await proactive.decideProactiveDelivery({
+    preferences: { ...preferences, proactiveLevel: 'quiet' },
+    signalType: proactive.ProactiveSignalType.DailyCheckin,
+    priority: 45,
+    now,
+    repository: { async findLatestByType() { return undefined; } }
+  });
+  assert.equal(quiet.reason, 'quiet_level');
   console.log('Mastery policy verification passed.');
 } finally { await server.close(); }

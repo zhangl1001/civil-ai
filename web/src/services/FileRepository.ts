@@ -1,16 +1,29 @@
-import { database } from '@/db/database';
-import { fileId, STORES, type FileRecord } from '@/db/schema';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import { LearningAssetKind } from '@/modules/content/public';
+
+export interface FileRecord {
+  readonly id: string;
+  readonly projectId: string;
+  readonly path: string;
+  readonly content: string;
+  readonly contentType: 'json' | 'text';
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
 
 function contentTypeForPath(path: string): FileRecord['contentType'] {
-  if (/\.json$/i.test(path)) return 'json';
-  if (/\.md$/i.test(path)) return 'markdown';
-  return 'text';
+  return /\.json$/i.test(path) ? 'json' : 'text';
 }
 
 export class FileRepository {
   async readText(projectId: string, path: string): Promise<string> {
-    const record = await database.get<FileRecord>(STORES.files, fileId(projectId, path));
-    return record?.content || '';
+    const { runtime, cycle } = await currentCycle(projectId);
+    const asset = await runtime.learningAssetStore.findLatest(
+      cycle.examCycle.id,
+      LearningAssetKind.ChatAttachment,
+      path
+    );
+    return typeof asset?.payload.content === 'string' ? asset.payload.content : '';
   }
 
   async readJson<T>(projectId: string, path: string, fallback: T): Promise<T> {
@@ -24,29 +37,63 @@ export class FileRepository {
   }
 
   async writeText(projectId: string, path: string, content: string): Promise<FileRecord> {
-    const id = fileId(projectId, path);
-    const existing = await database.get<FileRecord>(STORES.files, id);
-    const now = Date.now();
-    const record: FileRecord = {
-      id,
+    const { runtime, cycle } = await currentCycle(projectId);
+    const asset = await runtime.learningAssetStore.save({
+      examCycleId: cycle.examCycle.id,
+      kind: LearningAssetKind.ChatAttachment,
+      businessKey: path,
+      title: path.split('/').at(-1) || '聊天附件',
+      payload: {
+        projectId,
+        path,
+        content,
+        contentType: contentTypeForPath(path)
+      }
+    });
+    return {
+      id: asset.id,
       projectId,
       path,
       content,
       contentType: contentTypeForPath(path),
-      createdAt: existing?.createdAt || now,
-      updatedAt: now
+      createdAt: Number(asset.createdAt),
+      updatedAt: Number(asset.updatedAt)
     };
-    await database.put<FileRecord>(STORES.files, record);
-    return record;
   }
 
   async list(projectId: string): Promise<FileRecord[]> {
-    return database.queryByIndex<FileRecord>(STORES.files, 'projectId', projectId);
+    const { runtime, cycle } = await currentCycle(projectId);
+    const assets = await runtime.learningAssetStore.list({
+      examCycleId: cycle.examCycle.id,
+      kinds: [LearningAssetKind.ChatAttachment],
+      limit: 500
+    });
+    return assets.map((asset) => ({
+      id: asset.id,
+      projectId,
+      path: String(asset.payload.path || asset.businessKey),
+      content: String(asset.payload.content || ''),
+      contentType: asset.payload.contentType === 'json' ? 'json' : 'text',
+      createdAt: Number(asset.createdAt),
+      updatedAt: Number(asset.updatedAt)
+    }));
   }
 
   async delete(projectId: string, path: string): Promise<void> {
-    await database.delete(STORES.files, fileId(projectId, path));
+    const { runtime, cycle } = await currentCycle(projectId);
+    await runtime.learningAssetStore.retireBusinessKey(
+      cycle.examCycle.id,
+      LearningAssetKind.ChatAttachment,
+      path
+    );
   }
+}
+
+async function currentCycle(projectId: string) {
+  const runtime = await initializeTutorRuntime();
+  const cycle = await runtime.candidateRepository.findCurrentCycle();
+  if (!cycle || cycle.project.id !== projectId) throw new Error('当前备考档案不存在');
+  return { runtime, cycle };
 }
 
 export const fileRepository = new FileRepository();

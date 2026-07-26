@@ -3,11 +3,17 @@ import type { SqlTransactionScope } from '@/capabilities/database/adapters/sqlit
 import type { TransactionContext } from '@/capabilities/database/public';
 import type { AiInvocationId, AgentRunId, ExamCycleId, InstantMs, LearningThreadId, PromptVersionId } from '@/kernel/public';
 import type { AgentInvocationRecord, AgentRunAggregate, AgentRunClaimOptions, AgentRunEventRecord, AgentRunRecord, AgentRunRecoveryOptions, AgentRunRepository } from '../contracts/AgentRunRepository';
-import type { AgentRunStatus, AgentRunType } from '../domain/AgentRunCodes';
+import {
+  AgentWorkPool,
+  resolveAgentWorkPool,
+  type AgentRunStatus,
+  type AgentRunType,
+  type AgentWorkPool as AgentWorkPoolValue
+} from '../domain/AgentRunCodes';
 import type { InvocationValidationStatus } from '@/capabilities/ai-runtime/public';
 
 interface RunRow extends SqlRow {
-  id: string; run_type: AgentRunType; status: AgentRunStatus; exam_cycle_id: string | null; learning_thread_id: string | null;
+  id: string; run_type: AgentRunType; work_pool: AgentWorkPoolValue; status: AgentRunStatus; exam_cycle_id: string | null; learning_thread_id: string | null;
   target_resource_type: string | null; target_resource_id: string | null; input_snapshot_json: string; checkpoint_json: string;
   attempt_count: number; next_run_at: number | null; lease_owner: string | null; lease_expires_at: number | null; error_code: string | null; cancellation_reason: string | null;
   idempotency_key: string; created_at: number; updated_at: number; completed_at: number | null; version: number;
@@ -27,8 +33,8 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
   constructor(private readonly database: SqlDatabase, private readonly transactionScope: SqlTransactionScope) {}
   async create(run: AgentRunRecord, created: AgentRunEventRecord, context: TransactionContext): Promise<void> {
     const tx = this.transactionScope.resolve(context);
-    await tx.run(`INSERT INTO tutor_agent_runs(id, run_type, status, exam_cycle_id, learning_thread_id, target_resource_type, target_resource_id, input_snapshot_json, checkpoint_json, attempt_count, next_run_at, lease_owner, lease_expires_at, error_code, cancellation_reason, idempotency_key, created_at, updated_at, completed_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [run.id, run.runType, run.status, run.examCycleId ?? null, run.learningThreadId ?? null, run.targetResourceType ?? null, run.targetResourceId ?? null, JSON.stringify(run.inputSnapshot), JSON.stringify(run.checkpoint), run.attemptCount, run.nextRunAt ?? null, run.leaseOwner ?? null, run.leaseExpiresAt ?? null, run.errorCode ?? null, run.cancellationReason ?? null, run.idempotencyKey, run.createdAt, run.updatedAt, run.completedAt ?? null, run.version]);
+    await tx.run(`INSERT INTO tutor_agent_runs(id, run_type, work_pool, status, exam_cycle_id, learning_thread_id, target_resource_type, target_resource_id, input_snapshot_json, checkpoint_json, attempt_count, next_run_at, lease_owner, lease_expires_at, error_code, cancellation_reason, idempotency_key, created_at, updated_at, completed_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [run.id, run.runType, run.workPool ?? resolveAgentWorkPool(run.runType, run.targetResourceType, run.inputSnapshot), run.status, run.examCycleId ?? null, run.learningThreadId ?? null, run.targetResourceType ?? null, run.targetResourceId ?? null, JSON.stringify(run.inputSnapshot), JSON.stringify(run.checkpoint), run.attemptCount, run.nextRunAt ?? null, run.leaseOwner ?? null, run.leaseExpiresAt ?? null, run.errorCode ?? null, run.cancellationReason ?? null, run.idempotencyKey, run.createdAt, run.updatedAt, run.completedAt ?? null, run.version]);
     await insertEvent(tx, created);
   }
   async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext): Promise<void> {
@@ -41,6 +47,8 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
   }
   async findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined> { return this.find('id = ?', [runId]); }
   async findByIdempotencyKey(key: string): Promise<AgentRunAggregate | undefined> { return this.find('idempotency_key = ?', [key]); }
+  async findLatestByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{return this.find('target_resource_type = ? AND target_resource_id = ? ORDER BY updated_at DESC, id DESC',[type,id]);}
+  async findActiveByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{return this.find("target_resource_type = ? AND target_resource_id = ? AND status IN ('queued','running','waiting_user') ORDER BY updated_at DESC, id DESC",[type,id]);}
   async appendInvocation(value: AgentInvocationRecord, context: TransactionContext): Promise<void> {
     await this.transactionScope.resolve(context).run(`INSERT INTO tutor_agent_invocations(id, agent_run_id, provider, model, model_role, prompt_version_id, tool_schema_version, request_hash, provider_request_id, input_tokens, output_tokens, latency_ms, finish_reason, validation_status, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [value.id, value.agentRunId, value.provider, value.model, value.modelRole, value.promptVersionId ?? null, value.toolSchemaVersion ?? null, value.requestHash, value.providerRequestId ?? null, value.inputTokens ?? null, value.outputTokens ?? null, value.latencyMs ?? null, value.finishReason ?? null, value.validationStatus, value.errorCode ?? null, value.createdAt]);
@@ -56,6 +64,17 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
   async listInvocations(runId: AgentRunId): Promise<readonly AgentInvocationRecord[]> {
     return (await this.database.query<InvocationRow>('SELECT * FROM tutor_agent_invocations WHERE agent_run_id = ? ORDER BY created_at, id', [runId])).map(mapInvocation);
   }
+  async countInvocations(runIds: readonly AgentRunId[]): Promise<Readonly<Record<string, number>>> {
+    if (!runIds.length) return {};
+    const rows = await this.database.query<{ agent_run_id: string; total: number }>(
+      `SELECT agent_run_id,COUNT(*) AS total
+       FROM tutor_agent_invocations
+       WHERE agent_run_id IN (${runIds.map(() => '?').join(',')})
+       GROUP BY agent_run_id`,
+      runIds
+    );
+    return Object.fromEntries(rows.map((row) => [row.agent_run_id, row.total]));
+  }
   async listRecent(limit: number): Promise<readonly AgentRunAggregate[]> {
     assertRecentLimit(limit);
     const rows = await this.database.query<RunRow>('SELECT * FROM tutor_agent_runs ORDER BY updated_at DESC, id DESC LIMIT ?', [limit]);
@@ -66,10 +85,39 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
     const rows = await this.database.query<RunRow>(`SELECT * FROM tutor_agent_runs WHERE status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?) ORDER BY updated_at, id LIMIT ?`, [now, limit]);
     return Promise.all(rows.map((row) => this.load(row)));
   }
+  async nextWorkAt(now: InstantMs, workPools?: readonly AgentWorkPoolValue[]): Promise<InstantMs | undefined> {
+    const pools = normalizeWorkPools(workPools);
+    const poolFilter = pools.length ? ` AND work_pool IN (${pools.map(() => '?').join(',')})` : '';
+    const rows = await this.database.query<{ next_work_at: number | null }>(
+      `SELECT MIN(
+         CASE
+           WHEN status='queued' THEN COALESCE(next_run_at, ?)
+           WHEN status='running' THEN COALESCE(lease_expires_at, ?)
+         END
+       ) AS next_work_at
+       FROM tutor_agent_runs
+       WHERE status IN ('queued','running')${poolFilter}`,
+      [now, now, ...pools]
+    );
+    return rows[0]?.next_work_at === null || rows[0]?.next_work_at === undefined
+      ? undefined
+      : rows[0].next_work_at as InstantMs;
+  }
   async claimRunnable(options: AgentRunClaimOptions): Promise<readonly AgentRunAggregate[]> {
     if (!options.workerId.trim() || !Number.isInteger(options.limit) || options.limit < 1 || options.limit > 3 || options.eventIds.length < options.limit) throw new Error('Invalid agent run claim options');
+    const pools = normalizeWorkPools(options.workPools);
+    const poolFilter = pools.length ? ` AND work_pool IN (${pools.map(() => '?').join(',')})` : '';
+    const poolOrder = pools.length
+      ? `CASE work_pool ${pools.map(() => 'WHEN ? THEN ?').join(' ')} ELSE ${pools.length} END,`
+      : '';
+    const poolOrderParameters = pools.flatMap((pool, index) => [pool, index]);
     return this.database.transaction(async (tx) => {
-      const rows = await tx.query<RunRow>(`SELECT * FROM tutor_agent_runs WHERE status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?) ORDER BY updated_at, id LIMIT ?`, [options.now, options.limit]);
+      const rows = await tx.query<RunRow>(
+        `SELECT * FROM tutor_agent_runs
+         WHERE status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?)${poolFilter}
+         ORDER BY ${poolOrder} updated_at, id LIMIT ?`,
+        [options.now, ...pools, ...poolOrderParameters, options.limit]
+      );
       const claimed: AgentRunAggregate[] = [];
       for (let index = 0; index < rows.length; index += 1) {
         const row = rows[index];
@@ -81,6 +129,13 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
       }
       return claimed;
     });
+  }
+  async renewLease(runId:AgentRunId,workerId:string,leaseExpiresAt:InstantMs):Promise<boolean> {
+    const result=await this.database.run(
+      "UPDATE tutor_agent_runs SET lease_expires_at=? WHERE id=? AND status='running' AND lease_owner=?",
+      [leaseExpiresAt,runId,workerId]
+    );
+    return result.changes===1;
   }
   async recoverExpiredLeases(options: AgentRunRecoveryOptions): Promise<readonly AgentRunAggregate[]> {
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100 || options.eventIds.length < options.limit) throw new Error('Invalid agent run recovery options');
@@ -102,7 +157,14 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
 }
 function assertRecentLimit(limit: number): void { if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new RangeError('Agent recent limit must be between 1 and 50'); }
 function insertEvent(tx: ReturnType<SqlTransactionScope['resolve']>, value: AgentRunEventRecord): Promise<unknown> { return tx.run('INSERT INTO tutor_agent_run_events(id, agent_run_id, event_type, from_status, to_status, reason_code, payload_json, occurred_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [value.id, value.agentRunId, value.eventType, value.fromStatus ?? null, value.toStatus, value.reasonCode, JSON.stringify(value.payload), value.occurredAt, value.idempotencyKey]); }
-function mapRun(r: RunRow): AgentRunRecord { return { id:r.id as AgentRunId, runType:r.run_type, status:r.status, examCycleId:r.exam_cycle_id as ExamCycleId | null ?? undefined, learningThreadId:r.learning_thread_id as LearningThreadId | null ?? undefined, targetResourceType:r.target_resource_type??undefined, targetResourceId:r.target_resource_id??undefined, inputSnapshot:json(r.input_snapshot_json), checkpoint:json(r.checkpoint_json), attemptCount:r.attempt_count, nextRunAt:r.next_run_at as InstantMs | null ?? undefined, leaseOwner:r.lease_owner??undefined, leaseExpiresAt:r.lease_expires_at as InstantMs | null ?? undefined, errorCode:r.error_code??undefined, cancellationReason:r.cancellation_reason??undefined, idempotencyKey:r.idempotency_key, createdAt:r.created_at as InstantMs, updatedAt:r.updated_at as InstantMs, completedAt:r.completed_at as InstantMs | null ?? undefined, version:r.version }; }
+function mapRun(r: RunRow): AgentRunRecord { return { id:r.id as AgentRunId, runType:r.run_type, workPool:r.work_pool, status:r.status, examCycleId:r.exam_cycle_id as ExamCycleId | null ?? undefined, learningThreadId:r.learning_thread_id as LearningThreadId | null ?? undefined, targetResourceType:r.target_resource_type??undefined, targetResourceId:r.target_resource_id??undefined, inputSnapshot:json(r.input_snapshot_json), checkpoint:json(r.checkpoint_json), attemptCount:r.attempt_count, nextRunAt:r.next_run_at as InstantMs | null ?? undefined, leaseOwner:r.lease_owner??undefined, leaseExpiresAt:r.lease_expires_at as InstantMs | null ?? undefined, errorCode:r.error_code??undefined, cancellationReason:r.cancellation_reason??undefined, idempotencyKey:r.idempotency_key, createdAt:r.created_at as InstantMs, updatedAt:r.updated_at as InstantMs, completedAt:r.completed_at as InstantMs | null ?? undefined, version:r.version }; }
 function mapEvent(r: EventRow): AgentRunEventRecord { return { id:r.id, agentRunId:r.agent_run_id as AgentRunId, eventType:r.event_type, fromStatus:r.from_status??undefined, toStatus:r.to_status, reasonCode:r.reason_code, payload:json(r.payload_json), occurredAt:r.occurred_at as InstantMs, idempotencyKey:r.idempotency_key }; }
 function mapInvocation(r: InvocationRow): AgentInvocationRecord { return { id:r.id as AiInvocationId, agentRunId:r.agent_run_id as AgentRunId, provider:r.provider, model:r.model, modelRole:r.model_role, promptVersionId:r.prompt_version_id as PromptVersionId | null ?? undefined, toolSchemaVersion:r.tool_schema_version??undefined, requestHash:r.request_hash, providerRequestId:r.provider_request_id??undefined, inputTokens:r.input_tokens??undefined, outputTokens:r.output_tokens??undefined, latencyMs:r.latency_ms??undefined, finishReason:r.finish_reason??undefined, validationStatus:r.validation_status, errorCode:r.error_code??undefined, createdAt:r.created_at as InstantMs }; }
 function json(value:string) { const parsed:unknown=JSON.parse(value); if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)) throw new TypeError('Agent runtime JSON must be an object'); return parsed as import('@/kernel/public').JsonObject; }
+function normalizeWorkPools(values?: readonly AgentWorkPoolValue[]): AgentWorkPoolValue[] {
+  if (!values?.length) return [];
+  const allowed = new Set(Object.values(AgentWorkPool));
+  const pools = [...new Set(values)];
+  if (pools.some((pool) => !allowed.has(pool))) throw new Error('Invalid agent work pool filter');
+  return pools;
+}

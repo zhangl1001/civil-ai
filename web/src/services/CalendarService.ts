@@ -1,13 +1,17 @@
+import { initializeTutorRuntime } from '@/composition-root/public';
 import type { CalendarDayDetail, CalendarDayTask, CalendarMonthCell, CalendarMonthSummary } from '@/domain/calendar';
-import type { LearningEvent } from '@/domain/learning';
-import type { PracticeSession } from '@/domain/practice';
-import { calendarTaskTitle } from '@/domain/labels';
-import { projectRepository } from './ProjectRepository';
-import { learningEventRepository } from './LearningEventRepository';
-import { practiceSessionRepository } from './PracticeSessionRepository';
-import { questionRepository } from './QuestionRepository';
+import { calendarTaskTitle, practiceModuleLabel } from '@/domain/labels';
+import type { LearningAssetRecord } from '@/modules/content/public';
+import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
+import type { ObjectiveSessionFacts } from '@/modules/evidence/public';
 
-function localDate(date = new Date()): string {
+interface CalendarFact {
+  readonly date: string;
+  readonly task: CalendarDayTask;
+}
+
+function localDate(input: Date | number = new Date()): string {
+  const date = typeof input === 'number' ? new Date(input) : input;
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
@@ -22,92 +26,49 @@ function monthPrefix(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}`;
 }
 
-function eventAccuracy(event: LearningEvent): number | null {
-  if (typeof event.accuracy === 'number') return event.accuracy;
-  if (event.total && typeof event.correct === 'number') {
-    return Math.round((event.correct / event.total) * 100);
-  }
-  return null;
-}
-
-function sessionToTask(session: PracticeSession): CalendarDayTask {
-  return {
-    id: session.id,
-    type: session.mode === 'mock' ? 'mock' : session.mode === 'essay' ? 'essay' : session.mode === 'review' ? 'review' : 'practice',
-    title: calendarTaskTitle(session.mode, session.module),
-    module: session.module,
-    status: session.questionCount > 0 ? 'done' : 'pending',
-    questionCount: session.questionCount,
-    correct: session.correctCount,
-    accuracy: session.accuracy,
-    sourceRef: session.sourceFile || session.id
-  };
-}
-
-function isCalendarEvent(event: LearningEvent): boolean {
-  return event.type === 'practice' || event.type === 'review' || event.type === 'essay' || event.type === 'mock' || event.type === 'grade';
-}
-
 export class CalendarService {
   async getMonth(year: number, month: number): Promise<CalendarMonthSummary> {
-    const project = await projectRepository.getActiveProject();
-    const [events, sessions] = await Promise.all([
-      learningEventRepository.listByProject(project.id),
-      practiceSessionRepository.listByProject(project.id)
-    ]);
+    const facts = await this.loadFacts();
     const prefix = monthPrefix(year, month);
     const today = localDate();
     const cells: CalendarMonthCell[] = [];
 
     for (let day = 1; day <= daysInMonth(year, month); day++) {
       const date = `${prefix}-${String(day).padStart(2, '0')}`;
-      const dayEvents = events.filter((event) => event.date === date && isCalendarEvent(event));
-      const daySessions = sessions.filter((session) => session.date === date);
-      const total = daySessions.reduce((sum, session) => sum + session.questionCount, 0)
-        || dayEvents.reduce((sum, event) => sum + (event.total || 0), 0);
-      const correct = daySessions.reduce((sum, session) => sum + session.correctCount, 0)
-        || dayEvents.reduce((sum, event) => sum + (event.correct || 0), 0);
-      const accuracy = total ? Math.round((correct / total) * 100) : average(dayEvents.map(eventAccuracy));
-
+      const tasks = facts.filter((fact) => fact.date === date).map((fact) => fact.task);
+      const total = tasks.reduce((sum, task) => sum + task.questionCount, 0);
+      const correct = tasks.reduce((sum, task) => sum + (task.correct || 0), 0);
       cells.push({
         date,
         day,
         isToday: date === today,
-        hasPractice: dayEvents.some((event) => event.type === 'practice' || event.type === 'review') || daySessions.some((session) => session.mode === 'practice' || session.mode === 'review' || session.mode === 'diagnostic'),
-        hasEssay: dayEvents.some((event) => event.type === 'essay') || daySessions.some((session) => session.mode === 'essay'),
-        hasMock: dayEvents.some((event) => event.type === 'mock') || daySessions.some((session) => session.mode === 'mock'),
+        hasPractice: tasks.some((task) => task.type === 'practice' || task.type === 'review'),
+        hasEssay: tasks.some((task) => task.type === 'essay'),
+        hasMock: tasks.some((task) => task.type === 'mock'),
         total,
         correct,
-        accuracy
+        accuracy: total ? Math.round(correct / total * 100) : average(tasks.map((task) => task.accuracy))
       });
     }
 
-    const activeDays = cells.filter((cell) => cell.hasPractice || cell.hasEssay || cell.hasMock || cell.total > 0).length;
+    const activeDates = new Set(facts.map((fact) => fact.date));
     return {
       year,
       month,
-      activeDays,
-      streak: this.streak(events, sessions),
+      activeDays: cells.filter((cell) => activeDates.has(cell.date)).length,
+      streak: streakFrom(activeDates),
       averageAccuracy: average(cells.map((cell) => cell.accuracy)),
       cells
     };
   }
 
   async getDayDetail(date: string): Promise<CalendarDayDetail> {
-    const project = await projectRepository.getActiveProject();
-    const [events, sessions, questionCountsBySource] = await Promise.all([
-      learningEventRepository.listByDate(project.id, date),
-      practiceSessionRepository.listByDate(project.id, date),
-      questionRepository.countBySource(project.id)
-    ]);
-
-    const tasks = this.tasksFromData(events, sessions, questionCountsBySource);
+    const tasks = (await this.loadFacts())
+      .filter((fact) => fact.date === date)
+      .map((fact) => fact.task)
+      .sort((left, right) => typeOrder(left.type) - typeOrder(right.type));
     const total = tasks.reduce((sum, task) => sum + task.questionCount, 0);
     const correct = tasks.reduce((sum, task) => sum + (task.correct || 0), 0);
-    const weakModules = tasks
-      .filter((task) => task.module && typeof task.accuracy === 'number' && task.accuracy < 60)
-      .map((task) => ({ module: task.module!, accuracy: task.accuracy! }));
-
     return {
       date,
       isToday: date === localDate(),
@@ -115,65 +76,106 @@ export class CalendarService {
       tasks,
       total,
       correct,
-      accuracy: total ? Math.round((correct / total) * 100) : average(tasks.map((task) => task.accuracy ?? null)),
-      weakModules
+      accuracy: total ? Math.round(correct / total * 100) : average(tasks.map((task) => task.accuracy)),
+      weakModules: tasks
+        .filter((task) => task.module && typeof task.accuracy === 'number' && task.accuracy < 60)
+        .map((task) => ({ module: practiceModuleLabel(task.module), accuracy: task.accuracy! }))
     };
   }
 
-  private tasksFromData(events: LearningEvent[], sessions: PracticeSession[], questionCountsBySource: Map<string, number>): CalendarDayTask[] {
-    const seen = new Set<string>();
-    const tasks: CalendarDayTask[] = [];
-
-    sessions.forEach((session) => {
-      tasks.push(sessionToTask(session));
-      seen.add(session.id);
-    });
-
-    events.filter(isCalendarEvent).forEach((event) => {
-      const id = event.sourceRef || event.id;
-      if (seen.has(id)) return;
-      const questionCount = event.total || this.questionCountFromQuestions(questionCountsBySource, event.sourceRef);
-      tasks.push({
-        id,
-        type: event.type,
-        title: calendarTaskTitle(event.type, event.module),
-        module: event.module,
-        status: event.total || event.correct || event.accuracy !== undefined ? 'done' : 'pending',
-        questionCount,
-        correct: event.correct,
-        accuracy: eventAccuracy(event) ?? undefined,
-        sourceRef: event.sourceRef
-      });
-    });
-
-    return tasks.sort((a, b) => typeOrder(a.type) - typeOrder(b.type));
-  }
-
-  private questionCountFromQuestions(questionCountsBySource: Map<string, number>, sourceRef?: string): number {
-    if (!sourceRef) return 0;
-    return questionCountsBySource.get(sourceRef) || 0;
-  }
-
-  private streak(events: LearningEvent[], sessions: PracticeSession[]): number {
-    const active = new Set<string>();
-    events.filter(isCalendarEvent).forEach((event) => active.add(event.date));
-    sessions.forEach((session) => active.add(session.date));
-    let streak = 0;
-    const cursor = new Date();
-    for (let guard = 0; guard < 1000; guard++) {
-      const key = localDate(cursor);
-      if (!active.has(key)) break;
-      streak++;
-      cursor.setDate(cursor.getDate() - 1);
-    }
-    return streak;
+  private async loadFacts(): Promise<CalendarFact[]> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return [];
+    const [sessions, essayAttempts] = await Promise.all([
+      runtime.learningSessionRepository.listRecent(cycle.examCycle.id, 500),
+      runtime.learningAssetStore.list({
+        examCycleId: cycle.examCycle.id,
+        kinds: [LearningAssetKind.EssayAttempt],
+        status: LearningAssetStatus.Ready,
+        limit: 500
+      })
+    ]);
+    const bundles = await Promise.all(sessions.map((facts) => (
+      runtime.contentRepository.findQuestionSet(facts.session.questionSetId)
+    )));
+    return [
+      ...sessions.map((facts, index) => sessionFact(facts, bundles[index]?.questionSet.module)),
+      ...essayAttempts.map(assetFact)
+    ];
   }
 }
 
+function sessionFact(facts: ObjectiveSessionFacts, module?: string): CalendarFact {
+  const type = facts.session.sessionType === 'mock'
+    ? 'mock'
+    : facts.session.sessionType === 'review' || facts.session.sessionType === 'retention'
+      ? 'review'
+      : 'practice';
+  const accuracy = facts.session.questionCount
+    ? Math.round(facts.session.correctCount / facts.session.questionCount * 100)
+    : undefined;
+  return {
+    date: localDate(Number(facts.session.completedAt)),
+    task: {
+      id: facts.session.id,
+      type,
+      title: calendarTaskTitle(type, module),
+      module,
+      status: 'done',
+      questionCount: facts.session.questionCount,
+      correct: facts.session.correctCount,
+      accuracy,
+      sourceRef: facts.session.questionSetId,
+      target: {
+        type: 'objective_question_set',
+        questionSetId: facts.session.questionSetId,
+        learningThreadId: facts.session.learningThreadId
+      }
+    }
+  };
+}
+
+function assetFact(asset: LearningAssetRecord): CalendarFact {
+  const score = typeof asset.payload.score === 'number' ? asset.payload.score : undefined;
+  const context = recordOf(asset.payload.essayContext);
+  return {
+    date: typeof context.date === 'string' ? context.date : localDate(Number(asset.createdAt)),
+    task: {
+      id: asset.id,
+      type: 'essay',
+      title: asset.title,
+      module: '申论',
+      status: 'done',
+      questionCount: 1,
+      correct: score !== undefined && score >= 60 ? 1 : 0,
+      accuracy: score,
+      sourceRef: asset.id
+    }
+  };
+}
+
+function recordOf(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 function average(values: Array<number | null | undefined>): number | null {
-  const nums = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-  if (!nums.length) return null;
-  return Math.round(nums.reduce((sum, value) => sum + value, 0) / nums.length);
+  const numbers = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (!numbers.length) return null;
+  return Math.round(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
+}
+
+function streakFrom(activeDates: ReadonlySet<string>): number {
+  let streak = 0;
+  const cursor = new Date();
+  for (let guard = 0; guard < 1000; guard++) {
+    if (!activeDates.has(localDate(cursor))) break;
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
 }
 
 function typeOrder(type: CalendarDayTask['type']): number {

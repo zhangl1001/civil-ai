@@ -11,8 +11,8 @@ export interface ContentBlockBase {
   readonly type: ContentBlockType;
 }
 
-export interface MarkdownBlock extends ContentBlockBase {
-  readonly type: 'markdown';
+export interface TextBlock extends ContentBlockBase {
+  readonly type: 'text';
   readonly source: string;
 }
 
@@ -63,7 +63,7 @@ export interface CalloutBlock extends ContentBlockBase {
 }
 
 export type ContentBlock =
-  | MarkdownBlock
+  | TextBlock
   | DataTableBlock
   | SvgDiagramBlock
   | ImageBlock
@@ -74,4 +74,3 @@ export interface ContentDocumentEnvelope {
   readonly document: ContentDocument;
   readonly extension: JsonObject;
 }
-

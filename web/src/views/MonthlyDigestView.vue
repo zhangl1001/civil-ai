@@ -43,6 +43,15 @@
       </AppStateView>
 
       <template v-else>
+        <article v-if="dashboard.reportContent" class="monthly-report app-card">
+          <div class="category-title">
+            <div class="category-icon purple"><SparklesIcon /></div>
+            <strong>AI 月度复盘</strong>
+            <span>已生成</span>
+          </div>
+          <MarkdownContent :content="dashboard.reportContent" />
+        </article>
+
         <section v-for="category in dashboard.categories" :key="category.name" class="category">
           <div class="category-title">
             <div class="category-icon" :class="categoryClass(category.name)">
@@ -102,11 +111,11 @@ import {
 } from 'lucide-vue-next';
 import { goBackOrHome } from '@/router/navigation';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
+import MarkdownContent from '@/components/MarkdownContent.vue';
 import { monthlyDigestService, type MonthlyDigestDashboard } from '@/services/MonthlyDigestService';
-import { useTasksStore } from '@/stores/tasks';
 
 const router = useRouter();
-const tasksStore = useTasksStore();
 const current = monthlyDigestService.currentMonth();
 const selected = ref({ ...current, key: `${current.year}-${String(current.month).padStart(2, '0')}` });
 const months = monthlyDigestService.recentMonths(6);
@@ -131,8 +140,11 @@ async function selectMonth(year: number, month: number) {
 }
 
 function startPractice() {
-  monthlyDigestService.startPractice();
-  router.push('/vue/practice/session');
+  router.push(practiceDetailLocation({
+    mode: 'self',
+    module: '常识判断',
+    knowledgePoint: '时政热点'
+  }));
 }
 
 async function generateReport() {
@@ -140,7 +152,6 @@ async function generateReport() {
   isGeneratingReport.value = true;
   try {
     await monthlyDigestService.enqueueReport(selected.value.year, selected.value.month);
-    await tasksStore.refresh();
   } finally {
     isGeneratingReport.value = false;
   }
@@ -225,6 +236,10 @@ h3 {
   border-radius: 14px;
   padding: 14px;
   background: rgba(255, 255, 255, .72);
+}
+
+.monthly-report {
+  margin-bottom: 16px;
 }
 
 .hero div {

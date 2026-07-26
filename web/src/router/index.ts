@@ -1,13 +1,14 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router';
 import HomeView from '../views/HomeView.vue';
 import { requireCandidateCycle } from '@/features/onboarding/candidateRouteGuard';
+import { PageHeaderIcon } from '@/components/layout/PageHeaderCodes';
 
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'Home',
     component: HomeView,
-    meta: { level: 1, tabRoot: true, title: '首页', onboardingEntry: true }
+    meta: { level: 1, tabRoot: true, title: '首页', headerIcon: PageHeaderIcon.Home, onboardingEntry: true }
   },
   {
     path: '/practice',
@@ -77,7 +78,7 @@ const routes: RouteRecordRaw[] = [
     path: '/vue',
     name: 'VueHome',
     component: HomeView,
-    meta: { level: 1, tabRoot: true, title: '首页', onboardingEntry: true }
+    meta: { level: 1, tabRoot: true, title: '首页', headerIcon: PageHeaderIcon.Home, onboardingEntry: true }
   },
   {
     path: '/vue/diagnosis',
@@ -90,19 +91,25 @@ const routes: RouteRecordRaw[] = [
     name: 'VuePracticeCenter',
     // Lazy-load route components for better performance
     component: () => import('../features/practice/TutorPracticeCenterView.vue'),
-    meta: { level: 1, tabRoot: true, title: '刷题中心', requiresCandidate: true }
+    meta: { level: 1, tabRoot: true, title: '刷题中心', headerIcon: PageHeaderIcon.Practice, requiresCandidate: true }
   },
   {
     path: '/vue/practice/session',
     name: 'VuePracticeSession',
-    component: () => import('../features/practice/TutorPracticeDetailView.vue'),
-    meta: { level: 2, title: '行测刷题', fallbackPath: '/vue/practice', requiresCandidate: true }
+    redirect: (to) => ({ path: '/vue/practice', query: to.query }),
+    meta: { level: 1, title: '刷题中心', headerIcon: PageHeaderIcon.Practice, fallbackPath: '/vue/practice', requiresCandidate: true }
   },
   {
     path: '/vue/practice/objective-session',
     name: 'VueObjectivePracticeSession',
     component: () => import('../features/practice/TutorPracticeSessionView.vue'),
-    meta: { level: 2, title: '做题', fallbackPath: '/vue/practice', requiresCandidate: true }
+    meta: {
+      level: 2,
+      title: '做题',
+      fallbackPath: '/vue/practice',
+      requiresCandidate: true,
+      floatingActionBottom: 76
+    }
   },
   {
     path: '/vue/exam',
@@ -114,19 +121,19 @@ const routes: RouteRecordRaw[] = [
     path: '/vue/essay',
     name: 'VueEssay',
     component: () => import('../views/EssayView.vue'),
-    meta: { level: 2, title: '申论练习', fallbackPath: '/', requiresCandidate: true }
+    meta: { level: 2, title: '申论练习', fallbackPath: '/vue/practice', requiresCandidate: true }
   },
   {
     path: '/vue/wrongbook',
     name: 'VueWrongBook',
     component: () => import('../features/wrongbook/TutorWrongBookView.vue'),
-    meta: { level: 1, tabRoot: true, title: '错题本', requiresCandidate: true }
+    meta: { level: 1, tabRoot: true, title: '错题本', headerIcon: PageHeaderIcon.WrongBook, requiresCandidate: true }
   },
   {
     path: '/vue/profile',
     name: 'VueProfile',
     component: () => import('../views/ProfileView.vue'),
-    meta: { level: 1, tabRoot: true, title: '我的' }
+    meta: { level: 1, tabRoot: true, title: '我的', headerIcon: PageHeaderIcon.Profile }
   },
   {
     path: '/vue/onboarding',
@@ -192,24 +199,19 @@ const routes: RouteRecordRaw[] = [
     path: '/vue/study',
     name: 'VueStudy',
     component: () => import('../views/LearningCenterView.vue'),
-    meta: { level: 1, tabRoot: true, title: '学习中心', requiresCandidate: true }
+    meta: { level: 1, tabRoot: true, title: '学习中心', headerIcon: PageHeaderIcon.Study, requiresCandidate: true }
   },
   {
     path: '/vue/study/lecture',
     name: 'VueStudyLecture',
     component: () => import('../views/StudyView.vue'),
     meta: { level: 2, title: '考点精讲', fallbackPath: '/vue/study', requiresCandidate: true }
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/vue'
   }
 ];
-
-if (import.meta.env.VITE_ENABLE_LEGACY_FALLBACK === '1') {
-  routes.push({
-    path: '/legacy/:page?',
-    name: 'LegacyFallback',
-    component: () => import('../views/LegacyFrameView.vue'),
-    meta: { legacy: true }
-  });
-}
 
 const router = createRouter({
   history: createWebHashHistory(),

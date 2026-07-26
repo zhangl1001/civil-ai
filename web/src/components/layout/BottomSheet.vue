@@ -196,6 +196,16 @@ function close() {
   font-weight: var(--type-weight-medium);
 }
 
+.bottom-sheet-card :deep(.sheet-body label small),
+.bottom-sheet-card :deep(.sheet-form label small) {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-secondary-color);
+  opacity: .76;
+  font-size: var(--type-size-micro);
+  line-height: 1.4;
+}
+
 .bottom-sheet-filter :deep(.module-sheet) {
   display: flex;
   flex-direction: column;
@@ -345,8 +355,12 @@ function close() {
   background: var(--surface-muted);
 }
 
+.bottom-sheet-card :deep(.provider-options) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .bottom-sheet-card :deep(.concurrency-options) {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .bottom-sheet-card :deep(.option-group button) {

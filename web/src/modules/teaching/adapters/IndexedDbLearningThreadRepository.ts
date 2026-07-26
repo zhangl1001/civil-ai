@@ -30,6 +30,15 @@ export class IndexedDbLearningThreadRepository implements LearningThreadReposito
     });
   }
 
+  async restore(aggregate: LearningThreadAggregate, context: TransactionContext): Promise<void> {
+    if (!aggregate.events.length) throw new Error('Restored learning thread must contain at least one event');
+    this.transactionScope.stage(context, {
+      type: 'add',
+      store: TutorIndexedDbStore.LearningThreadAggregates,
+      value: stored(aggregate.thread, aggregate.events)
+    });
+  }
+
   async replace(
     thread: LearningThreadRecord,
     expectedVersion: number,

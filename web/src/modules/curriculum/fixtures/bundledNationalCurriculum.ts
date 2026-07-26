@@ -7,7 +7,7 @@ import type {
   MetadataPackageId,
   SubjectCode
 } from '@/kernel/public';
-import fixture from './civil-service-national-v1.json';
+import fixture from './civil-service-national-v2.json';
 import type { CurriculumBundle } from '../contracts/CurriculumRepository';
 import type {
   AssessmentPolicyStatus,

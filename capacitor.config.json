@@ -9,6 +9,11 @@
     "contentInset": "never"
   },
   "plugins": {
+    "CapacitorSQLite": {
+      "iosDatabaseLocation": "Library/CapacitorDatabase",
+      "iosIsEncryption": true,
+      "iosKeychainPrefix": "com.zhangl.examtutor.sqlite"
+    },
     "StatusBar": {
       "style": "light",
       "overlaysWebView": true,

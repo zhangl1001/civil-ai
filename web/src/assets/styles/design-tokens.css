@@ -53,10 +53,20 @@
     linear-gradient(180deg, #f8faff 0%, #f5f7fa 48%, #fafbfd 100%);
   --surface-card: rgba(255, 255, 255, .66);
   --surface-card-strong: rgba(255, 255, 255, .84);
+  --surface-feature-highlight:
+    linear-gradient(135deg, rgba(var(--color-surface-rgb), .78), rgba(var(--color-brand-rgb), .11));
+  --surface-feature-highlight-soft:
+    linear-gradient(135deg, rgba(var(--color-surface-rgb), .72), rgba(var(--color-brand-rgb), .07));
+  --surface-feature-tutor:
+    linear-gradient(135deg, var(--surface-card-strong), rgba(232, 246, 241, .56));
+  --surface-feature-self:
+    linear-gradient(135deg, var(--surface-card-strong), rgba(255, 242, 224, .5));
   --surface-muted: rgba(var(--color-ink-rgb), .045);
   --surface-control: rgba(255, 255, 255, .54);
   --surface-header:
     linear-gradient(180deg, rgba(248, 250, 253, .97) 0%, rgba(248, 250, 253, .91) 76%, rgba(248, 250, 253, .72) 100%);
+  --surface-header-edge:
+    linear-gradient(180deg, rgba(248, 250, 253, .72) 0%, rgba(248, 250, 253, .28) 48%, rgba(248, 250, 253, 0) 100%);
   --surface-sheet:
     linear-gradient(180deg, rgba(249, 251, 254, .97), rgba(245, 248, 252, .94));
   --surface-overlay: rgba(var(--color-ink-rgb), .14);
@@ -107,6 +117,8 @@
     linear-gradient(180deg, #f7fbfa 0%, #f4f8f7 50%, #fafcfc 100%);
   --surface-header:
     linear-gradient(180deg, rgba(247, 251, 250, .97) 0%, rgba(247, 251, 250, .91) 76%, rgba(247, 251, 250, .72) 100%);
+  --surface-header-edge:
+    linear-gradient(180deg, rgba(247, 251, 250, .72) 0%, rgba(247, 251, 250, .28) 48%, rgba(247, 251, 250, 0) 100%);
 }
 
 :root[data-theme="soft-rose"] {
@@ -121,4 +133,23 @@
     linear-gradient(180deg, #fcf9fb 0%, #f8f5f7 50%, #fbfafc 100%);
   --surface-header:
     linear-gradient(180deg, rgba(252, 249, 251, .97) 0%, rgba(252, 249, 251, .91) 76%, rgba(252, 249, 251, .72) 100%);
+  --surface-header-edge:
+    linear-gradient(180deg, rgba(252, 249, 251, .72) 0%, rgba(252, 249, 251, .28) 48%, rgba(252, 249, 251, 0) 100%);
+}
+
+:root[data-custom-background="true"] {
+  --surface-card: rgba(255, 255, 255, .58);
+  --surface-card-strong: rgba(255, 255, 255, .72);
+  --surface-feature-highlight:
+    linear-gradient(135deg, rgba(255, 255, 255, .62), rgba(var(--color-brand-rgb), .09));
+  --surface-feature-highlight-soft:
+    linear-gradient(135deg, rgba(255, 255, 255, .56), rgba(var(--color-brand-rgb), .06));
+  --surface-feature-tutor:
+    linear-gradient(135deg, var(--surface-card-strong), rgba(232, 246, 241, .46));
+  --surface-feature-self:
+    linear-gradient(135deg, var(--surface-card-strong), rgba(255, 242, 224, .42));
+  --surface-control: rgba(255, 255, 255, .5);
+  --surface-muted: rgba(255, 255, 255, .28);
+  --border-subtle: transparent;
+  --shadow-card: 0 8px 22px rgba(28, 38, 58, .045);
 }

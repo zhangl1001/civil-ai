@@ -4,15 +4,12 @@
   "main": "index.js",
   "scripts": {
     "web:build": "cd web && npm run build",
-    "ios:sync": "bash scripts/sync-ios-public.sh",
-    "ios:sync:legacy": "bash scripts/sync-ios-public.sh",
-    "ios:sync:web": "npm run web:build && bash scripts/sync-vue-ios-public.sh",
-    "ios:archive": "bash scripts/archive-ios.sh",
-    "ios:archive:legacy": "bash scripts/archive-ios.sh",
-    "ios:archive:web": "npm run ios:sync:web && bash scripts/archive-ios-web.sh",
+    "ios:sync": "npm run web:build && bash scripts/sync-vue-ios-public.sh",
+    "ios:sync:web": "npm run ios:sync",
+    "ios:archive": "npm run ios:sync && bash scripts/archive-ios-web.sh",
+    "ios:archive:web": "npm run ios:archive",
     "ios:verify-ipa": "node scripts/verify-ios-ipa.js",
     "smoke:ios": "npm run smoke:vue",
-    "smoke:ios:legacy": "node scripts/smoke-ios-mobile.js",
     "check:design": "node scripts/check-design-system.js",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:database-schema": "bash scripts/verify-tutor-database.sh",
@@ -25,20 +22,17 @@
     "check:generation-workflow": "node scripts/verify-generation-workflow.mjs",
     "check:generation-foundation": "node scripts/verify-generation-foundation.mjs",
     "check:learning-evidence": "node scripts/verify-learning-evidence.mjs",
+    "check:learning-reliability": "node scripts/verify-learning-reliability.mjs",
     "check:agent-runtime": "node scripts/verify-agent-runtime.mjs",
+    "check:agent-loop": "node scripts/verify-agent-loop.mjs",
     "check:chat-context": "node scripts/verify-chat-context.mjs",
     "check:mastery-policy": "node scripts/verify-mastery-policy.mjs",
     "smoke:vue": "npm run web:build && npm run check:design && node scripts/smoke-vue-mobile.js",
-    "check:python": "python3 -m compileall agent backend bin cli context memory models session skills tools",
-    "check:rust": "cd src-tauri && cargo check",
-    "test": "npm run smoke:ios && npm run check:python && npm run check:rust"
+    "test": "npm run smoke:ios"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "devDependencies": {
-    "@tauri-apps/cli": "^2.11.3"
-  },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.0",
     "@capacitor/cli": "^8.4.1",

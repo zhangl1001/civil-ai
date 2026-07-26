@@ -1,9 +1,10 @@
 # AI 私教服务架构设计
 
-> 状态：设计完成，待实施  
+> 状态：核心运行时已实施，扩展能力继续按本文推进
 > 上位约束：[Zhangl Agent 架构宪法](./architecture-constitution.md)  
 > 业务依据：[AI 私教能力提升闭环重构计划](./ai-tutor-capability-loop-redesign-plan.md)  
 > 部署方式：本地 TypeScript 服务层直接访问用户配置的模型供应商，不依赖自建云服务。
+> Agent Runtime 边界决策：[ADR-001：供应商无关的本地 Tutor Agent Runtime](./adr-001-provider-neutral-agent-runtime.md)
 
 ## 1. 设计目标
 
@@ -20,9 +21,9 @@ AI 服务不是一个 `complete(messages)` 工具，而是连接学生事实、�
 - Anthropic、OpenAI Compatible 等供应商差异不会泄漏到业务层。
 - 质量、延迟、token 和调用成本可观测、可治理。
 
-## 2. 当前实现审计
+## 2. 已删除实现的审计结论
 
-现有实现可继续作为迁移参考，但不能作为最终边界：
+以下旧实现已经删除，保留问题结论用于防止架构回退：
 
 | 当前问题 | 影响 |
 |---|---|
@@ -72,12 +73,13 @@ Workflow Orchestrator -------- Agent Runtime
 ```text
 Vue UI
 → 本地 AI Application/Agent/Workflow Service
-→ 本地 SQLite
+→ 本地 SQLite（业务事实与可恢复工作流）
+→ Agent Workspace 文件日志（会话与记忆）
 → Provider Gateway
 → 用户配置的 Anthropic/OpenAI Compatible API
 ```
 
-因此不能依赖常驻服务进程、远端队列和云端定时器。所有任务、Agent run、检查点和 Outbox 都持久化在本地 SQLite；App 未运行时只允许 iOS 本地通知，不伪装成 Agent 仍在后台工作。
+因此不能依赖常驻服务进程、远端队列和云端定时器。任务、Agent run、检查点和 Outbox 持久化在本地 SQLite；会话、摘要和 Agent 记忆保存在可删除的本地 Agent Workspace 文件日志；流式增量和工具执行明细只存在于当前进程的有界内存。App 未运行时只允许 iOS 本地通知，不伪装成 Agent 仍在后台工作。
 
 同时，内部接口按进程无关的 Port 设计，Provider、Repository、Clock、Notification、Audio 和 File Asset 都通过 Adapter 接入。未来如增加可选同步或自建网关，可以移动 Adapter，不重写领域与 Agent 逻辑。
 
@@ -231,13 +233,13 @@ Agent 不拥有一个无限增长的 messages 数组。记忆分为：
 
 | 记忆层 | 内容 | 存储与生命周期 |
 |---|---|---|
-| 工作记忆 | 当前用户输入、当前 turn、未完成工具调用 | `agent_run` 检查点，运行结束后压缩 |
-| 会话记忆 | 当前交流目标、已确认参数、必要对话摘要 | `tutor_session`，可开启新会话 |
+| 工作记忆 | 当前用户输入、当前 turn、未完成工具调用 | `agent_run` 检查点与进程内状态，运行结束后丢弃或压缩 |
+| 会话记忆 | 当前交流目标、已确认参数、必要对话摘要 | Agent Workspace 文件日志，可开启或删除会话 |
 | 情节记忆 | 某条学习主线发生过的教学动作及效果 | `learning_thread/events/interventions`，跨日保留 |
 | 语义记忆 | 目标、能力轨迹、确认错因、有效偏好 | 领域表和可重算投影，不从聊天推断覆盖 |
 | 前瞻记忆 | 待复习、未完成计划、主动信号和未来节点 | plan/review/signal，按状态消费 |
 
-模型只读取 Context Compiler 为当前任务生成的视图。聊天删除不删除学习事实；学习事实纠错会使相关会话摘要和上下文缓存失效。
+模型只读取 Context Compiler 为当前任务生成的视图。删除聊天会同步删除消息、摘要和该会话作用域的 Agent 记忆，但不删除已确认的学习事实；学习事实纠错会使相关会话摘要和上下文缓存失效。
 
 ### 5.5 Agent 目标与生命周期
 
@@ -671,6 +673,9 @@ prepare_context
 ## 13. 并发、锁和一致性
 
 - 全局默认最多 3 个活动模型请求，按供应商动态调节。
+- 统一 Worker 内按业务职责划分 `content_generation`、`assessment`、`interactive`、`background` 四个工作池；工作池隔离排队和抢占优先级，但复用同一套 AgentRun、租约、取消、重试和调用账本。
+- 默认并发 3 时分别为实时交互、批改诊断、内容生成保留执行 lane，后台维护只在 lane 空闲时补位。并发降到 2 时合并实时交互与批改，并发降到 1 时轮转前台工作池，避免永久饥饿。
+- 工作池不是四套数据库队列，也不是四组常驻系统线程。`work_pool` 是 AgentRun 的稳定调度元数据，供应商并发上限仍是全局硬边界。
 - `workflow_id` 隔离每个工作流，`task_id` 隔离一次任务，`agent_run_id` 隔离一次对话运行。
 - 写操作使用 `exam_cycle + aggregate_type + aggregate_id` 资源锁。
 - 一个学习主线同时只允许一个推进阶段或更新掌握的工作流。
@@ -679,6 +684,15 @@ prepare_context
 - 业务结果与 Outbox 在同一事务写入，消息和页面刷新从 Outbox 驱动。
 
 这比创建三个无状态 Runner 更重要。并发的关键不是“同时跑三个 Promise”，而是隔离身份、资源和提交边界。
+
+任务分类由领域枚举和创建用例统一完成，页面不得自行选择任意字符串：
+
+- 题目、讲义和积累生成进入 `content_generation`。
+- 客观题错因、申论批改和面试复盘进入 `assessment`。
+- 普通对话和需要立即确认的用户交互进入 `interactive`。
+- 计划重排、月度复盘和非紧急维护进入 `background`。
+
+旧任务没有工作池字段时，SQLite 增量迁移按 `run_type` 回填；IndexedDB 调试数据在读取时按同一领域规则推导。升级不得要求用户卸载 App 或清空备考数据。
 
 ## 14. 流式、消息和任务体验
 
@@ -722,13 +736,21 @@ TargetResourceView
 ```
 
 - AI 气泡展示 Tutor Presence：空闲、观察、思考、执行、等待确认、完成和失败。
-- 顶部工具执行区只展示当前 run 的最新真实工具事件。
+- 顶部工具执行区只展示当前 run 的最新真实工具事件。完整调用集合只保存在内存；下一次 run 开始时整体替换，不写业务数据库、不跨重启恢复。
 - 输入框上方 Task Dock 展示当前会话或目标资源的工作流，不展示普通回复。
 - 铃铛展示跨会话的持久任务与主动信号。
 - 页面通过 `target_resource_type/id` 订阅任务状态并在提交事件后重新查询 Repository。
 - 同一状态使用同一图标、颜色和文案映射，组件不得自行推断 `progress` 或拼接“已完成”。
 
 状态和组件抽象放在公共 Agent UI 模块，具体页面只提供目标资源和可执行动作。现款可保留小猫气泡、透明 Task Dock、工具执行单行、可拖动对话框等交互，但数据源统一切到上述视图模型。
+
+### 14.4 运行中引导
+
+- Agent 运行时输入框保持可编辑，用户发送的新内容作为当前 `agentRunId` 的引导，不创建新任务。
+- 引导使用有界内存队列，在下一轮模型决策前消费；消费后立即释放，运行结束或新 run 开始时清空。
+- 引导作为用户消息进入会话历史，但不进入 Task Dock、铃铛或工具执行列表。
+- 已完成的工具调用不会因引导重复执行；相同工具和参数继续受当前 run 的签名去重约束。
+- 输入区只显示一条当前请求摘要和已接收引导数量，运行结束后自动消失。
 
 ## 15. 提示注入和安全边界
 
@@ -931,7 +953,7 @@ src/features/tutor-ui/
 - [ ] 建立固定评测集和 Provider 回放测试。
 - [ ] 建立角色级模型路由、预算和限流降级。
 - [ ] 校准 Context 摘要和 Prompt token。
-- [ ] 删除旧散落提示词、一次性 Router 和巨型 AIRunners 业务逻辑。
+- [x] 删除旧 AIEngine、AIProvider、LocalTask、TaskQueue、TaskStore 和巨型 AIRunners 业务逻辑。
 
 ## 20. 完成标准
 

@@ -61,6 +61,7 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ArrowLeftIcon, PieChartIcon, RotateCcwIcon, TimerIcon, ZapIcon } from 'lucide-vue-next';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { goBackOrHome } from '@/router/navigation';
 import { sprintService, type SprintDashboard, type SprintIntensity, type SprintWeakPoint } from '@/services/SprintService';
 
@@ -98,8 +99,12 @@ function rankTone(point: SprintWeakPoint): string {
 }
 
 function startWeakPractice(point?: SprintWeakPoint) {
-  sprintService.startWeakPractice(point || dashboard.value?.weakPoints[0]);
-  router.push('/vue/practice/session');
+  const target = point || dashboard.value?.weakPoints[0];
+  router.push(practiceDetailLocation({
+    mode: 'self',
+    module: target?.module,
+    knowledgePoint: target?.name
+  }));
 }
 
 function goBack() {
