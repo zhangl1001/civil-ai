@@ -31,25 +31,35 @@ export class LearningAssetStore {
   async save(command: SaveLearningAssetCommand): Promise<LearningAssetRecord> {
     const businessKey = command.businessKey.trim();
     if (!businessKey) throw new Error('Learning asset businessKey is required');
-    const previous = await this.repository.findLatest(command.examCycleId, command.kind, businessKey);
-    const now = this.clock.now();
-    const asset: LearningAssetRecord = {
-      id: this.ids.next('LearningAssetId'),
-      examCycleId: command.examCycleId,
-      kind: command.kind,
-      businessKey,
-      title: command.title.trim() || command.kind,
-      status: command.status ?? LearningAssetStatus.Ready,
-      payload: command.payload,
-      sourceAgentRunId: command.sourceAgentRunId,
-      version: (previous?.version ?? 0) + 1,
-      createdAt: now,
-      updatedAt: now
-    };
-    await this.unitOfWork.run(async (context) => {
-      await this.repository.save(asset, context);
-    });
-    return asset;
+    // A generation retry can race with a previous completion between the
+    // read and insert. Re-read the version once instead of failing the whole
+    // Agent run on the expected UNIQUE(version) conflict.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const previous = await this.repository.findLatest(command.examCycleId, command.kind, businessKey);
+      const now = this.clock.now();
+      const asset: LearningAssetRecord = {
+        id: this.ids.next('LearningAssetId'),
+        examCycleId: command.examCycleId,
+        kind: command.kind,
+        businessKey,
+        title: command.title.trim() || command.kind,
+        status: command.status ?? LearningAssetStatus.Ready,
+        payload: command.payload,
+        sourceAgentRunId: command.sourceAgentRunId,
+        version: (previous?.version ?? 0) + 1,
+        createdAt: now,
+        updatedAt: now
+      };
+      try {
+        await this.unitOfWork.run(async (context) => {
+          await this.repository.save(asset, context);
+        });
+        return asset;
+      } catch (error) {
+        if (!isVersionConflict(error) || attempt === 2) throw error;
+      }
+    }
+    throw new Error('Learning asset save failed');
   }
 
   async saveDraft(command: SaveLearningAssetCommand): Promise<LearningAssetRecord> {
@@ -99,4 +109,10 @@ export class LearningAssetStore {
       await this.repository.retireBusinessKey(examCycleId, kind, businessKey, this.clock.now(), context);
     });
   }
+}
+
+function isVersionConflict(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === 'ConstraintError'
+    || /Key already exists|UNIQUE constraint failed: learning_assets\.(exam_cycle_id|business_key|version)|learning_assets.*version/i.test(error.message);
 }

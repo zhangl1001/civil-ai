@@ -163,13 +163,21 @@ export class RunTutorAgentBatch {
 
   private async fail(run: AgentRunAggregate, code: string, error?: unknown): Promise<void> {
     try {
+      const diagnostics = errorDiagnostics(error);
+      const message = readableErrorMessage(error);
       await this.transition.execute({
         idempotencyKey: `agent-run:${run.run.id}:failed:${run.run.attemptCount}`,
         agentRunId: run.run.id,
         action: AgentRunAction.Fail,
         reasonCode: 'agent_run.execution_failed',
         errorCode: code,
-        payload: errorDiagnostics(error)
+        checkpoint: {
+          ...run.run.checkpoint,
+          errorCode: code,
+          errorMessage: message,
+          message
+        },
+        payload: diagnostics
       });
     } catch (error) {
       if (!isTerminalTransitionConflict(error)) throw error;
@@ -251,6 +259,13 @@ function errorDiagnostics(error: unknown): JsonObject {
     message: typeof details.message === 'string' ? details.message.slice(0, 240) : 'Agent execution failed',
     issues
   };
+}
+
+function readableErrorMessage(error: unknown): string {
+  if (error instanceof ProviderGatewayError) return error.message.slice(0, 240);
+  if (error instanceof Error && error.message.trim()) return error.message.trim().slice(0, 240);
+  if (typeof error === 'string' && error.trim()) return error.trim().slice(0, 240);
+  return 'Agent 执行失败，未返回具体错误信息';
 }
 
 function isTerminalTransitionConflict(error: unknown): boolean {

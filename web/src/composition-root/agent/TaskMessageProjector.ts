@@ -100,7 +100,12 @@ function title(run: AgentRunAggregate): string {
 }
 
 function detail(run: AgentRunAggregate, fallback: string): string {
-  if (run.run.errorCode) return taskErrorText(run.run.errorCode);
+  if (run.run.errorCode) {
+    return taskErrorText(
+      run.run.errorCode,
+      text(run.run.checkpoint.errorMessage) || text(run.run.checkpoint.message)
+    );
+  }
   if (run.run.runType === AgentRunType.ErrorDiagnosis && fallback === '任务已完成') {
     const count = positiveInteger(run.run.inputSnapshot.diagnosisCount);
     return count
@@ -110,7 +115,7 @@ function detail(run: AgentRunAggregate, fallback: string): string {
   return text(run.run.checkpoint.message) || text(run.run.inputSnapshot.detail) || fallback;
 }
 
-function taskErrorText(code: string): string {
+function taskErrorText(code: string, diagnostic?: string): string {
   if (code === 'agent.AbortError' || code === 'generation.process_interrupted') {
     return '模型连接意外中断，请重新执行任务';
   }
@@ -128,7 +133,8 @@ function taskErrorText(code: string): string {
   if (code === 'provider.protocol') return '模型接口返回格式不兼容，请检查 Base URL';
   if (code === 'provider.transient') return '模型网络或服务暂时异常，请稍后重试';
   if (code.startsWith('provider.')) return '模型服务请求失败，请检查模型配置';
-  return code;
+  if (diagnostic && !/^agent\.(error|Error|unknown_error)$/.test(code)) return diagnostic;
+  return diagnostic || '任务执行失败，请重新生成';
 }
 
 function text(value: unknown): string | undefined {
