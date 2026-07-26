@@ -4,7 +4,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { HtmlPolicy, MarkdownEngine, escapeHtml } from '@/capabilities/content-rendering/public';
+import {
+  HtmlPolicy,
+  MarkdownEngine,
+  escapeHtml,
+  normalizeMarkdownSource
+} from '@/capabilities/content-rendering/public';
 
 const props = withDefaults(defineProps<{
   content: string;
@@ -40,9 +45,6 @@ const html = computed(() => {
   return htmlPolicy.sanitize(withStatus);
 });
 
-function normalizeMarkdownSource(value: string): string {
-  return value;
-}
 </script>
 
 <style scoped>
