@@ -70,12 +70,14 @@ export class MarkdownEngine {
  * hierarchy. Fenced code blocks remain untouched.
  */
 export function normalizeMarkdownSource(source: string): string {
-  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  const document = unwrapMarkdownDocumentFence(source.replace(/\r\n?/g, '\n'));
+  const lines = document.split('\n');
   const normalized: string[] = [];
   let inFence = false;
 
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
+    const rawLine = lines[index] ?? '';
+    const line = inFence ? rawLine : normalizeFullWidthPipeRow(rawLine);
     if (/^\s*(```|~~~)/.test(line)) {
       normalized.push(line);
       inFence = !inFence;
@@ -99,6 +101,25 @@ export function normalizeMarkdownSource(source: string): string {
     }
   }
   return normalized.join('\n');
+}
+
+function unwrapMarkdownDocumentFence(source: string): string {
+  const match = source.match(/^\s*(```|~~~)\s*(?:markdown|md|gfm)\s*\n([\s\S]*?)\n\s*\1\s*$/i);
+  return match?.[2] ?? source;
+}
+
+function normalizeFullWidthPipeRow(line: string): string {
+  const normalized = line.replaceAll('｜', '|');
+  const value = normalized.trim();
+  if (
+    normalized === line
+    || !value.startsWith('|')
+    || !value.endsWith('|')
+    || pipeColumnCount(value) < 2
+  ) {
+    return line;
+  }
+  return normalized;
 }
 
 function isPipeRow(line: string): boolean {
