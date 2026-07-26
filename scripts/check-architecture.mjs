@@ -42,6 +42,20 @@ const files = walk(sourceRoot);
 const directDatabaseCounts = new Map();
 const sourceByFile = new Map();
 const dependencyGraph = new Map();
+const forbiddenAgentDatabasePatterns = [
+  {
+    pattern: /\b(?:ConversationSessions|ConversationMessages)\b/,
+    message: 'conversation data belongs in AgentWorkspaceStorage, not a business database store'
+  },
+  {
+    pattern: /\b(?:ConversationRepository|conversationRepository)\b/,
+    message: 'conversation persistence must use ConversationStore backed by AgentWorkspaceStorage'
+  },
+  {
+    pattern: /\b(?:Sqlite|IndexedDb)AgentMemoryRepository\b/,
+    message: 'agent memory belongs in AgentWorkspaceStorage, not the business database'
+  }
+];
 
 function isNewArchitectureFile(file) {
   return /^web\/src\/(kernel|modules|capabilities|features|composition-root)\//.test(file);
@@ -73,8 +87,14 @@ for (const absolutePath of files) {
   const source = fs.readFileSync(absolutePath, 'utf8');
   const imports = importsFrom(source);
   sourceByFile.set(file, { absolutePath, imports });
+  for (const forbidden of forbiddenAgentDatabasePatterns) {
+    if (forbidden.pattern.test(source)) addViolation(file, forbidden.message);
+  }
   const directDatabaseCount = imports.filter((specifier) => specifier === '@/db/database').length;
   if (directDatabaseCount > 0) directDatabaseCounts.set(file, directDatabaseCount);
+  if (file.endsWith('.vue') && /\bruntime\.[A-Za-z0-9]+Repository\b/.test(source)) {
+    addViolation(file, 'Vue presentation must call a feature/application API instead of a repository');
+  }
 
   const moduleMatch = file.match(/^web\/src\/modules\/([^/]+)\/([^/]+)\//);
   const capabilityMatch = file.match(/^web\/src\/capabilities\/([^/]+)\//);
@@ -138,6 +158,49 @@ for (const absolutePath of files) {
   }
 }
 
+const removedRuntimeFiles = [
+  'web/src/ai/AIEngine.ts',
+  'web/src/ai/AIProvider.ts',
+  'web/src/domain/task.ts',
+  'web/src/stores/tasks.ts',
+  'web/src/tasks/AIRunners.ts',
+  'web/src/tasks/TaskBootstrap.ts',
+  'web/src/tasks/TaskLocks.ts',
+  'web/src/tasks/TaskNavigation.ts',
+  'web/src/tasks/TaskPresenter.ts',
+  'web/src/tasks/TaskQueue.ts',
+  'web/src/tasks/TaskRunner.ts',
+  'web/src/tasks/TaskRuntimeSettings.ts',
+  'web/src/tasks/TaskStore.ts',
+  'web/src/tasks/taskTypes.ts',
+  'web/src/services/LegacyImportService.ts',
+  'web/src/views/LegacyFrameView.vue',
+  'web/src/views/PlanView.vue',
+  'web/src/views/PracticeView.vue',
+  'web/src/views/WrongBookView.vue',
+  'web/src/stores/plan.ts',
+  'web/src/stores/practice.ts',
+  'web/src/stores/wrongBook.ts'
+];
+for (const file of removedRuntimeFiles) {
+  if (fs.existsSync(path.join(projectRoot, file))) {
+    addViolation(file, 'removed runtime must not be restored; use the current module and composition-root APIs');
+  }
+}
+for (const [file, entry] of sourceByFile) {
+  for (const specifier of entry.imports) {
+    if (
+      specifier === '@/ai/AIEngine'
+      || specifier === '@/ai/AIProvider'
+      || specifier === '@/domain/task'
+      || specifier === '@/stores/tasks'
+      || specifier.startsWith('@/tasks/')
+    ) {
+      addViolation(file, `removed runtime import is forbidden: ${specifier}`);
+    }
+  }
+}
+
 for (const [file, entry] of sourceByFile) {
   if (!isNewArchitectureFile(file)) continue;
   const dependencies = new Set();
@@ -192,4 +255,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log(`Architecture boundary check passed (${files.length} source files, ${directDatabaseCounts.size} legacy DB import files).`);
+console.log(`Architecture boundary check passed (${files.length} source files, ${directDatabaseCounts.size} classic service DB imports pending module migration).`);

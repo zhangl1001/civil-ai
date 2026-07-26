@@ -6,12 +6,7 @@ let initialization: Promise<TutorDatabaseRuntime> | undefined;
 export function initializeTutorRuntime(): Promise<TutorDatabaseRuntime> {
   if (runtime) return Promise.resolve(runtime);
   if (!initialization) {
-    initialization = createTutorDatabaseRuntime()
-      .then(async (nextRuntime) => {
-        await nextRuntime.initialize();
-        runtime = nextRuntime;
-        return nextRuntime;
-      })
+    initialization = createInitializedRuntime()
       .catch((error: unknown) => {
         initialization = undefined;
         throw error;
@@ -23,4 +18,11 @@ export function initializeTutorRuntime(): Promise<TutorDatabaseRuntime> {
 export function getTutorRuntime(): TutorDatabaseRuntime {
   if (!runtime) throw new Error('Tutor runtime has not been initialized');
   return runtime;
+}
+
+async function createInitializedRuntime(): Promise<TutorDatabaseRuntime> {
+  const initialized = await createTutorDatabaseRuntime();
+  await initialized.initialize();
+  runtime = initialized;
+  return initialized;
 }

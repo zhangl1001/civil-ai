@@ -13,5 +13,5 @@ export const errorCauseLabel: Readonly<Record<ErrorCauseCode, string>> = {
   careless_error: '审题或操作疏漏',
   transfer_failure: '变式迁移不足',
   retention_failure: '间隔复习遗忘',
-  unknown: '错因待分析'
+  unknown: '需要补充证据'
 };

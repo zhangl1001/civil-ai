@@ -1,13 +1,20 @@
 import type { LearningSessionId } from '@/kernel/public';
 import type { ContentRepository, QuestionRecord } from '@/modules/content/public';
 import type { ErrorDiagnosisRepository, LearningSessionRepository } from '../contracts/LearningRepositories';
-import type { AttemptRecord, ErrorDiagnosisRecord, GradingResultRecord, LearningSessionRecord } from '../contracts/LearningFacts';
+import type {
+  AttemptRecord,
+  ErrorDiagnosisCurrentProjection,
+  ErrorDiagnosisRecord,
+  GradingResultRecord,
+  LearningSessionRecord
+} from '../contracts/LearningFacts';
 
 export interface ObjectiveSessionReviewItem {
   readonly question: QuestionRecord;
   readonly attempt: AttemptRecord;
   readonly grading: GradingResultRecord;
   readonly diagnoses: readonly ErrorDiagnosisRecord[];
+  readonly diagnosisProjections: readonly ErrorDiagnosisCurrentProjection[];
 }
 
 export interface ObjectiveSessionReview {
@@ -38,12 +45,16 @@ export class GetObjectiveSessionReview {
       items.push(diagnosis);
       diagnosesByAttemptId.set(diagnosis.attemptId, items);
     });
-    const items = facts.attempts.map((attempt) => {
+    const items = await Promise.all(facts.attempts.map(async (attempt) => {
       const question = questionsById.get(attempt.questionId);
       const grading = gradingsByAttemptId.get(attempt.id);
       if (!question || !grading) throw new Error(`Objective session has incomplete attempt aggregate: ${attempt.id}`);
-      return { question, attempt, grading, diagnoses: diagnosesByAttemptId.get(attempt.id) ?? [] };
-    });
+      const itemDiagnoses = diagnosesByAttemptId.get(attempt.id) ?? [];
+      const diagnosisProjections = (await Promise.all(
+        itemDiagnoses.map((diagnosis) => this.diagnosisRepository.findCurrentProjection(diagnosis.id))
+      )).filter((value): value is ErrorDiagnosisCurrentProjection => Boolean(value));
+      return { question, attempt, grading, diagnoses: itemDiagnoses, diagnosisProjections };
+    }));
     return { session: facts.session, items };
   }
 }

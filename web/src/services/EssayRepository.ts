@@ -1,9 +1,10 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { LearningEvent } from '@/domain/learning';
-import { abilityDiagnosisService } from './AbilityDiagnosisService';
-import { projectRepository } from '@/services/ProjectRepository';
-import { settingsService } from '@/services/SettingsService';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import type { ExamCycleId, JsonObject } from '@/kernel/public';
+import {
+  LearningAssetKind,
+  LearningAssetStatus,
+  type LearningAssetRecord
+} from '@/modules/content/public';
 import type { EssayContext } from './EssayFlowService';
 
 export interface EssayQuestionRecord {
@@ -63,60 +64,117 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function stateKey(projectId: string, context?: EssayContext): string {
-  if (!context) return `essay:state:${projectId}`;
-  return `essay:state:${projectId}:${context.topic}:${context.date}`;
+function normalizeContext(context?: EssayContext): EssayContext {
+  return context ?? { date: today(), topic: '申论', type: 'short' };
 }
 
-function id(prefix: string): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+function businessKey(context: EssayContext): string {
+  return `essay:${context.date}:${context.topic}:${context.type}`;
 }
 
-function normalizeQuestion(question: EssayQuestionRecord): EssayQuestionRecord {
-  return { ...question };
+function asQuestion(value: unknown): EssayQuestionRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const question = value as Partial<EssayQuestionRecord>;
+  if (!question.id || !question.title || !question.material || !question.requirement) return null;
+  return question as EssayQuestionRecord;
+}
+
+function asDimensions(value: unknown): EssayFeedbackDimension[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is EssayFeedbackDimension => (
+    Boolean(item)
+    && typeof item === 'object'
+    && typeof (item as EssayFeedbackDimension).name === 'string'
+    && typeof (item as EssayFeedbackDimension).comment === 'string'
+  ));
+}
+
+function historyFromAsset(asset: LearningAssetRecord): EssayHistoryRecord | undefined {
+  const question = asQuestion(asset.payload.question);
+  const content = typeof asset.payload.content === 'string' ? asset.payload.content : '';
+  const feedback = typeof asset.payload.feedback === 'string' ? asset.payload.feedback : '';
+  if (!question || !content || !feedback) return undefined;
+  return {
+    id: asset.id,
+    questionId: question.id,
+    title: question.title,
+    content,
+    feedback,
+    score: typeof asset.payload.score === 'number' ? asset.payload.score : undefined,
+    dimensions: asDimensions(asset.payload.dimensions),
+    suggestions: Array.isArray(asset.payload.suggestions) ? asset.payload.suggestions.map(String) : undefined,
+    wordCount: typeof asset.payload.wordCount === 'number' ? asset.payload.wordCount : content.length,
+    createdAt: asset.createdAt
+  };
+}
+
+async function currentCycleId(): Promise<ExamCycleId> {
+  const runtime = await initializeTutorRuntime();
+  const cycle = await runtime.candidateRepository.findCurrentCycle();
+  if (!cycle) throw new Error('请先完成备考档案。');
+  return cycle.examCycle.id;
 }
 
 export class EssayRepository {
   async getState(context?: EssayContext): Promise<EssayLocalState> {
-    const project = await projectRepository.getActiveProject();
-    const existing = await settingsService.get<EssayLocalState | null>(stateKey(project.id, context), null);
-    if (existing?.question) {
-      const normalizedQuestion = normalizeQuestion(existing.question);
-      return { ...existing, question: normalizedQuestion };
-    }
+    const normalized = normalizeContext(context);
+    const key = businessKey(normalized);
+    const runtime = await initializeTutorRuntime();
+    const examCycleId = await currentCycleId();
+    const [questionAsset, draftAsset, attemptAssets] = await Promise.all([
+      runtime.learningAssetStore.findLatest(examCycleId, LearningAssetKind.EssayQuestion, key),
+      runtime.learningAssetStore.findLatest(examCycleId, LearningAssetKind.EssayDraft, key),
+      runtime.learningAssetStore.list({
+        examCycleId,
+        kinds: [LearningAssetKind.EssayAttempt],
+        businessKey: key,
+        status: LearningAssetStatus.Ready,
+        limit: 20
+      })
+    ]);
+    const question = asQuestion(questionAsset?.payload.question);
+    const history = attemptAssets.map(historyFromAsset).filter((item): item is EssayHistoryRecord => Boolean(item));
     return {
-      question: null,
-      draft: '',
-      feedback: null,
-      history: [],
-      updatedAt: Date.now()
+      question,
+      draft: typeof draftAsset?.payload.draft === 'string'
+        ? draftAsset.payload.draft
+        : history[0]?.content || '',
+      feedback: history[0]?.feedback || null,
+      history,
+      updatedAt: Math.max(questionAsset?.updatedAt || 0, draftAsset?.updatedAt || 0, history[0]?.createdAt || 0)
     };
   }
 
   async saveDraft(draft: string, context?: EssayContext): Promise<EssayLocalState> {
-    const project = await projectRepository.getActiveProject();
-    const current = await this.getState(context);
-    const next: EssayLocalState = {
-      ...current,
-      draft,
-      updatedAt: Date.now()
-    };
-    await settingsService.set(stateKey(project.id, context), next);
-    return next;
+    const normalized = normalizeContext(context);
+    const runtime = await initializeTutorRuntime();
+    await runtime.learningAssetStore.saveDraft({
+      examCycleId: await currentCycleId(),
+      kind: LearningAssetKind.EssayDraft,
+      businessKey: businessKey(normalized),
+      title: `${normalized.topic}草稿 · ${normalized.date}`,
+      payload: { draft, essayContext: normalized } as unknown as JsonObject
+    });
+    return this.getState(normalized);
   }
 
   async saveQuestion(question: EssayQuestionRecord, context?: EssayContext): Promise<EssayLocalState> {
-    const project = await projectRepository.getActiveProject();
-    const current = await this.getState(context);
-    const next: EssayLocalState = {
-      ...current,
-      question: normalizeQuestion(question),
-      draft: '',
-      feedback: null,
-      updatedAt: Date.now()
-    };
-    await settingsService.set(stateKey(project.id, context), next);
-    return next;
+    const normalized = normalizeContext(context);
+    const runtime = await initializeTutorRuntime();
+    const examCycleId = await currentCycleId();
+    await runtime.learningAssetStore.save({
+      examCycleId,
+      kind: LearningAssetKind.EssayQuestion,
+      businessKey: businessKey(normalized),
+      title: question.title,
+      payload: { question, essayContext: normalized } as unknown as JsonObject
+    });
+    await runtime.learningAssetStore.retireBusinessKey(
+      examCycleId,
+      LearningAssetKind.EssayDraft,
+      businessKey(normalized)
+    );
+    return this.getState(normalized);
   }
 
   async saveFeedback(
@@ -129,46 +187,28 @@ export class EssayRepository {
     },
     context?: EssayContext
   ): Promise<EssayLocalState> {
-    const project = await projectRepository.getActiveProject();
-    const current = await this.getState(context);
+    const normalized = normalizeContext(context);
+    const current = await this.getState(normalized);
     if (!current.question) throw new Error('当前没有申论题目，无法保存批改记录');
-    const now = Date.now();
-    const historyItem: EssayHistoryRecord = {
-      id: id('essay_history'),
-      questionId: current.question.id,
-      title: current.question.title,
-      content,
-      feedback,
-      score: structured?.score,
-      dimensions: structured?.dimensions,
-      suggestions: structured?.suggestions,
-      wordCount: content.length,
-      createdAt: now
-    };
-    const next: EssayLocalState = {
-      ...current,
-      draft: content,
-      feedback,
-      history: [historyItem, ...current.history].slice(0, 10),
-      updatedAt: now
-    };
-    await settingsService.set(stateKey(project.id, context), next);
-    await database.put<LearningEvent>(STORES.learningEvents, {
-      id: id('learning_event'),
-      projectId: project.id,
-      type: 'essay',
-      module: '申论',
-      date: context?.date || today(),
-      total: 1,
-      correct: 1,
-      accuracy: 100,
-      sourceRef: historyItem.id,
-      createdAt: now
+    const runtime = await initializeTutorRuntime();
+    await runtime.learningAssetStore.save({
+      examCycleId: await currentCycleId(),
+      kind: LearningAssetKind.EssayAttempt,
+      businessKey: businessKey(normalized),
+      title: `${current.question.title} · 批改`,
+      payload: {
+        question: current.question,
+        content,
+        feedback,
+        score: structured?.score,
+        dimensions: structured?.dimensions,
+        suggestions: structured?.suggestions,
+        wordCount: content.length,
+        essayContext: normalized
+      } as unknown as JsonObject
     });
-    void abilityDiagnosisService.refreshProject(project.id).catch((error) => {
-      console.warn('[ability diagnosis refresh]', error);
-    });
-    return next;
+    await this.saveDraft(content, normalized);
+    return this.getState(normalized);
   }
 
   async resetDraft(context?: EssayContext): Promise<EssayLocalState> {
@@ -176,34 +216,47 @@ export class EssayRepository {
   }
 
   async deleteState(context?: EssayContext): Promise<EssayLocalState> {
-    const project = await projectRepository.getActiveProject();
-    await settingsService.delete(stateKey(project.id, context));
-    return this.getState(context);
+    const normalized = normalizeContext(context);
+    const runtime = await initializeTutorRuntime();
+    const examCycleId = await currentCycleId();
+    await Promise.all([
+      runtime.learningAssetStore.retireBusinessKey(examCycleId, LearningAssetKind.EssayQuestion, businessKey(normalized)),
+      runtime.learningAssetStore.retireBusinessKey(examCycleId, LearningAssetKind.EssayDraft, businessKey(normalized)),
+      runtime.learningAssetStore.retireBusinessKey(examCycleId, LearningAssetKind.EssayAttempt, businessKey(normalized))
+    ]);
+    return this.getState(normalized);
   }
 
   async listStates(): Promise<EssayStateHistoryItem[]> {
-    const project = await projectRepository.getActiveProject();
-    const prefix = `essay:state:${project.id}:`;
-    const records = await database.list<{ key: string; value: unknown; updatedAt?: number }>(STORES.settings);
-    return records
-      .filter((record) => record.key.startsWith(prefix))
-      .map((record) => {
-        const rest = record.key.slice(prefix.length);
-        const parts = rest.split(':');
-        const topic = parts.slice(0, -1).join(':') || '申论';
-        const date = parts.at(-1) || today();
-        return {
-          key: record.key,
-          context: {
-            topic,
-            date,
-            type: topic === '申发论述' ? 'long' as const : 'short' as const
-          },
-          state: record.value as EssayLocalState
-        };
-      })
-      .filter((item) => item.state?.question)
-      .sort((a, b) => (b.state.updatedAt || 0) - (a.state.updatedAt || 0));
+    const runtime = await initializeTutorRuntime();
+    const examCycleId = await currentCycleId();
+    const assets = await runtime.learningAssetStore.list({
+      examCycleId,
+      kinds: [LearningAssetKind.EssayQuestion],
+      status: LearningAssetStatus.Ready,
+      limit: 200
+    });
+    const latest = new Map<string, LearningAssetRecord>();
+    assets.forEach((asset) => {
+      if (!latest.has(asset.businessKey)) latest.set(asset.businessKey, asset);
+    });
+    const items = await Promise.all(Array.from(latest.values()).map(async (asset) => {
+      const rawContext = asset.payload.essayContext;
+      const record = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
+        ? rawContext as Record<string, unknown>
+        : {};
+      const itemContext: EssayContext = {
+        date: typeof record.date === 'string' ? record.date : today(),
+        topic: typeof record.topic === 'string' ? record.topic : '申论',
+        type: record.type === 'long' ? 'long' : 'short'
+      };
+      return {
+        key: asset.businessKey,
+        context: itemContext,
+        state: await this.getState(itemContext)
+      };
+    }));
+    return items.sort((left, right) => right.state.updatedAt - left.state.updatedAt);
   }
 }
 

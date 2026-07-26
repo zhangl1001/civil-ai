@@ -42,15 +42,30 @@
             </div>
             <em v-if="store.dayDetail.accuracy !== null">{{ store.dayDetail.accuracy }}%</em>
           </div>
-          <article v-for="task in store.dayDetail.tasks" :key="task.id" class="day-task">
+          <article
+            v-for="task in store.dayDetail.tasks"
+            :key="task.id"
+            :class="['day-task', { clickable: task.target?.type === 'objective_question_set' }]"
+            :role="task.target?.type === 'objective_question_set' ? 'button' : undefined"
+            :tabindex="task.target?.type === 'objective_question_set' ? 0 : undefined"
+            :aria-label="task.target?.type === 'objective_question_set' ? `查看${task.title}` : undefined"
+            @click="openTask(task)"
+            @keydown.enter="openTask(task)"
+            @keydown.space.prevent="openTask(task)"
+          >
             <span :class="['task-dot', task.type]"></span>
             <div>
               <strong>{{ task.title }}</strong>
               <small>{{ task.questionCount ? `${task.questionCount}题` : '记录完成' }}<template v-if="task.accuracy !== undefined"> · 正确率 {{ task.accuracy }}%</template></small>
             </div>
-            <button v-if="task.type === 'practice' && task.module" type="button" @click="openPractice(task.module)">
-              查看
-            </button>
+            <span
+              v-if="task.target?.type === 'objective_question_set'"
+              class="view-action"
+              aria-hidden="true"
+            >
+              <span>查看</span>
+              <ChevronRightIcon />
+            </span>
           </article>
           <div v-if="store.dayDetail.weakModules.length" class="weak-tip">
             重点关注：{{ store.dayDetail.weakModules.map(item => `${item.module}(${item.accuracy}%)`).join('、') }}
@@ -73,8 +88,9 @@ import { useRouter } from 'vue-router';
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import type { CalendarDayTask } from '@/domain/calendar';
 import { useCalendarStore } from '@/stores/calendar';
-import { practiceFlowService } from '@/services/PracticeFlowService';
+import { objectivePracticeLocation } from '@/features/practice/PracticeNavigation';
 
 const store = useCalendarStore();
 const router = useRouter();
@@ -95,15 +111,9 @@ onMounted(() => {
   void store.loadMonth();
 });
 
-function openPractice(module: string) {
-  practiceFlowService.writeStartContext({
-    module,
-    date: store.selectedDate,
-    mode: 'practice',
-    source: 'calendar',
-    questionCount: 10
-  });
-  void router.push('/vue/practice/session');
+function openTask(task: CalendarDayTask) {
+  if (task.target?.type !== 'objective_question_set') return;
+  void router.push(objectivePracticeLocation(task.target));
 }
 </script>
 
@@ -131,6 +141,8 @@ function openPractice(module: string) {
 .detail-head em { color: var(--primary-color); font-size: var(--type-size-display); font-style: normal; font-weight: var(--type-weight-semibold); }
 .day-task { display: flex; align-items: center; gap: 9px; min-height: 46px; padding: 8px 0; border-top: 1px solid rgba(var(--color-ink-rgb), .06); }
 .day-task:first-of-type { border-top: none; }
+.day-task.clickable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.day-task.clickable:active { opacity: .68; }
 .task-dot { width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0; background: var(--primary-color); }
 .task-dot.essay { background: var(--green-color); }
 .task-dot.mock { background: var(--red-color); }
@@ -138,7 +150,8 @@ function openPractice(module: string) {
 .day-task div { flex: 1; min-width: 0; }
 .day-task strong { display: block; font-size: var(--type-size-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .day-task small { color: var(--text-secondary-color); font-size: var(--type-size-micro); }
-.day-task button { border: 1px solid rgba(var(--color-ink-rgb), .08); border-radius: 8px; background: rgba(255,255,255,.72); color: var(--primary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
+.view-action { min-width: 48px; min-height: 40px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; color: var(--primary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
+.view-action svg { width: 14px; height: 14px; stroke-width: 2; }
 .weak-tip { margin-top: 8px; padding: 9px 10px; border-left: 3px solid var(--orange-color); border-radius: 8px; background: rgba(255,149,0,.08); color: var(--text-secondary-color); font-size: var(--type-size-caption); line-height: 1.5; }
 .empty { padding: 10px 0; color: var(--text-secondary-color); font-size: var(--type-size-secondary); text-align: center; }
 </style>

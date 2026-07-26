@@ -74,7 +74,7 @@
         v-if="visibleGenerationTask"
         :task="visibleGenerationTask"
         title="AI 正在生成申论题"
-        :description="visibleGenerationTask.progressText || visibleGenerationTask.detail || '生成完成后会自动刷新题目和讲义。'"
+        :description="visibleGenerationTask.message || visibleGenerationTask.detail || '生成完成后会自动刷新题目和讲义。'"
         ready-action-label="重新生成"
         retry-action-label="重新生成"
         @start="generateEssay"
@@ -89,29 +89,9 @@
           <p>{{ lecture.summary }}</p>
         </div>
         <div class="lecture-grid">
-          <article>
-            <strong>审题抓手</strong>
-            <em v-for="item in lecture.clues" :key="item">{{ item }}</em>
-          </article>
-          <article>
-            <strong>核心方法</strong>
-            <em v-for="item in lecture.methods" :key="item">{{ item }}</em>
-          </article>
-          <article>
-            <strong>作答结构</strong>
-            <em v-for="item in lecture.structure" :key="item">{{ item }}</em>
-          </article>
-          <article>
-            <strong>易错提醒</strong>
-            <em v-for="item in lecture.warnings" :key="item">{{ item }}</em>
-          </article>
-          <article>
-            <strong>规范表达</strong>
-            <em v-for="item in lecture.cases" :key="item">{{ item }}</em>
-          </article>
-          <article>
-            <strong>训练任务</strong>
-            <em v-for="item in lecture.drills" :key="item">{{ item }}</em>
+          <article v-for="section in lectureSections" :key="section.title">
+            <strong>{{ section.title }}</strong>
+            <em v-for="(item, index) in section.items" :key="`${section.title}:${index}`">{{ item }}</em>
           </article>
         </div>
       </section>
@@ -162,7 +142,7 @@
             <span>{{ formatTime(item.createdAt) }} · {{ item.wordCount }} 字<span v-if="item.score"> · {{ item.score }}分</span></span>
           </div>
           <ul v-if="item.dimensions?.length" class="dimension-list">
-            <li v-for="dimension in item.dimensions.slice(0, 3)" :key="dimension.name">
+            <li v-for="(dimension, index) in item.dimensions" :key="`${dimension.name}:${index}`">
               <b>{{ dimension.name }}</b>
               <em v-if="dimension.score !== undefined">{{ dimension.score }}</em>
               <span>{{ dimension.comment }}</span>
@@ -305,8 +285,10 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { ChevronDownIcon, ClockIcon, Edit3Icon, FileClockIcon, HistoryIcon, SettingsIcon, SparklesIcon, Trash2Icon } from 'lucide-vue-next';
-import type { LocalTask } from '@/domain/task';
+import type { AgentRunView } from '@/modules/agent/public';
+import { initializeTutorRuntime } from '@/composition-root/public';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
@@ -317,10 +299,9 @@ import type { EssayHistoryRecord, EssayLecture, EssayStateHistoryItem } from '@/
 import { essayRepository } from '@/services/EssayRepository';
 import { useEssayStore } from '@/stores/essay';
 import { essayFlowService } from '@/services/EssayFlowService';
-import { TASK_CHANGED_EVENT, taskStore } from '@/tasks/TaskStore';
-import { taskQueue } from '@/tasks/TaskQueue';
 
 const store = useEssayStore();
+const route = useRoute();
 const activeMode = ref<'lecture' | 'question'>('lecture');
 const showTopicPicker = ref(false);
 const isAnswerSheetOpen = ref(false);
@@ -330,7 +311,7 @@ const showQuestionHistorySheet = ref(false);
 const showDeleteConfirmSheet = ref(false);
 const isGenerating = ref(false);
 const pendingGenerationTaskId = ref('');
-const visibleGenerationTask = ref<LocalTask | undefined>();
+const visibleGenerationTask = ref<AgentRunView | undefined>();
 const questionHistory = ref<EssayStateHistoryItem[]>([]);
 const customTopic = ref('归纳概括');
 const customQuestionCount = ref(1);
@@ -338,6 +319,7 @@ const answerSheetHeight = ref(42);
 const elapsedMs = ref(0);
 const isTimerRunning = ref(false);
 let timerId: number | null = null;
+let taskPollId: number | null = null;
 let resizeStartY = 0;
 let resizeStartHeight = 0;
 
@@ -349,15 +331,16 @@ const essayTopics = topicGroups.flatMap((group) => group.children);
 
 onMounted(() => {
   store.fetchQuestion(essayFlowService.readContext()).then(restoreTimer);
+  if (route.query.open === 'custom') showGenerateSheet.value = true;
   document.addEventListener('click', closeTopicPicker);
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  window.addEventListener(TASK_CHANGED_EVENT, handleTaskChanged);
+  taskPollId = window.setInterval(() => void refreshVisibleTask(), 900);
 });
 
 onUnmounted(() => {
   document.removeEventListener('click', closeTopicPicker);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  window.removeEventListener(TASK_CHANGED_EVENT, handleTaskChanged);
+  if (taskPollId !== null) window.clearInterval(taskPollId);
   window.removeEventListener('pointermove', resizeAnswerSheet);
   saveTimer();
   stopTimer();
@@ -382,6 +365,14 @@ const lecture = computed<EssayLecture>(() => store.question?.lecture || {
   cases: [],
   drills: []
 });
+const lectureSections = computed(() => [
+  { title: '审题抓手', items: lecture.value.clues },
+  { title: '核心方法', items: lecture.value.methods },
+  { title: '作答结构', items: lecture.value.structure },
+  { title: '易错提醒', items: lecture.value.warnings },
+  { title: '规范表达', items: lecture.value.cases },
+  { title: '训练任务', items: lecture.value.drills }
+].filter((section) => section.items.length > 0));
 const elapsedText = computed(() => formatDuration(elapsedMs.value));
 const materialParagraphs = computed(() => splitMaterial(store.question?.material || ''));
 const requirementTasks = computed(() => splitRequirement(store.question?.requirement || ''));
@@ -389,15 +380,15 @@ const emptyEssayTitle = computed(() => {
   const task = visibleGenerationTask.value;
   if (task?.status === 'failed') return '生成失败';
   if (task?.status === 'cancelled') return '任务已取消';
-  if (task && ['queued', 'running', 'retrying', 'paused'].includes(task.status)) return 'AI 正在生成申论题';
+  if (task?.isActive) return 'AI 正在生成申论题';
   return '暂无申论题目';
 });
 const emptyEssayDescription = computed(() => {
   const task = visibleGenerationTask.value;
-  if (task?.status === 'failed') return task.error || '生成失败，可以重新发起。';
+  if (task?.status === 'failed') return task.detail || '生成失败，可以重新发起。';
   if (task?.status === 'cancelled') return '任务已取消，可以重新生成。';
-  if (task && ['queued', 'running', 'retrying', 'paused'].includes(task.status)) {
-    return task.progressText || task.detail || '生成完成后会自动刷新题目和讲义。';
+  if (task?.isActive) {
+    return task.message || task.detail || '生成完成后会自动刷新题目和讲义。';
   }
   return '先生成一套申论题，系统会同步保存题目和对应讲义。';
 });
@@ -443,12 +434,9 @@ async function enqueueEssayGeneration(context = essayFlowService.readContext(), 
   await store.fetchQuestion(context);
 }
 
-async function handleTaskChanged(event: Event) {
-  const taskId = (event as CustomEvent<{ taskId?: string }>).detail?.taskId;
-  if (!taskId || taskId !== pendingGenerationTaskId.value) return;
-  const task = await taskStore.get(taskId);
+async function handleTaskChanged(task: AgentRunView | undefined) {
   visibleGenerationTask.value = task;
-  if (task?.status === 'done') {
+  if (task?.status === 'completed') {
     await store.fetchQuestion(store.context || essayFlowService.readContext());
     activeMode.value = 'lecture';
     isGenerating.value = false;
@@ -462,12 +450,19 @@ async function handleTaskChanged(event: Event) {
 
 async function refreshVisibleTask() {
   if (!pendingGenerationTaskId.value) return;
-  visibleGenerationTask.value = await taskStore.get(pendingGenerationTaskId.value);
+  const runtime = await initializeTutorRuntime();
+  const task = (await runtime.getAgentRunViews.execute({ limit: 50 }))
+    .find((item) => item.id === pendingGenerationTaskId.value);
+  await handleTaskChanged(task);
 }
 
 async function cancelEssayGeneration() {
   if (!pendingGenerationTaskId.value) return;
-  await taskQueue.cancel(pendingGenerationTaskId.value);
+  const runtime = await initializeTutorRuntime();
+  await runtime.cancelAgentRun.execute({
+    agentRunId: pendingGenerationTaskId.value as Parameters<typeof runtime.cancelAgentRun.execute>[0]['agentRunId'],
+    reason: 'user_cancelled_essay_generation'
+  });
   await refreshVisibleTask();
   isGenerating.value = false;
 }

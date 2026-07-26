@@ -21,7 +21,7 @@ defineProps<{
 <style scoped>
 .card {
   background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: var(--radius-card);
   padding: 14px;
   box-shadow: var(--shadow-card);
@@ -45,6 +45,5 @@ defineProps<{
   color: var(--color-text-secondary);
 }
 .card-content {
-  /* Content styles can be added here if needed */
 }
 </style>

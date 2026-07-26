@@ -1,11 +1,6 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { AbilityProfile } from '@/domain/learning';
-import type { Question } from '@/domain/question';
-import type { WrongItem } from '@/domain/wrongbook';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
 import { generationTaskService } from './GenerationTaskService';
-import { DEFAULT_KNOWLEDGE_TREE } from './KnowledgeDefaults';
-import { projectRepository } from './ProjectRepository';
 
 export interface StudyPoint {
   module: string;
@@ -28,64 +23,97 @@ export interface StudyDashboard {
   weakPoints: StudyPoint[];
 }
 
-function inferPoint(stem?: string): string | undefined {
-  if (!stem) return undefined;
-  const clean = stem.replace(/\s+/g, '');
-  return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
+function score(value: number | undefined, fallback = 0): number {
+  return Math.round(Math.max(0, Math.min(1, value ?? fallback)) * 100);
+}
+
+function moduleAncestor(node: CapabilityNode, byId: Map<string, CapabilityNode>): CapabilityNode | undefined {
+  let current: CapabilityNode | undefined = node;
+  while (current) {
+    if (current.nodeType === CapabilityNodeType.Module) return current;
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return undefined;
+}
+
+function groupAncestor(node: CapabilityNode, module: CapabilityNode, byId: Map<string, CapabilityNode>): CapabilityNode {
+  let current = node.parentId ? byId.get(node.parentId) : undefined;
+  let candidate = node;
+  while (current && current.id !== module.id) {
+    candidate = current;
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return candidate;
 }
 
 export class StudyService {
   async dashboard(): Promise<StudyDashboard> {
-    const project = await projectRepository.getActiveProject();
-    const [profiles, wrongItems] = await Promise.all([
-      database.queryByIndex<AbilityProfile>(STORES.abilityProfiles, 'projectId', project.id),
-      database.queryByIndex<WrongItem>(STORES.wrongItems, 'projectId', project.id)
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return { modules: [], weakPoints: [] };
+    const [curriculum, tracks] = await Promise.all([
+      runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
+      runtime.masteryRepository.listTracks(cycle.examCycle.id, 100)
     ]);
-    const questions = await this.questionMap(wrongItems.map((item) => item.questionId));
-    const wrongMap = new Map<string, number>();
-    wrongItems.filter((item) => item.status !== 'mastered').forEach((item) => {
-      const question = questions.get(item.questionId);
-      const module = item.module || question?.module || '专项练习';
-      const point = question?.knowledgePoint || inferPoint(question?.stem) || module;
-      const key = `${module}:${point}`;
-      wrongMap.set(key, (wrongMap.get(key) || 0) + Math.max(1, item.wrongCount || 1));
-    });
-    const profileMap = new Map(profiles.map((profile) => [profile.module, profile]));
-    const modules = Object.entries(DEFAULT_KNOWLEDGE_TREE).map(([moduleName, groups]) => {
-      const moduleProfile = profileMap.get(moduleName);
-      const groupRows = Object.entries(groups).map(([groupName, points]) => ({
-        name: groupName,
-        points: points.map((name) => {
-          const wrongCount = wrongMap.get(`${moduleName}:${name}`) || 0;
-          const base = moduleProfile?.accuracy ?? 0;
-          const proficiency = Math.max(0, Math.min(100, base ? base - wrongCount * 10 : 100 - wrongCount * 18));
-          const priority = (base ? Math.max(0, 80 - proficiency) : 35) + wrongCount * 12;
-          return {
-            module: moduleName,
-            group: groupName,
-            name,
-            wrongCount,
-            proficiency,
-            priority,
-            reason: wrongCount ? `错 ${wrongCount} 次` : base ? `模块正确率 ${base}%` : '大纲未学'
-          } satisfies StudyPoint;
-        })
-      }));
-      return {
-        name: moduleName,
-        total: Object.values(groups).reduce((sum, points) => sum + points.length, 0),
-        groups: groupRows
+    if (!curriculum) return { modules: [], weakPoints: [] };
+    const byId = new Map(curriculum.capabilityNodes.map((node) => [node.id, node]));
+    const trackByNode = new Map(tracks.map((track) => [track.capabilityNodeId, track]));
+    const pointNodes = curriculum.capabilityNodes.filter((node) => (
+      node.status === 'active'
+      && node.subject === 'aptitude'
+      && (
+        node.nodeType === CapabilityNodeType.KnowledgePoint
+        || node.nodeType === CapabilityNodeType.SubPoint
+        || node.nodeType === CapabilityNodeType.QuestionType
+      )
+    ));
+    const moduleMap = new Map<string, Map<string, StudyPoint[]>>();
+    pointNodes.forEach((node) => {
+      const module = moduleAncestor(node, byId);
+      if (!module) return;
+      const group = groupAncestor(node, module, byId);
+      const track = trackByNode.get(node.id);
+      const proficiency = track
+        ? Math.round((score(track.concept) + score(track.method) + score(track.accuracy) + score(track.retention)) / 4)
+        : 0;
+      const wrongCount = track ? Math.max(0, Math.round(track.effectiveSample * (1 - track.accuracy))) : 0;
+      const confidencePenalty = track ? Math.round((1 - track.confidence) * 30) : 35;
+      const priority = Math.round((100 - proficiency) * 0.7 + confidencePenalty + wrongCount * 4);
+      const point: StudyPoint = {
+        module: module.name,
+        group: group.name,
+        name: node.name,
+        wrongCount,
+        proficiency,
+        priority,
+        reason: !track
+          ? '尚未形成学习证据'
+          : wrongCount
+            ? `近阶段约错 ${wrongCount} 次`
+            : `掌握可信度 ${score(track.confidence)}%`
       };
+      const groups = moduleMap.get(module.name) ?? new Map<string, StudyPoint[]>();
+      groups.set(group.name, [...(groups.get(group.name) ?? []), point]);
+      moduleMap.set(module.name, groups);
     });
+    const modules = Array.from(moduleMap.entries()).map(([name, groups]) => ({
+      name,
+      total: Array.from(groups.values()).reduce((sum, points) => sum + points.length, 0),
+      groups: Array.from(groups.entries()).map(([groupName, points]) => ({
+        name: groupName,
+        points: points.sort((left, right) => right.priority - left.priority)
+      }))
+    }));
     const weakPoints = modules
       .flatMap((module) => module.groups.flatMap((group) => group.points))
+      .filter((point) => point.proficiency < 75 || point.wrongCount > 0)
       .sort((a, b) => b.priority - a.priority || a.proficiency - b.proficiency)
       .slice(0, 6);
     return { modules, weakPoints };
   }
 
   async startLearning(point: Pick<StudyPoint, 'module' | 'name'> | { module?: string; name: string }) {
-    const module = point.module || this.findModule(point.name) || '公考';
+    const module = point.module || '公考';
     return generationTaskService.enqueue({
       intent: 'study',
       title: '生成考点精讲',
@@ -99,17 +127,6 @@ export class StudyService {
     });
   }
 
-  private async questionMap(questionIds: string[]): Promise<Map<string, Question>> {
-    const pairs = await Promise.all(Array.from(new Set(questionIds)).map(async (id) => [id, await database.get<Question>(STORES.questions, id)] as const));
-    return new Map(pairs.filter((pair): pair is readonly [string, Question] => Boolean(pair[1])));
-  }
-
-  private findModule(pointName: string): string | undefined {
-    for (const [module, groups] of Object.entries(DEFAULT_KNOWLEDGE_TREE)) {
-      if (Object.values(groups).some((points) => points.includes(pointName))) return module;
-    }
-    return undefined;
-  }
 }
 
 export const studyService = new StudyService();

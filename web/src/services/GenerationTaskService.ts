@@ -1,41 +1,48 @@
-import type { TaskType } from '@/domain/task';
-import { initializeTutorRuntime } from '@/composition-root/public';
-import { AgentRunAction, AgentRunType, type AgentRunAggregate } from '@/modules/agent/public';
-import { projectRepository } from '@/services/ProjectRepository';
+import { agentWorkerCoordinator } from '@/composition-root/agent/AgentWorkerCoordinator';
+import { initializeTutorRuntime, type TutorDatabaseRuntime } from '@/composition-root/public';
 import type { JsonObject, JsonValue } from '@/kernel/public';
-import { taskInputHash } from '@/tasks/TaskLocks';
-import { taskQueue } from '@/tasks/TaskQueue';
-import type { EnqueueResult } from '@/tasks/taskTypes';
-import { profileGuardService } from './ProfileGuardService';
+import {
+  AgentRunType,
+  TaskTargetType,
+  type AgentRunView
+} from '@/modules/agent/public';
+import {
+  MessageBusinessLine,
+  MessageCategory,
+  MessageEventCode,
+  MessageSeverity,
+  MessageSourceType
+} from '@/modules/message-center/public';
 
-export type GenerationIntent = 'daily' | 'practice' | 'practiceGrade' | 'essayGrade' | 'mock' | 'redo' | 'digest' | 'monthlyDigest' | 'study' | 'interviewReview';
+export type GenerationIntent =
+  | 'daily'
+  | 'practice'
+  | 'essayGrade'
+  | 'mock'
+  | 'redo'
+  | 'digest'
+  | 'monthlyDigest'
+  | 'study'
+  | 'interviewReview';
 
 export interface GenerationTaskInput {
-  intent: GenerationIntent;
-  title?: string;
-  detail?: string;
-  module?: string;
-  sourceId?: string;
-  payload?: Record<string, unknown>;
+  readonly intent: GenerationIntent;
+  readonly title?: string;
+  readonly detail?: string;
+  readonly module?: string;
+  readonly sourceId?: string;
+  readonly payload?: Record<string, unknown>;
 }
 
-const TASK_BY_INTENT: Record<GenerationIntent, TaskType> = {
-  daily: 'digest',
-  practice: 'generate',
-  practiceGrade: 'grade',
-  essayGrade: 'grade',
-  mock: 'mock',
-  redo: 'redo',
-  digest: 'digest',
-  monthlyDigest: 'digest',
-  study: 'study',
-  interviewReview: 'interview'
-};
+export interface AgentTaskEnqueueResult {
+  readonly task: AgentRunView;
+  readonly reused: boolean;
+  readonly reason?: string;
+}
 
 const TITLE_BY_INTENT: Record<GenerationIntent, string> = {
   daily: '每日积累',
   practice: '生成练习',
-  practiceGrade: '行测错因分析',
   essayGrade: '申论批改',
   mock: '生成模考',
   redo: '错题重练',
@@ -45,113 +52,102 @@ const TITLE_BY_INTENT: Record<GenerationIntent, string> = {
   interviewReview: '面试深度点评'
 };
 
-function lockKey(projectId: string, input: GenerationTaskInput): string {
-  const stableSource = input.sourceId || input.module || input.intent;
-  return `${input.intent}:${projectId}:${stableSource}`;
+export class GenerationTaskService {
+  async enqueue(input: GenerationTaskInput): Promise<AgentTaskEnqueueResult> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) {
+      throw new Error('当前还没有完整备考档案，请先补全目标、现状和学习时间。');
+    }
+    const projectId = cycle?.project.id ?? 'unbound';
+    const scopeKey = taskScope(projectId, input);
+    const active = await runtime.getAgentRunViews.findActiveByTarget(TaskTargetType.BusinessOperation, scopeKey);
+    if (active) {
+      agentWorkerCoordinator.start(runtime);
+      return { task: active, reused: true, reason: 'active_scope' };
+    }
+
+    const title = input.title || TITLE_BY_INTENT[input.intent];
+    const detail = input.detail || input.module || '准备执行';
+    const actionRoute = routeForInput(input);
+    const aggregate = await runtime.createAgentRun.execute({
+      idempotencyKey: `business:${scopeKey}:${crypto.randomUUID()}`,
+      runType: runTypeForIntent(input.intent),
+      examCycleId: cycle?.examCycle.id,
+      targetResourceType: TaskTargetType.BusinessOperation,
+      targetResourceId: scopeKey,
+      inputSnapshot: {
+        projectId,
+        intent: input.intent,
+        title,
+        detail,
+        module: input.module ?? null,
+        sourceId: input.sourceId ?? null,
+        payload: toJsonObject(input.payload || {}),
+        scopeKey,
+        businessLine: businessLineForIntent(input.intent),
+        category: MessageCategory.Task,
+        actionRoute,
+        actionParams: {}
+      }
+    });
+    await runtime.messageCenter.publish({
+      businessLine: businessLineForIntent(input.intent),
+      category: MessageCategory.Task,
+      eventCode: MessageEventCode.TaskQueued,
+      severity: MessageSeverity.Info,
+      title,
+      content: detail,
+      sourceType: MessageSourceType.AgentRun,
+      sourceId: aggregate.run.id,
+      actionRoute,
+      actionParams: {},
+      dedupKey: `agent-run:${aggregate.run.id}:queued`
+    }).catch(() => undefined);
+    agentWorkerCoordinator.start(runtime);
+    return {
+      task: await requireRunView(runtime, aggregate.run.id),
+      reused: false
+    };
+  }
 }
 
-export class GenerationTaskService {
-  async enqueue(input: GenerationTaskInput): Promise<EnqueueResult> {
-    await profileGuardService.ensureActiveProfile(input.intent);
-    const project = await projectRepository.getActiveProject();
-    const agentRun = await this.startAgentRun(project.id, input);
-    try {
-      const result = await this.enqueueLegacy(project.id, input);
-      if (agentRun) {
-        const runtime = await initializeTutorRuntime();
-        await runtime.transitionAgentRun.execute({
-          idempotencyKey: `generation:${agentRun.run.id}:completed`,
-          agentRunId: agentRun.run.id,
-          action: AgentRunAction.Complete,
-          reasonCode: 'generation_task.completed',
-          checkpoint: { taskId: result.task.id, intent: input.intent, title: input.title || result.task.title },
-          payload: { taskId: result.task.id, intent: input.intent, title: input.title || result.task.title, reused: result.reused }
-        });
-      }
-      return result;
-    } catch {
-      if (agentRun) {
-        try {
-          const runtime = await initializeTutorRuntime();
-          await runtime.transitionAgentRun.execute({
-            idempotencyKey: `generation:${agentRun.run.id}:failed`,
-            agentRunId: agentRun.run.id,
-            action: AgentRunAction.Fail,
-            reasonCode: 'generation_task.failed',
-            errorCode: 'generation_task.enqueue_failed',
-            payload: { intent: input.intent, title: input.title || TITLE_BY_INTENT[input.intent] }
-          });
-        } catch {
-          // keep the original enqueue failure as the main signal
-        }
-      }
-      return this.enqueueLegacy(project.id, input);
-    }
-  }
+async function requireRunView(runtime: TutorDatabaseRuntime, id: AgentRunView['id']): Promise<AgentRunView> {
+  const run = await runtime.getAgentRunViews.findById(id);
+  if (!run) throw new Error('任务创建后无法读取');
+  return run;
+}
 
-  async enqueueLegacy(projectId: string, input: GenerationTaskInput): Promise<EnqueueResult> {
-    const taskType = TASK_BY_INTENT[input.intent];
-    return taskQueue.enqueue({
-      type: taskType,
-      projectId,
-      title: input.title || TITLE_BY_INTENT[input.intent],
-      detail: input.detail || input.module || '准备执行',
-      payload: {
-        intent: input.intent,
-        module: input.module,
-        sourceId: input.sourceId,
-        ...(input.payload || {})
-      },
-      inputHash: taskInputHash({
-        intent: input.intent,
-        module: input.module,
-        sourceId: input.sourceId,
-        payload: input.payload || {}
-      }),
-      lockKey: lockKey(projectId, input)
-    });
-  }
+function taskScope(projectId: string, input: GenerationTaskInput): string {
+  const source = input.sourceId || input.module || input.intent;
+  return `${input.intent}:${projectId}:${source}`;
+}
 
-  private async startAgentRun(projectId: string, input: GenerationTaskInput): Promise<AgentRunAggregate | undefined> {
-    try {
-      const runtime = await initializeTutorRuntime();
-      const created = await runtime.createAgentRun.execute({
-        idempotencyKey: `generation:${projectId}:${input.intent}:${input.sourceId || input.module || input.title || 'task'}:${taskInputHash({
-          intent: input.intent,
-          title: input.title || '',
-          detail: input.detail || '',
-          module: input.module || '',
-          sourceId: input.sourceId || '',
-          payload: input.payload || {}
-        })}`,
-        runType: runTypeForIntent(input.intent),
-        targetResourceType: 'generation_task',
-        targetResourceId: input.sourceId || input.module || input.intent,
-        inputSnapshot: {
-          projectId,
-          intent: input.intent,
-          title: input.title || TITLE_BY_INTENT[input.intent],
-          detail: input.detail || input.module || '准备执行',
-          module: input.module ?? null,
-          sourceId: input.sourceId ?? null,
-          payload: toJsonObject(input.payload || {})
-        }
-      });
-      if (created.run.status !== 'queued') return created;
-      return runtime.transitionAgentRun.execute({
-        idempotencyKey: `generation:${created.run.id}:started`,
-        agentRunId: created.run.id,
-        action: AgentRunAction.Start,
-        reasonCode: 'generation_task.started',
-        payload: {
-          intent: input.intent,
-          title: input.title || TITLE_BY_INTENT[input.intent]
-        }
-      });
-    } catch {
-      return undefined;
-    }
-  }
+function runTypeForIntent(intent: GenerationIntent): AgentRunType {
+  if (intent === 'daily' || intent === 'monthlyDigest') return AgentRunType.TeachingPlan;
+  if (intent === 'essayGrade' || intent === 'interviewReview') return AgentRunType.TutorTurn;
+  return AgentRunType.ContentGeneration;
+}
+
+function businessLineForIntent(intent: GenerationIntent) {
+  if (intent === 'practice') return MessageBusinessLine.Practice;
+  if (intent === 'redo') return MessageBusinessLine.Review;
+  if (intent === 'essayGrade') return MessageBusinessLine.Essay;
+  if (intent === 'interviewReview') return MessageBusinessLine.Interview;
+  if (intent === 'mock') return MessageBusinessLine.Exam;
+  if (intent === 'daily' || intent === 'digest' || intent === 'monthlyDigest') return MessageBusinessLine.Digest;
+  return MessageBusinessLine.Tutor;
+}
+
+function routeForInput(input: GenerationTaskInput): string {
+  const intent = input.intent;
+  if (intent === 'practice' || intent === 'redo') return '/vue/practice/session';
+  if (intent === 'essayGrade') return '/vue/essay';
+  if (intent === 'interviewReview') return '/vue/interview';
+  if (intent === 'mock') return input.payload?.subject === '申论' ? '/vue/essay' : '/vue/exam';
+  if (intent === 'monthlyDigest') return '/vue/monthly-digest';
+  if (intent === 'daily' || intent === 'digest') return '/vue/digest';
+  return '/vue/study';
 }
 
 function toJsonObject(value: Record<string, unknown>): JsonObject {
@@ -161,15 +157,9 @@ function toJsonObject(value: Record<string, unknown>): JsonObject {
 function toJsonValue(value: unknown): JsonValue {
   if (value === null) return null;
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (Array.isArray(value)) return value.map((item) => toJsonValue(item));
+  if (Array.isArray(value)) return value.map(toJsonValue);
   if (value && typeof value === 'object') return toJsonObject(value as Record<string, unknown>);
   return null;
 }
 
 export const generationTaskService = new GenerationTaskService();
-
-function runTypeForIntent(intent: GenerationIntent): AgentRunType {
-  if (intent === 'daily' || intent === 'monthlyDigest') return AgentRunType.TeachingPlan;
-  if (intent === 'practiceGrade' || intent === 'essayGrade' || intent === 'interviewReview') return AgentRunType.TutorTurn;
-  return AgentRunType.ContentGeneration;
-}

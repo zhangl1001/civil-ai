@@ -11,10 +11,14 @@ export {
   GradingMethod,
   ConfirmationStatus,
   ErrorCauseCode,
+  ErrorDiagnosisDimensionCode,
+  ErrorDiagnosisDimensionStatus,
   ErrorDiagnosisConfirmationAction,
   EvidenceType,
   EvidenceSource,
   EvidenceCorrectionAction,
+  DecisionObservationType,
+  isDecisionObservationType,
   QuestionExposureType
 } from './domain/EvidenceCodes';
 export { errorCauseLabel } from './domain/ErrorCausePresentation';
@@ -22,6 +26,8 @@ export type {
   AttemptRecord,
   DecisionObservationRecord,
   ErrorDiagnosisRecord,
+  ErrorDiagnosisDimension,
+  ErrorCorrectionPlan,
   ErrorDiagnosisConfirmationRecord,
   ErrorDiagnosisCurrentProjection,
   EvidenceCorrectionRecord,
@@ -50,6 +56,20 @@ export { ConfirmErrorDiagnosis, type ConfirmErrorDiagnosisCommand } from './appl
 export { RunAiErrorDiagnosis } from './application/RunAiErrorDiagnosis';
 export { RequestAiErrorDiagnosis } from './application/RequestAiErrorDiagnosis';
 export { CompleteObjectivePractice, type CompleteObjectivePracticeResult } from './application/CompleteObjectivePractice';
+export {
+  ObjectiveSubmissionPostProcessor,
+  type ObjectiveSubmissionPostProcessCommand,
+  type ObjectiveSubmissionPostProcessResult
+} from './application/ObjectiveSubmissionPostProcessor';
+export {
+  ProcessObjectiveSubmissionOutbox,
+  type ObjectiveSubmissionOutboxBatchResult
+} from './application/ProcessObjectiveSubmissionOutbox';
+export {
+  RecordSubjectiveAssessment,
+  type RecordSubjectiveAssessmentCommand,
+  type SubjectiveAssessmentDimension
+} from './application/RecordSubjectiveAssessment';
 export {
   GetObjectiveSessionReview,
   type ObjectiveSessionReview,

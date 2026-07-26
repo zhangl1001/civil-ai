@@ -1,6 +1,6 @@
 # AI 私教能力提升闭环重构计划
 
-> 状态：设计复检完成，按 `implementation-roadmap.md` 实施  
+> 状态：核心底座与主要业务闭环已实现，进入真机验收和算法校准
 > 决策：产品尚未上线，数据层和业务层采用 clean break，不兼容旧业务模型，不双写旧 JSON，不保留错误抽象。  
 > 平台：iOS 本地 SQLite 为主，Web 使用 IndexedDB 适配器，仅 AI 请求访问用户配置的模型服务商，不依赖自建云服务。
 
@@ -13,6 +13,8 @@
 > 内容渲染：Markdown、表格、SVG、图片、结构化内容块和题目 Renderer 按 [内容与 Markdown 渲染架构](./content-rendering-architecture.md) 实施。
 
 > 编码标准：所有业务模块、功能能力、分层、公开合同、Registry 和运行时装配按 [模块化分层与组合编码标准](./modular-architecture-standard.md) 实施。
+
+> 核心模块：内容生成、消息中心和个人能力分析按 [核心业务模块规划](./core-business-modules-plan.md) 划分数据所有权、接口、事件和性能预算。
 
 ## 1. 产品定位
 
@@ -375,7 +377,7 @@ PRAGMA busy_timeout = 3000;
 
 ### 5.2 新数据库
 
-- 数据库名：`zhangl-agent-tutor-v1`。
+- 数据库名：`zhangl-agent-tutor-v2`，旧开发数据库不打开、不迁移。
 - schema 从版本 `1` 开始。
 - 不读取旧 IndexedDB/SQLite 业务数据。
 - 后续 schema migration 只服务于新数据库自身的版本演进，与旧系统数据迁移无关。
@@ -1040,33 +1042,35 @@ UNIQUE(daily_plan_id, sequence)
 
 ### 6.8 AI 私教和任务
 
-#### `tutor_sessions`
+#### Agent Workspace：会话索引
 
 一个私教会话可以绑定当前考试周期、活动学习主线、每日计划和掌握轨迹。普通聊天不创建教学任务，但从聊天触发教学工具后，后续工具、任务、结果和消息都必须携带同一 `workflow_id`。
 
-#### `tutor_messages`
+会话不是业务关系表。会话 ID、标题、摘要和更新时间以 append-only JSONL 事件写入 Agent Workspace；删除会话写入删除事件并删除该会话消息文件。日志需要支持回放、压缩和整会话删除，不参与业务 SQLite 外键。
+
+#### Agent Workspace：消息日志
 
 ```text
-id TEXT PK
-tutor_session_id TEXT FK
-agent_run_id TEXT FK
-role TEXT NOT NULL
-content_json TEXT NOT NULL
-status TEXT NOT NULL
-sequence INTEGER NOT NULL
-created_at INTEGER NOT NULL
-updated_at INTEGER NOT NULL
-UNIQUE(tutor_session_id, sequence)
+version
+operation: put
+message:
+  id
+  session_id
+  role
+  content
+  tool_name?
+  tool_call_id?
+  created_at
 ```
 
-`status` 区分 `streaming/completed/cancelled/failed`。一次 Agent 回复只创建一条 assistant message，流式过程中更新同一记录。
+每个会话使用独立日志文件。流式 delta 只更新内存中的临时消息，不逐 token 写文件；回复完成或中断后只追加一次最终完整消息。删除会话同时删除消息文件、摘要和该会话作用域的 Agent memory。
 
 #### `agent_runs`
 
 ```text
 id TEXT PK
 workflow_id TEXT
-tutor_session_id TEXT FK
+chat_session_id TEXT
 exam_cycle_id TEXT FK
 learning_thread_id TEXT FK
 goal_type TEXT NOT NULL
@@ -1082,6 +1086,8 @@ started_at INTEGER NOT NULL
 completed_at INTEGER
 version INTEGER NOT NULL
 ```
+
+`chat_session_id` 仅是运行相关键，不是数据库外键。AgentRun 保存的是任务状态、恢复检查点和稳定业务结果引用，不复制对话正文、会话摘要或隐藏思考。
 
 #### `agent_tool_calls`
 
@@ -1103,7 +1109,7 @@ started_at INTEGER
 completed_at INTEGER
 ```
 
-工具调用和结果必须成对。完整大结果保存在所属业务模块，Agent 记录只保存摘要和资源引用。
+需要崩溃恢复或产生业务写入的工具调用和结果必须成对。完整大结果保存在所属业务模块，Agent 运行记录只保存恢复所需摘要、幂等键和资源引用。对话框顶部的工具执行列表不是历史账本，只使用当前 run 的有界内存快照；下一次 run 开始时整体覆盖。
 
 #### `prompt_versions`、`skill_versions` 与 `tool_catalog_versions`
 
@@ -1169,9 +1175,36 @@ cooldown_until INTEGER
 created_at INTEGER NOT NULL
 ```
 
-#### `ai_tasks`、`task_steps`、`task_events`
+#### `tutor_agent_runs`、`tutor_agent_run_events`
 
-任务保留现有队列思想，但增加：
+`AgentRun` 是用户可见长任务的唯一事实源。生成工作流只保存内容生成内部检查点，不再作为第二套任务；旧 `LocalTask/TaskQueue` 已删除。
+
+统一状态：
+
+```text
+queued
+running
+waiting_user
+completed
+failed
+cancelled
+```
+
+统一执行阶段：
+
+```text
+queued
+resolving_plan
+preparing_context
+compiling_prompt
+invoking_model
+parsing_response
+validating_content
+committing_result
+completed
+```
+
+任务增加：
 
 - `workflow_id`。
 - `learning_thread_id`。
@@ -1186,6 +1219,32 @@ created_at INTEGER NOT NULL
 - `checkpoint_json`。
 
 同一 `learning_thread` 默认只允许一个会改变教学阶段或掌握投影的活动工作流；纯内容预生成可以并行，但必须写入独立资源并在最终提交时做版本检查。
+
+#### `system_messages`
+
+消息中心与任务中心职责分离：
+
+- 任务中心回答“正在执行什么、到哪一步、能否取消”。
+- 消息中心回答“发生了什么需要用户知道、属于哪条业务线、可以跳到哪里处理”。
+- 任务的细粒度进度不写消息；排队、完成、失败、取消等关键事件可投影为消息。
+- 所有业务只能通过 `MessageCenter.publish()` 发布，页面不得直接写消息表。
+
+业务线固定为：
+
+```text
+tutor       私教
+practice    刷题
+essay       申论
+interview   面试
+planning    计划
+review      复习
+exam        模考
+digest      积累
+profile     档案
+system      系统
+```
+
+消息类别固定为 `task/learning/reminder/result/warning/system`；每条消息必须有 `event_code`、`source_type/source_id`、幂等 `dedup_key`，需要处理时携带内部 `action_route/action_params`。
 
 #### `ai_invocations`
 
@@ -1246,12 +1305,13 @@ questions(exam_cycle_id, capability_node_id, created_at DESC)
 ai_tasks(status, next_run_at, priority DESC)
 ai_tasks(exam_cycle_id, lock_key, status)
 ai_invocations(task_id, created_at)
-agent_runs(tutor_session_id, status, started_at DESC)
+agent_runs(chat_session_id, status, started_at DESC)
 agent_runs(workflow_id, status)
 agent_tool_calls(agent_run_id, turn_index, status)
-tutor_messages(tutor_session_id, sequence)
 domain_outbox(published_at, occurred_at)
 ```
+
+Agent Workspace 文件日志不建立 SQL 索引；会话按独立文件读取，会话索引日志通过内存回放并按阈值压缩。
 
 额外唯一约束：
 
@@ -2203,19 +2263,33 @@ score_projection_calibration 预测区间对真实模考的覆盖和误差
 | Phase 0 冻结旧模型 | done |
 | Phase 1 关系型数据基础 | done |
 | Phase 2 考试周期和知识图谱 | done |
-| Phase 3 学习证据链 | in_progress |
+| Phase 3 学习证据链 | done |
 | Phase 4 掌握与复习引擎 | in_progress |
 | Phase 5 每日计划与周期把控 | in_progress |
 | Phase 6 教学闭环和内容生成 | in_progress |
-| Phase 7 AI 私教编排 | in_progress |
-| Phase 8 页面切换和旧代码删除 | pending |
+| Phase 7 AI 私教编排 | done（发布前保留真机供应商回归） |
+| Phase 8 页面切换和旧代码删除 | done（旧 AI/Task/legacy fallback 已删除） |
 | Phase 9 算法校准 | pending |
 
 当前代码执行入口以 [拆分实施计划](./implementation-roadmap.md) 为准。新核心已具备考试周期和能力元数据、内容 Schema/Repository、统一 Markdown 内核、版本化 Prompt、Provider Gateway、可信 Context Compiler、调用账本、客观题作答事实、错因候选、掌握投影、复习队列、每日计划提案和计划项状态回写。
 
+2026-07-26 可靠性收口：
+
+- IndexedDB Unit of Work 串行覆盖“读取、暂存写入、提交”完整临界区，避免并发丢更新。
+- 全量备份不再受页面查询上限影响，恢复在单事务内清理并重建学习事实。
+- 客观题交卷后处理由同一应用用例执行，并由限定事件类型的 Outbox Worker 持久恢复。
+- Agent 调度按最早可执行时间取任务，不再由最近 50 条视图造成旧任务饥饿。
+- 页面任务栏、铃铛和 AI 对话框共用单一 Pinia 状态源。
+- 能力质量报表按模块计算正确率、速度、未闭环错题和重复错误，不再混用全局错题数。
+- Vue 页面直接 Repository 访问已清零，并加入架构检查。
+- 完整 Web 构建、数据库 Schema、设计系统、元数据和 iOS 资源同步已通过。
+
 最新断点：
 
 - 客观题链路已经可以把作答、判分、错因候选、掌握刷新、复习队列和每日计划项关联起来；退出重进、前后台恢复和真机限流场景仍需回归。
-- 对话工具调用已经创建 `AgentRun` 并能被铃铛/Task Dock 读取、取消和跳转；聊天工具已改为由本地 Agent handler 执行，页面生成入口也已包进 AgentRun，旧 TaskQueue 只作为执行内核保留。
-- 内容生成已具备结构化讲义/题组的基础闭环，但复杂题型、多模块题型、申论/面试 Rubric 和长期学习主线仍未完全落地。
-- 旧页面、旧 Service、旧 Store 和旧兼容数据仍未删除；开发阶段不需要兼容旧数据，后续可以按模块替换后直接清理。
+- `AgentRun` 已成为新业务唯一任务实体；结构化刷题生题已具备计划解析、上下文准备、提示词编译、模型调用、解析、质检、落库等持久进度，支持最多 3 个并发、取消、限流退避、页面重进恢复和完成跳转。`GenerationWorkflow` 只负责内部生成检查点。
+- `MessageCenter` 已建立 SQLite/IndexedDB 双适配和公开发布接口，按私教、刷题、申论、面试、计划、复习、模考、积累、档案、系统分类；铃铛支持业务线过滤、未读、归档和业务跳转。
+- AI 气泡、输入框上方任务栏、铃铛和顶部轻提示已统一读取 `AgentRun`，页面发起的生题不再是黑盒；聊天工具执行区与业务任务区保持分离。
+- 所有用户可见长任务统一使用 `AgentRun`；旧 `LocalTask/TaskQueue/TaskStore`、旧 AI Provider 和 legacy fallback 已删除。
+- 内容生成、长期学习主线、客观学习证据、计划/复习联动和主观题 Rubric 证据已形成基础闭环；复杂题型专用模板和主观评分校准属于下一阶段深化。
+- 旧 Python Agent、旧 HTML 页面、旧 LocalTask/TaskQueue、旧数据库访问层和 legacy fallback 已删除；保留的 Service 是面向页面的应用门面，数据真相仍归模块 Repository。

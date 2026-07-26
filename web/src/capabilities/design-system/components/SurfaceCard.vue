@@ -31,7 +31,7 @@ withDefaults(defineProps<{
 
 <style scoped>
 .surface-card {
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: var(--radius-card);
   padding: 14px;
   background: var(--surface-card);
@@ -45,7 +45,7 @@ withDefaults(defineProps<{
 }
 
 .surface-card-muted {
-  background: rgba(var(--color-ink-rgb), .045);
+  background: var(--surface-muted);
 }
 
 .surface-card.compact {

@@ -13,7 +13,7 @@
       <component :is="iconComponent" class="status-icon" />
     </div>
     <div class="pending-copy">
-      <span v-if="task" class="pending-status">{{ taskStatusText(task.status) }}</span>
+      <span v-if="task" class="pending-status">{{ statusText }}</span>
       <strong>{{ displayTitle }}</strong>
       <p>{{ displayDescription }}</p>
     </div>
@@ -40,11 +40,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { CheckCircleIcon, RefreshCwIcon, SparklesIcon, TriangleAlertIcon, XIcon } from 'lucide-vue-next';
-import type { LocalTask, TaskStatus } from '@/domain/task';
-import { isActiveStatus, taskBrief, taskStatusText } from '@/tasks/TaskPresenter';
+import type { AgentRunView } from '@/modules/agent/public';
 
 const props = withDefaults(defineProps<{
-  task?: LocalTask;
+  task?: AgentRunView;
   title?: string;
   description?: string;
   readyTitle?: string;
@@ -70,9 +69,10 @@ const emit = defineEmits<{
   cancel: [];
 }>();
 
-const isActive = computed(() => Boolean(props.task && isActiveStatus(props.task.status)));
-const canCancel = computed(() => Boolean(props.task && isActiveStatus(props.task.status)));
-const isRetryable = computed(() => props.task?.status === 'failed' || props.task?.status === 'cancelled');
+const normalizedStatus = computed(() => props.task?.status ?? 'ready');
+const isActive = computed(() => Boolean(props.task?.isActive));
+const canCancel = computed(() => Boolean(props.task?.canCancel));
+const isRetryable = computed(() => normalizedStatus.value === 'failed' || normalizedStatus.value === 'cancelled');
 const showPrimaryAction = computed(() => !props.hidePrimaryAction && !isActive.value);
 const showCustomActions = computed(() => !props.hideCustomActionsWhenActive || !isActive.value);
 const primaryLabel = computed(() => isRetryable.value ? props.retryActionLabel : props.readyActionLabel);
@@ -84,34 +84,45 @@ function emitPrimary() {
 }
 
 const displayTitle = computed(() => {
-  if (props.title) return props.title;
   if (!props.task) return props.readyTitle;
-  if (props.task.status === 'failed') return '生成失败';
-  if (props.task.status === 'cancelled') return '任务已取消';
-  if (props.task.status === 'done') return '生成完成';
+  if (normalizedStatus.value === 'failed') return '生成失败';
+  if (normalizedStatus.value === 'cancelled') return '任务已取消';
+  if (normalizedStatus.value === 'completed') return '生成完成';
+  if (props.title) return props.title;
   return props.task.title || 'AI 正在生成';
 });
 
 const displayDescription = computed(() => {
   if (props.description) return props.description;
   if (!props.task) return props.readyDescription;
-  if (props.task.status === 'failed') return props.task.error || '可以稍后重新生成。';
-  if (props.task.status === 'cancelled') return '任务已取消，可以重新发起生成。';
-  return taskBrief(props.task);
+  if (normalizedStatus.value === 'failed') {
+    return props.task.detail || '可以稍后重新生成。';
+  }
+  if (normalizedStatus.value === 'cancelled') return '任务已取消，可以重新发起生成。';
+  return props.task.detail;
 });
 
 const iconComponent = computed(() => {
-  const status = props.task?.status;
-  if (!status || status === 'queued' || status === 'running' || status === 'retrying' || status === 'paused') return SparklesIcon;
-  if (status === 'done') return CheckCircleIcon;
+  const status = normalizedStatus.value;
+  if (!status || status === 'queued' || status === 'running' || status === 'waiting_user') return SparklesIcon;
+  if (status === 'completed') return CheckCircleIcon;
   if (status === 'failed') return TriangleAlertIcon;
   if (status === 'cancelled') return XIcon;
   return SparklesIcon;
 });
 
 const statusClass = computed(() => {
-  const status: TaskStatus | 'ready' = props.task?.status || 'ready';
-  return `status-${status}`;
+  return `status-${normalizedStatus.value}`;
+});
+
+const statusText = computed(() => {
+  if (normalizedStatus.value === 'queued') return '排队中';
+  if (normalizedStatus.value === 'running') return '执行中';
+  if (normalizedStatus.value === 'waiting_user') return '等待确认';
+  if (normalizedStatus.value === 'completed') return '已完成';
+  if (normalizedStatus.value === 'failed') return '失败';
+  if (normalizedStatus.value === 'cancelled') return '已取消';
+  return '';
 });
 </script>
 
@@ -327,7 +338,7 @@ const statusClass = computed(() => {
   opacity: .52;
 }
 
-.status-done .cat {
+.status-completed .cat {
   color: var(--green-color);
   background:
     radial-gradient(circle at 33% 46%, rgba(52, 168, 83, .22) 0 3px, transparent 4px),
@@ -335,7 +346,7 @@ const statusClass = computed(() => {
     linear-gradient(145deg, rgba(255, 255, 255, .96), rgba(235, 249, 240, .94));
 }
 
-.status-done .status-icon {
+.status-completed .status-icon {
   color: var(--green-color);
 }
 

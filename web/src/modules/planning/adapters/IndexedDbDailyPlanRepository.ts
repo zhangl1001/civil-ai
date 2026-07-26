@@ -19,6 +19,13 @@ export class IndexedDbDailyPlanRepository implements DailyPlanRepository {
       .sort((left, right) => right.plan.version - left.plan.version)[0];
   }
 
+  async listAll(cycle: ExamCycleId): Promise<readonly DailyPlanAggregate[]> {
+    const all = await this.db.getAll<DailyPlanAggregate>(TutorIndexedDbStore.DailyPlanAggregates);
+    return all
+      .filter((value) => value.plan.examCycleId === cycle)
+      .sort((left, right) => right.plan.createdAt - left.plan.createdAt || right.plan.version - left.plan.version);
+  }
+
   async replaceCurrent(next: DailyPlanAggregate, previous: DailyPlanRecord | undefined, context: TransactionContext): Promise<void> {
     if (previous) {
       const current = await this.require(previous.id);
@@ -27,15 +34,35 @@ export class IndexedDbDailyPlanRepository implements DailyPlanRepository {
     this.scope.stage(context, { type:'add', store:TutorIndexedDbStore.DailyPlanAggregates, value:next });
   }
 
+  async updateItemById(dailyPlanItemId: string, patch: DailyPlanItemStatusPatch, context: TransactionContext): Promise<DailyPlanItemRecord | undefined> {
+    return this.updateMatchingItem((item) => item.id === dailyPlanItemId, patch, context);
+  }
+
   async updateItemByReviewQueueId(reviewQueueItemId: string, patch: DailyPlanItemStatusPatch, context: TransactionContext): Promise<DailyPlanItemRecord | undefined> {
+    return this.updateMatchingItem((item) => item.reviewQueueItemId === reviewQueueItemId, patch, context);
+  }
+
+  private async updateMatchingItem(
+    matches: (item: DailyPlanItemRecord) => boolean,
+    patch: DailyPlanItemStatusPatch,
+    context: TransactionContext
+  ): Promise<DailyPlanItemRecord | undefined> {
     const all = await this.db.getAll<DailyPlanAggregate>(TutorIndexedDbStore.DailyPlanAggregates);
-    const aggregate = all.filter((value) => value.plan.status === 'active' && value.items.some((item) => item.reviewQueueItemId === reviewQueueItemId))
+    const aggregate = all.filter((value) => value.plan.status === 'active' && value.items.some(matches))
       .sort((left, right) => right.plan.version - left.plan.version)[0];
     if (!aggregate) return undefined;
     let updated: DailyPlanItemRecord | undefined;
     const items = aggregate.items.map((item) => {
-      if (item.reviewQueueItemId !== reviewQueueItemId) return item;
-      updated = { ...item, status: patch.status, actualMinutes: patch.actualMinutes ?? item.actualMinutes };
+      if (!matches(item)) return item;
+      updated = {
+        ...item,
+        status: patch.status,
+        actualMinutes: patch.actualMinutes ?? item.actualMinutes,
+        resultSummary: patch.resultSummary ?? item.resultSummary,
+        failureCode: patch.failureCode,
+        failureMessage: patch.failureMessage,
+        finishedAt: patch.finishedAt
+      };
       return updated;
     });
     if (!updated) return undefined;

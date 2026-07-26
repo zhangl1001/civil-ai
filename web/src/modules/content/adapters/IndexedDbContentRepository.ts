@@ -10,9 +10,16 @@ import type {
   ContentMetadataBundle,
   ContentRepository,
   ContentSchemaVersion,
+  QuestionSetLibraryEntry,
   QuestionTemplateVersion
 } from '../contracts/ContentRepository';
-import { PublishedAssetStatus, QuestionSetStatus, type QuestionTemplateCode } from '../domain/ContentCodes';
+import {
+  PublishedAssetStatus,
+  QuestionSetEntryMode,
+  QuestionSetPracticeStatus,
+  QuestionSetStatus,
+  type QuestionTemplateCode
+} from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
 
 interface StoredContentMetadataBundle {
@@ -89,7 +96,7 @@ export class IndexedDbContentRepository implements ContentRepository {
       TutorIndexedDbStore.ContentQuestionSetBundles,
       questionSetId
     );
-    return stored?.bundle;
+    return stored ? normalizedBundle(stored.bundle) : undefined;
   }
 
   async findQuestionSetByGenerationSpec(
@@ -98,20 +105,109 @@ export class IndexedDbContentRepository implements ContentRepository {
     const stored = await this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles);
     return stored
       .filter((item) => item.bundle.generationSpec.id === generationSpecId)
-      .sort((left, right) => right.createdAt - left.createdAt)[0]?.bundle;
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .map((item) => normalizedBundle(item.bundle))[0];
+  }
+
+  async listQuestionSetLibrary(
+    examCycleId: ExamCycleId,
+    limit: number
+  ): Promise<readonly QuestionSetLibraryEntry[]> {
+    assertQuestionSetQueryLimit(limit);
+    const stored = await this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles);
+    return stored
+      .filter((item) => (
+        item.examCycleId === examCycleId
+        && item.bundle.questionSet.status === QuestionSetStatus.Ready
+      ))
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, limit)
+      .map((item) => libraryEntry(normalizedBundle(item.bundle)));
   }
 
   async listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]> {
     assertQuestionSetQueryLimit(limit);
+    return (await this.listAllQuestionSets(examCycleId)).slice(0, limit);
+  }
+
+  async listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]> {
     const stored = await this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles);
     return stored
       .filter((item) => item.examCycleId === examCycleId && item.bundle.questionSet.status === QuestionSetStatus.Ready)
       .sort((left, right) => right.createdAt - left.createdAt)
-      .slice(0, limit)
-      .map((item) => item.bundle);
+      .map((item) => normalizedBundle(item.bundle));
+  }
+
+  async updateQuestionSetPracticeStatus(
+    questionSetId: QuestionSetId,
+    status: QuestionSetPracticeStatus,
+    context: TransactionContext
+  ): Promise<void> {
+    if (status === QuestionSetPracticeStatus.NotStarted) return;
+    const stored = await this.database.get<StoredQuestionSetBundle>(
+      TutorIndexedDbStore.ContentQuestionSetBundles,
+      questionSetId
+    );
+    if (!stored) return;
+    const bundle = normalizedBundle(stored.bundle);
+    if (
+      bundle.questionSet.practiceStatus === QuestionSetPracticeStatus.Completed
+      || bundle.questionSet.practiceStatus === status
+    ) return;
+    this.transactionScope.stage(context, {
+      type: 'put',
+      store: TutorIndexedDbStore.ContentQuestionSetBundles,
+      value: {
+        ...stored,
+        bundle: {
+          ...bundle,
+          questionSet: { ...bundle.questionSet, practiceStatus: status }
+        }
+      } satisfies StoredQuestionSetBundle
+    });
   }
 }
 
 function compareVersionsDescending(left: { readonly version: string }, right: { readonly version: string }): number {
   return right.version.localeCompare(left.version, undefined, { numeric: true });
+}
+
+function libraryEntry(bundle: CommittedQuestionSetBundle): QuestionSetLibraryEntry {
+  const explicit = bundle.generationSpec.constraints.entryMode;
+  const entryMode = explicit === QuestionSetEntryMode.Self
+    ? QuestionSetEntryMode.Self
+    : explicit === QuestionSetEntryMode.Tutor
+      ? QuestionSetEntryMode.Tutor
+      : bundle.generationSpec.constraints.source === 'custom'
+        ? QuestionSetEntryMode.Self
+        : QuestionSetEntryMode.Tutor;
+  const source = typeof bundle.generationSpec.constraints.source === 'string'
+    ? bundle.generationSpec.constraints.source
+    : undefined;
+  return {
+    id: bundle.questionSet.id,
+    examCycleId: bundle.questionSet.examCycleId,
+    learningThreadId: bundle.questionSet.learningThreadId,
+    capabilityNodeId: bundle.questionSet.capabilityNodeId,
+    purpose: bundle.questionSet.purpose,
+    assessmentRole: bundle.questionSet.assessmentRole,
+    module: bundle.questionSet.module,
+    questionCount: bundle.questionSet.questionCount,
+    practiceStatus: bundle.questionSet.practiceStatus,
+    entryMode,
+    source,
+    createdAt: bundle.questionSet.createdAt
+  };
+}
+
+function normalizedBundle(bundle: CommittedQuestionSetBundle): CommittedQuestionSetBundle {
+  return bundle.questionSet.practiceStatus
+    ? bundle
+    : {
+        ...bundle,
+        questionSet: {
+          ...bundle.questionSet,
+          practiceStatus: QuestionSetPracticeStatus.NotStarted
+        }
+      };
 }

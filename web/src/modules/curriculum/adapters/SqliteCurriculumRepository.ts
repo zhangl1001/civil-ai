@@ -116,6 +116,100 @@ export class SqliteCurriculumRepository implements CurriculumRepository {
     for (const policy of bundle.assessmentPolicies) await this.insertPolicy(transaction, policy);
   }
 
+  async synchronizeBundle(bundle: CurriculumBundle, context: TransactionContext): Promise<void> {
+    const transaction = this.transactionScope.resolve(context);
+    await transaction.run(
+      `UPDATE metadata_packages
+       SET version = ?, content_hash = ?, release_notes = ?, installed_at = ?
+       WHERE id = ?`,
+      [
+        bundle.metadataPackage.version,
+        bundle.metadataPackage.contentHash,
+        bundle.metadataPackage.releaseNotes ?? null,
+        bundle.metadataPackage.installedAt,
+        bundle.metadataPackage.id
+      ]
+    );
+    await transaction.run(
+      `UPDATE curriculum_versions
+       SET version = ?, content_hash = ?, status = ?
+       WHERE id = ?`,
+      [
+        bundle.curriculum.version,
+        bundle.curriculum.contentHash,
+        bundle.curriculum.status,
+        bundle.curriculum.id
+      ]
+    );
+    for (const node of bundle.capabilityNodes) {
+      await transaction.run(
+        `INSERT INTO capability_nodes(
+          id, curriculum_version_id, parent_id, code, name, node_type, subject, module, sequence,
+          score_weight, default_target_accuracy, default_target_seconds, mastery_policy_json, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          parent_id = excluded.parent_id,
+          code = excluded.code,
+          name = excluded.name,
+          node_type = excluded.node_type,
+          subject = excluded.subject,
+          module = excluded.module,
+          sequence = excluded.sequence,
+          score_weight = excluded.score_weight,
+          default_target_accuracy = excluded.default_target_accuracy,
+          default_target_seconds = excluded.default_target_seconds,
+          mastery_policy_json = excluded.mastery_policy_json,
+          status = excluded.status`,
+        [
+          node.id,
+          node.curriculumVersionId,
+          node.parentId ?? null,
+          node.code,
+          node.name,
+          node.nodeType,
+          node.subject,
+          node.module,
+          node.sequence,
+          node.scoreWeight,
+          node.defaultTargetAccuracy ?? null,
+          node.defaultTargetSeconds ?? null,
+          JSON.stringify(node.masteryPolicy),
+          node.status
+        ]
+      );
+    }
+    for (const edge of bundle.capabilityEdges) {
+      await transaction.run(
+        `INSERT INTO capability_edges(from_node_id, to_node_id, relation_type, weight)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(from_node_id, to_node_id, relation_type) DO UPDATE SET weight = excluded.weight`,
+        [edge.fromNodeId, edge.toNodeId, edge.relationType, edge.weight]
+      );
+    }
+    for (const policy of bundle.assessmentPolicies) {
+      await transaction.run(
+        `INSERT INTO assessment_policy_versions(
+          id, metadata_package_id, subject, policy_type, version, config_json, content_hash, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          config_json = excluded.config_json,
+          content_hash = excluded.content_hash,
+          status = excluded.status`,
+        [
+          policy.id,
+          policy.metadataPackageId,
+          policy.subject,
+          policy.policyType,
+          policy.version,
+          JSON.stringify(policy.config),
+          policy.contentHash,
+          policy.status,
+          policy.createdAt
+        ]
+      );
+    }
+  }
+
   async findBundle(curriculumVersionId: CurriculumVersionId): Promise<CurriculumBundle | undefined> {
     const curriculumRows = await this.database.query<CurriculumRow>(
       'SELECT * FROM curriculum_versions WHERE id = ? LIMIT 1',

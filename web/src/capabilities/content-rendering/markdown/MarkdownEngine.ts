@@ -14,7 +14,7 @@ export interface MarkdownRenderWarning {
   readonly message: string;
 }
 
-export const MARKDOWN_RENDERER_VERSION = 'markdown-v1';
+export const MARKDOWN_RENDERER_VERSION = 'markdown-v2';
 
 export class MarkdownEngine {
   private readonly marked: Marked;
@@ -47,7 +47,7 @@ export class MarkdownEngine {
     const warnings: MarkdownRenderWarning[] = [];
     let rendered: string;
     try {
-      rendered = this.marked.parse(source, { async: false });
+      rendered = this.marked.parse(normalizeMarkdownSource(source), { async: false });
     } catch (error) {
       warnings.push({
         code: 'markdown.parse_failed',
@@ -62,6 +62,75 @@ export class MarkdownEngine {
       rendererVersion: MARKDOWN_RENDERER_VERSION
     };
   }
+}
+
+/**
+ * Normalizes the two presentation problems most often produced by model output:
+ * incomplete pipe tables and decorative emoji that compete with the reading
+ * hierarchy. Fenced code blocks remain untouched.
+ */
+export function normalizeMarkdownSource(source: string): string {
+  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  const normalized: string[] = [];
+  let inFence = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (/^\s*(```|~~~)/.test(line)) {
+      normalized.push(line);
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      normalized.push(line);
+      continue;
+    }
+
+    normalized.push(stripDecorativeEmoji(line));
+    const next = lines[index + 1] ?? '';
+    const previous = lines[index - 1] ?? '';
+    if (
+      isPipeRow(line)
+      && !isPipeDelimiter(line)
+      && !isPipeRow(previous)
+      && !isPipeDelimiter(next)
+    ) {
+      normalized.push(pipeDelimiter(pipeColumnCount(line)));
+    }
+  }
+  return normalized.join('\n');
+}
+
+function isPipeRow(line: string): boolean {
+  const value = line.trim();
+  return value.startsWith('|') && value.endsWith('|') && pipeColumnCount(value) >= 2;
+}
+
+function isPipeDelimiter(line: string): boolean {
+  if (!isPipeRow(line)) return false;
+  return line
+    .trim()
+    .slice(1, -1)
+    .split('|')
+    .every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function pipeColumnCount(line: string): number {
+  const value = line.trim();
+  if (!value.startsWith('|') || !value.endsWith('|')) return 0;
+  return value.slice(1, -1).split('|').length;
+}
+
+function pipeDelimiter(columnCount: number): string {
+  return `| ${Array.from({ length: columnCount }, () => '---').join(' | ')} |`;
+}
+
+function stripDecorativeEmoji(value: string): string {
+  return value
+    .replace(/\p{Extended_Pictographic}/gu, '')
+    .replace(/[\uFE0F\u200D\u20E3]/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trimEnd();
 }
 
 function escapeAttribute(value: string): string {

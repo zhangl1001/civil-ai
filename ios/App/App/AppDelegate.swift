@@ -38,8 +38,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         if let webView = view as? WKWebView {
             webView.backgroundColor = color
             webView.scrollView.backgroundColor = color
-            webView.isOpaque = true
-            webView.scrollView.isOpaque = true
+            webView.isOpaque = false
+            webView.scrollView.isOpaque = false
             webView.scrollView.contentInsetAdjustmentBehavior = .never
             return
         }

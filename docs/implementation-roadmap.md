@@ -20,11 +20,11 @@
 | WP1 | 新数据库内核、元数据和 Repository 合同 | WP0 | done |
 | WP2 | 无默认工程的建档与考试周期 | WP1 | done |
 | WP3 | 内容 Schema、Markdown/Renderer 和 AI 确定性工作流 | WP1 | done |
-| WP4 | “削弱论证”作答、证据、错因和学习主线纵向闭环 | WP2-3 | in_progress |
+| WP4 | 通用作答、证据、错因和学习主线纵向闭环 | WP2-3 | done |
 | WP5 | 掌握、复习、每日计划和主动信号 | WP4 | in_progress |
-| WP6 | Tutor Agent、Skills、Tools 和多任务并发 | WP3-5 | in_progress |
-| WP7 | 行测复杂模板和全模块扩展 | WP4-6 | pending |
-| WP8 | 申论、面试和主观题策略 | WP5-6 | pending |
+| WP6 | Tutor Agent、Skills、Tools 和多任务并发 | WP3-5 | done |
+| WP7 | 行测复杂模板和全模块扩展 | WP4-6 | in_progress |
+| WP8 | 申论、面试和主观题策略 | WP5-6 | in_progress |
 | WP9 | 全局 UI 收敛、旧代码删除、校准和发布质量 | WP2-8 | pending |
 
 ## 3. WP0：架构护栏
@@ -72,7 +72,7 @@
 
 交付：
 
-- 新数据库名 `zhangl-agent-tutor-v1`。
+- 新数据库名 `zhangl-agent-tutor-v2`；不打开或迁移旧开发数据库。
 - migration runner、schema version、外键、WAL 和 busy timeout。
 - Unit of Work、乐观锁、幂等和 Outbox。
 - Metadata Package、Curriculum、Capability、Policy、Rubric、Prompt、Skill 和 Schema 基础表。
@@ -165,16 +165,16 @@
 
 ## 7. WP4：参考能力纵向闭环
 
-范围：判断推理 → 逻辑判断 → 削弱论证及必要前置能力。
+范围：通用客观题作答、学习事实、错因和学习主线闭环；削弱论证仅作为首个验证切片。
 
-状态：in_progress（2026-07-14）
+状态：done（2026-07-25）
 
-当前断点：
+完成范围：
 
 - 已新增并注册 `003_learning_evidence.sql`，覆盖 learning thread/event、teaching blueprint、learning session、question exposure、attempt、decision observation、grading result、error diagnosis、learning evidence、evidence correction 和 validity projection。
 - 已增加稳定领域枚举、branded ID、Learning Thread 与 Learning Evidence Repository 合同。
 - 已建立 Learning Thread 的 SQLite/IndexedDB 适配器，以及学习会话/错因/证据的 SQLite 适配器。
-- IndexedDB 已升级到 v12 并创建 WP4 学习事实与 Agent Run 聚合 Store。
+- IndexedDB 已升级到 v21，并为学习事实、题组会话和 Agent 目标查询建立 Store/索引。
 - 数据库验收覆盖活动主线唯一性、题组与作答一致性、重复作答约束、学习证据不可原地修改和考试周期级联删除。
 - 已补齐学习会话、错因和证据的 IndexedDB 适配器，Web 与 iOS runtime 均暴露同一 Repository Port。
 - 已实现受限 Learning Thread 状态机与创建/推进/暂停/恢复/完成/放弃应用服务，所有转换追加事件并使用乐观锁和事件幂等键。
@@ -189,7 +189,7 @@
 - 已新增 `RequestAiErrorDiagnosis` / `RunAiErrorDiagnosis` / `CompleteObjectivePractice`，后端可将确定性错误转为异步 AI 候选诊断，再等待用户确认。
 - 当前 `npm run check:database-schema`、`npm run check:learning-evidence`、`npm run check:architecture` 和 `web/npm run build` 通过。
 
-下一入口：把第一个削弱论证页面切换到 `CreateLearningThread → CreateGenerationWorkflow(threadId) → CompleteObjectivePractice → GetObjectiveSessionReview`，并由 Agent Runner 执行错因候选诊断。必须先写 Agent Runtime 专项回归，再删除该 Feature 的旧 `PracticeSessionRepository` 路径。详细断点见 [核心底座交接](./core-foundation-handoff.md#8-wp4-当前开发断点)。
+完成补充：通用 Feature 已切换到 `CreateLearningThread → StructuredPracticeTaskCenter → CompleteObjectivePractice → GetObjectiveSessionReview`；页面重进按 `questionSetId` 精确读取作答事实，错题本和闪卡复用同一 Query DTO，AI 错因通过统一 Worker 执行。
 
 交付：
 
@@ -209,6 +209,19 @@
 
 ## 8. WP5：掌握、复习与计划
 
+状态：in_progress（2026-07-25）
+
+当前完成：
+
+- 掌握轨迹、复习队列、本地每日计划提案和计划版本持久化。
+- 计划项启动、完成、跳过、取消、实际耗时、结果摘要和结构化失败原因。
+- 作答结果刷新掌握度后自动重排剩余计划；保留终态计划项，重排失败不反向破坏已提交作答。
+- 启动和回前台会补偿尚未完成的计划重排。
+- 主动私教信号独立 Repository、SQLite/IndexedDB 双适配器、按类型冷却、静默时段和优先级投递。
+- 用户可在“学习提醒”中选择安静/适中/主动，所有信号统一进入消息中心。
+
+下一入口：目标差距、预测分区间、真实模考校准，以及复习队列 iOS 前后台恢复验收。
+
 交付：
 
 - Mastery Policy、多维轨迹、可信度和状态机。
@@ -226,6 +239,19 @@
 - 错题复发和计划偏离能产生不重复的主动信号。
 
 ## 9. WP6：Tutor Agent
+
+状态：done（2026-07-25，发布前仅保留真机供应商回归）
+
+当前完成：
+
+- OpenAI Compatible 与 Anthropic 原生协议已统一到 `ProviderGateway`，协议选择只服从用户配置，不再根据模型名猜测。
+- 两个 Gateway 均支持供应商无关的 `ModelToolCall/ProviderToolDefinition`；结构化生成不再依赖 OpenAI `response_format`，不支持强制工具时可降级为严格 JSON 文本。
+- 已实现受限 `RunAgentLoop`：工具结果回送模型、最多 8 turn/12 tool calls、单 turn 4 次、调用签名去重、确认停点、工具结果截断和每轮检查点 Port。
+- 已实现类型化 Agent Runtime Event、Context Budgeter、五层 Memory Port、Skill/Tool Registry 与 Sub-agent Registry。
+- 已写入 [ADR-001](./adr-001-provider-neutral-agent-runtime.md)，固定 Provider、Agent、Tool、Context、Memory、Sub-agent、Workflow 和 Event 的依赖方向。
+- `check:provider-gateway`、`check:agent-loop` 和 TypeScript 类型检查覆盖上述合同。
+
+完成补充：会话、消息、摘要和 Agent 记忆已从 SQLite/IndexedDB 业务库移除，统一进入 `AgentWorkspaceStorage` 文件日志；删除会话同步遗忘会话作用域记忆。Application Tool Executor、Policy Guard、学生上下文编译、对话 Agent Loop、受限 Sub-agent 元数据、统一 Worker、任务消息投影和三并发隔离均已装配。业务长任务与普通聊天内部工具在展示层明确隔离，工具明细仅保留当前 run。
 
 交付：
 

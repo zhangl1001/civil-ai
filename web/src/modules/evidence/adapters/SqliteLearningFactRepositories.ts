@@ -1,4 +1,9 @@
-import type { SqlDatabase, SqlRow, SqlTransaction } from '@/capabilities/database/contracts/SqlDatabase';
+import type {
+  SqlBatchStatement,
+  SqlDatabase,
+  SqlRow,
+  SqlTransaction
+} from '@/capabilities/database/contracts/SqlDatabase';
 import type { SqlTransactionScope } from '@/capabilities/database/adapters/sqlite/SqlTransactionScope';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type {
@@ -16,6 +21,8 @@ import type {
   DecisionObservationRecord,
   ErrorDiagnosisConfirmationRecord,
   ErrorDiagnosisCurrentProjection,
+  ErrorCorrectionPlan,
+  ErrorDiagnosisDimension,
   ErrorDiagnosisRecord,
   EvidenceCorrectionRecord,
   EvidenceValidityProjection,
@@ -30,6 +37,11 @@ import type { EvidenceValidity } from '../domain/EvidenceValidity';
 import type {
   AttemptResult, ConfirmationStatus, ErrorCauseCode, ErrorDiagnosisConfirmationAction, EvidenceSource, EvidenceType,
   GradingMethod, LearningSessionStatus, LearningSessionType, QuestionExposureType
+} from '../domain/EvidenceCodes';
+import {
+  ErrorDiagnosisDimensionCode,
+  ErrorDiagnosisDimensionStatus,
+  isDecisionObservationType
 } from '../domain/EvidenceCodes';
 
 interface SessionRow extends SqlRow {
@@ -62,7 +74,8 @@ interface DiagnosisRow extends SqlRow {
   id: string; session_id: string; grading_result_id: string; attempt_id: string; exam_cycle_id: string; capability_node_id: string;
   cause_code: ErrorCauseCode; error_stage: string | null; detail: string; confidence: number;
   confirmation_status: Exclude<ConfirmationStatus, 'not_required'>; prerequisite_capability_node_id: string | null;
-  recommended_action_code: string; source: ErrorDiagnosisRecord['source']; created_at: number; idempotency_key: string;
+  recommended_action_code: string; dimensions_json: string; correction_plan_json: string;
+  source: ErrorDiagnosisRecord['source']; created_at: number; idempotency_key: string;
 }
 interface DiagnosisConfirmationRow extends SqlRow {
   id: string; error_diagnosis_id: string; attempt_id: string; exam_cycle_id: string;
@@ -96,11 +109,13 @@ export class SqliteLearningSessionRepository implements LearningSessionRepositor
 
   async commitObjectiveSession(facts: ObjectiveSessionFacts, context: TransactionContext): Promise<void> {
     const transaction = this.transactionScope.resolve(context);
-    await insertSession(transaction, facts.session);
-    for (const value of facts.exposures) await insertExposure(transaction, value);
-    for (const value of facts.attempts) await insertAttempt(transaction, value);
-    for (const value of facts.observations) await insertObservation(transaction, value);
-    for (const value of facts.gradings) await insertGrading(transaction, value);
+    await runBatch(transaction, [
+      sessionStatement(facts.session),
+      ...facts.exposures.map(exposureStatement),
+      ...facts.attempts.map(attemptStatement),
+      ...facts.observations.map(observationStatement),
+      ...facts.gradings.map(gradingStatement)
+    ]);
   }
 
   async findByIdempotencyKey(idempotencyKey: string): Promise<ObjectiveSessionFacts | undefined> {
@@ -115,6 +130,18 @@ export class SqliteLearningSessionRepository implements LearningSessionRepositor
     return rows[0] ? this.load(rows[0]) : undefined;
   }
 
+  async listByQuestionSet(questionSetId: QuestionSetId, limit: number): Promise<readonly ObjectiveSessionFacts[]> {
+    assertLimit(limit);
+    const rows = await this.database.query<SessionRow>(
+      `SELECT * FROM learning_sessions
+       WHERE question_set_id = ?
+       ORDER BY completed_at DESC, id DESC
+       LIMIT ?`,
+      [questionSetId, limit]
+    );
+    return Promise.all(rows.map((row) => this.load(row)));
+  }
+
   async listRecent(examCycleId: ExamCycleId, limit: number): Promise<readonly ObjectiveSessionFacts[]> {
     assertLimit(limit);
     const rows = await this.database.query<SessionRow>(
@@ -123,6 +150,16 @@ export class SqliteLearningSessionRepository implements LearningSessionRepositor
        ORDER BY started_at DESC, id DESC
        LIMIT ?`,
       [examCycleId, limit]
+    );
+    return Promise.all(rows.map((row) => this.load(row)));
+  }
+
+  async listAll(examCycleId: ExamCycleId): Promise<readonly ObjectiveSessionFacts[]> {
+    const rows = await this.database.query<SessionRow>(
+      `SELECT * FROM learning_sessions
+       WHERE exam_cycle_id = ?
+       ORDER BY started_at DESC, id DESC`,
+      [examCycleId]
     );
     return Promise.all(rows.map((row) => this.load(row)));
   }
@@ -153,13 +190,25 @@ export class SqliteErrorDiagnosisRepository implements ErrorDiagnosisRepository 
   constructor(private readonly database: SqlDatabase, private readonly transactionScope: SqlTransactionScope) {}
   async append(values: readonly ErrorDiagnosisRecord[], context: TransactionContext): Promise<void> {
     const transaction = this.transactionScope.resolve(context);
-    for (const value of values) await insertDiagnosis(transaction, value);
+    await runBatch(transaction, values.map(diagnosisStatement));
   }
   async listBySession(sessionId: LearningSessionId): Promise<readonly ErrorDiagnosisRecord[]> {
     const rows = await this.database.query<DiagnosisRow>(
       `SELECT diagnosis.*, attempt.session_id FROM error_diagnoses diagnosis
        JOIN attempts attempt ON attempt.id = diagnosis.attempt_id
        WHERE attempt.session_id = ? ORDER BY diagnosis.created_at, diagnosis.id`, [sessionId]
+    );
+    return rows.map(mapDiagnosis);
+  }
+
+  async listBySessions(sessionIds: readonly LearningSessionId[]): Promise<readonly ErrorDiagnosisRecord[]> {
+    if (!sessionIds.length) return [];
+    const rows = await this.database.query<DiagnosisRow>(
+      `SELECT diagnosis.*, attempt.session_id FROM error_diagnoses diagnosis
+       JOIN attempts attempt ON attempt.id = diagnosis.attempt_id
+       WHERE attempt.session_id IN (${sessionIds.map(() => '?').join(',')})
+       ORDER BY diagnosis.created_at, diagnosis.id`,
+      sessionIds
     );
     return rows.map(mapDiagnosis);
   }
@@ -171,6 +220,16 @@ export class SqliteErrorDiagnosisRepository implements ErrorDiagnosisRepository 
     );
     return rows[0] ? mapDiagnosis(rows[0]) : undefined;
   }
+  async findMany(diagnosisIds: readonly ErrorDiagnosisId[]): Promise<readonly ErrorDiagnosisRecord[]> {
+    if (!diagnosisIds.length) return [];
+    const rows = await this.database.query<DiagnosisRow>(
+      `SELECT diagnosis.*, attempt.session_id FROM error_diagnoses diagnosis
+       JOIN attempts attempt ON attempt.id = diagnosis.attempt_id
+       WHERE diagnosis.id IN (${diagnosisIds.map(() => '?').join(',')})`,
+      diagnosisIds
+    );
+    return rows.map(mapDiagnosis);
+  }
   async findByIdempotencyKey(idempotencyKey: string): Promise<ErrorDiagnosisRecord | undefined> {
     const rows = await this.database.query<DiagnosisRow>(
       `SELECT diagnosis.*, attempt.session_id FROM error_diagnoses diagnosis
@@ -178,6 +237,16 @@ export class SqliteErrorDiagnosisRepository implements ErrorDiagnosisRepository 
        WHERE diagnosis.idempotency_key = ? LIMIT 1`, [idempotencyKey]
     );
     return rows[0] ? mapDiagnosis(rows[0]) : undefined;
+  }
+  async findByIdempotencyKeys(idempotencyKeys: readonly string[]): Promise<readonly ErrorDiagnosisRecord[]> {
+    if (!idempotencyKeys.length) return [];
+    const rows = await this.database.query<DiagnosisRow>(
+      `SELECT diagnosis.*, attempt.session_id FROM error_diagnoses diagnosis
+       JOIN attempts attempt ON attempt.id = diagnosis.attempt_id
+       WHERE diagnosis.idempotency_key IN (${idempotencyKeys.map(() => '?').join(',')})`,
+      idempotencyKeys
+    );
+    return rows.map(mapDiagnosis);
   }
   async appendConfirmation(
     confirmation: ErrorDiagnosisConfirmationRecord,
@@ -232,6 +301,18 @@ export class SqliteErrorDiagnosisRepository implements ErrorDiagnosisRepository 
     );
     return rows[0] ? mapDiagnosisProjection(rows[0]) : undefined;
   }
+
+  async listCurrentProjections(
+    diagnosisIds: readonly ErrorDiagnosisId[]
+  ): Promise<readonly ErrorDiagnosisCurrentProjection[]> {
+    if (!diagnosisIds.length) return [];
+    const rows = await this.database.query<DiagnosisProjectionRow>(
+      `SELECT * FROM error_diagnosis_current_projection
+       WHERE error_diagnosis_id IN (${diagnosisIds.map(() => '?').join(',')})`,
+      diagnosisIds
+    );
+    return rows.map(mapDiagnosisProjection);
+  }
 }
 
 export class SqliteLearningEvidenceRepository implements LearningEvidenceRepository {
@@ -242,8 +323,10 @@ export class SqliteLearningEvidenceRepository implements LearningEvidenceReposit
     context: TransactionContext
   ): Promise<void> {
     const transaction = this.transactionScope.resolve(context);
-    for (const value of evidence) await insertEvidence(transaction, value);
-    for (const value of validity) await insertValidity(transaction, value);
+    await runBatch(transaction, [
+      ...evidence.map(evidenceStatement),
+      ...validity.map(validityStatement)
+    ]);
   }
   async appendCorrection(
     correction: EvidenceCorrectionRecord,
@@ -307,96 +390,117 @@ export class SqliteLearningEvidenceRepository implements LearningEvidenceReposit
     );
     return rows.map(mapEvidence);
   }
+
+  async listAllValid(examCycleId: ExamCycleId): Promise<readonly LearningEvidenceRecord[]> {
+    const rows = await this.database.query<EvidenceRow>(
+      `SELECT evidence.* FROM learning_evidence evidence
+       JOIN evidence_validity_projection validity ON validity.evidence_id = evidence.id
+       WHERE evidence.exam_cycle_id = ? AND validity.validity_status = 'valid'
+       ORDER BY evidence.occurred_at DESC, evidence.id DESC`,
+      [examCycleId]
+    );
+    return rows.map(mapEvidence);
+  }
 }
 
-function insertSession(tx: SqlTransaction, value: LearningSessionRecord): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO learning_sessions(
+async function runBatch(tx: SqlTransaction, statements: readonly SqlBatchStatement[]): Promise<void> {
+  if (!statements.length) return;
+  if (tx.runBatch) {
+    await tx.runBatch(statements);
+    return;
+  }
+  for (const statement of statements) await tx.run(statement.sql, statement.parameters);
+}
+
+function sessionStatement(value: LearningSessionRecord): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO learning_sessions(
       id, exam_cycle_id, learning_thread_id, question_set_id, review_queue_item_id, session_type, assessment_role,
       status, started_at, completed_at, elapsed_ms, question_count, answered_count, correct_count,
       idempotency_key, version, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.examCycleId, value.learningThreadId, value.questionSetId, value.reviewQueueItemId ?? null, value.sessionType,
+    parameters: [value.id, value.examCycleId, value.learningThreadId, value.questionSetId, value.reviewQueueItemId ?? null, value.sessionType,
       value.assessmentRole, value.status, value.startedAt, value.completedAt, value.elapsedMs,
       value.questionCount, value.answeredCount, value.correctCount, value.idempotencyKey,
       value.version, value.createdAt, value.updatedAt]
-  );
+  };
 }
-function insertExposure(tx: SqlTransaction, value: QuestionExposureRecord): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO question_exposures(
+function exposureStatement(value: QuestionExposureRecord): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO question_exposures(
       id, exam_cycle_id, learning_thread_id, session_id, question_id, exposure_type,
       answer_exposed, occurred_at, idempotency_key
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.examCycleId, value.learningThreadId, value.sessionId, value.questionId,
+    parameters: [value.id, value.examCycleId, value.learningThreadId, value.sessionId, value.questionId,
       value.exposureType, value.answerExposed ? 1 : 0, value.occurredAt, value.idempotencyKey]
-  );
+  };
 }
-function insertAttempt(tx: SqlTransaction, value: AttemptRecord): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO attempts(
+function attemptStatement(value: AttemptRecord): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO attempts(
       id, session_id, question_id, exam_cycle_id, capability_node_id, learning_thread_id,
       assessment_role, question_content_version, answer_json, result, score, elapsed_ms,
       confidence, hint_level, answer_change_count, submitted_at, idempotency_key
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.sessionId, value.questionId, value.examCycleId, value.capabilityNodeId,
+    parameters: [value.id, value.sessionId, value.questionId, value.examCycleId, value.capabilityNodeId,
       value.learningThreadId, value.assessmentRole, value.questionContentVersion, JSON.stringify(value.answer),
       value.result, value.score, value.elapsedMs ?? null, value.confidence ?? null, value.hintLevel,
       value.answerChangeCount, value.submittedAt, value.idempotencyKey]
-  );
+  };
 }
-function insertObservation(tx: SqlTransaction, value: DecisionObservationRecord): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO decision_observations(
+function observationStatement(value: DecisionObservationRecord): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO decision_observations(
       id, attempt_id, observation_type, value_code, value_json, source, confidence, occurred_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.attemptId, value.observationType, value.valueCode,
+    parameters: [value.id, value.attemptId, value.observationType, value.valueCode,
       JSON.stringify(value.value), value.source, value.confidence, value.occurredAt]
-  );
+  };
 }
-function insertGrading(tx: SqlTransaction, value: GradingResultRecord): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO grading_results(
+function gradingStatement(value: GradingResultRecord): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO grading_results(
       id, attempt_id, grading_method, grader_version, result, score, normalized_feedback_json,
       raw_response_json, confidence, confirmation_status, created_at, idempotency_key
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.attemptId, value.gradingMethod, value.graderVersion, value.result, value.score,
+    parameters: [value.id, value.attemptId, value.gradingMethod, value.graderVersion, value.result, value.score,
       JSON.stringify(value.normalizedFeedback), value.rawResponse ? JSON.stringify(value.rawResponse) : null,
       value.confidence, value.confirmationStatus, value.createdAt, value.idempotencyKey]
-  );
+  };
 }
-function insertDiagnosis(tx: SqlTransaction, value: ErrorDiagnosisRecord): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO error_diagnoses(
+function diagnosisStatement(value: ErrorDiagnosisRecord): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO error_diagnoses(
       id, grading_result_id, attempt_id, exam_cycle_id, capability_node_id, cause_code,
       error_stage, detail, confidence, confirmation_status, prerequisite_capability_node_id,
-      recommended_action_code, source, created_at, idempotency_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.gradingResultId, value.attemptId, value.examCycleId, value.capabilityNodeId,
+      recommended_action_code, dimensions_json, correction_plan_json, source, created_at, idempotency_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    parameters: [value.id, value.gradingResultId, value.attemptId, value.examCycleId, value.capabilityNodeId,
       value.causeCode, value.errorStage ?? null, value.detail, value.confidence, value.confirmationStatus,
-      value.prerequisiteCapabilityNodeId ?? null, value.recommendedActionCode, value.source,
+      value.prerequisiteCapabilityNodeId ?? null, value.recommendedActionCode,
+      JSON.stringify(value.dimensions), JSON.stringify(value.correctionPlan), value.source,
       value.createdAt, value.idempotencyKey]
-  );
+  };
 }
-function insertEvidence(tx: SqlTransaction, value: LearningEvidenceRecord): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO learning_evidence(
+function evidenceStatement(value: LearningEvidenceRecord): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO learning_evidence(
       id, exam_cycle_id, capability_node_id, attempt_id, assessment_role, evidence_type,
       value, weight, quality, source, validation_policy_version, occurred_at, idempotency_key, metadata_json
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.examCycleId, value.capabilityNodeId, value.attemptId ?? null,
+    parameters: [value.id, value.examCycleId, value.capabilityNodeId, value.attemptId ?? null,
       value.assessmentRole, value.evidenceType, value.value ?? null, value.weight, value.quality,
       value.source, value.validationPolicyVersion, value.occurredAt, value.idempotencyKey,
       JSON.stringify(value.metadata)]
-  );
+  };
 }
-function insertValidity(tx: SqlTransaction, value: EvidenceValidityProjection): Promise<unknown> {
-  return tx.run(
-    `INSERT INTO evidence_validity_projection(
+function validityStatement(value: EvidenceValidityProjection): SqlBatchStatement {
+  return {
+    sql: `INSERT INTO evidence_validity_projection(
       evidence_id, validity_status, latest_correction_id, updated_at, version
     ) VALUES (?, ?, ?, ?, ?)`,
-    [value.evidenceId, value.validityStatus, value.latestCorrectionId ?? null, value.updatedAt, value.version]
-  );
+    parameters: [value.evidenceId, value.validityStatus, value.latestCorrectionId ?? null, value.updatedAt, value.version]
+  };
 }
 
 function mapSession(row: SessionRow): LearningSessionRecord {
@@ -433,6 +537,9 @@ function mapAttempt(row: AttemptRow): AttemptRecord {
   };
 }
 function mapObservation(row: ObservationRow): DecisionObservationRecord {
+  if (!isDecisionObservationType(row.observation_type)) {
+    throw new Error(`Invalid decision observation type in database: ${row.observation_type}`);
+  }
   return {
     id: row.id as DecisionObservationId, attemptId: row.attempt_id as AttemptId,
     observationType: row.observation_type, valueCode: row.value_code,
@@ -459,7 +566,10 @@ function mapDiagnosis(row: DiagnosisRow): ErrorDiagnosisRecord {
     errorStage: row.error_stage ?? undefined, detail: row.detail, confidence: row.confidence,
     confirmationStatus: row.confirmation_status,
     prerequisiteCapabilityNodeId: row.prerequisite_capability_node_id as CapabilityNodeId | null ?? undefined,
-    recommendedActionCode: row.recommended_action_code, source: row.source,
+    recommendedActionCode: row.recommended_action_code,
+    dimensions: parseDiagnosisDimensions(row.dimensions_json),
+    correctionPlan: parseCorrectionPlan(row.correction_plan_json),
+    source: row.source,
     createdAt: row.created_at as InstantMs, idempotencyKey: row.idempotency_key
   };
 }
@@ -524,6 +634,66 @@ function parseObject(value: string, field: string): JsonObject {
   const parsed: unknown = JSON.parse(value);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new TypeError(`${field} must be an object`);
   return parsed as JsonObject;
+}
+function parseDiagnosisDimensions(value: string): readonly ErrorDiagnosisDimension[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value || '[]');
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((item): ErrorDiagnosisDimension[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    if (
+      !Object.values(ErrorDiagnosisDimensionCode).includes(row.code as never)
+      || !Object.values(ErrorDiagnosisDimensionStatus).includes(row.status as never)
+      || typeof row.evidence !== 'string'
+      || !row.evidence.trim()
+    ) return [];
+    return [{
+      code: row.code as ErrorDiagnosisDimension['code'],
+      status: row.status as ErrorDiagnosisDimension['status'],
+      evidence: row.evidence.trim()
+    }];
+  }).slice(0, 4);
+}
+function parseCorrectionPlan(value: string): ErrorCorrectionPlan {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value || '{}');
+  } catch {
+    parsed = {};
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptyCorrectionPlan();
+  const row = parsed as Record<string, unknown>;
+  const steps = Array.isArray(row.steps)
+    ? row.steps.filter((step): step is string => typeof step === 'string' && Boolean(step.trim())).map((step) => step.trim()).slice(0, 4)
+    : [];
+  if (
+    typeof row.objective !== 'string'
+    || !row.objective.trim()
+    || !steps.length
+    || typeof row.practiceFocus !== 'string'
+    || !row.practiceFocus.trim()
+    || typeof row.successCriteria !== 'string'
+    || !row.successCriteria.trim()
+  ) return emptyCorrectionPlan();
+  return {
+    objective: row.objective.trim(),
+    steps,
+    practiceFocus: row.practiceFocus.trim(),
+    successCriteria: row.successCriteria.trim()
+  };
+}
+function emptyCorrectionPlan(): ErrorCorrectionPlan {
+  return {
+    objective: '',
+    steps: [],
+    practiceFocus: '',
+    successCriteria: ''
+  };
 }
 function assertLimit(limit: number): void {
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new RangeError('Evidence query limit must be between 1 and 500');

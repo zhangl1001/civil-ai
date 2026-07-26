@@ -9,7 +9,8 @@ export type ProviderCode = typeof ProviderCode[keyof typeof ProviderCode];
 
 export const ModelMessageRole = {
   User: 'user',
-  Assistant: 'assistant'
+  Assistant: 'assistant',
+  Tool: 'tool'
 } as const;
 
 export type ModelMessageRole = typeof ModelMessageRole[keyof typeof ModelMessageRole];
@@ -17,6 +18,20 @@ export type ModelMessageRole = typeof ModelMessageRole[keyof typeof ModelMessage
 export interface ModelMessage {
   readonly role: ModelMessageRole;
   readonly content: string;
+  readonly toolCallId?: string;
+  readonly toolCalls?: readonly ModelToolCall[];
+}
+
+export interface ModelToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: JsonObject;
+}
+
+export interface ProviderToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JsonObject;
 }
 
 export interface ProviderRequest {
@@ -25,6 +40,8 @@ export interface ProviderRequest {
   readonly temperature: number;
   readonly maxOutputTokens: number;
   readonly responseSchema?: JsonObject;
+  readonly tools?: readonly ProviderToolDefinition[];
+  readonly toolChoice?: 'auto' | 'none' | 'required' | { readonly name: string };
   readonly requestId: string;
 }
 
@@ -35,6 +52,7 @@ export interface ProviderUsage {
 
 export interface ProviderResponse {
   readonly text: string;
+  readonly toolCalls?: readonly ModelToolCall[];
   readonly finishReason?: string;
   readonly providerRequestId?: string;
   readonly usage: ProviderUsage;

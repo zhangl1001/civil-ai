@@ -120,10 +120,10 @@
         </section>
 
         <AiTaskPendingState
-          v-if="visibleReviewTask && visibleReviewTask.status !== 'done'"
+          v-if="visibleReviewTask && visibleReviewTask.status !== 'completed'"
           :task="visibleReviewTask"
           title="AI 正在做面试深度点评"
-          :description="visibleReviewTask.progressText || visibleReviewTask.detail || '会结合逐题作答、表达结构和语音指标生成复盘。'"
+          :description="visibleReviewTask.message || visibleReviewTask.detail || '会结合逐题作答、表达结构和语音指标生成复盘。'"
           ready-action-label="重新点评"
           retry-action-label="重新点评"
           @start="enqueueAiReview"
@@ -178,7 +178,8 @@ import {
   UserIcon,
   UsersIcon
 } from 'lucide-vue-next';
-import type { LocalTask } from '@/domain/task';
+import type { AgentRunView } from '@/modules/agent/public';
+import { initializeTutorRuntime } from '@/composition-root/public';
 import type { InterviewAnswer, InterviewDifficulty, InterviewQuestion, InterviewQuestionType, InterviewSession, InterviewStats, InterviewType } from '@/domain/interview';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
@@ -186,12 +187,8 @@ import { AppStateView } from '@/capabilities/design-system/public';
 import { goBackOrHome } from '@/router/navigation';
 import { speechRecognitionAdapter } from '@/platform/SpeechRecognitionAdapter';
 import { INTERVIEW_QUESTION_TYPES, interviewRepository } from '@/services/InterviewRepository';
-import { useTasksStore } from '@/stores/tasks';
-import { TASK_CHANGED_EVENT, taskStore } from '@/tasks/TaskStore';
-import { taskQueue } from '@/tasks/TaskQueue';
 
 const router = useRouter();
-const tasksStore = useTasksStore();
 const DRAFT_KEY = 'interview-session-draft';
 const questionTypeOptions = INTERVIEW_QUESTION_TYPES;
 const stage = ref<'setup' | 'session' | 'result'>('setup');
@@ -214,9 +211,10 @@ const history = ref<InterviewSession[]>([]);
 const stats = ref<InterviewStats>({ totalSessions: 0, averageScore: 0 });
 const resultSession = ref<InterviewSession | null>(null);
 const draftSaveTimer = ref<number | null>(null);
-const visibleReviewTask = ref<LocalTask | undefined>();
+const visibleReviewTask = ref<AgentRunView | undefined>();
 const reviewTaskId = ref('');
 const isReviewing = ref(false);
+let reviewPollId: number | null = null;
 
 interface InterviewDraft {
   stage: 'session';
@@ -259,13 +257,13 @@ onMounted(async () => {
   speechAvailable.value = await speechRecognitionAdapter.isAvailable();
   restoreDraft();
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  window.addEventListener(TASK_CHANGED_EVENT, handleReviewTaskChanged);
+  reviewPollId = window.setInterval(() => void refreshReviewTask(), 900);
   window.addEventListener('beforeunload', saveDraftNow);
 });
 onUnmounted(() => {
   saveDraftNow();
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  window.removeEventListener(TASK_CHANGED_EVENT, handleReviewTaskChanged);
+  if (reviewPollId !== null) window.clearInterval(reviewPollId);
   window.removeEventListener('beforeunload', saveDraftNow);
   clearDraftTimer();
   stopTimer();
@@ -417,7 +415,6 @@ async function enqueueAiReview() {
     const result = await interviewRepository.enqueueAiReview(resultSession.value);
     reviewTaskId.value = result.task.id;
     visibleReviewTask.value = result.task;
-    await tasksStore.refresh();
   } finally {
     isReviewing.value = false;
   }
@@ -425,17 +422,21 @@ async function enqueueAiReview() {
 
 async function cancelAiReview() {
   if (!reviewTaskId.value) return;
-  await taskQueue.cancel(reviewTaskId.value);
-  visibleReviewTask.value = await taskStore.get(reviewTaskId.value);
-  await tasksStore.refresh();
+  const runtime = await initializeTutorRuntime();
+  await runtime.cancelAgentRun.execute({
+    agentRunId: reviewTaskId.value as Parameters<typeof runtime.cancelAgentRun.execute>[0]['agentRunId'],
+    reason: 'user_cancelled_interview_review'
+  });
+  await refreshReviewTask();
 }
 
-async function handleReviewTaskChanged(event: Event) {
-  const taskId = (event as CustomEvent<{ taskId?: string }>).detail?.taskId;
-  if (!taskId || taskId !== reviewTaskId.value) return;
-  const task = await taskStore.get(taskId);
+async function refreshReviewTask() {
+  if (!reviewTaskId.value) return;
+  const runtime = await initializeTutorRuntime();
+  const task = (await runtime.getAgentRunViews.execute({ limit: 50 }))
+    .find((item) => item.id === reviewTaskId.value);
   visibleReviewTask.value = task;
-  if (task?.status === 'done' && resultSession.value) {
+  if (task?.status === 'completed' && resultSession.value) {
     const updated = await interviewRepository.getSession(resultSession.value.id);
     if (updated) resultSession.value = updated;
     visibleReviewTask.value = undefined;

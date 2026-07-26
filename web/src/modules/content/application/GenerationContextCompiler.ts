@@ -26,10 +26,15 @@ export interface CompiledGenerationContext {
   readonly capability: CapabilityNode;
 }
 
+export interface GenerationLearningContextPort {
+  build(examCycleId: ExamCycleId, capabilityNodeId: CapabilityNodeId): Promise<JsonObject>;
+}
+
 export class GenerationContextCompiler {
   constructor(
     private readonly candidateRepository: CandidateRepository,
-    private readonly curriculumRepository: CurriculumRepository
+    private readonly curriculumRepository: CurriculumRepository,
+    private readonly learningContext?: GenerationLearningContextPort
   ) {}
 
   async compile(request: GenerationContextRequest): Promise<CompiledGenerationContext> {
@@ -54,6 +59,11 @@ export class GenerationContextCompiler {
       .map((edge) => edge.toNodeId);
     const nodesById = new Map(curriculum.capabilityNodes.map((node) => [node.id, node]));
     const evidenceLevel = resolveEvidenceLevel(measurement);
+    const learningEvidence = await this.learningContext?.build(request.examCycleId, capability.id) ?? {
+      hasMasteryProjection: false,
+      recentErrors: [],
+      recentSessions: []
+    };
     const snapshot: JsonObject = {
       schemaVersion: 'generation-context.v1',
       examCycle: {
@@ -105,10 +115,7 @@ export class GenerationContextCompiler {
         difficultyMin: request.difficultyMin,
         difficultyMax: request.difficultyMax
       },
-      evidenceBoundary: {
-        hasMasteryProjection: false,
-        reason: 'WP4 evidence and mastery projections are not available; do not infer mastery from self-report or chat.'
-      }
+      learningEvidence
     };
     return { snapshot, capability };
   }
@@ -138,8 +145,8 @@ function capabilitySummary(node?: CapabilityNode): JsonObject {
 }
 
 function assertRequest(request: GenerationContextRequest): void {
-  if (!Number.isInteger(request.requestedCount) || request.requestedCount < 1 || request.requestedCount > 20) {
-    throw new RangeError('Requested question count must be an integer between 1 and 20');
+  if (!Number.isInteger(request.requestedCount) || request.requestedCount < 1 || request.requestedCount > 25) {
+    throw new RangeError('Requested question count must be an integer between 1 and 25');
   }
   if (
     !Number.isFinite(request.difficultyMin)

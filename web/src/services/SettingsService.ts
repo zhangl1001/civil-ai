@@ -1,23 +1,28 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { AppSetting } from '@/domain/project';
+const SETTINGS_PREFIX = 'zhangl-setting:';
 
 export class SettingsService {
   async get<T>(key: string, fallback: T): Promise<T> {
-    const record = await database.get<AppSetting>(STORES.settings, key);
-    return record ? (record.value as T) : fallback;
+    if (typeof localStorage === 'undefined') return fallback;
+    const value = localStorage.getItem(`${SETTINGS_PREFIX}${key}`);
+    if (value === null) return fallback;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
   }
 
   async set(key: string, value: unknown): Promise<void> {
-    await database.put<AppSetting>(STORES.settings, {
-      key,
-      value,
-      updatedAt: Date.now()
-    });
+    if (typeof localStorage === 'undefined') return;
+    if (value === null || value === undefined) {
+      localStorage.removeItem(`${SETTINGS_PREFIX}${key}`);
+      return;
+    }
+    localStorage.setItem(`${SETTINGS_PREFIX}${key}`, JSON.stringify(value));
   }
 
   async delete(key: string): Promise<void> {
-    await database.delete(STORES.settings, key);
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(`${SETTINGS_PREFIX}${key}`);
   }
 }
 

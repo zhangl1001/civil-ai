@@ -162,7 +162,6 @@ import {
   RocketIcon,
   SlidersHorizontalIcon
 } from 'lucide-vue-next';
-import { useTasksStore } from '@/stores/tasks';
 import {
   examFlowService,
   type EssayMockType,
@@ -173,9 +172,9 @@ import {
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 
 const router = useRouter();
-const tasksStore = useTasksStore();
 const subjects: ExamSubject[] = ['行测', '申论'];
 
 const initial = examFlowService.readContext();
@@ -269,9 +268,7 @@ async function startExam() {
       tags: selectedTags.value,
       essayType: essayType.value
     });
-    await tasksStore.refresh();
     notice.value = result.reused ? '已有相同模考任务在执行，已为你打开对应页面。' : '模考任务已加入执行队列。';
-    router.push(subject.value === '行测' ? '/vue/practice/session' : '/vue/essay');
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '模考任务派发失败';
   } finally {
@@ -280,8 +277,11 @@ async function startExam() {
 }
 
 function openHistory(item: ExamHistoryItem) {
-  examFlowService.openHistoryItem(item);
-  router.push('/vue/practice/session');
+  if (item.manifestId) {
+    router.push({ path: '/vue/practice/objective-session', query: { manifestId: item.manifestId } });
+    return;
+  }
+  router.push(subject.value === '申论' ? '/vue/essay' : practiceDetailLocation({ mode: 'self' }));
 }
 
 function durationText(durationMs?: number): string {

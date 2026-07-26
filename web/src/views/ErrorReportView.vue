@@ -67,6 +67,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ArrowLeftIcon, RotateCcwIcon, TargetIcon, ZapIcon } from 'lucide-vue-next';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { goBackOrHome } from '@/router/navigation';
 import { errorReportService, type ErrorCategory, type ErrorReport } from '@/services/ErrorReportService';
 
@@ -105,8 +106,12 @@ function shortCategory(category: ErrorCategory): string {
 
 function startPractice() {
   if (!report.value) return;
-  errorReportService.startWeakPractice(report.value);
-  router.push('/vue/practice/session');
+  const target = report.value.weakest;
+  router.push(practiceDetailLocation({
+    mode: 'self',
+    module: target?.module || report.value.modules[0]?.name,
+    knowledgePoint: target?.name
+  }));
 }
 
 function openWrongBook() {

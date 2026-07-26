@@ -43,6 +43,7 @@ export class IndexedDbOutboxRepository implements OutboxRepository {
       (values) => {
         const candidates = values
           .filter((event) => event.publishedAt === undefined)
+          .filter((event) => !options.eventTypes?.length || options.eventTypes.includes(event.eventType))
           .filter((event) => event.nextAttemptAt === undefined || event.nextAttemptAt <= options.now)
           .filter((event) => event.claimedBy === undefined || (
             event.claimExpiresAt !== undefined && event.claimExpiresAt <= options.now

@@ -1,5 +1,5 @@
 export const ContentBlockType = {
-  Markdown: 'markdown',
+  Text: 'text',
   DataTable: 'data_table',
   SvgDiagram: 'svg_diagram',
   Image: 'image',
@@ -70,6 +70,14 @@ export const QuestionSetStatus = {
 
 export type QuestionSetStatus = typeof QuestionSetStatus[keyof typeof QuestionSetStatus];
 
+export const QuestionSetPracticeStatus = {
+  NotStarted: 'not_started',
+  InProgress: 'in_progress',
+  Completed: 'completed'
+} as const;
+
+export type QuestionSetPracticeStatus = typeof QuestionSetPracticeStatus[keyof typeof QuestionSetPracticeStatus];
+
 export const QuestionQualityStatus = {
   Staged: 'staged',
   Validated: 'validated',
@@ -92,6 +100,20 @@ export const QuestionSetPurpose = {
 } as const;
 
 export type QuestionSetPurpose = typeof QuestionSetPurpose[keyof typeof QuestionSetPurpose];
+
+export const QuestionSetEntryMode = {
+  Tutor: 'tutor',
+  Self: 'self'
+} as const;
+
+export type QuestionSetEntryMode = typeof QuestionSetEntryMode[keyof typeof QuestionSetEntryMode];
+
+export const GenerationSelectionAuthority = {
+  TutorEngine: 'tutor_engine',
+  User: 'user'
+} as const;
+
+export type GenerationSelectionAuthority = typeof GenerationSelectionAuthority[keyof typeof GenerationSelectionAuthority];
 
 export const GenerationWorkflowStatus = {
   Queued: 'queued',

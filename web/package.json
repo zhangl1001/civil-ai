@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "prebuild": "bash ../scripts/prepare-vue-public-assets.sh",
     "dev": "vite",
     "check:architecture": "node ../scripts/check-architecture.mjs",
     "check:metadata": "node ../scripts/verify-curriculum-fixtures.mjs",
@@ -14,12 +13,13 @@
     "check:generation-workflow": "node ../scripts/verify-generation-workflow.mjs",
     "check:generation-foundation": "node ../scripts/verify-generation-foundation.mjs",
     "check:learning-evidence": "node ../scripts/verify-learning-evidence.mjs",
+    "check:learning-reliability": "node ../scripts/verify-learning-reliability.mjs",
     "check:agent-runtime": "node ../scripts/verify-agent-runtime.mjs",
+    "check:agent-loop": "node ../scripts/verify-agent-loop.mjs",
     "check:chat-context": "node ../scripts/verify-chat-context.mjs",
     "check:mastery-policy": "node ../scripts/verify-mastery-policy.mjs",
     "typecheck": "vue-tsc",
-    "build": "npm run check:architecture && npm run check:metadata && npm run check:content-metadata && npm run check:content-schema && npm run check:prompt-compiler && npm run check:provider-gateway && npm run check:generation-workflow && npm run check:generation-foundation && npm run check:learning-evidence && npm run check:agent-runtime && npm run check:chat-context && npm run check:mastery-policy && npm run typecheck && vite build",
-    "build:with-legacy": "ZHANGL_VUE_BUNDLE_LEGACY=1 VITE_ENABLE_LEGACY_FALLBACK=1 npm run build",
+    "build": "npm run check:architecture && npm run check:metadata && npm run check:content-metadata && npm run check:content-schema && npm run check:prompt-compiler && npm run check:provider-gateway && npm run check:generation-workflow && npm run check:generation-foundation && npm run check:learning-evidence && npm run check:learning-reliability && npm run check:agent-runtime && npm run check:agent-loop && npm run check:chat-context && npm run check:mastery-policy && npm run typecheck && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

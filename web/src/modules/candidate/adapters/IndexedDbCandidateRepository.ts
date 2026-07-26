@@ -5,7 +5,15 @@ import {
 import type { IndexedDbTransactionScope } from '@/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type { ProjectId } from '@/kernel/public';
-import type { CandidateCycleBundle, CandidateRepository, OnboardingDraft, ScoreTarget } from '../contracts/CandidateRepository';
+import type {
+  CandidateCycleBundle,
+  CandidateRepository,
+  ExamCycle,
+  ExamCyclePolicyBinding,
+  LearningPreferences,
+  OnboardingDraft,
+  ScoreTarget
+} from '../contracts/CandidateRepository';
 import { ScoreTargetStatus } from '../domain/ScoreTargetStatus';
 
 interface StoredCandidateCycleBundle {
@@ -55,6 +63,47 @@ export class IndexedDbCandidateRepository implements CandidateRepository {
           : target),
         ...targets
       ]
+    };
+    this.transactionScope.stage(context, {
+      type: 'put',
+      store: TutorIndexedDbStore.CandidateCycleBundles,
+      value: {
+        projectId: bundle.project.id,
+        status: bundle.examCycle.status,
+        updatedAt: bundle.examCycle.updatedAt,
+        bundle
+      } satisfies StoredCandidateCycleBundle
+    });
+  }
+
+  async replaceLearningPreferences(preferences:LearningPreferences,expectedVersion:number,context:TransactionContext):Promise<void>{
+    const current=await this.findCycle(preferences.examCycleId);
+    if(!current||current.learningPreferences.version!==expectedVersion)throw new Error('Learning preferences version conflict');
+    const bundle:CandidateCycleBundle={
+      ...current,
+      examCycle:{...current.examCycle,updatedAt:preferences.updatedAt},
+      learningPreferences:preferences
+    };
+    this.transactionScope.stage(context,{
+      type:'put',store:TutorIndexedDbStore.CandidateCycleBundles,
+      value:{projectId:bundle.project.id,status:bundle.examCycle.status,updatedAt:bundle.examCycle.updatedAt,bundle} satisfies StoredCandidateCycleBundle
+    });
+  }
+
+  async replaceCurriculumBinding(
+    examCycle: ExamCycle,
+    policyBindings: readonly ExamCyclePolicyBinding[],
+    expectedVersion: number,
+    context: TransactionContext
+  ): Promise<void> {
+    const current = await this.findCycle(examCycle.id);
+    if (!current || current.examCycle.version !== expectedVersion) {
+      throw new Error('Candidate curriculum binding version conflict');
+    }
+    const bundle: CandidateCycleBundle = {
+      ...current,
+      examCycle,
+      policyBindings: [...policyBindings]
     };
     this.transactionScope.stage(context, {
       type: 'put',

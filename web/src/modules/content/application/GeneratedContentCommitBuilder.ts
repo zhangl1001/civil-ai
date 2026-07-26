@@ -11,6 +11,7 @@ import {
   ContentAssetStatus,
   ContentDocumentType,
   QuestionQualityStatus,
+  QuestionSetPracticeStatus,
   QuestionSetPurpose,
   QuestionSetStatus
 } from '../domain/ContentCodes';
@@ -48,6 +49,7 @@ export class GeneratedContentCommitBuilder {
       cognitiveLevel: 'application',
       purpose: purposeForRole(spec.assessmentRole),
       assessmentRole: spec.assessmentRole,
+      variantGroupId: question.materialGroupId,
       content: question,
       correctAnswer: { optionId: question.correctOptionId },
       qualityStatus: QuestionQualityStatus.Published,
@@ -96,6 +98,7 @@ export class GeneratedContentCommitBuilder {
         assessmentRole: spec.assessmentRole,
         module: capability.module,
         status: QuestionSetStatus.Ready,
+        practiceStatus: QuestionSetPracticeStatus.NotStarted,
         questionCount: questions.length,
         contentHash: questionSetHash,
         contentVersion: 1,

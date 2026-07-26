@@ -31,6 +31,7 @@ import type {
   LectureRecord,
   QuestionCapabilityLink,
   QuestionRecord,
+  QuestionSetLibraryEntry,
   QuestionSetRecord,
   QuestionTemplateVersion
 } from '../contracts/ContentRepository';
@@ -41,10 +42,12 @@ import type {
   GenerationWorkflowStep,
   PublishedAssetStatus,
   QuestionQualityStatus,
+  QuestionSetPracticeStatus,
   QuestionSetPurpose,
   QuestionSetStatus,
   QuestionTemplateCode
 } from '../domain/ContentCodes';
+import { QuestionSetEntryMode } from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
 
 interface ReleaseRow extends SqlRow { id: string; content_hash: string; }
@@ -82,7 +85,10 @@ interface LectureRow extends SqlRow {
 interface QuestionSetRow extends SqlRow {
   id: string; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; generation_spec_id: string;
   purpose: QuestionSetPurpose; assessment_role: AssessmentRole; module: string; status: QuestionSetStatus;
-  question_count: number; content_hash: string | null; content_version: number; created_at: number;
+  practice_status: QuestionSetPracticeStatus; question_count: number; content_hash: string | null; content_version: number; created_at: number;
+}
+interface QuestionSetLibraryRow extends QuestionSetRow {
+  constraints_json: string;
 }
 interface QuestionRow extends SqlRow {
   id: string; question_set_id: string; exam_cycle_id: string; capability_node_id: string;
@@ -199,6 +205,46 @@ export class SqliteContentRepository implements ContentRepository {
     return rows[0] ? this.loadBundle(rows[0]) : undefined;
   }
 
+  async listQuestionSetLibrary(
+    examCycleId: ExamCycleId,
+    limit: number
+  ): Promise<readonly QuestionSetLibraryEntry[]> {
+    assertQuestionSetQueryLimit(limit);
+    const rows = await this.database.query<QuestionSetLibraryRow>(
+      `SELECT question_set.*, generation_spec.constraints_json
+       FROM question_sets question_set
+       JOIN generation_specs generation_spec ON generation_spec.id = question_set.generation_spec_id
+       WHERE question_set.exam_cycle_id = ? AND question_set.status = 'ready'
+       ORDER BY question_set.created_at DESC LIMIT ?`,
+      [examCycleId, limit]
+    );
+    return rows.map((row) => {
+      const constraints = parseJsonObject(row.constraints_json, 'generation_specs.constraints_json');
+      const explicit = constraints.entryMode;
+      const entryMode = explicit === QuestionSetEntryMode.Self
+        ? QuestionSetEntryMode.Self
+        : explicit === QuestionSetEntryMode.Tutor
+          ? QuestionSetEntryMode.Tutor
+          : constraints.source === 'custom'
+            ? QuestionSetEntryMode.Self
+            : QuestionSetEntryMode.Tutor;
+      return {
+        id: row.id as QuestionSetId,
+        examCycleId: row.exam_cycle_id as ExamCycleId,
+        learningThreadId: row.learning_thread_id as LearningThreadId | null ?? undefined,
+        capabilityNodeId: row.capability_node_id as CapabilityNodeId,
+        purpose: row.purpose,
+        assessmentRole: row.assessment_role,
+        module: row.module,
+        questionCount: row.question_count,
+        practiceStatus: row.practice_status,
+        entryMode,
+        source: typeof constraints.source === 'string' ? constraints.source : undefined,
+        createdAt: row.created_at as InstantMs
+      };
+    });
+  }
+
   async listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]> {
     assertQuestionSetQueryLimit(limit);
     const rows = await this.database.query<QuestionSetRow>(
@@ -207,6 +253,33 @@ export class SqliteContentRepository implements ContentRepository {
       [examCycleId, limit]
     );
     return Promise.all(rows.map((row) => this.loadBundle(row)));
+  }
+
+  async listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]> {
+    const rows = await this.database.query<QuestionSetRow>(
+      `SELECT * FROM question_sets WHERE exam_cycle_id = ? AND status = 'ready'
+       ORDER BY created_at DESC`,
+      [examCycleId]
+    );
+    return Promise.all(rows.map((row) => this.loadBundle(row)));
+  }
+
+  async updateQuestionSetPracticeStatus(
+    questionSetId: QuestionSetId,
+    status: QuestionSetPracticeStatus,
+    context: TransactionContext
+  ): Promise<void> {
+    const transaction = this.transactionScope.resolve(context);
+    if (status === 'not_started') return;
+    const currentStatuses = status === 'completed'
+      ? ['not_started', 'in_progress']
+      : ['not_started'];
+    await transaction.run(
+      `UPDATE question_sets
+       SET practice_status = ?
+       WHERE id = ? AND practice_status IN (${currentStatuses.map(() => '?').join(', ')})`,
+      [status, questionSetId, ...currentStatuses]
+    );
   }
 
   private async loadBundle(questionSetRow: QuestionSetRow): Promise<CommittedQuestionSetBundle> {
@@ -309,10 +382,10 @@ export class SqliteContentRepository implements ContentRepository {
     return transaction.run(
       `INSERT INTO question_sets(
         id, exam_cycle_id, learning_thread_id, teaching_blueprint_id, capability_node_id, generation_spec_id, purpose, assessment_role,
-        module, status, question_count, content_hash, content_version, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        module, status, practice_status, question_count, content_hash, content_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [value.id, value.examCycleId, value.learningThreadId ?? null, value.teachingBlueprintId ?? null, value.capabilityNodeId, value.generationSpecId, value.purpose,
-        value.assessmentRole, value.module, value.status, value.questionCount, value.contentHash ?? null,
+        value.assessmentRole, value.module, value.status, value.practiceStatus, value.questionCount, value.contentHash ?? null,
         value.contentVersion, value.createdAt]
     );
   }
@@ -447,6 +520,7 @@ export class SqliteContentRepository implements ContentRepository {
       assessmentRole: row.assessment_role,
       module: row.module,
       status: row.status,
+      practiceStatus: row.practice_status,
       questionCount: row.question_count,
       contentHash: row.content_hash ?? undefined,
       contentVersion: row.content_version,

@@ -1,31 +1,3 @@
 {
-  "legacyDirectDatabaseImports": {
-    "web/src/services/AIChatRepository.ts": 1,
-    "web/src/services/AbilityStatsService.ts": 1,
-    "web/src/services/DataManagementService.ts": 1,
-    "web/src/services/DigestRepository.ts": 2,
-    "web/src/services/DigestService.ts": 1,
-    "web/src/services/ErrorReportService.ts": 1,
-    "web/src/services/EssayRepository.ts": 1,
-    "web/src/services/ExamFlowService.ts": 1,
-    "web/src/services/ExamProfileRepository.ts": 1,
-    "web/src/services/FileRepository.ts": 1,
-    "web/src/services/HomeDashboardRepository.ts": 1,
-    "web/src/services/InterviewRepository.ts": 1,
-    "web/src/services/KnowledgeGraphService.ts": 1,
-    "web/src/services/LearningEventRepository.ts": 1,
-    "web/src/services/PlanDashboardService.ts": 1,
-    "web/src/services/PlanService.ts": 1,
-    "web/src/services/PracticeSessionRepository.ts": 1,
-    "web/src/services/ProfileAnalysisRepository.ts": 1,
-    "web/src/services/ProfileStatsRepository.ts": 1,
-    "web/src/services/ProjectRepository.ts": 1,
-    "web/src/services/QualityDashboardService.ts": 1,
-    "web/src/services/QuestionRepository.ts": 1,
-    "web/src/services/SettingsService.ts": 1,
-    "web/src/services/SprintService.ts": 1,
-    "web/src/services/StudyService.ts": 1,
-    "web/src/services/WrongBookRepository.ts": 1,
-    "web/src/tasks/TaskStore.ts": 1
-  }
+  "legacyDirectDatabaseImports": {}
 }

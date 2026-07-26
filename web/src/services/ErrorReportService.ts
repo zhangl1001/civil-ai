@@ -1,9 +1,5 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { Question } from '@/domain/question';
-import type { WrongItem } from '@/domain/wrongbook';
-import { practiceFlowService } from './PracticeFlowService';
-import { projectRepository } from './ProjectRepository';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import type { CapabilityNode } from '@/modules/curriculum/public';
 
 export type ErrorCategory = '概念性错误' | '理解性错误' | '执行性错误';
 
@@ -42,33 +38,41 @@ function emptyDistribution(): ErrorDistribution {
   return { '概念性错误': 0, '理解性错误': 0, '执行性错误': 0 };
 }
 
-function normalizeCategory(reason?: string): ErrorCategory {
-  if (!reason) return '执行性错误';
-  if (reason.includes('概念')) return '概念性错误';
-  if (reason.includes('理解')) return '理解性错误';
+function normalizeCategory(causeCode?: string): ErrorCategory {
+  if (causeCode === 'concept_gap' || causeCode === 'retention_failure') return '概念性错误';
+  if (
+    causeCode === 'recognition_error'
+    || causeCode === 'method_selection_error'
+    || causeCode === 'reasoning_error'
+    || causeCode === 'transfer_failure'
+  ) return '理解性错误';
   return '执行性错误';
-}
-
-function today(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
 export class ErrorReportService {
   async report(): Promise<ErrorReport> {
-    const project = await projectRepository.getActiveProject();
-    const wrongItems = await database.queryByIndex<WrongItem>(STORES.wrongItems, 'projectId', project.id);
-    const openWrongItems = wrongItems.filter((item) => item.status !== 'mastered');
-    const questions = await this.questionMap(openWrongItems.map((item) => item.questionId));
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return this.emptyReport();
+    const [wrongItems, curriculum, tracks] = await Promise.all([
+      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 }),
+      runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
+      runtime.masteryRepository.listTracks(cycle.examCycle.id, 100)
+    ]);
+    const nodes = new Map((curriculum?.capabilityNodes || []).map((node) => [node.id, node]));
+    const trackMap = new Map(tracks.map((track) => [track.capabilityNodeId, track]));
     const moduleMap = new Map<string, ErrorModuleReport>();
     const distribution = emptyDistribution();
 
-    for (const item of openWrongItems) {
-      const question = questions.get(item.questionId);
-      const moduleName = item.module || question?.module || '专项练习';
-      const pointName = question?.knowledgePoint || this.inferKnowledgePoint(question?.stem) || moduleName;
-      const category = normalizeCategory(item.reason);
-      const errorCount = Math.max(1, item.wrongCount || 1);
+    for (const item of wrongItems) {
+      const node = nodes.get(item.attempt.capabilityNodeId);
+      const moduleName = moduleLabel(node, item.module, curriculum?.capabilityNodes || []);
+      const pointName = node?.name || item.question.content.capabilityCode || moduleName;
+      const dominantDiagnosis = item.diagnoses[0];
+      const category = normalizeCategory(dominantDiagnosis?.causeCode);
+      const errorCount = 1;
+      const mastery = trackMap.get(item.attempt.capabilityNodeId);
+      const proficiency = mastery ? Math.round(mastery.accuracy * 100) : 0;
       const moduleReport = moduleMap.get(moduleName) || {
         name: moduleName,
         totalErrors: 0,
@@ -82,17 +86,17 @@ export class ErrorReportService {
       const current = moduleReport.points.find((point) => point.name === pointName);
       if (current) {
         current.errorCount += errorCount;
-        current.latestAt = Math.max(current.latestAt, item.updatedAt || item.lastWrongAt);
+        current.latestAt = Math.max(current.latestAt, Number(item.attempt.submittedAt));
         current.errorType = moduleReport.distribution[current.errorType] >= moduleReport.distribution[category] ? current.errorType : category;
-        current.proficiency = Math.max(0, Math.round(100 - Math.min(100, current.errorCount * 18)));
+        current.proficiency = proficiency;
       } else {
         moduleReport.points.push({
           name: pointName,
           module: moduleName,
           errorType: category,
           errorCount,
-          proficiency: Math.max(0, Math.round(100 - Math.min(100, errorCount * 18))),
-          latestAt: item.updatedAt || item.lastWrongAt
+          proficiency,
+          latestAt: Number(item.attempt.submittedAt)
         });
       }
       moduleMap.set(moduleName, moduleReport);
@@ -118,27 +122,13 @@ export class ErrorReportService {
     };
   }
 
-  startWeakPractice(report: ErrorReport): void {
-    practiceFlowService.writeStartContext({
-      module: report.weakest?.module || report.modules[0]?.name || '资料分析',
-      knowledgePoint: report.weakest?.name,
-      date: today(),
-      mode: 'practice',
-      source: 'error-report',
-      questionCount: 10
-    });
-  }
-
-  private async questionMap(questionIds: string[]): Promise<Map<string, Question>> {
-    const unique = Array.from(new Set(questionIds));
-    const pairs = await Promise.all(unique.map(async (id) => [id, await database.get<Question>(STORES.questions, id)] as const));
-    return new Map(pairs.filter((pair): pair is readonly [string, Question] => Boolean(pair[1])));
-  }
-
-  private inferKnowledgePoint(stem?: string): string | undefined {
-    if (!stem) return undefined;
-    const clean = stem.replace(/\s+/g, '');
-    return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
+  private emptyReport(): ErrorReport {
+    return {
+      totalErrors: 0,
+      distribution: emptyDistribution(),
+      modules: [],
+      recommendations: ['请先建立备考档案并完成练习。']
+    };
   }
 
   private recommendations(totalErrors: number, distribution: ErrorDistribution, weakest?: ErrorKnowledgePoint): string[] {
@@ -157,3 +147,8 @@ export class ErrorReportService {
 }
 
 export const errorReportService = new ErrorReportService();
+
+function moduleLabel(node: CapabilityNode | undefined, fallback: string, nodes: readonly CapabilityNode[]): string {
+  const moduleCode = node?.module || fallback;
+  return nodes.find((item) => item.nodeType === 'module' && item.module === moduleCode)?.name || moduleCode || '专项练习';
+}

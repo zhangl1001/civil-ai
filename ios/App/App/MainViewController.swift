@@ -22,9 +22,11 @@ final class MainViewController: CAPBridgeViewController {
         super.capacitorDidLoad()
         applyStableWebBackground()
         applyStableStatusBarAppearance()
-        bridge?.registerPluginType(KeychainPlugin.self)
-        bridge?.registerPluginType(LearningNotificationPlugin.self)
-        bridge?.registerPluginType(SpeechRecognitionPlugin.self)
+        bridge?.registerPluginInstance(KeychainPlugin())
+        bridge?.registerPluginInstance(LearningNotificationPlugin())
+        bridge?.registerPluginInstance(SpeechRecognitionPlugin())
+        bridge?.registerPluginInstance(NativeStreamingHTTPPlugin())
+        bridge?.registerPluginInstance(NativeAgentWorkspacePlugin())
         NotificationCenter.default.addObserver(self, selector: #selector(openLearningRoute(_:)), name: .examTutorNotificationRoute, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -45,6 +47,7 @@ final class MainViewController: CAPBridgeViewController {
         bridge?.triggerWindowJSEvent(eventName: "app-active")
         DispatchQueue.main.async { [weak self] in
             self?.triggerResumeRepaint()
+            self?.refreshWebViewCompositor()
             self?.recoverWebViewIfNeeded()
         }
     }
@@ -86,17 +89,30 @@ final class MainViewController: CAPBridgeViewController {
         view.backgroundColor = stableBackgroundColor
         webView?.backgroundColor = stableBackgroundColor
         webView?.scrollView.backgroundColor = stableBackgroundColor
-        webView?.isOpaque = true
-        webView?.scrollView.isOpaque = true
+        webView?.isOpaque = false
+        webView?.scrollView.isOpaque = false
         webView?.scrollView.contentInsetAdjustmentBehavior = .never
     }
 
     private func triggerResumeRepaint() {
         webView?.evaluateJavaScript("""
-            document.documentElement.style.background = getComputedStyle(document.documentElement).getPropertyValue('--app-canvas-bg') || '#F5F6FA';
-            document.body.style.background = getComputedStyle(document.documentElement).getPropertyValue('--app-canvas-bg') || '#F5F6FA';
+            document.documentElement.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue('--surface-canvas-solid') || '#F5F6FA';
+            document.body.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue('--surface-canvas-solid') || '#F5F6FA';
             window.dispatchEvent(new Event('native-resume'));
         """)
+    }
+
+    private func refreshWebViewCompositor() {
+        guard let webView = webView else { return }
+        webView.setNeedsLayout()
+        webView.layoutIfNeeded()
+        webView.scrollView.setNeedsLayout()
+        webView.scrollView.layoutIfNeeded()
+        webView.alpha = 0.999
+        DispatchQueue.main.async { [weak webView] in
+            webView?.alpha = 1.0
+            webView?.setNeedsDisplay()
+        }
     }
 
     private func recoverWebViewIfNeeded() {

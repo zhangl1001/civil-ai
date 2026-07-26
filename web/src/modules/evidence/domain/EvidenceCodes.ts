@@ -56,6 +56,27 @@ export const ErrorCauseCode = {
 } as const;
 export type ErrorCauseCode = typeof ErrorCauseCode[keyof typeof ErrorCauseCode];
 
+export const ErrorDiagnosisDimensionCode = {
+  KnowledgeConcept: 'knowledge_concept',
+  QuestionRecognition: 'question_recognition',
+  MethodSelection: 'method_selection',
+  ReasoningProcess: 'reasoning_process',
+  EvidenceExtraction: 'evidence_extraction',
+  CalculationExecution: 'calculation_execution',
+  OptionElimination: 'option_elimination',
+  TimeStrategy: 'time_strategy',
+  TransferRetention: 'transfer_retention'
+} as const;
+export type ErrorDiagnosisDimensionCode = typeof ErrorDiagnosisDimensionCode[keyof typeof ErrorDiagnosisDimensionCode];
+
+export const ErrorDiagnosisDimensionStatus = {
+  Gap: 'gap',
+  Risk: 'risk',
+  Adequate: 'adequate',
+  Unknown: 'unknown'
+} as const;
+export type ErrorDiagnosisDimensionStatus = typeof ErrorDiagnosisDimensionStatus[keyof typeof ErrorDiagnosisDimensionStatus];
+
 export const ErrorDiagnosisConfirmationAction = {
   Confirm: 'confirm',
   Reject: 'reject',
@@ -90,6 +111,22 @@ export const EvidenceCorrectionAction = {
   Reinstate: 'reinstate'
 } as const;
 export type EvidenceCorrectionAction = typeof EvidenceCorrectionAction[keyof typeof EvidenceCorrectionAction];
+
+export const DecisionObservationType = {
+  QuestionRecognition: 'question_recognition',
+  MethodSelection: 'method_selection',
+  KeyEvidence: 'key_evidence',
+  OptionElimination: 'option_elimination',
+  ErrorStage: 'error_stage',
+  ConfidenceReport: 'confidence_report',
+  UserConfirmation: 'user_confirmation'
+} as const;
+export type DecisionObservationType = typeof DecisionObservationType[keyof typeof DecisionObservationType];
+
+export function isDecisionObservationType(value: unknown): value is DecisionObservationType {
+  return typeof value === 'string'
+    && Object.values(DecisionObservationType).includes(value as DecisionObservationType);
+}
 
 export const QuestionExposureType = {
   LectureExample: 'lecture_example',

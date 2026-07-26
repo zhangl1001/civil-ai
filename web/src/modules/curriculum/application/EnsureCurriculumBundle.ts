@@ -10,7 +10,9 @@ export class EnsureCurriculumBundle {
   async execute(bundle: CurriculumBundle): Promise<void> {
     const existing = await this.repository.findBundle(bundle.curriculum.id);
     if (existing) {
-      this.assertSameRelease(existing, bundle);
+      if (!this.isSameRelease(existing, bundle)) {
+        await this.unitOfWork.run((context) => this.repository.synchronizeBundle(bundle, context));
+      }
       return;
     }
 
@@ -19,18 +21,29 @@ export class EnsureCurriculumBundle {
     } catch (error) {
       const concurrentInstall = await this.repository.findBundle(bundle.curriculum.id);
       if (!concurrentInstall) throw error;
-      this.assertSameRelease(concurrentInstall, bundle);
+      if (!this.isSameRelease(concurrentInstall, bundle)) {
+        await this.unitOfWork.run((context) => this.repository.synchronizeBundle(bundle, context));
+      }
     }
   }
 
-  private assertSameRelease(installed: CurriculumBundle, bundled: CurriculumBundle): void {
-    if (
-      installed.metadataPackage.contentHash !== bundled.metadataPackage.contentHash
-      || installed.curriculum.contentHash !== bundled.curriculum.contentHash
-    ) {
-      throw new Error(
-        `Published curriculum ${bundled.curriculum.id} has the same ID but different content`
+  private isSameRelease(installed: CurriculumBundle, bundled: CurriculumBundle): boolean {
+    return installed.metadataPackage.contentHash === bundled.metadataPackage.contentHash
+      && installed.curriculum.contentHash === bundled.curriculum.contentHash
+      && sameValues(installed.capabilityNodes.map((node) => node.id), bundled.capabilityNodes.map((node) => node.id))
+      && sameValues(
+        installed.capabilityEdges.map((edge) => `${edge.fromNodeId}:${edge.toNodeId}:${edge.relationType}`),
+        bundled.capabilityEdges.map((edge) => `${edge.fromNodeId}:${edge.toNodeId}:${edge.relationType}`)
+      )
+      && sameValues(
+        installed.assessmentPolicies.map((policy) => policy.id),
+        bundled.assessmentPolicies.map((policy) => policy.id)
       );
-    }
   }
+}
+
+function sameValues(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const expected = new Set(right);
+  return left.every((value) => expected.has(value));
 }

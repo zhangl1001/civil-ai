@@ -1,19 +1,40 @@
-import { database, type DatabaseOperation } from '@/db/database';
-import { STORES, type StoreName } from '@/db/schema';
-import { projectRepository } from './ProjectRepository';
-import { settingsService } from './SettingsService';
-
-type DbRecord = Record<string, unknown>;
+import { initializeTutorRuntime, type TutorDatabaseRuntime } from '@/composition-root/public';
+import { TransactionWorkload } from '@/capabilities/database/public';
+import type { LearningThreadId } from '@/kernel/public';
+import type { CandidateCycleBundle } from '@/modules/candidate/public';
+import type { CommittedQuestionSetBundle, LearningAssetRecord } from '@/modules/content/public';
+import { assertCommittedQuestionSetBundle } from '@/modules/content/domain/ContentBundlePolicy';
+import type {
+  ErrorDiagnosisRecord,
+  LearningEvidenceRecord,
+  ObjectiveSessionFacts
+} from '@/modules/evidence/public';
+import type { MasteryTrack, ReviewQueueItem } from '@/modules/mastery/public';
+import type { DailyPlanAggregate } from '@/modules/planning/public';
+import type { LearningThreadAggregate } from '@/modules/teaching/public';
+import type { ConversationMessage, ConversationSession } from '@/modules/conversation/public';
 
 export interface DataBackup {
   app: 'zhangl-agent';
-  version: number;
+  version: 2;
   exportedAt: number;
-  project: {
-    id: string;
-    name: string;
+  project: { id: string; name: string };
+  candidate: CandidateCycleBundle;
+  learning: {
+    threads: LearningThreadAggregate[];
+    questionSets: CommittedQuestionSetBundle[];
+    sessions: ObjectiveSessionFacts[];
+    diagnoses: ErrorDiagnosisRecord[];
+    evidence: LearningEvidenceRecord[];
+    masteryTracks: MasteryTrack[];
+    reviewQueue: ReviewQueueItem[];
+    dailyPlans: DailyPlanAggregate[];
+    assets: LearningAssetRecord[];
   };
-  stores: Partial<Record<StoreName, DbRecord[]>>;
+  conversations: {
+    sessions: ConversationSession[];
+    messages: ConversationMessage[];
+  };
 }
 
 export interface DataSummary {
@@ -25,32 +46,241 @@ export interface DataSummary {
   wrongItems: number;
   events: number;
   aiSessions: number;
-  tasks: number;
 }
 
-const PROJECT_SCOPED_STORES = [
-  STORES.files,
-  STORES.questions,
-  STORES.practiceSessions,
-  STORES.wrongItems,
-  STORES.abilityProfiles,
-  STORES.learningEvents,
-  STORES.digestItems,
-  STORES.interviewSessions,
-  STORES.aiSessions,
-  STORES.aiTasks
-] as const;
+export class DataManagementService {
+  async exportActiveProject(): Promise<DataBackup> {
+    const runtime = await initializeTutorRuntime();
+    const candidate = await runtime.candidateRepository.findCurrentCycle();
+    if (!candidate) throw new Error('请先建立备考档案');
+    const examCycleId = candidate.examCycle.id;
+    const [questionSets, sessions, masteryTracks, reviewQueue, assets, conversationSessions] = await Promise.all([
+      runtime.contentRepository.listAllQuestionSets(examCycleId),
+      runtime.learningSessionRepository.listAll(examCycleId),
+      runtime.masteryRepository.listAllTracks(examCycleId),
+      runtime.masteryRepository.listAllReviews(examCycleId),
+      runtime.learningAssetRepository.listAll(examCycleId),
+      runtime.conversationStore.listSessions(candidate.project.id)
+    ]);
+    const [threads, diagnoses, evidence, messages, dailyPlans] = await Promise.all([
+      collectThreads(runtime, questionSets, sessions),
+      collectDiagnoses(runtime, sessions),
+      runtime.learningEvidenceRepository.listAllValid(examCycleId),
+      collectMessages(runtime, conversationSessions),
+      runtime.dailyPlanRepository.listAll(examCycleId)
+    ]);
+    return {
+      app: 'zhangl-agent',
+      version: 2,
+      exportedAt: Date.now(),
+      project: { id: candidate.project.id, name: candidate.project.name },
+      candidate,
+      learning: {
+        threads,
+        questionSets: [...questionSets],
+        sessions: [...sessions],
+        diagnoses,
+        evidence: [...evidence],
+        masteryTracks: [...masteryTracks],
+        reviewQueue: [...reviewQueue],
+        dailyPlans: [...dailyPlans],
+        assets: [...assets]
+      },
+      conversations: {
+        sessions: [...conversationSessions],
+        messages
+      }
+    };
+  }
 
-const CLEAR_LEARNING_STORES = [
-  STORES.questions,
-  STORES.practiceSessions,
-  STORES.wrongItems,
-  STORES.abilityProfiles,
-  STORES.learningEvents,
-  STORES.digestItems,
-  STORES.interviewSessions,
-  STORES.aiTasks
-] as const;
+  async importBackup(input: unknown): Promise<number> {
+    const backup = assertBackup(input);
+    const runtime = await initializeTutorRuntime();
+    const current = await runtime.candidateRepository.findCurrentCycle();
+    if (current && current.examCycle.id !== backup.candidate.examCycle.id) {
+      throw new Error('备份属于另一个备考周期；当前版本不合并不同考生或考试周期');
+    }
+    let count = 0;
+    if (current) count += await runtime.conversationStore.deleteProjectConversations(current.project.id);
+    await runtime.unitOfWork.run(async (context) => {
+      if (current) {
+        count += await runtime.dataMaintenance.clearLearningData(current.examCycle.id, context);
+      } else {
+        await runtime.candidateRepository.createCycleBundle(backup.candidate, context);
+        count += 1;
+      }
+      for (const aggregate of backup.learning.threads) {
+        if (!aggregate.events.length) continue;
+        await runtime.learningThreadRepository.restore(aggregate, context);
+        count += 1;
+      }
+      for (const bundle of backup.learning.questionSets) {
+        await runtime.contentRepository.commitQuestionSet(bundle, context);
+        count += bundle.questions.length + 1;
+      }
+      for (const facts of backup.learning.sessions) {
+        await runtime.learningSessionRepository.commitObjectiveSession(facts, context);
+        count += facts.attempts.length + 1;
+      }
+      if (backup.learning.diagnoses.length) {
+        await runtime.errorDiagnosisRepository.append(backup.learning.diagnoses, context);
+        count += backup.learning.diagnoses.length;
+      }
+      if (backup.learning.evidence.length) {
+        await runtime.learningEvidenceRepository.append(
+          backup.learning.evidence,
+          backup.learning.evidence.map((item) => ({
+            evidenceId: item.id,
+            validityStatus: 'valid',
+            updatedAt: item.occurredAt,
+            version: 1
+          })),
+          context
+        );
+        count += backup.learning.evidence.length;
+      }
+      for (const track of backup.learning.masteryTracks) {
+        await runtime.masteryRepository.upsertTrack(track, undefined, context);
+        count += 1;
+      }
+      for (const item of backup.learning.reviewQueue) {
+        await runtime.masteryRepository.scheduleReview(item, context);
+        count += 1;
+      }
+      for (const plan of backup.learning.dailyPlans) {
+        await runtime.dailyPlanRepository.replaceCurrent(plan, undefined, context);
+        count += plan.items.length + 1;
+      }
+      for (const asset of backup.learning.assets) {
+        await runtime.learningAssetRepository.save(asset, context);
+        count += 1;
+      }
+    }, { workload: TransactionWorkload.Maintenance });
+    for (const session of backup.conversations.sessions) {
+      await runtime.conversationStore.restoreSession(session);
+      count += 1;
+    }
+    for (const message of backup.conversations.messages) {
+      await runtime.conversationStore.restoreMessage(message);
+      count += 1;
+    }
+    return count;
+  }
+
+  async getSummary(): Promise<DataSummary> {
+    const backup = await this.exportActiveProject();
+    const questions = backup.learning.questionSets.reduce((sum, bundle) => sum + bundle.questions.length, 0);
+    const wrongItems = backup.learning.sessions.reduce((sum, facts) => (
+      sum + facts.attempts.filter((attempt) => attempt.result === 'incorrect').length
+    ), 0);
+    return {
+      projectName: backup.project.name,
+      storageText: bytesText(estimateBytes(backup)),
+      files: backup.learning.assets.length,
+      questions,
+      sessions: backup.learning.sessions.length,
+      wrongItems,
+      events: backup.learning.sessions.length + backup.learning.diagnoses.length + backup.learning.evidence.length,
+      aiSessions: backup.conversations.sessions.length
+    };
+  }
+
+  async clearLearningData(): Promise<number> {
+    const runtime = await initializeTutorRuntime();
+    const candidate = await runtime.candidateRepository.findCurrentCycle();
+    if (!candidate) return 0;
+    return runtime.dataMaintenance.clearLearningData(candidate.examCycle.id);
+  }
+}
+
+async function collectThreads(
+  runtime: TutorDatabaseRuntime,
+  questionSets: readonly CommittedQuestionSetBundle[],
+  sessions: readonly ObjectiveSessionFacts[]
+): Promise<LearningThreadAggregate[]> {
+  const ids = new Set<string>();
+  questionSets.forEach((bundle) => {
+    if (bundle.questionSet.learningThreadId) ids.add(bundle.questionSet.learningThreadId);
+  });
+  sessions.forEach((facts) => ids.add(facts.session.learningThreadId));
+  const values = await Promise.all([...ids].map((id) => runtime.learningThreadRepository.findById(id as LearningThreadId)));
+  return values.filter((item): item is LearningThreadAggregate => Boolean(item));
+}
+
+async function collectDiagnoses(
+  runtime: TutorDatabaseRuntime,
+  sessions: readonly ObjectiveSessionFacts[]
+): Promise<ErrorDiagnosisRecord[]> {
+  const groups = await Promise.all(sessions.map((facts) => runtime.errorDiagnosisRepository.listBySession(facts.session.id)));
+  return groups.flatMap((items) => [...items]);
+}
+
+async function collectMessages(
+  runtime: TutorDatabaseRuntime,
+  sessions: readonly ConversationSession[]
+): Promise<ConversationMessage[]> {
+  const groups = await Promise.all(sessions.map((session) => runtime.conversationStore.listMessages(session.id)));
+  return groups.flatMap((items) => [...items]);
+}
+
+function assertBackup(input: unknown): DataBackup {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('备份文件格式不正确');
+  const value = input as Partial<DataBackup>;
+  if (value.app !== 'zhangl-agent' || value.version !== 2 || !value.candidate || !value.learning || !value.conversations) {
+    throw new Error('仅支持新版 v2 业务快照，不兼容旧 Markdown/旧数据库备份');
+  }
+  const backup = value as DataBackup;
+  const cycleId = requiredText(record(backup.candidate).examCycle, 'candidate.examCycle', 'id');
+  const projectId = requiredText(record(backup.candidate).project, 'candidate.project', 'id');
+  if (requiredText(backup.project, 'project', 'id') !== projectId) throw new Error('备份项目标识不一致');
+  assertArrayFields(backup.learning, [
+    'threads', 'questionSets', 'sessions', 'diagnoses', 'evidence',
+    'masteryTracks', 'reviewQueue', 'dailyPlans', 'assets'
+  ]);
+  assertArrayFields(backup.conversations, ['sessions', 'messages']);
+  backup.learning.threads.forEach((item) => assertCycle(record(item).thread, cycleId, 'learning.thread'));
+  backup.learning.questionSets.forEach((item) => {
+    assertCommittedQuestionSetBundle(item);
+    assertCycle(item.questionSet, cycleId, 'learning.questionSet');
+  });
+  backup.learning.sessions.forEach((item) => assertCycle(item.session, cycleId, 'learning.session'));
+  backup.learning.diagnoses.forEach((item) => assertCycle(item, cycleId, 'learning.diagnosis'));
+  backup.learning.evidence.forEach((item) => assertCycle(item, cycleId, 'learning.evidence'));
+  backup.learning.masteryTracks.forEach((item) => assertCycle(item, cycleId, 'learning.masteryTrack'));
+  backup.learning.reviewQueue.forEach((item) => assertCycle(item, cycleId, 'learning.reviewQueue'));
+  backup.learning.dailyPlans.forEach((item) => assertCycle(item.plan, cycleId, 'learning.dailyPlan'));
+  backup.learning.assets.forEach((item) => assertCycle(item, cycleId, 'learning.asset'));
+  const sessionIds = new Set(backup.conversations.sessions.map((session) => {
+    if (session.projectId !== projectId || !session.id) throw new Error('备份会话不属于当前项目');
+    return session.id;
+  }));
+  backup.conversations.messages.forEach((message) => {
+    if (!message.id || !sessionIds.has(message.sessionId)) throw new Error('备份消息引用了不存在的会话');
+  });
+  return backup;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('备份对象结构不正确');
+  return value as Record<string, unknown>;
+}
+
+function requiredText(parent: unknown, label: string, key: string): string {
+  const value = record(parent)[key];
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label}.${key} 缺失`);
+  return value;
+}
+
+function assertArrayFields(parent: unknown, fields: readonly string[]): void {
+  const value = record(parent);
+  fields.forEach((field) => {
+    if (!Array.isArray(value[field])) throw new Error(`备份字段 ${field} 必须是数组`);
+  });
+}
+
+function assertCycle(value: unknown, cycleId: string, label: string): void {
+  if (requiredText(value, label, 'examCycleId') !== cycleId) throw new Error(`${label} 不属于当前备考周期`);
+}
 
 function bytesText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -59,116 +289,8 @@ function bytesText(bytes: number): string {
 }
 
 function estimateBytes(value: unknown): number {
-  try {
-    return new Blob([JSON.stringify(value)]).size;
-  } catch {
-    return JSON.stringify(value ?? '').length;
-  }
-}
-
-function deleteOps(storeName: StoreName, records: DbRecord[]): DatabaseOperation[] {
-  return records
-    .map((record) => record.id ?? record.key)
-    .filter((key): key is string | number => typeof key === 'string' || typeof key === 'number')
-    .map((key) => ({ type: 'delete', storeName, key }));
-}
-
-export class DataManagementService {
-  async exportActiveProject(): Promise<DataBackup> {
-    const project = await projectRepository.getActiveProject();
-    const stores: Partial<Record<StoreName, DbRecord[]>> = {
-      [STORES.projects]: [project as unknown as DbRecord]
-    };
-
-    for (const storeName of PROJECT_SCOPED_STORES) {
-      stores[storeName] = await database.queryByIndex<DbRecord>(storeName, 'projectId', project.id);
-    }
-
-    const sessionIds = new Set((stores[STORES.practiceSessions] || []).map((item) => item.id).filter(Boolean));
-    stores[STORES.answers] = (await database.list<DbRecord>(STORES.answers))
-      .filter((answer) => sessionIds.has(answer.sessionId));
-
-    const aiSessionIds = new Set((stores[STORES.aiSessions] || []).map((item) => item.id).filter(Boolean));
-    stores[STORES.aiMessages] = (await database.list<DbRecord>(STORES.aiMessages))
-      .filter((message) => aiSessionIds.has(message.sessionId));
-
-    const taskIds = new Set((stores[STORES.aiTasks] || []).map((item) => item.id).filter(Boolean));
-    stores[STORES.taskLogs] = (await database.list<DbRecord>(STORES.taskLogs))
-      .filter((log) => taskIds.has(log.taskId));
-
-    return {
-      app: 'zhangl-agent',
-      version: 1,
-      exportedAt: Date.now(),
-      project: {
-        id: project.id,
-        name: project.name
-      },
-      stores
-    };
-  }
-
-  async importBackup(backup: DataBackup): Promise<number> {
-    if (!backup || backup.app !== 'zhangl-agent' || !backup.project?.id || !backup.stores) {
-      throw new Error('备份文件格式不正确');
-    }
-
-    const operations: DatabaseOperation[] = [];
-    for (const storeName of Object.values(STORES)) {
-      const rows = backup.stores[storeName];
-      if (Array.isArray(rows) && rows.length) {
-        operations.push({ type: 'putMany', storeName, values: rows });
-      }
-    }
-    await database.transaction(operations);
-    await settingsService.set('activeProjectId', backup.project.id);
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('zhangl-active-project', backup.project.name);
-    }
-    return operations.reduce((total, op) => total + (op.type === 'putMany' ? op.values.length : 1), 0);
-  }
-
-  async getSummary(): Promise<DataSummary> {
-    const backup = await this.exportActiveProject();
-    const stores = backup.stores;
-    const bytes = estimateBytes(backup);
-    return {
-      projectName: backup.project.name,
-      storageText: bytesText(bytes),
-      files: stores[STORES.files]?.length || 0,
-      questions: stores[STORES.questions]?.length || 0,
-      sessions: stores[STORES.practiceSessions]?.length || 0,
-      wrongItems: stores[STORES.wrongItems]?.length || 0,
-      events: stores[STORES.learningEvents]?.length || 0,
-      aiSessions: stores[STORES.aiSessions]?.length || 0,
-      tasks: stores[STORES.aiTasks]?.length || 0
-    };
-  }
-
-  async clearLearningData(): Promise<number> {
-    const project = await projectRepository.getActiveProject();
-    const operations: DatabaseOperation[] = [];
-
-    const sessions = await database.queryByIndex<DbRecord>(STORES.practiceSessions, 'projectId', project.id);
-    const sessionIds = new Set(sessions.map((session) => session.id).filter(Boolean));
-    operations.push(...deleteOps(STORES.answers, (await database.list<DbRecord>(STORES.answers)).filter((answer) => sessionIds.has(answer.sessionId))));
-
-    const aiTasks = await database.queryByIndex<DbRecord>(STORES.aiTasks, 'projectId', project.id);
-    const taskIds = new Set(aiTasks.map((task) => task.id).filter(Boolean));
-    operations.push(...deleteOps(STORES.taskLogs, (await database.list<DbRecord>(STORES.taskLogs)).filter((log) => taskIds.has(log.taskId))));
-
-    for (const storeName of CLEAR_LEARNING_STORES) {
-      const records = storeName === STORES.practiceSessions
-        ? sessions
-        : storeName === STORES.aiTasks
-          ? aiTasks
-          : await database.queryByIndex<DbRecord>(storeName, 'projectId', project.id);
-      operations.push(...deleteOps(storeName, records));
-    }
-
-    await database.transaction(operations);
-    return operations.length;
-  }
+  const json = JSON.stringify(value);
+  return typeof Blob === 'undefined' ? json.length : new Blob([json]).size;
 }
 
 export const dataManagementService = new DataManagementService();

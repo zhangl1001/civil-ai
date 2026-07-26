@@ -5,6 +5,20 @@ import errorDiagnosisConfirmationsSql from './004_error_diagnosis_confirmations.
 import tutorAgentRuntimeSql from './005_tutor_agent_runtime.sql?raw';
 import masteryPlanningSql from './006_mastery_planning_foundation.sql?raw';
 import reviewExecutionLinkageSql from './007_review_execution_linkage.sql?raw';
+import taskMessageCenterSql from './008_task_message_center.sql?raw';
+import planFeedbackProactiveSignalsSql from './009_plan_feedback_proactive_signals.sql?raw';
+import learningAssetsSql from './010_learning_assets.sql?raw';
+import conversationsSql from './011_conversations.sql?raw';
+import learningAssetAndSessionIndexesSql from './012_learning_asset_and_session_indexes.sql?raw';
+import agentRunTargetIndexSql from './013_agent_run_target_index.sql?raw';
+import conversationMessageLogsSql from './014_conversation_message_logs.sql?raw';
+import conversationSessionIndexSql from './015_conversation_session_index.sql?raw';
+import agentWorkspaceSessionsSql from './016_agent_workspace_sessions.sql?raw';
+import practiceSessionDraftsSql from './017_practice_session_drafts.sql?raw';
+import agentWorkPoolsSql from './018_agent_work_pools.sql?raw';
+import practiceManifestsSql from './019_practice_manifests.sql?raw';
+import errorDiagnosisGuidanceSql from './020_error_diagnosis_guidance.sql?raw';
+import questionSetPracticeStatusSql from './021_question_set_practice_status.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -49,5 +63,89 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'review_execution_linkage',
     checksum: 'sha256:e3cb4d1cd8002e0d68e67fb1020032a2f3bc5a227fdb4096bd0c4adf6a47a331',
     sql: reviewExecutionLinkageSql
+  },
+  {
+    version: 8,
+    name: 'task_message_center',
+    checksum: 'sha256:2b95e0e5e034a9d124f7e00c93903e7b7c533f40880ab007b7412383f9a4d91e',
+    sql: taskMessageCenterSql
+  },
+  {
+    version: 9,
+    name: 'plan_feedback_proactive_signals',
+    checksum: 'sha256:bba68fdc2818b4fabc7b98387a4968545af204593e4a578f31e022c9c0353ccd',
+    sql: planFeedbackProactiveSignalsSql
+  },
+  {
+    version: 10,
+    name: 'learning_assets',
+    checksum: 'sha256:fbf5f0c0050719e34f13ee65ad66a6a226d90adbe6867fdbe320d2674950fc05',
+    sql: learningAssetsSql
+  },
+  {
+    version: 11,
+    name: 'conversations',
+    checksum: 'sha256:c4c115cdfda63d57e9d5024671b13577b682acd538ab6cd34821c8c165480261',
+    sql: conversationsSql
+  },
+  {
+    version: 12,
+    name: 'learning_asset_and_session_indexes',
+    checksum: 'sha256:68077786280e5d48fb86d57f12f23c4352aec9900c38cfb5275fd7dd819c9c8e',
+    sql: learningAssetAndSessionIndexesSql
+  },
+  {
+    version: 13,
+    name: 'agent_run_target_index',
+    checksum: 'sha256:061941d8b30ca3e3befa0d32c445e1bfd76b4376647b1c655019a65dd48d0e6b',
+    sql: agentRunTargetIndexSql
+  },
+  {
+    version: 14,
+    name: 'conversation_message_logs',
+    checksum: 'sha256:d695c89eb93458eb7e04bb4a7dd89fb45643a0cd62f906f6a8fa8adb15b6096d',
+    sql: conversationMessageLogsSql
+  },
+  {
+    version: 15,
+    name: 'conversation_session_index',
+    checksum: 'sha256:60296081e434ce20e0391e5073afe5a11e04bb705aa207ee6ee1cb4abeabf6d3',
+    sql: conversationSessionIndexSql
+  },
+  {
+    version: 16,
+    name: 'agent_workspace_sessions',
+    checksum: 'sha256:dfd6259c8d4c13c84f5071a02e852c7d6348cc67390f567f0fe3e410ab04b35f',
+    sql: agentWorkspaceSessionsSql
+  },
+  {
+    version: 17,
+    name: 'practice_session_drafts',
+    checksum: 'sha256:82f897e92fd79d083834d8b83fd334a1bb04cbb7a7442220f37df826d601cf72',
+    sql: practiceSessionDraftsSql
+  },
+  {
+    version: 18,
+    name: 'agent_work_pools',
+    checksum: 'sha256:b9641dcca8b3e4202b5e76f1e46791375fb0ecf8933be98edf4a47b4d79d2645',
+    sql: agentWorkPoolsSql
+  },
+  {
+    version: 19,
+    name: 'practice_manifests',
+    checksum: 'sha256:182d88817157adbce377fd06859c4e7de96a6100985b829ffee778ae1c2a6132',
+    sql: practiceManifestsSql
+  },
+  {
+    version: 20,
+    name: 'error_diagnosis_guidance',
+    checksum: 'sha256:c598bd4a7c36953919699afab328cb3ecd2133388cdc1c0731de77d89d5781ef',
+    sql: errorDiagnosisGuidanceSql
+  },
+  {
+    version: 21,
+    name: 'question_set_practice_status',
+    checksum: 'sha256:7f6356296ef751d6fb75f0e6354c0d488363c63c5214b977586719bffd91c680',
+    sql: questionSetPracticeStatusSql
   }
 ];

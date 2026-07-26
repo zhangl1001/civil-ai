@@ -29,15 +29,22 @@ export class SqlitePromptRepository implements PromptRepository {
     const transaction = this.transactionScope.resolve(context);
     await transaction.run(
       `INSERT INTO prompt_definitions(id, prompt_code, task_type, description, status, created_at)
-       VALUES (?, ?, ?, ?, 'active', ?)`,
+       VALUES (?, ?, ?, ?, 'active', ?)
+       ON CONFLICT(prompt_code) DO UPDATE SET
+         task_type = excluded.task_type,
+         description = excluded.description,
+         status = 'active'`,
       [bundle.definitionId, bundle.promptCode, bundle.taskType, bundle.description, bundle.createdAt]
     );
     await transaction.run(
       `INSERT INTO prompt_versions(
         id, prompt_definition_id, version, manifest_json, sections_json,
         compatible_schema_versions_json, content_hash, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'published', ?)`,
-      [bundle.versionId, bundle.definitionId, bundle.version, JSON.stringify({
+      ) VALUES (
+        ?, (SELECT id FROM prompt_definitions WHERE prompt_code = ?),
+        ?, ?, ?, ?, ?, 'published', ?
+      )`,
+      [bundle.versionId, bundle.promptCode, bundle.version, JSON.stringify({
         requiredVariables: bundle.requiredVariables,
         responseSchema: bundle.responseSchema
       }), JSON.stringify(bundle.sections), JSON.stringify(bundle.compatibleSchemaVersions),

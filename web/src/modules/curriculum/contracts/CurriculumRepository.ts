@@ -92,5 +92,6 @@ export interface CurriculumBundle {
 
 export interface CurriculumRepository {
   installBundle(bundle: CurriculumBundle, context: TransactionContext): Promise<void>;
+  synchronizeBundle(bundle: CurriculumBundle, context: TransactionContext): Promise<void>;
   findBundle(curriculumVersionId: CurriculumVersionId): Promise<CurriculumBundle | undefined>;
 }

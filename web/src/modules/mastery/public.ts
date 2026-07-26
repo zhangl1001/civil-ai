@@ -2,7 +2,13 @@ export { MasteryState, ReviewStatus, ReviewType } from './domain/MasteryCodes';
 export type { MasteryRepository, MasterySnapshot, MasteryTrack, ReviewQueueItem } from './contracts/MasteryRepository';
 export { MASTERY_ALGORITHM_VERSION, projectMastery, type MasteryProjection, type MasteryProjectionInput } from './domain/MasteryProjectionPolicy';
 export { RefreshMasteryTrack, type RefreshMasteryTrackCommand } from './application/RefreshMasteryTrack';
-export { proposeDailyPlan, type DailyPlanProposal, type DailyPlanProposalItem, type DailyTeachingAction } from './domain/DailyPlanPolicy';
+export {
+  DailyPlanReasonCode,
+  proposeDailyPlan,
+  type DailyPlanProposal,
+  type DailyPlanProposalItem,
+  type DailyTeachingAction
+} from './domain/DailyPlanPolicy';
 export { BuildDailyPlanProposal } from './application/BuildDailyPlanProposal';
 export { StartReviewQueueItem } from './application/StartReviewQueueItem';
 export { CompleteReviewQueueItem } from './application/CompleteReviewQueueItem';

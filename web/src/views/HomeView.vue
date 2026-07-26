@@ -1,15 +1,10 @@
 <template>
   <div class="home-page app-page">
-    <PageHeader :level="1">
-      <template #title>
-        <div class="app-title-row">
-          <span class="app-title-icon"><GraduationCapIcon /></span>
-          <div class="app-title-copy">
-            <h3>{{ candidateHome?.projectName || 'AI 私教备考' }}</h3>
-            <span>{{ candidateHome ? cycleSubtitle : '建立档案后开始个性化训练' }}</span>
-          </div>
-        </div>
-      </template>
+    <PageHeader
+      :level="1"
+      :title="candidateHome?.projectName || 'AI 私教备考'"
+      :meta="candidateHome ? cycleSubtitle : '建立档案后开始个性化训练'"
+    >
       <template #actions>
         <button class="icon-button" type="button" @click="router.push('/vue/calendar')"><CalendarIcon /></button>
       </template>
@@ -57,7 +52,7 @@
                 <SparklesIcon />
                 今日计划
               </button>
-              <button type="button" @click="router.push('/vue/practice')">
+              <button type="button" @click="router.push({ path: '/vue/practice/session', query: { mode: 'tutor' } })">
                 <TargetIcon />
                 针对性练习
               </button>
@@ -197,13 +192,13 @@ import {
   ChevronRightIcon,
   Edit3Icon,
   FileTextIcon,
-  GraduationCapIcon,
   MonitorIcon,
   SparklesIcon,
   TargetIcon
 } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
   InitialDiagnosisStatus,
@@ -211,7 +206,6 @@ import {
   type CandidateHomeSnapshot
 } from '@/modules/candidate/public';
 import { qualityDashboardService, type QualityDashboard } from '@/services/QualityDashboardService';
-import { practiceFlowService } from '@/services/PracticeFlowService';
 
 const router = useRouter();
 const candidateHome = ref<CandidateHomeSnapshot | null>(null);
@@ -346,7 +340,7 @@ const diagnosisStatusDetail = computed(() => ({
 
 const actionCards = [
   { name: '学习中心', sub: '讲义、积累和路径', icon: BookOpenIcon, color: 'study', to: '/vue/study' },
-  { name: '针对性练习', sub: '围绕薄弱点刷题', icon: Edit3Icon, color: 'practice', to: '/vue/practice/session' },
+  { name: '针对性练习', sub: '围绕薄弱点刷题', icon: Edit3Icon, color: 'practice', to: { path: '/vue/practice/session', query: { mode: 'tutor' } } },
   { name: '错题复盘', sub: '错因、闪卡、重做', icon: BookMarkedIcon, color: 'wrong', to: '/vue/wrongbook' },
   { name: '申论练习', sub: '材料题和批改', icon: FileTextIcon, color: 'essay', to: '/vue/essay' },
   { name: '阶段模考', sub: '校准真实水平', icon: MonitorIcon, color: 'mock', to: '/vue/exam' },
@@ -369,9 +363,7 @@ function daysUntil(value: string): number | undefined {
 }
 
 function startWeakPractice(module: string) {
-  practiceFlowService.writeStartContext({ module, mode: 'practice' });
-  qualityDashboardService.startWeakPractice(module);
-  void router.push('/vue/practice/session');
+  void router.push(practiceDetailLocation({ mode: 'self', module }));
 }
 
 function radarPoint(index: number, total: number, scale: number): { x: number; y: number } {
@@ -407,51 +399,13 @@ function roundChart(value: number): number {
   gap: 14px;
 }
 
-.app-title-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.app-title-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  color: var(--primary-color);
-  background: rgba(var(--color-brand-rgb), .1);
-}
-
-.app-title-icon svg {
-  width: 19px;
-  height: 19px;
-}
-
-.app-title-copy {
-  min-width: 0;
-}
-
-.app-title-copy h3 {
-  margin: 0;
-  font-size: var(--type-size-section-title);
-}
-
-.app-title-copy span {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-micro);
-  font-weight: var(--type-weight-semibold);
-}
-
 .onboarding-card,
 .tutor-hero,
 .portrait-section,
 .coach-card {
-  border-radius: 18px;
+  border-radius: var(--radius-card);
   padding: 16px;
-  background: rgba(var(--color-surface-rgb), .76);
+  background: var(--surface-card);
   box-shadow: var(--app-shadow-soft);
 }
 
@@ -513,8 +467,7 @@ function roundChart(value: number): number {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 76px;
   gap: 14px;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.9), rgba(232,246,241,.78));
+  background: var(--surface-feature-tutor);
 }
 
 .hero-copy {
@@ -527,8 +480,7 @@ function roundChart(value: number): number {
   display: grid;
   place-items: center;
   align-content: center;
-  background: rgba(255,255,255,.72);
-  box-shadow: inset 0 0 0 1px rgba(var(--color-brand-rgb), .08);
+  background: var(--surface-control);
 }
 
 .hero-meter strong {
@@ -647,11 +599,9 @@ function roundChart(value: number): number {
 
 .ability-chart-card {
   margin-top: 12px;
-  border-radius: 16px;
-  padding: 13px;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.72), rgba(255,255,255,.48));
-  box-shadow: inset 0 0 0 1px rgba(var(--color-ink-rgb), .045);
+  padding: 8px 0 2px;
+  background: transparent;
+  box-shadow: none;
 }
 
 .chart-head {
@@ -763,8 +713,8 @@ function roundChart(value: number): number {
 
 .weak-list {
   overflow: hidden;
-  border-radius: 16px;
-  background: rgba(var(--color-surface-rgb), .62);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
   box-shadow: var(--app-shadow-soft);
 }
 
@@ -868,13 +818,13 @@ function roundChart(value: number): number {
 .action-card {
   min-height: 104px;
   border: 0;
-  border-radius: 16px;
+  border-radius: var(--radius-card);
   padding: 13px;
   display: flex;
   flex-direction: column;
   gap: 7px;
   color: inherit;
-  background: rgba(var(--color-surface-rgb), .72);
+  background: var(--surface-card);
   box-shadow: var(--app-shadow-soft);
   font: inherit;
   text-align: left;
@@ -917,8 +867,8 @@ function roundChart(value: number): number {
 
 .skeleton-card {
   height: 120px;
-  border-radius: 18px;
-  background: linear-gradient(90deg, rgba(255,255,255,.48), rgba(255,255,255,.86), rgba(255,255,255,.48));
+  border-radius: var(--radius-card);
+  background: linear-gradient(90deg, var(--surface-card), var(--surface-card-strong), var(--surface-card));
   background-size: 220% 100%;
   animation: pulse 1.3s ease-in-out infinite;
 }

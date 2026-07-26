@@ -147,6 +147,13 @@ export interface CandidateCycleBundle {
 export interface CandidateRepository {
   createCycleBundle(bundle: CandidateCycleBundle, context: TransactionContext): Promise<void>;
   replaceActiveScoreTargets(targets: readonly ScoreTarget[], context: TransactionContext): Promise<void>;
+  replaceLearningPreferences(preferences: LearningPreferences, expectedVersion: number, context: TransactionContext): Promise<void>;
+  replaceCurriculumBinding(
+    examCycle: ExamCycle,
+    policyBindings: readonly ExamCyclePolicyBinding[],
+    expectedVersion: number,
+    context: TransactionContext
+  ): Promise<void>;
   findCurrentCycle(): Promise<CandidateCycleBundle | undefined>;
   findCycle(examCycleId: ExamCycleId): Promise<CandidateCycleBundle | undefined>;
   findActiveCycle(projectId: ProjectId): Promise<CandidateCycleBundle | undefined>;

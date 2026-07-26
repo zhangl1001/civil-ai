@@ -1,5 +1,5 @@
 import { generationTaskService } from './GenerationTaskService';
-import type { EnqueueResult } from '@/tasks/taskTypes';
+import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 
 export interface EssayContext {
   date: string;
@@ -36,7 +36,7 @@ export class EssayFlowService {
     return next;
   }
 
-  async enqueueGrading(content: string, context = this.readContext()): Promise<EnqueueResult> {
+  async enqueueGrading(content: string, context = this.readContext()): Promise<AgentTaskEnqueueResult> {
     return generationTaskService.enqueue({
       intent: 'essayGrade',
       title: '申论批改',
@@ -54,7 +54,7 @@ export class EssayFlowService {
   async enqueueQuestionGeneration(
     context = this.readContext(),
     options: { questionCount?: number; title?: string } = {}
-  ): Promise<EnqueueResult> {
+  ): Promise<AgentTaskEnqueueResult> {
     const count = Math.max(1, Math.min(3, Number(options.questionCount || 1)));
     return generationTaskService.enqueue({
       intent: 'mock',

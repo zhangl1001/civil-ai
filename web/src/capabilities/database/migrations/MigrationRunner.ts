@@ -1,4 +1,5 @@
 import type { SqlDatabase, SqlRow } from '../contracts/SqlDatabase';
+import { TransactionWorkload } from '../contracts/UnitOfWork';
 import type { TutorDatabaseConfig } from '../config/TutorDatabaseConfig';
 import type { Migration } from './Migration';
 import { MigrationError, MigrationErrorCode } from './MigrationError';
@@ -75,7 +76,7 @@ export class MigrationRunner {
           'INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
           [migration.version, migration.name, migration.checksum, nowEpochMs]
         );
-      });
+      }, { workload: TransactionWorkload.Maintenance });
     }
   }
 

@@ -2,7 +2,11 @@ import type { UnitOfWork } from '@/capabilities/database/public';
 import type {
   CapabilityNodeId, Clock, IdGenerator, InstantMs, JsonObject, LearningSessionId, LearningThreadId, QuestionSetId, ReviewQueueItemId
 } from '@/kernel/public';
-import type { ContentRepository, QuestionRecord } from '@/modules/content/public';
+import {
+  QuestionSetPracticeStatus,
+  type ContentRepository,
+  type QuestionRecord
+} from '@/modules/content/public';
 import type { OutboxRepository } from '@/modules/task/public';
 import type { LearningThreadRecord, LearningThreadRepository } from '@/modules/teaching/public';
 import type {
@@ -17,10 +21,12 @@ import {
   EvidenceSource,
   EvidenceType,
   GradingMethod,
+  isDecisionObservationType,
   LearningSessionStatus,
   LearningSessionType,
   QuestionExposureType
 } from '../domain/EvidenceCodes';
+import type { DecisionObservationType } from '../domain/EvidenceCodes';
 import { AssessmentRole } from '../domain/AssessmentRole';
 import { EvidenceValidity } from '../domain/EvidenceValidity';
 import type { ObjectiveSubmissionBundle } from '../contracts/LearningFacts';
@@ -34,7 +40,7 @@ export interface ObjectiveAnswerInput {
   readonly hintLevel?: number;
   readonly answerChangeCount?: number;
   readonly observations?: readonly {
-    readonly observationType: string;
+    readonly observationType: DecisionObservationType;
     readonly valueCode: string;
     readonly value: JsonObject;
     readonly confidence: number;
@@ -46,6 +52,9 @@ export interface SubmitObjectiveSessionCommand {
   readonly learningThreadId: LearningThreadId;
   readonly questionSetId: QuestionSetId;
   readonly reviewQueueItemId?: ReviewQueueItemId;
+  readonly dailyPlanItemId?: string;
+  readonly questionIds?: readonly string[];
+  readonly assessmentRole?: AssessmentRole;
   readonly startedAt: InstantMs;
   readonly elapsedMs: number;
   readonly answers: readonly ObjectiveAnswerInput[];
@@ -94,12 +103,24 @@ export class SubmitObjectiveSession {
     if (questionSet.questionSet.capabilityNodeId !== thread.thread.primaryCapabilityNodeId) {
       throw new Error('Reference slice only accepts question sets bound to the learning thread primary capability');
     }
-    const bundle = this.buildBundle(command, thread.thread, questionSet.questions, questionSet.questionSet.assessmentRole);
+    const selectedQuestions = selectQuestions(questionSet.questions, command.questionIds);
+    const bundle = this.buildBundle(
+      command,
+      thread.thread,
+      selectedQuestions,
+      command.assessmentRole ?? questionSet.questionSet.assessmentRole,
+      targetQuestionMs(questionSet.generationSpec?.constraints, selectedQuestions.length)
+    );
     try {
       await this.unitOfWork.run(async (context) => {
         await this.sessionRepository.commitObjectiveSession(bundle, context);
         await this.diagnosisRepository.append(bundle.diagnoses, context);
         await this.evidenceRepository.append(bundle.evidence, bundle.validity, context);
+        await this.contentRepository.updateQuestionSetPracticeStatus(
+          command.questionSetId,
+          QuestionSetPracticeStatus.Completed,
+          context
+        );
         await this.outboxRepository.append({
           id: this.ids.next('OutboxEventId'),
           aggregateType: 'learning_session',
@@ -109,6 +130,10 @@ export class SubmitObjectiveSession {
             sessionId: bundle.session.id,
             learningThreadId: bundle.session.learningThreadId,
             questionSetId: bundle.session.questionSetId,
+            capabilityNodeId: bundle.attempts[0]?.capabilityNodeId ?? null,
+            reviewQueueItemId: command.reviewQueueItemId ?? null,
+            dailyPlanItemId: command.dailyPlanItemId ?? null,
+            elapsedMs: command.elapsedMs,
             correctCount: bundle.session.correctCount,
             questionCount: bundle.session.questionCount
           },
@@ -132,7 +157,8 @@ export class SubmitObjectiveSession {
     command: SubmitObjectiveSessionCommand,
     thread: LearningThreadRecord,
     questions: readonly QuestionRecord[],
-    assessmentRole: AssessmentRole
+    assessmentRole: AssessmentRole,
+    speedTargetMs: number
   ): ObjectiveSubmissionBundle {
     const answerByQuestionId = new Map(command.answers.map((item) => [item.questionId, item]));
     if (answerByQuestionId.size !== command.answers.length) throw new Error('Each question can be submitted once per session');
@@ -239,11 +265,18 @@ export class SubmitObjectiveSession {
       confirmationStatus: ConfirmationStatus.Pending,
       prerequisiteCapabilityNodeId: undefined,
       recommendedActionCode: 'request_error_diagnosis',
+      dimensions: [],
+      correctionPlan: {
+        objective: '先确认具体错误环节，再安排针对性纠正。',
+        steps: ['查看标准解析并回忆自己的选择依据。', '等待 AI 结合误选项完成深度诊断。'],
+        practiceFocus: '暂不追加同类训练，避免在错因不明时重复刷题。',
+        successCriteria: '能够说明自己的错误发生在哪一步，并复述正确方法。'
+      },
       source: 'deterministic' as const,
       createdAt: now,
       idempotencyKey: `${command.idempotencyKey}:diagnosis:${item.attempt.questionId}`
     }]);
-    const evidence = attempts.map((item) => ({
+    const correctnessEvidence = attempts.map((item) => ({
       id: this.ids.next('EvidenceId'),
       examCycleId: item.attempt.examCycleId,
       capabilityNodeId: item.attempt.capabilityNodeId,
@@ -259,6 +292,27 @@ export class SubmitObjectiveSession {
       idempotencyKey: `${command.idempotencyKey}:evidence:correctness:${item.attempt.questionId}`,
       metadata: { hintLevel: item.attempt.hintLevel, questionContentVersion: item.attempt.questionContentVersion }
     }));
+    const speedEvidence = attempts.flatMap((item) => item.attempt.elapsedMs === undefined ? [] : [{
+      id: this.ids.next('EvidenceId'),
+      examCycleId: item.attempt.examCycleId,
+      capabilityNodeId: item.attempt.capabilityNodeId,
+      attemptId: item.attempt.id,
+      assessmentRole,
+      evidenceType: EvidenceType.Speed,
+      value: speedScore(item.attempt.elapsedMs, speedTargetMs),
+      weight: objectiveEvidencePolicyV1.correctnessWeight(assessmentRole, item.attempt.hintLevel) * 0.65,
+      quality: objectiveEvidencePolicyV1.quality(item.attempt.hintLevel),
+      source: EvidenceSource.System,
+      validationPolicyVersion: objectiveEvidencePolicyV1.version,
+      occurredAt: now,
+      idempotencyKey: `${command.idempotencyKey}:evidence:speed:${item.attempt.questionId}`,
+      metadata: {
+        elapsedMs: item.attempt.elapsedMs,
+        targetMs: speedTargetMs,
+        questionContentVersion: item.attempt.questionContentVersion
+      }
+    }]);
+    const evidence = [...correctnessEvidence, ...speedEvidence];
     const validity = evidence.map((item) => ({
       evidenceId: item.id,
       validityStatus: EvidenceValidity.Valid,
@@ -294,8 +348,46 @@ export class SubmitObjectiveSession {
       if (answer.confidence !== undefined && (answer.confidence < 0 || answer.confidence > 1)) {
         throw new Error('Objective answer confidence is invalid');
       }
+      answer.observations?.forEach((observation) => {
+        if (!isDecisionObservationType(observation.observationType)) {
+          throw new Error(`Objective answer observation type is invalid: ${String(observation.observationType)}`);
+        }
+        if (!observation.valueCode.trim()) throw new Error('Objective answer observation valueCode is required');
+        if (!Number.isFinite(observation.confidence) || observation.confidence < 0 || observation.confidence > 1) {
+          throw new Error('Objective answer observation confidence is invalid');
+        }
+      });
     });
   }
+}
+
+function selectQuestions(
+  questions: readonly QuestionRecord[],
+  requestedIds?: readonly string[]
+): readonly QuestionRecord[] {
+  if (!requestedIds) return questions;
+  if (!requestedIds.length) throw new Error('Question subset cannot be empty');
+  const unique = new Set(requestedIds);
+  if (unique.size !== requestedIds.length) throw new Error('Question subset cannot contain duplicates');
+  const byId = new Map(questions.map((question) => [String(question.id), question]));
+  const selected = requestedIds.map((id) => byId.get(id));
+  if (selected.some((question) => !question)) {
+    throw new Error('Question subset contains a question outside the source set');
+  }
+  return selected as QuestionRecord[];
+}
+
+function targetQuestionMs(constraints: JsonObject | undefined, questionCount: number): number {
+  const durationMinutes = constraints?.durationMinutes;
+  if (typeof durationMinutes === 'number' && Number.isFinite(durationMinutes) && durationMinutes > 0 && questionCount > 0) {
+    return Math.max(15_000, Math.round(durationMinutes * 60_000 / questionCount));
+  }
+  return 90_000;
+}
+
+function speedScore(elapsedMs: number, targetMs: number): number {
+  if (elapsedMs <= targetMs) return 1;
+  return Math.round(Math.max(0, 1 - (elapsedMs - targetMs) / (targetMs * 1.5)) * 10_000) / 10_000;
 }
 
 function correctOptionIdOf(question: QuestionRecord): string {

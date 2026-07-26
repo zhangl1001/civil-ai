@@ -197,6 +197,40 @@ export class SqliteCandidateRepository implements CandidateRepository {
     }
   }
 
+  async replaceLearningPreferences(preferences:LearningPreferences,expectedVersion:number,context:TransactionContext):Promise<void>{
+    const result=await this.transactionScope.resolve(context).run(
+      `UPDATE learning_preferences
+       SET proactive_level=?,quiet_hours_json=?,updated_at=?,version=?
+       WHERE id=? AND exam_cycle_id=? AND version=?`,
+      [preferences.proactiveLevel,JSON.stringify(preferences.quietHours),preferences.updatedAt,preferences.version,preferences.id,preferences.examCycleId,expectedVersion]
+    );
+    if(result.changes!==1)throw new Error('Learning preferences version conflict');
+  }
+
+  async replaceCurriculumBinding(
+    examCycle: ExamCycle,
+    policyBindings: readonly ExamCyclePolicyBinding[],
+    expectedVersion: number,
+    context: TransactionContext
+  ): Promise<void> {
+    const transaction = this.transactionScope.resolve(context);
+    const result = await transaction.run(
+      `UPDATE exam_cycles
+       SET curriculum_version_id = ?, updated_at = ?, version = ?
+       WHERE id = ? AND version = ?`,
+      [
+        examCycle.curriculumVersionId,
+        examCycle.updatedAt,
+        examCycle.version,
+        examCycle.id,
+        expectedVersion
+      ]
+    );
+    if (result.changes !== 1) throw new Error('Candidate curriculum binding version conflict');
+    await transaction.run('DELETE FROM exam_cycle_policy_bindings WHERE exam_cycle_id = ?', [examCycle.id]);
+    for (const binding of policyBindings) await this.insertPolicyBinding(transaction, binding);
+  }
+
   async findCurrentCycle(): Promise<CandidateCycleBundle | undefined> {
     const projects = await this.database.query<ProjectRow>(
       `SELECT * FROM projects WHERE status = 'active' ORDER BY updated_at DESC LIMIT 1`

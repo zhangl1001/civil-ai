@@ -1,5 +1,5 @@
 import type { AIMessage } from '@/domain/ai';
-import type { AICompletionMessage } from './AIProvider';
+import type { AITextMessage } from '@/composition-root/ai/ConfiguredAIClient';
 
 const DEFAULT_CONTEXT_BUDGET = 12_000;
 const DEFAULT_MAX_MESSAGES = 24;
@@ -12,10 +12,10 @@ export interface BuildChatContextOptions {
   readonly maxMessages?: number;
 }
 
-export function buildChatContext(history: readonly AIMessage[], options: BuildChatContextOptions): AICompletionMessage[] {
+export function buildChatContext(history: readonly AIMessage[], options: BuildChatContextOptions): AITextMessage[] {
   const budget = options.budget ?? DEFAULT_CONTEXT_BUDGET;
   const maxMessages = options.maxMessages ?? DEFAULT_MAX_MESSAGES;
-  const selected: AICompletionMessage[] = [];
+  const selected: AITextMessage[] = [];
   let used = 0;
   const currentPrompt = options.currentPrompt.trim();
   const usable = history

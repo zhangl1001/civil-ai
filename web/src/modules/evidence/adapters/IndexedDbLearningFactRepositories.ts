@@ -1,7 +1,7 @@
 import type { IndexedDbTransactionScope } from '@/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork';
 import { TutorIndexedDb, TutorIndexedDbStore } from '@/capabilities/database/adapters/indexeddb/TutorIndexedDb';
 import type { TransactionContext } from '@/capabilities/database/public';
-import type { CapabilityNodeId, ErrorDiagnosisId, EvidenceId, ExamCycleId, LearningSessionId } from '@/kernel/public';
+import type { CapabilityNodeId, ErrorDiagnosisId, EvidenceId, ExamCycleId, LearningSessionId, QuestionSetId } from '@/kernel/public';
 import type {
   ErrorDiagnosisRepository,
   LearningEvidenceRepository,
@@ -68,13 +68,30 @@ export class IndexedDbLearningSessionRepository implements LearningSessionReposi
     return value ? factsOf(value) : undefined;
   }
 
+  async listByQuestionSet(questionSetId: QuestionSetId, limit: number): Promise<readonly ObjectiveSessionFacts[]> {
+    assertSessionLimit(limit);
+    const values = await this.database.getAllByIndex<StoredSessionFacts>(
+      TutorIndexedDbStore.LearningSessionFacts,
+      'by_question_set',
+      questionSetId
+    );
+    return values
+      .slice()
+      .sort((left, right) => right.session.completedAt - left.session.completedAt || right.session.id.localeCompare(left.session.id))
+      .slice(0, limit)
+      .map(factsOf);
+  }
+
   async listRecent(examCycleId: ExamCycleId, limit: number): Promise<readonly ObjectiveSessionFacts[]> {
     assertSessionLimit(limit);
+    return (await this.listAll(examCycleId)).slice(0, limit);
+  }
+
+  async listAll(examCycleId: ExamCycleId): Promise<readonly ObjectiveSessionFacts[]> {
     const values = await this.database.getAll<StoredSessionFacts>(TutorIndexedDbStore.LearningSessionFacts);
     return values
       .filter((item) => item.examCycleKey === examCycleId)
       .sort((left, right) => right.session.startedAt - left.session.startedAt || right.session.id.localeCompare(left.session.id))
-      .slice(0, limit)
       .map(factsOf);
   }
 }
@@ -99,21 +116,43 @@ export class IndexedDbErrorDiagnosisRepository implements ErrorDiagnosisReposito
     return values
       .filter((item) => item.sessionKey === sessionId)
       .sort((left, right) => left.createdAt - right.createdAt)
-      .map(({ sessionKey: _sessionKey, ...value }) => value);
+      .map(normalizeStoredDiagnosis);
+  }
+
+  async listBySessions(sessionIds: readonly LearningSessionId[]): Promise<readonly ErrorDiagnosisRecord[]> {
+    const wanted = new Set<string>(sessionIds);
+    const values = await this.database.getAll<StoredDiagnosis>(TutorIndexedDbStore.ErrorDiagnoses);
+    return values
+      .filter((item) => wanted.has(item.sessionKey))
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .map(normalizeStoredDiagnosis);
   }
   async find(diagnosisId: ErrorDiagnosisId): Promise<ErrorDiagnosisRecord | undefined> {
     const value = await this.database.get<StoredDiagnosis>(TutorIndexedDbStore.ErrorDiagnoses, diagnosisId);
     if (!value) return undefined;
-    const { sessionKey: _sessionKey, ...diagnosis } = value;
-    return diagnosis;
+    return normalizeStoredDiagnosis(value);
+  }
+
+  async findMany(diagnosisIds: readonly ErrorDiagnosisId[]): Promise<readonly ErrorDiagnosisRecord[]> {
+    const wanted = new Set<string>(diagnosisIds);
+    const values = await this.database.getAll<StoredDiagnosis>(TutorIndexedDbStore.ErrorDiagnoses);
+    return values
+      .filter((item) => wanted.has(item.id))
+      .map(normalizeStoredDiagnosis);
   }
 
   async findByIdempotencyKey(idempotencyKey: string): Promise<ErrorDiagnosisRecord | undefined> {
     const values = await this.database.getAll<StoredDiagnosis>(TutorIndexedDbStore.ErrorDiagnoses);
     const value = values.find((item) => item.idempotencyKey === idempotencyKey);
     if (!value) return undefined;
-    const { sessionKey: _sessionKey, ...diagnosis } = value;
-    return diagnosis;
+    return normalizeStoredDiagnosis(value);
+  }
+  async findByIdempotencyKeys(idempotencyKeys: readonly string[]): Promise<readonly ErrorDiagnosisRecord[]> {
+    const wanted = new Set(idempotencyKeys);
+    const values = await this.database.getAll<StoredDiagnosis>(TutorIndexedDbStore.ErrorDiagnoses);
+    return values
+      .filter((item) => wanted.has(item.idempotencyKey))
+      .map(normalizeStoredDiagnosis);
   }
   async appendConfirmation(
     confirmation: ErrorDiagnosisConfirmationRecord,
@@ -148,6 +187,36 @@ export class IndexedDbErrorDiagnosisRepository implements ErrorDiagnosisReposito
   async findCurrentProjection(diagnosisId: ErrorDiagnosisId): Promise<ErrorDiagnosisCurrentProjection | undefined> {
     return this.database.get<ErrorDiagnosisCurrentProjection>(TutorIndexedDbStore.ErrorDiagnosisProjections, diagnosisId);
   }
+
+  async listCurrentProjections(diagnosisIds: readonly ErrorDiagnosisId[]): Promise<readonly ErrorDiagnosisCurrentProjection[]> {
+    const wanted = new Set<string>(diagnosisIds);
+    return (await this.database.getAll<ErrorDiagnosisCurrentProjection>(TutorIndexedDbStore.ErrorDiagnosisProjections))
+      .filter((item) => wanted.has(item.diagnosisId));
+  }
+}
+
+function normalizeStoredDiagnosis(value: StoredDiagnosis): ErrorDiagnosisRecord {
+  const { sessionKey: _sessionKey, ...diagnosis } = value;
+  const correctionPlan = diagnosis.correctionPlan;
+  return {
+    ...diagnosis,
+    dimensions: Array.isArray(diagnosis.dimensions) ? diagnosis.dimensions : [],
+    correctionPlan: correctionPlan && typeof correctionPlan === 'object'
+      ? {
+          objective: typeof correctionPlan.objective === 'string' ? correctionPlan.objective : '',
+          steps: Array.isArray(correctionPlan.steps)
+            ? correctionPlan.steps.filter((step): step is string => typeof step === 'string')
+            : [],
+          practiceFocus: typeof correctionPlan.practiceFocus === 'string' ? correctionPlan.practiceFocus : '',
+          successCriteria: typeof correctionPlan.successCriteria === 'string' ? correctionPlan.successCriteria : ''
+        }
+      : {
+          objective: '',
+          steps: [],
+          practiceFocus: '',
+          successCriteria: ''
+        }
+  };
 }
 
 export class IndexedDbLearningEvidenceRepository implements LearningEvidenceRepository {
@@ -227,6 +296,14 @@ export class IndexedDbLearningEvidenceRepository implements LearningEvidenceRepo
       .filter((item) => item.validity.validityStatus === 'valid')
       .sort((left, right) => right.evidence.occurredAt - left.evidence.occurredAt)
       .slice(0, limit)
+      .map((item) => item.evidence);
+  }
+
+  async listAllValid(examCycleId: ExamCycleId): Promise<readonly LearningEvidenceRecord[]> {
+    const values = await this.database.getAll<StoredEvidenceAggregate>(TutorIndexedDbStore.LearningEvidenceAggregates);
+    return values
+      .filter((item) => item.examCycleKey === examCycleId && item.validity.validityStatus === 'valid')
+      .sort((left, right) => right.evidence.occurredAt - left.evidence.occurredAt)
       .map((item) => item.evidence);
   }
 }

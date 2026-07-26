@@ -1,11 +1,12 @@
 import type { TransactionContext } from '@/capabilities/database/public';
 import type { AiInvocationId, AgentRunId, ExamCycleId, InstantMs, JsonObject, LearningThreadId, PromptVersionId } from '@/kernel/public';
 import type { InvocationValidationStatus } from '@/capabilities/ai-runtime/public';
-import type { AgentRunStatus, AgentRunType } from '../domain/AgentRunCodes';
+import type { AgentRunStatus, AgentRunType, AgentWorkPool } from '../domain/AgentRunCodes';
 
 export interface AgentRunRecord {
   readonly id: AgentRunId;
   readonly runType: AgentRunType;
+  readonly workPool?: AgentWorkPool;
   readonly status: AgentRunStatus;
   readonly examCycleId?: ExamCycleId;
   readonly learningThreadId?: LearningThreadId;
@@ -29,7 +30,7 @@ export interface AgentRunRecord {
 export interface AgentRunEventRecord {
   readonly id: string;
   readonly agentRunId: AgentRunId;
-  readonly eventType: 'created' | 'started' | 'waiting_user' | 'resumed' | 'recovered' | 'completed' | 'failed' | 'cancelled';
+  readonly eventType: 'created' | 'started' | 'progressed' | 'waiting_user' | 'resumed' | 'recovered' | 'completed' | 'failed' | 'cancelled';
   readonly fromStatus?: AgentRunStatus;
   readonly toStatus: AgentRunStatus;
   readonly reasonCode: string;
@@ -66,14 +67,19 @@ export interface AgentRunRepository {
   create(run: AgentRunRecord, created: AgentRunEventRecord, context: TransactionContext): Promise<void>;
   findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined>;
   findByIdempotencyKey(idempotencyKey: string): Promise<AgentRunAggregate | undefined>;
+  findLatestByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
+  findActiveByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
   replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext): Promise<void>;
   appendInvocation(invocation: AgentInvocationRecord, context: TransactionContext): Promise<void>;
   updateInvocationResult(id: AiInvocationId, result: Pick<AgentInvocationRecord, 'providerRequestId' | 'inputTokens' | 'outputTokens' | 'latencyMs' | 'finishReason'>, context: TransactionContext): Promise<void>;
   updateInvocationValidation(id: AiInvocationId, status: InvocationValidationStatus, errorCode: string | undefined, context: TransactionContext): Promise<void>;
   listInvocations(runId: AgentRunId): Promise<readonly AgentInvocationRecord[]>;
+  countInvocations(runIds: readonly AgentRunId[]): Promise<Readonly<Record<string, number>>>;
   listRecent(limit: number): Promise<readonly AgentRunAggregate[]>;
   listRunnable(now: InstantMs, limit: number): Promise<readonly AgentRunAggregate[]>;
+  nextWorkAt(now: InstantMs, workPools?: readonly AgentWorkPool[]): Promise<InstantMs | undefined>;
   claimRunnable(options: AgentRunClaimOptions): Promise<readonly AgentRunAggregate[]>;
+  renewLease(runId: AgentRunId, workerId: string, leaseExpiresAt: InstantMs): Promise<boolean>;
   recoverExpiredLeases(options: AgentRunRecoveryOptions): Promise<readonly AgentRunAggregate[]>;
 }
 
@@ -89,4 +95,5 @@ export interface AgentRunClaimOptions {
   readonly leaseExpiresAt: InstantMs;
   readonly limit: number;
   readonly eventIds: readonly string[];
+  readonly workPools?: readonly AgentWorkPool[];
 }

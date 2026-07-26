@@ -1,19 +1,24 @@
 <template>
   <div class="profile-page app-page">
-    <PageHeader :level="1">
-      <template #title>
-        <div class="app-title-row">
-          <span class="app-title-icon"><UserIcon /></span>
-          <div class="app-title-copy">
-            <h3>{{ candidateHome?.projectName || 'AI 私教档案' }}</h3>
-            <span>{{ candidateHome ? `${candidateHome.examName} · ${candidateHome.examDate}` : '尚未建立备考档案' }}</span>
-          </div>
-        </div>
-      </template>
-    </PageHeader>
+    <PageHeader :level="1" :title="profileHeaderTitle" :meta="profileHeaderMeta" />
 
     <main class="profile-content page-container">
-      <section v-if="candidateHome" class="profile-section">
+      <InitialRefreshState
+        v-if="!candidateHomeLoaded"
+        label="正在刷新备考档案"
+      />
+
+      <AppStateView
+        v-else-if="candidateHomeError"
+        compact
+        state="error"
+        title="备考档案暂不可用"
+        :description="candidateHomeError"
+        action-label="重新读取"
+        @action="retryCandidateHome"
+      />
+
+      <section v-else-if="candidateHome" class="profile-section">
         <div class="profile-section-title">
           <strong>目标与现状</strong>
           <span>{{ diagnosisLabel }}</span>
@@ -131,6 +136,20 @@
               </div>
 
               <div v-else-if="activeSheet === 'reminder'" class="sheet-body">
+                <label>
+                  <span>私教主动程度</span>
+                  <div class="option-group">
+                    <button
+                      v-for="item in proactiveOptions"
+                      :key="item.value"
+                      type="button"
+                      :class="{ active: proactiveLevel === item.value }"
+                      @click="proactiveLevel = item.value"
+                    >
+                      {{ item.label }}
+                    </button>
+                  </div>
+                </label>
                 <button class="toggle-row toggle-button" type="button" @click="reminderForm.enabled = !reminderForm.enabled">
                   <span>开启每日提醒</span>
                   <i :class="['switch-control', { active: reminderForm.enabled }]" aria-hidden="true"></i>
@@ -232,12 +251,19 @@
                   <i :class="['switch-control', { active: aiForm.streamingEnabled !== false }]" aria-hidden="true"></i>
                 </button>
                 <label>
-                  <span>任务并发数</span>
+                  <span>并发任务</span>
                   <div class="option-group concurrency-options">
-                    <button v-for="count in [1, 2, 3, 4, 5]" :key="count" type="button" :class="{ active: taskConcurrency === count }" @click="taskConcurrency = count">
+                    <button
+                      v-for="count in AI_TASK_CONCURRENCY_OPTIONS"
+                      :key="count"
+                      type="button"
+                      :class="{ active: aiForm.maxConcurrentTasks === count }"
+                      @click="aiForm.maxConcurrentTasks = count"
+                    >
                       {{ count }}
                     </button>
                   </div>
+                  <small>同时最多执行 {{ aiForm.maxConcurrentTasks }} 个 AI 任务，遇到限流会自动降速</small>
                 </label>
                 <div class="config-actions">
                   <button type="button" @click="saveAIConfig" :disabled="isSavingConfig">
@@ -255,7 +281,7 @@
     <ConfirmDialog
       v-model="showClearLearningConfirm"
       title="清除学习数据"
-      description="将清除当前工程的题目、练习、错题、学习事件和任务记录，保留备考计划与 AI 配置。"
+      description="将清除当前工程的题目、练习、错题和学习事件，保留备考计划与 AI 配置。"
       confirm-text="确认清除"
       tone="danger"
       @confirm="confirmClearLearningData"
@@ -270,6 +296,7 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import AppearanceSettings from '@/components/settings/AppearanceSettings.vue';
+import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
 import {
   BellRingIcon,
   BadgeInfoIcon,
@@ -281,26 +308,35 @@ import {
   PaletteIcon,
   TargetIcon,
   Trash2Icon,
-  UploadIcon,
-  UserIcon
+  UploadIcon
 } from 'lucide-vue-next';
-import type { AIConfig, AIProviderType } from '@/domain/ai';
-import { aiEngine } from '@/ai/AIEngine';
+import {
+  AI_TASK_CONCURRENCY_OPTIONS,
+  type AIConfig,
+  type AIProviderType
+} from '@/domain/ai';
+import { configuredAIClient } from '@/composition-root/public';
 import { aiConfigService } from '@/services/AIConfigService';
 import { learningNotificationAdapter, type LearningNotificationStatus } from '@/platform/LearningNotificationAdapter';
 import { dataManagementService, type DataSummary } from '@/services/DataManagementService';
-import { taskRuntimeSettings } from '@/tasks/TaskRuntimeSettings';
 import { THEME_PRESETS, themeService, type ThemeSettings } from '@/services/ThemeService';
 import { appVersionInfo } from '@/services/AppVersionService';
 import { profileStatsRepository } from '@/services/ProfileStatsRepository';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
   InitialDiagnosisStatus,
+  ProactiveLevel,
   type CandidateHomeSnapshot
 } from '@/modules/candidate/public';
 import type { SubjectCode } from '@/kernel/public';
+import {
+  CandidateProfileFeature,
+  peekCandidateProfileSnapshot
+} from '@/features/profile/CandidateProfileFeature';
 
 const router = useRouter();
+let candidateProfileFeaturePromise: Promise<CandidateProfileFeature> | undefined;
+const cachedCandidateSnapshot = peekCandidateProfileSnapshot();
 const isSavingConfig = ref(false);
 const isTestingConfig = ref(false);
 const isSavingReminder = ref(false);
@@ -314,27 +350,43 @@ const dataMessage = ref('');
 const exportText = ref('');
 const dataSummary = ref<DataSummary | null>(null);
 const reminderStatus = ref<LearningNotificationStatus | null>(null);
-const candidateHome = ref<CandidateHomeSnapshot | null>(null);
+const candidateHome = ref<CandidateHomeSnapshot | null>(cachedCandidateSnapshot?.home || null);
+const candidateHomeLoaded = ref(Boolean(cachedCandidateSnapshot));
+const candidateHomeError = ref('');
 const profileStats = ref<Awaited<ReturnType<typeof profileStatsRepository.getStats>> | null>(null);
-const taskConcurrency = ref(3);
 const activeSheet = ref<'profile' | 'reminder' | 'ai' | 'data' | 'appearance' | null>(null);
 const appearanceSettings = ref<ThemeSettings>(themeService.getCurrent());
 const aiProviderOptions: Array<{ value: AIProviderType; label: string }> = [
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'custom', label: '自定义' }
+  { value: 'openai', label: 'OpenAI 兼容协议' },
+  { value: 'anthropic', label: 'Anthropic 原生协议' }
 ];
 const aiForm = reactive<Omit<AIConfig, 'updatedAt'>>({
   provider: 'openai',
   apiKey: '',
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
-  streamingEnabled: true
+  streamingEnabled: true,
+  maxConcurrentTasks: 3
 });
 const reminderForm = reactive(learningNotificationAdapter.loadSettings());
+const proactiveLevel = ref<typeof ProactiveLevel[keyof typeof ProactiveLevel]>(
+  cachedCandidateSnapshot?.proactiveLevel || ProactiveLevel.Balanced
+);
+const proactiveOptions = [
+  { value: ProactiveLevel.Quiet, label: '安静' },
+  { value: ProactiveLevel.Balanced, label: '适中' },
+  { value: ProactiveLevel.Active, label: '主动' }
+] as const;
 const targetForm = reactive({ aptitude: 80, essay: 70, reason: '' });
 
 const secureLabel = computed(() => aiConfigService.isNativeSecure() ? 'iOS Keychain' : '本地开发存储');
+const profileHeaderTitle = computed(() => candidateHome.value?.projectName || 'AI 私教档案');
+const profileHeaderMeta = computed(() => {
+  if (candidateHomeError.value) return '档案读取失败';
+  return candidateHome.value
+    ? `${candidateHome.value.examName} · ${candidateHome.value.examDate}`
+    : candidateHomeLoaded.value ? '尚未建立备考档案' : '目标、进度与学习设置';
+});
 const aiCardLabel = computed(() => aiForm.apiKey ? `${aiForm.provider} · ${aiForm.model || '未填模型'}` : '未配置');
 const reminderStatusLabel = computed(() => {
   if (!learningNotificationAdapter.isNative()) return '仅真机可用';
@@ -378,7 +430,6 @@ const sheetSubtitle = computed(() => {
 onMounted(() => {
   void loadCandidateHome();
   void loadAIConfig();
-  void loadTaskRuntimeSettings();
   void loadReminderStatus();
   void loadProfileStats();
 });
@@ -388,12 +439,25 @@ async function loadProfileStats() {
 }
 
 async function loadCandidateHome() {
-  const runtime = await initializeTutorRuntime();
-  candidateHome.value = await runtime.getCandidateHome.execute() || null;
-  const aptitude = candidateHome.value?.scores.find((score) => score.subject === 'aptitude');
-  const essay = candidateHome.value?.scores.find((score) => score.subject === 'essay');
-  if (aptitude) targetForm.aptitude = aptitude.targetScore;
-  if (essay) targetForm.essay = essay.targetScore;
+  candidateHomeError.value = '';
+  try {
+    const state = await (await candidateProfileFeature()).load({ refresh: true });
+    candidateHome.value = state.home;
+    if (state.proactiveLevel) proactiveLevel.value = state.proactiveLevel;
+    const aptitude = candidateHome.value?.scores.find((score) => score.subject === 'aptitude');
+    const essay = candidateHome.value?.scores.find((score) => score.subject === 'essay');
+    if (aptitude) targetForm.aptitude = aptitude.targetScore;
+    if (essay) targetForm.essay = essay.targetScore;
+  } catch (error) {
+    candidateHomeError.value = error instanceof Error ? error.message : '读取备考档案失败';
+  } finally {
+    candidateHomeLoaded.value = true;
+  }
+}
+
+function retryCandidateHome() {
+  candidateHomeLoaded.value = false;
+  void loadCandidateHome();
 }
 
 function subjectLabel(subject: SubjectCode): string {
@@ -413,10 +477,7 @@ async function loadAIConfig() {
   aiForm.baseUrl = config.baseUrl || '';
   aiForm.model = config.model;
   aiForm.streamingEnabled = config.streamingEnabled !== false;
-}
-
-async function loadTaskRuntimeSettings() {
-  taskConcurrency.value = await taskRuntimeSettings.load();
+  aiForm.maxConcurrentTasks = config.maxConcurrentTasks;
 }
 
 async function saveAIConfig() {
@@ -429,9 +490,9 @@ async function saveAIConfig() {
       apiKey: aiForm.apiKey.trim(),
       baseUrl: aiForm.baseUrl?.trim(),
       model: aiForm.model.trim(),
-      streamingEnabled: aiForm.streamingEnabled !== false
+      streamingEnabled: aiForm.streamingEnabled !== false,
+      maxConcurrentTasks: aiForm.maxConcurrentTasks
     });
-    taskConcurrency.value = await taskRuntimeSettings.saveMaxConcurrent(taskConcurrency.value);
     configMessage.value = aiConfigService.isNativeSecure() ? '已保存到 iOS Keychain' : '已保存到本地开发存储';
   } finally {
     isSavingConfig.value = false;
@@ -448,9 +509,11 @@ async function testAIConfig() {
       apiKey: aiForm.apiKey.trim(),
       baseUrl: aiForm.baseUrl?.trim(),
       model: aiForm.model.trim(),
-      streamingEnabled: aiForm.streamingEnabled !== false
+      streamingEnabled: aiForm.streamingEnabled !== false,
+      maxConcurrentTasks: aiForm.maxConcurrentTasks
     });
-    const result = await aiEngine.testConnection();
+    const result = await configuredAIClient.testConnection();
+    await configuredAIClient.testStructuredOutput();
     configMessage.value = `连接正常：${result.slice(0, 24)}`;
   } catch (error) {
     configMessage.value = error instanceof Error ? error.message : '连接测试失败';
@@ -555,12 +618,22 @@ async function saveReminders() {
       morningTime: reminderForm.morningTime,
       eveningTime: reminderForm.eveningTime
     });
+    await (await candidateProfileFeature()).updateReminderPreferences({
+      proactiveLevel: proactiveLevel.value,
+      enabled: reminderForm.enabled,
+      morningTime: reminderForm.morningTime,
+      eveningTime: reminderForm.eveningTime
+    });
     reminderMessage.value = reminderForm.enabled
       ? (learningNotificationAdapter.isNative() ? '已设置未来 7 天学习提醒' : '已保存提醒偏好，真机运行后生效')
       : '已关闭学习提醒';
   } finally {
     isSavingReminder.value = false;
   }
+}
+function candidateProfileFeature(): Promise<CandidateProfileFeature> {
+  candidateProfileFeaturePromise ??= initializeTutorRuntime().then((runtime) => new CandidateProfileFeature(runtime));
+  return candidateProfileFeaturePromise;
 }
 
 async function clearReminders() {
@@ -723,13 +796,13 @@ async function confirmClearLearningData() {
 .stat-card {
   min-height: 86px;
   padding: 14px;
-  border: 1px solid rgba(var(--color-ink-rgb), .06);
-  border-radius: 14px;
+  border: 0;
+  border-radius: var(--radius-card);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  background: rgba(255, 255, 255, .84);
-  box-shadow: 0 10px 26px rgba(28, 38, 58, .06);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
 }
 .stat-card strong {
   font-size: var(--type-size-display);
@@ -745,10 +818,10 @@ async function confirmClearLearningData() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid rgba(var(--color-ink-rgb), .06);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, .78);
-  box-shadow: 0 10px 26px rgba(28, 38, 58, .05);
+  border: 0;
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
 }
 .menu-item {
   width: 100%;
@@ -816,13 +889,13 @@ async function confirmClearLearningData() {
 }
 .data-summary {
   padding: 14px;
-  border: 1px solid rgba(var(--color-ink-rgb), .06);
-  border-radius: 15px;
+  border: 0;
+  border-radius: var(--radius-card);
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: rgba(255, 255, 255, .72);
-  box-shadow: 0 8px 20px rgba(28, 38, 58, .045);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
 }
 .data-summary strong {
   color: var(--text-color);

@@ -11,7 +11,6 @@ build/
 dist/
 *.ipa
 *.xcarchive
-src-tauri/target/
 ios/App/build/
 ios/App/build-ipa/
 ios/App/DerivedData/

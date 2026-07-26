@@ -1,9 +1,5 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { LearningEvent } from '@/domain/learning';
-import type { PracticeSession } from '@/domain/practice';
-import type { WrongItem } from '@/domain/wrongbook';
-import { projectRepository } from '@/services/ProjectRepository';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import { qualityDashboardService } from './QualityDashboardService';
 
 export interface ProfileStats {
   projectName: string;
@@ -17,25 +13,25 @@ export interface ProfileStats {
 
 export class ProfileStatsRepository {
   async getStats(): Promise<ProfileStats> {
-    const project = await projectRepository.getActiveProject();
-    const [sessions, wrongItems, events] = await Promise.all([
-      database.queryByIndex<PracticeSession>(STORES.practiceSessions, 'projectId', project.id),
-      database.queryByIndex<WrongItem>(STORES.wrongItems, 'projectId', project.id),
-      database.queryByIndex<LearningEvent>(STORES.learningEvents, 'projectId', project.id)
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) {
+      return { projectName: '尚未建档', practiceCount: 0, questionCount: 0, correctCount: 0, accuracy: 0, wrongCount: 0, activeDays: 0 };
+    }
+    const [dashboard, sessions] = await Promise.all([
+      qualityDashboardService.dashboard(),
+      runtime.learningSessionRepository.listRecent(cycle.examCycle.id, 500)
     ]);
-
-    const questionCount = sessions.reduce((total, session) => total + session.questionCount, 0);
-    const correctCount = sessions.reduce((total, session) => total + session.correctCount, 0);
-    const activeDays = new Set(events.map((event) => event.date)).size;
+    const correctCount = sessions.reduce((total, facts) => total + facts.session.correctCount, 0);
 
     return {
-      projectName: project.name,
-      practiceCount: sessions.length,
-      questionCount,
+      projectName: cycle.project.name,
+      practiceCount: dashboard.eventsCount,
+      questionCount: dashboard.totalQuestions,
       correctCount,
-      accuracy: questionCount ? Math.round((correctCount / questionCount) * 100) : 0,
-      wrongCount: wrongItems.filter((item) => item.status !== 'mastered').length,
-      activeDays
+      accuracy: dashboard.totalQuestions ? Math.round((correctCount / dashboard.totalQuestions) * 100) : 0,
+      wrongCount: dashboard.openWrongCount,
+      activeDays: dashboard.practiceDays
     };
   }
 }

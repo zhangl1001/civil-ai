@@ -1,12 +1,8 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { PracticeSession } from '@/domain/practice';
-import { projectRepository } from './ProjectRepository';
-import { planService } from './PlanService';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
 import { generationTaskService } from './GenerationTaskService';
-import { practiceFlowService } from './PracticeFlowService';
 import { essayFlowService } from './EssayFlowService';
-import type { EnqueueResult } from '@/tasks/taskTypes';
+import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 
 export type ExamSubject = '行测' | '申论';
 export type EssayMockType = 'short' | 'long';
@@ -36,6 +32,7 @@ export interface ExamHistoryItem {
   accuracy: number;
   durationMs?: number;
   createdAt: number;
+  manifestId?: string;
 }
 
 export interface ExamStats {
@@ -99,11 +96,11 @@ function statsFrom(history: ExamHistoryItem[]): ExamStats {
 
 export class ExamFlowService {
   readContext(): ExamStartContext {
-    const subject = normalizeSubject(localStorage.getItem('exam-subject') || localStorage.getItem('mp-target-module') || '行测');
+    const subject = normalizeSubject(localStorage.getItem('exam-subject') || '行测');
     const questionCount = normalizePositiveNumber(localStorage.getItem('exam-question-count'), 120);
     return {
       subject,
-      date: normalizeDate(localStorage.getItem('mp-practice-date') || localStorage.getItem('es-date')),
+      date: normalizeDate(localStorage.getItem('exam-date')),
       questionCount,
       durationMinutes: normalizePositiveNumber(localStorage.getItem('exam-duration-minutes'), questionCount <= 60 ? 60 : 120),
       tags: normalizeTags(localStorage.getItem('exam-focus-tags')),
@@ -123,7 +120,7 @@ export class ExamFlowService {
       essayType: raw.essayType === 'long' ? 'long' : 'short'
     };
     localStorage.setItem('exam-subject', next.subject);
-    localStorage.setItem('mp-practice-date', next.date);
+    localStorage.setItem('exam-date', next.date);
     localStorage.setItem('exam-question-count', String(next.questionCount));
     localStorage.setItem('exam-duration-minutes', String(next.durationMinutes));
     localStorage.setItem('exam-focus-tags', next.tags.join(','));
@@ -132,29 +129,64 @@ export class ExamFlowService {
   }
 
   async dashboard(subject: ExamSubject): Promise<ExamDashboard> {
-    const project = await projectRepository.getActiveProject();
-    const plan = await planService.getPlan(project.id);
-    const defaultQuestionCount = Number(plan?.mock_exam_count || plan?.business_model?.question_count || 120);
-    const sessions = await database.queryByIndex<PracticeSession>(STORES.practiceSessions, 'projectId', project.id);
-    const history = sessions
-      .filter((session) => session.mode === 'mock' && normalizeSubject(session.module) === subject)
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, 30)
-      .map((session) => ({
-        id: session.id,
-        subject,
-        date: session.date,
-        title: `${subject}模考 · ${session.date}`,
-        questionCount: session.questionCount,
-        correctCount: session.correctCount,
-        accuracy: session.accuracy,
-        durationMs: session.durationMs,
-        createdAt: session.createdAt
-      }));
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const assets = await runtime.learningAssetStore.list({
+      examCycleId: cycle.examCycle.id,
+      kinds: subject === '行测' ? [LearningAssetKind.MockManifest] : [LearningAssetKind.EssayQuestion],
+      status: LearningAssetStatus.Ready,
+      limit: 100
+    });
+    const recentSessions = subject === '行测'
+      ? await runtime.learningSessionRepository.listRecent(cycle.examCycle.id, 500)
+      : [];
+    const history = assets
+      .map((asset): ExamHistoryItem | undefined => {
+        if (subject === '申论') {
+          const essayContext = asset.payload.essayContext && typeof asset.payload.essayContext === 'object' && !Array.isArray(asset.payload.essayContext)
+            ? asset.payload.essayContext as Record<string, unknown>
+            : {};
+          const date = typeof essayContext.date === 'string' ? essayContext.date : new Date(asset.createdAt).toISOString().slice(0, 10);
+          return {
+            id: asset.id,
+            subject,
+            date,
+            title: asset.title,
+            questionCount: 1,
+            correctCount: 0,
+            accuracy: 0,
+            createdAt: asset.createdAt
+          };
+        }
+        const sections = Array.isArray(asset.payload.sections) ? asset.payload.sections : [];
+        const setIds = new Set(sections.flatMap((item) => {
+          const record = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {};
+          return typeof record.questionSetId === 'string' ? [record.questionSetId] : [];
+        }));
+        const completed = recentSessions.filter((session) => setIds.has(session.session.questionSetId));
+        const attempts = completed.flatMap((session) => session.attempts);
+        const correctCount = attempts.filter((attempt) => attempt.result === 'correct').length;
+        const questionCount = typeof asset.payload.actualCount === 'number' ? asset.payload.actualCount : sections.length;
+        return {
+          id: asset.id,
+          manifestId: asset.id,
+          subject,
+          date: typeof asset.payload.date === 'string' ? asset.payload.date : new Date(asset.createdAt).toISOString().slice(0, 10),
+          title: asset.title,
+          questionCount,
+          correctCount,
+          accuracy: attempts.length ? Math.round((correctCount / attempts.length) * 100) : 0,
+          durationMs: completed.reduce((sum, session) => sum + (session.session.elapsedMs || 0), 0) || undefined,
+          createdAt: asset.createdAt
+        };
+      })
+      .filter((item): item is ExamHistoryItem => Boolean(item))
+      .slice(0, 30);
 
     return {
-      projectName: project.name,
-      defaultQuestionCount,
+      projectName: cycle.project.name,
+      defaultQuestionCount: 120,
       schemes: SCHEMES,
       focusTags: FOCUS_TAGS,
       history,
@@ -162,16 +194,9 @@ export class ExamFlowService {
     };
   }
 
-  async startMock(context: ExamStartContext): Promise<EnqueueResult> {
+  async startMock(context: ExamStartContext): Promise<AgentTaskEnqueueResult> {
     const normalized = this.writeContext(context);
     if (normalized.subject === '行测') {
-      const practiceContext = practiceFlowService.writeStartContext({
-        module: '行测',
-        date: normalized.date,
-        mode: 'mock',
-        source: 'practice-center',
-        questionCount: normalized.questionCount
-      });
       const result = await generationTaskService.enqueue({
         intent: 'mock',
         title: '行测模考',
@@ -187,7 +212,6 @@ export class ExamFlowService {
           focusTags: normalized.tags
         }
       });
-      practiceFlowService.writeStartContext({ ...practiceContext, sourceRef: result.task.id });
       return result;
     }
 
@@ -212,15 +236,6 @@ export class ExamFlowService {
     });
   }
 
-  openHistoryItem(item: ExamHistoryItem): void {
-    practiceFlowService.writeStartContext({
-      module: item.subject,
-      date: item.date,
-      mode: 'mock',
-      source: 'practice-center',
-      questionCount: item.questionCount
-    });
-  }
 }
 
 export const examFlowService = new ExamFlowService();

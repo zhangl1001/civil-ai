@@ -29,6 +29,13 @@ export interface CalendarDayTask {
   correct?: number;
   accuracy?: number;
   sourceRef?: string;
+  target?: CalendarTaskTarget;
+}
+
+export interface CalendarTaskTarget {
+  type: 'objective_question_set';
+  questionSetId: string;
+  learningThreadId?: string;
 }
 
 export interface CalendarDayDetail {

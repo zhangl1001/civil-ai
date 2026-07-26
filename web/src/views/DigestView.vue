@@ -9,14 +9,29 @@
         </HeaderMoreMenu>
       </template>
 
-      <div class="mode-tabs">
-        <button type="button" :class="{ active: tab === 'news' }" @click="switchTab('news')">热点</button>
-        <button type="button" :class="{ active: tab === 'tips' }" @click="switchTab('tips')">知识点</button>
-      </div>
     </PageHeader>
 
-    <PullToRefresh :on-refresh="loadDashboard">
+    <PullToRefresh class="digest-scroll" :on-refresh="loadDashboard">
+      <SegmentedControl
+        :model-value="tab"
+        label="积累内容类型"
+        :options="digestTabOptions"
+        @update:model-value="switchDigestMode"
+      />
+
       <AppStateView v-if="isLoading" state="loading" title="加载每日积累" />
+
+      <AiTaskPendingState
+        v-else-if="visibleTask"
+        :task="visibleTask"
+        title="AI 正在整理每日积累"
+        :description="visibleTask.message || visibleTask.detail || '正在生成学习内容，完成后会自动刷新。'"
+        ready-action-label="重新生成"
+        retry-action-label="重新生成"
+        @start="generate"
+        @retry="generate"
+        @cancel="cancelGeneration"
+      />
 
       <AppStateView
         v-else-if="!sections.length"
@@ -34,21 +49,20 @@
       </AppStateView>
 
       <template v-else>
-        <section class="toolbar app-card">
+        <section class="digest-section-heading">
           <div>
-            <span>{{ tab === 'news' ? '今日热点' : '今日知识点' }}</span>
-            <strong>{{ sections.length }} 个条目</strong>
+            <strong>{{ tab === 'news' ? '今日热点' : '今日知识点' }}</strong>
+            <span>{{ sections.length }} 个条目</span>
           </div>
-          <button type="button" :disabled="isGenerating" @click="generate">
+          <button type="button" :disabled="isGenerating" title="重新生成" aria-label="重新生成" @click="generate">
             <SparklesIcon />
-            重新生成
           </button>
         </section>
 
         <article v-for="section in sections" :key="section.id" class="digest-card app-card">
           <span class="digest-tag" :class="tab">{{ tab === 'news' ? '热点' : '知识点' }}</span>
           <h4>{{ section.title }}</h4>
-          <p>{{ compactBody(section.body) }}</p>
+          <MarkdownContent class="digest-body" :content="section.body" variant="compact" />
         </article>
       </template>
     </PullToRefresh>
@@ -79,35 +93,58 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   ChevronRightIcon,
   HistoryIcon,
   SparklesIcon,
   Trash2Icon
 } from 'lucide-vue-next';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, PullToRefresh, SegmentedControl } from '@/capabilities/design-system/public';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
+import MarkdownContent from '@/components/MarkdownContent.vue';
+import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import type { DigestTab } from '@/domain/digest';
+import type { AgentRunView } from '@/modules/agent/public';
 import { digestService, type DigestDashboard } from '@/services/DigestService';
-import { useTasksStore } from '@/stores/tasks';
+import { useTaskCenterStore } from '@/stores/taskCenter';
 
-const tasksStore = useTasksStore();
 
+const taskCenter = useTaskCenterStore();
 const tab = ref<DigestTab>(digestService.readActiveTab());
 const date = ref(localDate());
 const dashboard = ref<DigestDashboard | null>(null);
 const isLoading = ref(false);
-const isGenerating = ref(false);
+const isDispatching = ref(false);
+const trackedTaskId = ref('');
+const taskSnapshot = ref<AgentRunView>();
 const showHistorySheet = ref(false);
 const showDeleteConfirm = ref(false);
 const notice = ref('');
+const digestTabOptions = [
+  { value: 'news', label: '热点' },
+  { value: 'tips', label: '知识点' }
+] as const;
 
 const sections = computed(() => dashboard.value?.sections || []);
 const history = computed(() => dashboard.value?.history || []);
+const scopedTask = computed(() => {
+  const scopeKey = dashboard.value?.taskScopeKey;
+  if (!scopeKey) return undefined;
+  return taskCenter.runs.find((task) => task.scopeKey === scopeKey);
+});
+const visibleTask = computed(() => {
+  const current = scopedTask.value?.id === trackedTaskId.value
+    ? scopedTask.value
+    : taskCenter.runs.find((task) => task.id === trackedTaskId.value);
+  const recovered = scopedTask.value?.isActive ? scopedTask.value : undefined;
+  const task = current || recovered || (taskSnapshot.value?.id === trackedTaskId.value ? taskSnapshot.value : undefined);
+  return task && (task.isActive || task.status === 'failed' || task.status === 'cancelled') ? task : undefined;
+});
+const isGenerating = computed(() => isDispatching.value || Boolean(visibleTask.value?.isActive));
 const historyGroups = computed(() => {
   const grouped = new Map<string, typeof history.value>();
   history.value.forEach((item) => {
@@ -117,7 +154,32 @@ const historyGroups = computed(() => {
   return Array.from(grouped.entries()).map(([month, items]) => ({ month, items }));
 });
 
-onMounted(loadDashboard);
+onMounted(async () => {
+  taskCenter.connect();
+  await loadDashboard();
+  await taskCenter.refresh();
+  if (scopedTask.value?.isActive) trackedTaskId.value = scopedTask.value.id;
+});
+
+onBeforeUnmount(() => {
+  taskCenter.disconnect();
+});
+
+watch(scopedTask, async (task) => {
+  if (!task) return;
+  if (task.isActive) {
+    trackedTaskId.value = task.id;
+    taskSnapshot.value = task;
+    return;
+  }
+  if (task.id !== trackedTaskId.value) return;
+  taskSnapshot.value = task;
+  if (task.status === 'completed') {
+    trackedTaskId.value = '';
+    taskSnapshot.value = undefined;
+    await loadDashboard();
+  }
+});
 
 async function loadDashboard() {
   isLoading.value = true;
@@ -133,27 +195,45 @@ async function loadDashboard() {
 
 async function switchTab(next: DigestTab) {
   if (tab.value === next) return;
+  trackedTaskId.value = '';
+  taskSnapshot.value = undefined;
   tab.value = next;
   date.value = localDate();
   digestService.writeActiveTab(next);
   await loadDashboard();
 }
 
+function switchDigestMode(next: string) {
+  if (next === 'news' || next === 'tips') void switchTab(next);
+}
+
 async function generate() {
-  isGenerating.value = true;
+  if (isGenerating.value) return;
+  isDispatching.value = true;
   notice.value = '';
   try {
     const result = await digestService.enqueueGenerate(tab.value, date.value);
-    await tasksStore.refresh();
+    trackedTaskId.value = result.task.id;
+    taskSnapshot.value = result.task;
+    await taskCenter.refresh();
     notice.value = result.reused ? '已有相同内容生成任务在执行。' : '生成任务已加入任务栏。';
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '生成任务派发失败';
   } finally {
-    isGenerating.value = false;
+    isDispatching.value = false;
   }
 }
 
+async function cancelGeneration() {
+  const task = visibleTask.value;
+  if (!task) return;
+  await digestService.cancelGeneration(task.id);
+  await taskCenter.refresh();
+}
+
 async function openHistory(nextDate: string) {
+  trackedTaskId.value = '';
+  taskSnapshot.value = undefined;
   date.value = nextDate;
   showHistorySheet.value = false;
   await loadDashboard();
@@ -168,14 +248,6 @@ async function deleteCurrent() {
   await loadDashboard();
 }
 
-function compactBody(body: string): string {
-  return body
-    .replace(/^[-*]\s+/gm, '')
-    .replace(/\*\*/g, '')
-    .replace(/\n{2,}/g, '\n')
-    .trim();
-}
-
 function localDate(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -183,95 +255,9 @@ function localDate(): string {
 </script>
 
 <style scoped>
-.title-row,
-.toolbar {
-  display: flex;
-  align-items: center;
-}
-
-.title-row {
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.title-row > div {
-  min-width: 0;
-  text-align: center;
-}
-
-h3 {
-  margin: 0;
-  font-size: var(--type-size-section-title);
-}
-
-.title-row span {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-micro);
-  font-weight: var(--type-weight-semibold);
-}
-
-.icon-button svg {
-  width: 18px;
-  height: 18px;
-}
-
-.mode-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 4px;
-  margin-top: 14px;
-  padding: 4px;
-  border-radius: 12px;
-  background: rgba(var(--color-ink-rgb), .06);
-}
-
-.mode-tabs button {
-  height: 34px;
-  border: none;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-secondary-color);
-  font: inherit;
-  font-size: var(--type-size-secondary);
-  font-weight: var(--type-weight-semibold);
-}
-
-.mode-tabs button.active {
-  background: rgba(255, 255, 255, .94);
-  color: var(--primary-color);
-  box-shadow: 0 5px 14px rgba(28, 38, 58, .08);
-}
-
-.guide {
-  min-height: 320px;
-  margin: 16px;
-  padding: 24px 18px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+.digest-scroll {
   gap: 12px;
-  text-align: center;
-}
-
-.guide > svg {
-  width: 42px;
-  height: 42px;
-  color: var(--primary-color);
-}
-
-.guide strong {
-  font-size: var(--type-size-section-title);
-}
-
-.guide p {
-  max-width: 280px;
-  margin: 0;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-secondary);
-  line-height: 1.6;
+  padding-top: 12px;
 }
 
 .notice {
@@ -279,49 +265,55 @@ h3 {
   font-size: var(--type-size-caption);
 }
 
-.toolbar {
+.digest-section-heading {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin: 14px 16px 10px;
-  padding: 14px;
+  gap: 10px;
+  padding: 0 2px;
 }
 
-.toolbar span {
+.digest-section-heading > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.digest-section-heading strong {
+  font-size: var(--type-size-body-large);
+}
+
+.digest-section-heading span {
   color: var(--text-secondary-color);
   font-size: var(--type-size-micro);
   font-weight: var(--type-weight-semibold);
 }
 
-.toolbar strong {
-  display: block;
-  margin-top: 3px;
-  font-size: var(--type-size-control);
-}
-
-.toolbar button {
+.digest-section-heading button {
+  width: 34px;
   flex-shrink: 0;
   height: 34px;
   border: none;
   border-radius: 10px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 12px;
+  justify-content: center;
+  padding: 0;
   background: rgba(var(--color-brand-rgb), .1);
   color: var(--primary-color);
-  font-size: var(--type-size-caption);
-  font-weight: var(--type-weight-semibold);
 }
 
-.toolbar svg,
+.digest-section-heading svg,
 .primary-button svg {
   width: 15px;
   height: 15px;
 }
 
 .digest-card {
-  margin: 10px 16px;
-  padding: 15px;
+  width: 100%;
+  padding: 14px;
 }
 
 .digest-tag {
@@ -345,16 +337,24 @@ h3 {
 }
 
 .digest-card h4 {
-  margin: 10px 0 8px;
-  font-size: var(--type-size-control);
+  margin: 9px 0 7px;
+  font-size: var(--type-size-body-large);
+  line-height: var(--type-line-title);
 }
 
-.digest-card p {
-  margin: 0;
-  white-space: pre-line;
+.digest-body {
   color: var(--text-secondary-color);
   font-size: var(--type-size-secondary);
-  line-height: 1.7;
+}
+
+.digest-body :deep(h3),
+.digest-body :deep(h4) {
+  margin-top: 13px;
+  color: var(--text-color);
+}
+
+.digest-body :deep(strong) {
+  color: var(--text-color);
 }
 
 .digest-history-list {

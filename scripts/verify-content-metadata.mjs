@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '..');
-const fixturePath = path.join(projectRoot, 'web/src/modules/content/fixtures/content-metadata-v1.json');
+const fixturePath = path.join(projectRoot, 'web/src/modules/content/fixtures/content-metadata-v2.json');
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 const errors = [];
 const expectedHash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(fixture.payload)).digest('hex')}`;

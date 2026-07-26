@@ -3,6 +3,15 @@ import type { MasteryTrack, ReviewQueueItem } from '../contracts/MasteryReposito
 
 export type DailyTeachingAction = 'review' | 'repair' | 'lecture' | 'guided_practice' | 'independent_practice' | 'transfer';
 
+export const DailyPlanReasonCode = {
+  MasteryRepairRequired: 'mastery_repair_required',
+  IndependentEvidenceNeeded: 'independent_evidence_needed',
+  TransferEvidenceNeeded: 'transfer_evidence_needed',
+  RecentPerformanceRegression: 'recent_performance_regression',
+  SpacedRetentionMaintenance: 'spaced_retention_maintenance',
+  MasteryEvidenceIncomplete: 'mastery_evidence_incomplete'
+} as const;
+
 export interface DailyPlanProposalItem {
   readonly capabilityNodeId: CapabilityNodeId;
   readonly reviewQueueItemId?: string;
@@ -49,12 +58,12 @@ export function proposeDailyPlan(input: {
   for (const track of input.priorityTracks) {
     if (remaining < 10 || items.some((item) => item.capabilityNodeId === track.capabilityNodeId)) continue;
     if (track.state === 'regressed' || track.state === 'learning') {
-      add({ capabilityNodeId: track.capabilityNodeId, action: 'lecture', targetMinutes: 12, reasonCode: 'mastery_repair_required' });
-      add({ capabilityNodeId: track.capabilityNodeId, action: 'guided_practice', targetMinutes: 15, targetCount: 4, reasonCode: 'mastery_repair_required' });
+      add({ capabilityNodeId: track.capabilityNodeId, action: 'lecture', targetMinutes: 12, reasonCode: DailyPlanReasonCode.MasteryRepairRequired });
+      add({ capabilityNodeId: track.capabilityNodeId, action: 'guided_practice', targetMinutes: 15, targetCount: 4, reasonCode: DailyPlanReasonCode.MasteryRepairRequired });
     } else if (track.state === 'practicing' || track.state === 'diagnosed') {
-      add({ capabilityNodeId: track.capabilityNodeId, action: 'independent_practice', targetMinutes: 20, targetCount: 6, reasonCode: 'independent_evidence_needed' });
+      add({ capabilityNodeId: track.capabilityNodeId, action: 'independent_practice', targetMinutes: 20, targetCount: 6, reasonCode: DailyPlanReasonCode.IndependentEvidenceNeeded });
     } else if (track.state === 'consolidating') {
-      add({ capabilityNodeId: track.capabilityNodeId, action: 'transfer', targetMinutes: 18, targetCount: 4, reasonCode: 'transfer_evidence_needed' });
+      add({ capabilityNodeId: track.capabilityNodeId, action: 'transfer', targetMinutes: 18, targetCount: 4, reasonCode: DailyPlanReasonCode.TransferEvidenceNeeded });
     }
   }
   if (items.length && remaining >= 5) rationale.push('剩余时间刻意留白，避免为凑题量而牺牲反馈、休息和完成质量。');

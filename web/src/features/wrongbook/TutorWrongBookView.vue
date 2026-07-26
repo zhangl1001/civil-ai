@@ -1,23 +1,25 @@
 <template>
   <div class="tutor-wrongbook app-page">
-    <PageHeader title="错题本" :meta="loading ? '正在同步学习事实' : `${entries.length} 道待巩固`">
+    <PageHeader title="错题本" :meta="!loaded ? '错题归因与巩固' : mode === 'browse' ? `${entries.length} 道待巩固` : `已选 ${selectedReviewEntries.length} 道`">
       <template #actions>
         <button class="header-icon" type="button" aria-label="筛选错题" @click="showFilter = true"><FilterIcon /></button>
-        <button class="header-icon" type="button" aria-label="打开错题闪卡" :disabled="!filtered.length" @click="openFlashcard"><LayersIcon /></button>
+        <button v-if="mode === 'browse'" class="header-icon" type="button" aria-label="打开错题闪卡" :disabled="!filtered.length" @click="openFlashcard"><LayersIcon /></button>
       </template>
     </PageHeader>
 
     <PullToRefresh class="wrongbook-scroll" :on-refresh="load">
-      <AppStateView v-if="loading" state="loading" title="正在读取错题" />
-      <AppStateView v-else-if="error" state="error" title="错题暂不可用" :description="error" action-label="重试" @action="load" />
+      <SegmentedControl v-model="mode" label="错题本模式" :options="modeOptions" />
+
+      <InitialRefreshState v-if="!loaded" label="正在刷新错题" />
+      <AppStateView v-else-if="error && !entries.length" state="error" title="错题暂不可用" :description="error" action-label="重试" @action="load" />
       <AppStateView
         v-else-if="!filtered.length"
         state="success"
-        :title="entries.length ? '当前筛选下没有错题' : '暂无待巩固错题'"
+        :title="entries.length ? '当前筛选下没有错题' : mode === 'browse' ? '暂无待巩固错题' : '暂无可重做错题'"
         :description="entries.length ? '调整筛选条件，或继续完成新的针对性练习。' : '每次提交后，答错题会自动写入这里。'"
       />
 
-      <section v-else class="wrong-list" aria-label="错题列表">
+      <section v-else-if="mode === 'browse'" class="wrong-list" aria-label="错题列表">
         <article v-for="entry in filtered" :key="entry.id" :class="['wrong-entry', { expanded: expandedId === entry.id }]">
           <button class="wrong-summary" type="button" @click="toggle(entry.id)">
             <span class="cause-dot"></span>
@@ -25,15 +27,76 @@
             <ChevronDownIcon :class="{ rotated: expandedId === entry.id }" />
           </button>
           <div v-if="expandedId === entry.id" class="wrong-detail">
-            <ContentDocumentRenderer :document="entry.question.content.material || entry.question.content.prompt" markdown-variant="compact" />
-            <ContentDocumentRenderer v-if="entry.question.content.material" :document="entry.question.content.prompt" markdown-variant="compact" />
-            <section class="answer-note"><span>正确答案</span><strong>{{ entry.question.content.correctOptionId }}</strong></section>
-            <section class="diagnosis-note"><span>错因分析</span><template v-if="entry.diagnoses.length"><strong>{{ cause(entry) }}</strong><p>{{ detail(entry) }}</p></template><p v-else>正在结合本题作答过程分析错因，完成后会自动显示。</p></section>
-            <section class="explanation-note"><span>解析</span><ContentDocumentRenderer :document="entry.question.content.explanation" markdown-variant="compact" /></section>
-            <button class="retry-button" type="button" @click="retry(entry)"><RotateCcwIcon />重新作答本题组</button>
+            <ContentDocumentRenderer :document="entry.question.content.material || entry.question.content.prompt" text-variant="compact" />
+            <ContentDocumentRenderer v-if="entry.question.content.material" :document="entry.question.content.prompt" text-variant="compact" />
+            <QuestionOptionList
+              :options="entry.question.content.options"
+              :selected-option-id="selectedOptionId(entry)"
+              :correct-option-id="entry.question.content.correctOptionId"
+              reveal-result
+              readonly-mode
+              compact
+            />
+            <section class="diagnosis-note">
+              <span>错因分析</span>
+              <template v-if="entry.diagnoses.length">
+                <ErrorDiagnosisInsight
+                  :cause-code="effectiveDiagnosis(entry)!.causeCode"
+                  :cause-label="cause(entry)"
+                  :detail="detail(entry)"
+                  :dimensions="effectiveDiagnosis(entry)!.diagnosis.dimensions"
+                  :correction-plan="effectiveDiagnosis(entry)!.diagnosis.correctionPlan"
+                />
+              </template>
+              <p v-else>目前只有答题结果，还没有形成可靠的错因判断。</p>
+              <button
+                v-if="!hasSpecificDiagnosis(entry)"
+                class="diagnosis-retry"
+                type="button"
+                :disabled="isAnalyzing(entry)"
+                @click="analyzeDiagnosis(entry)"
+              >{{ isAnalyzing(entry) ? 'AI 正在分析' : '重新分析错因' }}</button>
+            </section>
+            <QuestionExplanationView :document="entry.question.content.explanation" :correct-option-id="entry.question.content.correctOptionId" />
           </div>
         </article>
       </section>
+
+      <section v-else class="review-workspace" aria-label="错题重做">
+        <div class="review-overview">
+          <span class="review-icon"><RotateCcwIcon /></span>
+          <div>
+            <strong>重做历史错题</strong>
+            <p>直接使用原题检验是否真正掌握，不重新生成题目。</p>
+          </div>
+          <em>{{ selectedReviewEntries.length }}/{{ reviewCandidates.length }}</em>
+        </div>
+        <div class="review-toolbar">
+          <button type="button" @click="selectAllReview">选择{{ reviewCandidates.length > maxReviewCount ? `前 ${maxReviewCount} 道` : '全部' }}</button>
+          <button type="button" :disabled="!selectedReviewIds.length" @click="selectedReviewIds = []">清空</button>
+        </div>
+        <div class="review-list">
+          <button
+            v-for="entry in reviewCandidates"
+            :key="entry.question.id"
+            type="button"
+            :class="{ selected: isSelectedForReview(entry) }"
+            :disabled="!isSelectedForReview(entry) && selectedReviewIds.length >= maxReviewCount"
+            @click="toggleReviewSelection(entry)"
+          >
+            <span class="review-check"><CheckIcon v-if="isSelectedForReview(entry)" /></span>
+            <span class="review-copy">
+              <strong>{{ summary(entry.question.content.prompt) }}</strong>
+              <small>{{ practiceModuleLabel(entry.module) }} · {{ cause(entry) }} · {{ formatTime(entry.attempt.submittedAt) }}</small>
+            </span>
+          </button>
+        </div>
+        <button class="start-review-button" type="button" :disabled="startingReview || !selectedReviewEntries.length" @click="startReview">
+          <RotateCcwIcon />
+          {{ startingReview ? '正在准备错题...' : `开始重做 ${selectedReviewEntries.length} 道` }}
+        </button>
+      </section>
+      <p v-if="error && entries.length" class="sync-error">{{ error }}</p>
     </PullToRefresh>
 
     <BottomSheet v-model="showFilter" title="错题筛选" subtitle="按训练模块与已确认错因过滤" variant="filter">
@@ -42,7 +105,7 @@
           <span>训练模块</span>
           <div class="filter-options">
             <button type="button" :class="{ active: moduleFilter === '' }" @click="moduleFilter = ''">全部模块</button>
-            <button v-for="module in modules" :key="module" type="button" :class="{ active: moduleFilter === module }" @click="moduleFilter = module">{{ module }}</button>
+            <button v-for="module in modules" :key="module" type="button" :class="{ active: moduleFilter === module }" @click="moduleFilter = module">{{ practiceModuleLabel(module) }}</button>
           </div>
         </label>
         <label>
@@ -58,11 +121,31 @@
     <CenterDialog v-model="showFlashcards" title="错题闪卡" :subtitle="flashcard ? `${flashcardIndex + 1}/${filtered.length}` : '暂无错题'" variant="content">
       <template v-if="flashcard">
         <div class="flashcard-top"><span>{{ cause(flashcard) }}</span><small>{{ formatTime(flashcard.attempt.submittedAt) }}</small></div>
-        <ContentDocumentRenderer :document="flashcard.question.content.material || flashcard.question.content.prompt" markdown-variant="compact" />
-        <ContentDocumentRenderer v-if="flashcard.question.content.material" :document="flashcard.question.content.prompt" markdown-variant="compact" />
+        <ContentDocumentRenderer :document="flashcard.question.content.material || flashcard.question.content.prompt" text-variant="compact" />
+        <ContentDocumentRenderer v-if="flashcard.question.content.material" :document="flashcard.question.content.prompt" text-variant="compact" />
+        <QuestionOptionList
+          :options="flashcard.question.content.options"
+          :selected-option-id="selectedOptionId(flashcard)"
+          :correct-option-id="flashcard.question.content.correctOptionId"
+          :reveal-result="revealed"
+          readonly-mode
+          compact
+        />
         <button class="reveal-button" type="button" @click="revealed = !revealed">{{ revealed ? '收起答案与解析' : '查看答案与解析' }}</button>
-        <template v-if="revealed"><section class="answer-note"><span>正确答案</span><strong>{{ flashcard.question.content.correctOptionId }}</strong></section><section class="diagnosis-note"><span>错因分析</span><p>{{ detail(flashcard) }}</p></section><ContentDocumentRenderer :document="flashcard.question.content.explanation" markdown-variant="compact" /></template>
-        <div class="flashcard-actions"><button type="button" :disabled="flashcardIndex === 0" @click="flashcardIndex--">上一张</button><button type="button" @click="retry(flashcard)">重做</button><button type="button" :disabled="flashcardIndex >= filtered.length - 1" @click="flashcardIndex++">下一张</button></div>
+        <template v-if="revealed">
+          <section class="diagnosis-note">
+            <span>错因分析</span>
+            <ErrorDiagnosisInsight
+              :cause-code="effectiveDiagnosis(flashcard)!.causeCode"
+              :cause-label="cause(flashcard)"
+              :detail="detail(flashcard)"
+              :dimensions="effectiveDiagnosis(flashcard)!.diagnosis.dimensions"
+              :correction-plan="effectiveDiagnosis(flashcard)!.diagnosis.correctionPlan"
+            />
+          </section>
+          <QuestionExplanationView :document="flashcard.question.content.explanation" :correct-option-id="flashcard.question.content.correctOptionId" />
+        </template>
+        <div class="flashcard-actions"><button type="button" :disabled="flashcardIndex === 0" @click="flashcardIndex--">上一张</button><button type="button" @click="openReviewFromFlashcard(flashcard)">错题重做</button><button type="button" :disabled="flashcardIndex >= filtered.length - 1" @click="flashcardIndex++">下一张</button></div>
       </template>
     </CenterDialog>
   </div>
@@ -71,50 +154,158 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ChevronDownIcon, FilterIcon, LayersIcon, RotateCcwIcon } from 'lucide-vue-next';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { CheckIcon, ChevronDownIcon, FilterIcon, LayersIcon, RotateCcwIcon } from 'lucide-vue-next';
+import { AppStateView, InitialRefreshState, PullToRefresh, SegmentedControl } from '@/capabilities/design-system/public';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import CenterDialog from '@/components/layout/CenterDialog.vue';
 import ContentDocumentRenderer from '@/components/content/ContentDocumentRenderer.vue';
+import QuestionExplanationView from '@/components/question/QuestionExplanationView.vue';
+import QuestionOptionList from '@/components/question/QuestionOptionList.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import ErrorDiagnosisInsight from '@/components/learning/ErrorDiagnosisInsight.vue';
 import { initializeTutorRuntime } from '@/composition-root/public';
+import { practiceModuleLabel } from '@/domain/labels';
 import { errorCauseLabel, type WrongBookDiagnosis, type WrongBookEntry } from '@/modules/evidence/public';
 import type { ContentDocument } from '@/modules/content/public';
+import { peekWrongBookEntries, WrongBookFeature } from './WrongBookFeature';
 
 const router = useRouter();
-const loading = ref(true); const error = ref(''); const entries = ref<readonly WrongBookEntry[]>([]);
+const initialEntries = peekWrongBookEntries();
+const loading = ref(false); const loaded = ref(Boolean(initialEntries)); const error = ref(''); const entries = ref<readonly WrongBookEntry[]>(initialEntries || []);
+const mode = ref<'browse' | 'review'>('browse');
 const expandedId = ref<string>(); const showFilter = ref(false); const showFlashcards = ref(false); const flashcardIndex = ref(0); const revealed = ref(false);
 const moduleFilter = ref(''); const causeFilter = ref('');
+const analyzingEntryIds = ref<readonly string[]>([]);
+const selectedReviewIds = ref<string[]>([]);
+const startingReview = ref(false);
+const maxReviewCount = 30;
+const modeOptions = [
+  { value: 'browse', label: '错题浏览' },
+  { value: 'review', label: '错题重做' }
+] as const;
+let featurePromise: Promise<WrongBookFeature> | undefined;
 const modules = computed(() => [...new Set(entries.value.map((entry) => entry.module).filter(Boolean))].sort());
 const causes = computed(() => [...new Set(entries.value.map(cause))].sort());
 const filtered = computed(() => entries.value.filter((entry) => (!moduleFilter.value || entry.module === moduleFilter.value) && (!causeFilter.value || cause(entry) === causeFilter.value)));
+const reviewCandidates = computed(() => [...new Map(
+  filtered.value.map((entry) => [String(entry.question.id), entry])
+).values()]);
+const selectedReviewEntries = computed(() => {
+  const selected = new Set(selectedReviewIds.value);
+  return reviewCandidates.value.filter((entry) => selected.has(String(entry.question.id)));
+});
 const flashcard = computed(() => filtered.value[flashcardIndex.value]);
 
 onMounted(() => { void load(); });
 watch(filtered, () => { if (flashcardIndex.value >= filtered.value.length) flashcardIndex.value = Math.max(0, filtered.value.length - 1); });
 watch(flashcardIndex, () => { revealed.value = false; });
+watch(mode, (next) => {
+  if (next === 'review' && !selectedReviewIds.value.length) selectDefaultReview();
+});
+watch(reviewCandidates, (values) => {
+  const available = new Set(values.map((entry) => String(entry.question.id)));
+  selectedReviewIds.value = selectedReviewIds.value.filter((id) => available.has(id));
+  if (mode.value === 'review' && !selectedReviewIds.value.length) selectDefaultReview();
+});
 
 async function load() {
+  if (loading.value) return;
   loading.value = true; error.value = '';
   try {
-    const runtime = await initializeTutorRuntime(); const cycle = await runtime.candidateRepository.findCurrentCycle();
-    if (!cycle) throw new Error('请先完成备考档案。');
-    entries.value = await runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 80 });
+    entries.value = await (await feature()).list(80, { refresh: true });
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '读取错题失败'; }
-  finally { loading.value = false; }
+  finally { loaded.value = true; loading.value = false; }
 }
 function toggle(id: string) { expandedId.value = expandedId.value === id ? undefined : id; }
-function cause(entry: WrongBookEntry): string { return errorCauseLabel[effectiveDiagnosis(entry)?.causeCode as keyof typeof errorCauseLabel] || '错因待分析'; }
-function detail(entry: WrongBookEntry): string { return effectiveDiagnosis(entry)?.detail || '正在结合本题作答过程分析错因，完成后会自动显示。'; }
+function cause(entry: WrongBookEntry): string {
+  const code = effectiveDiagnosis(entry)?.causeCode as keyof typeof errorCauseLabel | undefined;
+  return code ? errorCauseLabel[code] : '需要补充证据';
+}
+function detail(entry: WrongBookEntry): string {
+  const diagnosis = effectiveDiagnosis(entry);
+  return diagnosis && diagnosis.causeCode !== 'unknown'
+    ? diagnosis.detail
+    : '目前只能确认本题答错，暂时还无法判断具体原因。完成深度分析后会自动更新。';
+}
+function selectedOptionId(entry: WrongBookEntry): string { return typeof entry.attempt.answer.optionId === 'string' ? entry.attempt.answer.optionId : ''; }
 function effectiveDiagnosis(entry: WrongBookEntry): WrongBookDiagnosis | undefined { return [...entry.diagnoses].sort((left, right) => diagnosisPriority(right) - diagnosisPriority(left) || right.diagnosis.createdAt - left.diagnosis.createdAt)[0]; }
+function hasSpecificDiagnosis(entry: WrongBookEntry): boolean {
+  const diagnosis = effectiveDiagnosis(entry);
+  return Boolean(diagnosis && diagnosis.causeCode !== 'unknown');
+}
 function diagnosisPriority(value: WrongBookDiagnosis): number { return value.diagnosis.source === 'tutor_ai' ? 2 : value.causeCode === 'unknown' ? 0 : 1; }
 function summary(document: ContentDocument): string { const text = collectText(document).replace(/\s+/g, ' ').trim(); return text.length > 46 ? `${text.slice(0, 46)}...` : text || '题目内容'; }
-function collectText(document: ContentDocument): string { return document.blocks.map((block) => block.type === 'markdown' ? block.source : block.type === 'callout' ? collectText({ schemaVersion: document.schemaVersion, blocks: block.blocks }) : block.type === 'data_table' ? `${block.caption || ''} ${block.rows.map((row) => Object.values(row).join(' ')).join(' ')}` : block.type === 'formula' ? block.source : block.type === 'svg_diagram' ? block.alt : block.type === 'image' ? block.alt : '').join(' '); }
+function collectText(document: ContentDocument): string { return document.blocks.map((block) => block.type === 'text' ? block.source : block.type === 'callout' ? collectText({ schemaVersion: document.schemaVersion, blocks: block.blocks }) : block.type === 'data_table' ? `${block.caption || ''} ${block.rows.map((row) => Object.values(row).join(' ')).join(' ')}` : block.type === 'formula' ? block.source : block.type === 'svg_diagram' ? block.alt : block.type === 'image' ? block.alt : '').join(' '); }
 function formatTime(value: number): string { return new Date(value).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }); }
 function openFlashcard() { flashcardIndex.value = 0; revealed.value = false; showFlashcards.value = true; }
-function retry(entry: WrongBookEntry) { showFlashcards.value = false; void router.push({ path: '/vue/practice/objective-session', query: { questionSetId: entry.session.questionSetId, learningThreadId: entry.session.learningThreadId, retryFrom: entry.id } }); }
+function selectDefaultReview() {
+  selectedReviewIds.value = reviewCandidates.value
+    .slice(0, Math.min(10, maxReviewCount))
+    .map((entry) => String(entry.question.id));
+}
+function selectAllReview() {
+  selectedReviewIds.value = reviewCandidates.value
+    .slice(0, maxReviewCount)
+    .map((entry) => String(entry.question.id));
+}
+function isSelectedForReview(entry: WrongBookEntry): boolean {
+  return selectedReviewIds.value.includes(String(entry.question.id));
+}
+function toggleReviewSelection(entry: WrongBookEntry) {
+  const id = String(entry.question.id);
+  if (selectedReviewIds.value.includes(id)) {
+    selectedReviewIds.value = selectedReviewIds.value.filter((item) => item !== id);
+    return;
+  }
+  if (selectedReviewIds.value.length < maxReviewCount) {
+    selectedReviewIds.value = [...selectedReviewIds.value, id];
+  }
+}
+function openReviewFromFlashcard(entry: WrongBookEntry) {
+  const id = String(entry.question.id);
+  if (!selectedReviewIds.value.includes(id)) {
+    selectedReviewIds.value = [id, ...selectedReviewIds.value].slice(0, maxReviewCount);
+  }
+  showFlashcards.value = false;
+  mode.value = 'review';
+}
+function isAnalyzing(entry: WrongBookEntry): boolean { return analyzingEntryIds.value.includes(entry.id); }
+async function analyzeDiagnosis(entry: WrongBookEntry) {
+  if (isAnalyzing(entry)) return;
+  analyzingEntryIds.value = [...analyzingEntryIds.value, entry.id];
+  try {
+    await (await feature()).analyze(entry);
+    await load();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '错因分析启动失败';
+  } finally {
+    analyzingEntryIds.value = analyzingEntryIds.value.filter((id) => id !== entry.id);
+  }
+}
+async function startReview() {
+  if (!selectedReviewEntries.value.length || startingReview.value) return;
+  startingReview.value = true;
+  error.value = '';
+  try {
+    const manifestId = await (await feature()).startReview(selectedReviewEntries.value);
+    await router.push({
+      path: '/vue/practice/objective-session',
+      query: { manifestId }
+    });
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '错题重做启动失败';
+  } finally {
+    startingReview.value = false;
+  }
+}
+function feature(): Promise<WrongBookFeature> {
+  featurePromise ??= initializeTutorRuntime().then((runtime) => new WrongBookFeature(runtime));
+  return featurePromise;
+}
 </script>
 
 <style scoped>
-.wrongbook-scroll { display:flex; flex-direction:column; gap:12px; padding-top:12px; }.header-icon { width:36px; height:36px; display:grid; place-items:center; border:0; border-radius:50%; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); }.header-icon:disabled { opacity:.4; }.header-icon svg { width:17px; height:17px; }.wrong-list { overflow:hidden; border-radius:8px; background:rgba(var(--color-surface-rgb),.52); }.wrong-entry { border-top:1px solid rgba(var(--color-ink-rgb),.055); }.wrong-entry:first-child { border-top:0; }.wrong-summary { width:100%; min-height:72px; display:flex; align-items:center; gap:10px; padding:11px 12px; border:0; background:transparent; color:inherit; text-align:left; }.cause-dot { width:9px; height:9px; border-radius:50%; background:var(--orange-color); flex:0 0 auto; }.wrong-copy { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }.wrong-copy strong,.wrong-copy em,.wrong-copy small { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }.wrong-copy strong { font-size:var(--type-size-body); }.wrong-copy em,.wrong-copy small { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; }.wrong-copy small { font-size:var(--type-size-micro); }.wrong-summary>svg { width:17px; color:var(--text-secondary-color); transition:transform .18s ease; }.wrong-summary>svg.rotated { transform:rotate(180deg); }.wrong-detail { display:flex; flex-direction:column; gap:11px; padding:2px 12px 14px 31px; }.answer-note,.diagnosis-note,.explanation-note { padding:10px 11px; border-radius:8px; background:rgba(var(--color-ink-rgb),.035); }.answer-note { display:flex; align-items:center; gap:8px; }.answer-note span,.diagnosis-note>span,.explanation-note>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.answer-note strong { color:var(--green-color); }.diagnosis-note { background:rgba(255,149,0,.075); }.diagnosis-note strong { display:block; margin-top:4px; font-size:var(--type-size-secondary); }.diagnosis-note p { margin:4px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-secondary); line-height:1.5; }.explanation-note { display:flex; flex-direction:column; gap:6px; }.retry-button,.reveal-button { min-height:40px; display:inline-flex; align-items:center; justify-content:center; gap:7px; border:0; border-radius:10px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-secondary); }.retry-button svg { width:16px; }.filter-form { display:flex; flex-direction:column; gap:12px; }.filter-form label { display:flex; flex-direction:column; gap:6px; }.filter-form span { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.filter-options { display:flex; flex-wrap:wrap; gap:7px; }.filter-options button { min-height:32px; border:0; border-radius:999px; padding:0 11px; background:var(--surface-control); color:var(--text-secondary-color); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.filter-options button.active { background:rgba(var(--color-brand-rgb),.12); color:var(--primary-color); }.flashcard-top { display:flex; justify-content:space-between; gap:8px; color:var(--orange-color); font-size:var(--type-size-caption); }.flashcard-top small { color:var(--text-secondary-color); }.flashcard-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }.flashcard-actions button { min-height:39px; border:0; border-radius:9px; color:var(--text-color); background:var(--surface-control); font:inherit; font-size:var(--type-size-secondary); }.flashcard-actions button:nth-child(2) { color:#fff; background:var(--primary-color); }.flashcard-actions button:disabled { opacity:.4; }
+.wrongbook-scroll { display:flex; flex-direction:column; gap:12px; padding-top:12px; }.header-icon { width:36px; height:36px; display:grid; place-items:center; border:0; border-radius:50%; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); }.header-icon:disabled { opacity:.4; }.header-icon svg { width:17px; height:17px; }.wrong-list { overflow:hidden; border-radius:8px; background:rgba(var(--color-surface-rgb),.52); }.wrong-entry { border-top:1px solid rgba(var(--color-ink-rgb),.055); }.wrong-entry:first-child { border-top:0; }.wrong-summary { width:100%; min-height:72px; display:flex; align-items:center; gap:10px; padding:11px 12px; border:0; background:transparent; color:inherit; text-align:left; }.cause-dot { width:9px; height:9px; border-radius:50%; background:var(--orange-color); flex:0 0 auto; }.wrong-copy { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }.wrong-copy strong,.wrong-copy em,.wrong-copy small { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }.wrong-copy strong { font-size:var(--type-size-body); }.wrong-copy em,.wrong-copy small { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; }.wrong-copy small { font-size:var(--type-size-micro); }.wrong-summary>svg { width:17px; color:var(--text-secondary-color); transition:transform .18s ease; }.wrong-summary>svg.rotated { transform:rotate(180deg); }.wrong-detail { display:flex; flex-direction:column; gap:11px; padding:2px 12px 14px 31px; }.answer-note,.diagnosis-note,.explanation-note { padding:10px 11px; border-radius:8px; background:rgba(var(--color-ink-rgb),.035); }.answer-note { display:flex; align-items:center; gap:8px; }.answer-note span,.diagnosis-note>span,.explanation-note>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.answer-note strong { color:var(--green-color); }.diagnosis-note { background:rgba(255,149,0,.075); }.diagnosis-note strong { display:block; margin-top:4px; font-size:var(--type-size-secondary); }.diagnosis-note p { margin:4px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-secondary); line-height:1.5; }.diagnosis-retry { margin-top:8px; min-height:32px; border:0; border-radius:8px; padding:0 10px; color:var(--orange-color); background:rgba(255,149,0,.1); font:inherit; font-size:var(--type-size-caption); }.diagnosis-retry:disabled { opacity:.55; }.explanation-note { display:flex; flex-direction:column; gap:6px; }.reveal-button { min-height:40px; display:inline-flex; align-items:center; justify-content:center; gap:7px; border:0; border-radius:10px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-secondary); }.filter-form { display:flex; flex-direction:column; gap:12px; }.filter-form label { display:flex; flex-direction:column; gap:6px; }.filter-form span { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.filter-options { display:flex; flex-wrap:wrap; gap:7px; }.filter-options button { min-height:32px; border:0; border-radius:999px; padding:0 11px; background:var(--surface-control); color:var(--text-secondary-color); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.filter-options button.active { background:rgba(var(--color-brand-rgb),.12); color:var(--primary-color); }.flashcard-top { display:flex; justify-content:space-between; gap:8px; color:var(--orange-color); font-size:var(--type-size-caption); }.flashcard-top small { color:var(--text-secondary-color); }.flashcard-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }.flashcard-actions button { min-height:39px; border:0; border-radius:9px; color:var(--text-color); background:var(--surface-control); font:inherit; font-size:var(--type-size-secondary); }.flashcard-actions button:nth-child(2) { color:#fff; background:var(--primary-color); }.flashcard-actions button:disabled { opacity:.4; }
+.sync-error { margin:0; color:var(--red-color); font-size:var(--type-size-micro); text-align:center; }
+.review-workspace { display:flex; flex-direction:column; gap:10px; }.review-overview { display:flex; align-items:center; gap:10px; padding:12px; border-radius:8px; background:rgba(var(--color-surface-rgb),.5); }.review-icon { width:34px; height:34px; flex:0 0 auto; display:grid; place-items:center; border-radius:8px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); }.review-icon svg { width:17px; }.review-overview div { min-width:0; flex:1; }.review-overview strong { display:block; font-size:var(--type-size-body); }.review-overview p { margin:3px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-caption); line-height:1.4; }.review-overview em { color:var(--primary-color); font-size:var(--type-size-caption); font-style:normal; font-weight:var(--type-weight-semibold); white-space:nowrap; }.review-toolbar { display:flex; justify-content:flex-end; gap:8px; }.review-toolbar button { min-height:30px; padding:0 9px; border:0; border-radius:8px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.08); font:inherit; font-size:var(--type-size-caption); }.review-toolbar button:disabled { opacity:.4; }.review-list { overflow:hidden; border-radius:8px; background:rgba(var(--color-surface-rgb),.46); }.review-list>button { width:100%; min-height:62px; display:flex; align-items:center; gap:10px; padding:9px 11px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.05); color:inherit; background:transparent; text-align:left; }.review-list>button:first-child { border-top:0; }.review-list>button.selected { background:rgba(var(--color-brand-rgb),.055); }.review-list>button:disabled { opacity:.38; }.review-check { width:20px; height:20px; flex:0 0 auto; display:grid; place-items:center; border:1.5px solid rgba(var(--color-ink-rgb),.18); border-radius:6px; color:#fff; }.selected .review-check { border-color:var(--primary-color); background:var(--primary-color); }.review-check svg { width:14px; }.review-copy { min-width:0; display:flex; flex:1; flex-direction:column; gap:4px; }.review-copy strong,.review-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.review-copy strong { font-size:var(--type-size-secondary); font-weight:var(--type-weight-medium); }.review-copy small { color:var(--text-secondary-color); font-size:var(--type-size-micro); }.start-review-button { min-height:44px; display:flex; align-items:center; justify-content:center; gap:7px; border:0; border-radius:10px; color:#fff; background:var(--primary-color); font:inherit; font-size:var(--type-size-secondary); font-weight:var(--type-weight-semibold); }.start-review-button svg { width:17px; }.start-review-button:disabled { opacity:.45; }
 </style>

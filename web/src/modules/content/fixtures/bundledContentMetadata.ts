@@ -4,7 +4,7 @@ import type {
   JsonObject,
   QuestionTemplateVersionId
 } from '@/kernel/public';
-import fixture from './content-metadata-v1.json';
+import fixture from './content-metadata-v2.json';
 import type { ContentMetadataBundle } from '../contracts/ContentRepository';
 import type {
   ContentDocumentType,

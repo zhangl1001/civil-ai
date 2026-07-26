@@ -15,10 +15,11 @@ const server = await createServer({
 
 async function verify() {
 try {
-  const [evidence, teaching, curriculum] = await Promise.all([
+  const [evidence, teaching, curriculum, sqliteEvidence] = await Promise.all([
     server.ssrLoadModule('/src/modules/evidence/public.ts'),
     server.ssrLoadModule('/src/modules/teaching/public.ts'),
-    server.ssrLoadModule('/src/modules/curriculum/public.ts')
+    server.ssrLoadModule('/src/modules/curriculum/public.ts'),
+    server.ssrLoadModule('/src/modules/evidence/adapters/SqliteLearningFactRepositories.ts')
   ]);
   const clock = new TestClock();
   const ids = new TestIds();
@@ -31,7 +32,23 @@ try {
   const diagnosisRepository = new MemoryDiagnosisRepository();
   const evidenceRepository = new MemoryEvidenceRepository();
   const outboxRepository = new MemoryOutboxRepository();
-  const contentRepository = { findQuestionSet: async (id) => id === 'question-set:test' ? questionSet() : undefined };
+  let questionSetPracticeStatus = 'not_started';
+  const contentRepository = {
+    findQuestionSet: async (id) => id === 'question-set:test' ? questionSet() : undefined,
+    async updateQuestionSetPracticeStatus(id, status) {
+      if (id === 'question-set:test') questionSetPracticeStatus = status;
+    }
+  };
+  let diagnosisListSql = '';
+  const sqliteDiagnosisRepository = new sqliteEvidence.SqliteErrorDiagnosisRepository({
+    async query(sql) {
+      diagnosisListSql = sql;
+      return [];
+    }
+  }, {});
+  await sqliteDiagnosisRepository.listBySessions(['LearningSessionId:test']);
+  assert.match(diagnosisListSql, /JOIN attempts attempt ON attempt\.id = diagnosis\.attempt_id/);
+  assert.match(diagnosisListSql, /WHERE attempt\.session_id IN/);
 
   const createThread = new teaching.CreateLearningThread(
     unitOfWork, threadRepository, candidateRepository, curriculumRepository, outboxRepository, clock, ids
@@ -92,6 +109,7 @@ try {
     idempotencyKey: 'session:weakening:1',
     learningThreadId: thread.thread.id,
     questionSetId: 'question-set:test',
+    questionIds: ['question:test:1'],
     startedAt: 1_784_016_010_000,
     elapsedMs: 41_000,
     answers: [{
@@ -117,6 +135,7 @@ try {
   const savedFacts = await sessionRepository.findById(result.sessionId);
   assert.equal(savedFacts.attempts[0].result, evidence.AttemptResult.Incorrect);
   assert.equal(savedFacts.gradings[0].gradingMethod, evidence.GradingMethod.Deterministic);
+  assert.equal(questionSetPracticeStatus, 'completed', 'submitting a session must complete the question-set practice lifecycle');
   const diagnoses = await diagnosisRepository.listBySession(result.sessionId);
   assert.equal(diagnoses[0].causeCode, evidence.ErrorCauseCode.Unknown);
   assert.match(diagnoses[0].detail, /不能直接归因为/);
@@ -143,34 +162,206 @@ try {
   });
   assert.equal(repeatedConfirmation.version, 1, 'diagnosis confirmation must be idempotent');
   const validEvidence = await evidenceRepository.listValid('cycle:test', 'capability:aptitude:judgment:weaken', 10);
-  assert.equal(validEvidence.length, 1);
-  assert.equal(validEvidence[0].weight, 0.6);
+  assert.equal(validEvidence.length, 2);
+  const correctnessEvidence = validEvidence.find((item) => item.evidenceType === evidence.EvidenceType.Correctness);
+  assert.equal(correctnessEvidence?.weight, 0.6);
+  assert.equal(validEvidence.some((item) => item.evidenceType === evidence.EvidenceType.Speed), true);
   assert.equal(evidence.objectiveEvidencePolicyV1.correctnessWeight(evidence.AssessmentRole.Practice, 2), 0.42);
   const repeatedSubmission = await submit.execute(command);
   assert.equal(repeatedSubmission.sessionId, result.sessionId, 'objective submission must be idempotent');
   assert.equal(repeatedSubmission.diagnosisCount, 1);
+  let diagnosisModelInvocations = 0;
+  const diagnosisTransitions = [];
+  const secondProvisional = {
+    ...diagnoses[0],
+    id: 'ErrorDiagnosisId:diagnosis:test:second',
+    idempotencyKey: 'diagnosis:test:second',
+    detail: '第二道错题的确定性证据不足。'
+  };
+  diagnosisRepository.values.push(secondProvisional);
+  const runAiDiagnosis = new evidence.RunAiErrorDiagnosis(
+    unitOfWork,
+    diagnosisRepository,
+    outboxRepository,
+    {
+      compile() {
+        return {
+          system: 'diagnose',
+          user: '{}',
+          responseSchema: {},
+          version: 'test',
+          promptCode: 'test',
+          contentHash: 'test'
+        };
+      }
+    },
+    {
+      async execute(invocation) {
+        diagnosisModelInvocations += 1;
+        return {
+          invocationId: `invocation:diagnosis:${diagnosisModelInvocations}`,
+          text: invocation.modelRole === 'error_diagnosis_batch'
+            ? JSON.stringify({
+                diagnoses: [
+                  {
+                    provisionalDiagnosisId: diagnoses[0].id,
+                    causeCode: evidence.ErrorCauseCode.MethodSelectionError,
+                    errorStage: 'option_comparison',
+                    detail: '观察到误选项没有直接作用于题干论证链，更可能是在比较削弱力度时选择了较弱的方法。',
+                    confidence: 0.5,
+                    recommendedActionCode: 'practice_option_strength_comparison',
+                    dimensions: [{
+                      code: 'method_selection',
+                      status: 'gap',
+                      evidence: '误选项采用了较弱的削弱方式。'
+                    }],
+                    correctionPlan: {
+                      objective: '学会比较削弱方式的直接性和强度。',
+                      steps: ['标出论点与论据。', '逐项比较选项作用位置。'],
+                      practiceFocus: '选项强度对比',
+                      successCriteria: '连续三题能解释正确项更强的原因。'
+                    }
+                  },
+                  {
+                    provisionalDiagnosisId: secondProvisional.id,
+                    causeCode: evidence.ErrorCauseCode.CarelessError,
+                    detail: '这项置信度非法，应仅重试本题。',
+                    confidence: 1,
+                    recommendedActionCode: 'check_answer',
+                    dimensions: [{
+                      code: 'reasoning_process',
+                      status: 'risk',
+                      evidence: '测试用非法高置信度诊断。'
+                    }],
+                    correctionPlan: {
+                      objective: '测试非法条目单独重试。',
+                      steps: ['检查输入。', '重新诊断。'],
+                      practiceFocus: '测试',
+                      successCriteria: '仅重试当前条目。'
+                    }
+                  }
+                ]
+              })
+            : JSON.stringify({
+                causeCode: evidence.ErrorCauseCode.MethodSelectionError,
+                errorStage: 'option_comparison',
+                detail: '观察到误选项没有直接作用于题干论证链，更可能是在比较削弱力度时选择了较弱的方法。',
+                confidence: 0.5,
+                recommendedActionCode: 'practice_option_strength_comparison',
+                dimensions: [{
+                  code: 'method_selection',
+                  status: 'gap',
+                  evidence: '误选项采用了较弱的削弱方式。'
+                }],
+                correctionPlan: {
+                  objective: '学会比较削弱方式的直接性和强度。',
+                  steps: ['标出论点与论据。', '逐项比较选项作用位置。'],
+                  practiceFocus: '选项强度对比',
+                  successCriteria: '连续三题能解释正确项更强的原因。'
+                }
+              })
+        };
+      }
+    },
+    {
+      async execute(transitionCommand) {
+        diagnosisTransitions.push(transitionCommand);
+      }
+    },
+    clock,
+    ids
+  );
+  const diagnosisCommand = {
+    agentRunId: 'AgentRunId:diagnosis:test',
+    items: [{
+      provisionalDiagnosisId: diagnoses[0].id,
+      evidenceContext: { userAnswer: 'A', standardAnswer: 'B' },
+      subject: '行测判断推理',
+      capabilityName: '削弱论证'
+    }, {
+      provisionalDiagnosisId: secondProvisional.id,
+      evidenceContext: { userAnswer: 'C', standardAnswer: 'D' },
+      subject: '行测判断推理',
+      capabilityName: '削弱论证'
+    }]
+  };
+  const aiDiagnosisIds = await runAiDiagnosis.execute(diagnosisCommand, {});
+  const repeatedAiDiagnosisIds = await runAiDiagnosis.execute(diagnosisCommand, {});
+  assert.deepEqual(repeatedAiDiagnosisIds, aiDiagnosisIds);
+  assert.equal(
+    diagnosisModelInvocations,
+    2,
+    'a valid batch item must be committed while only the malformed sibling receives a single-item fallback'
+  );
+  assert.equal(
+    diagnosisRepository.values.filter((item) => item.source === 'tutor_ai').length,
+    2,
+    'AI diagnosis retry must not append duplicate diagnosis facts'
+  );
+  const committedAiDiagnosis = diagnosisRepository.values.find((item) => item.source === 'tutor_ai');
+  assert.equal(committedAiDiagnosis.dimensions[0].code, 'method_selection');
+  assert.equal(committedAiDiagnosis.correctionPlan.steps.length, 2);
+  assert.match(committedAiDiagnosis.correctionPlan.successCriteria, /连续三题/);
+  assert.equal(diagnosisTransitions.length, 2, 'both the original execution and recovery path may idempotently complete the run');
+  await assert.rejects(
+    () => submit.execute({
+      ...command,
+      idempotencyKey: 'session:weakening:invalid-observation',
+      answers: [{
+        ...command.answers[0],
+        observations: [{
+          observationType: 'answer_interaction',
+          valueCode: 'answer_changed',
+          value: {},
+          confidence: 1
+        }]
+      }]
+    }),
+    /observation type is invalid/
+  );
+  assert.equal(sessionRepository.byId.size, 1, 'invalid observations must fail before opening the submission transaction');
 
   const correctEvidence = new evidence.CorrectLearningEvidence(
     unitOfWork, evidenceRepository, outboxRepository, clock, ids
   );
   await correctEvidence.execute({
     idempotencyKey: 'evidence:weakening:invalidate:1',
-    evidenceId: validEvidence[0].id,
+    evidenceId: correctnessEvidence.id,
     action: evidence.EvidenceCorrectionAction.Invalidate,
     reasonCode: 'question.quality_rejected',
     actorType: 'user'
   });
-  assert.equal((await evidenceRepository.listValid('cycle:test', 'capability:aptitude:judgment:weaken', 10)).length, 0);
+  assert.equal((await evidenceRepository.listValid('cycle:test', 'capability:aptitude:judgment:weaken', 10)).length, 1);
   await correctEvidence.execute({
     idempotencyKey: 'evidence:weakening:invalidate:1',
-    evidenceId: validEvidence[0].id,
+    evidenceId: correctnessEvidence.id,
     action: evidence.EvidenceCorrectionAction.Invalidate,
     reasonCode: 'question.quality_rejected',
     actorType: 'user'
   });
-  assert.equal((await evidenceRepository.findValidity(validEvidence[0].id)).validityStatus, evidence.EvidenceValidity.Invalid);
+  assert.equal((await evidenceRepository.findValidity(correctnessEvidence.id)).validityStatus, evidence.EvidenceValidity.Invalid);
   assert.equal(outboxRepository.events.filter((item) => item.eventType === 'learning_session.objective_submitted').length, 1);
   assert.equal(outboxRepository.events.filter((item) => item.eventType === 'error_diagnosis.confirmed').length, 1);
+  const retentionSubset = await submit.execute({
+    idempotencyKey: 'session:weakening:retention-subset',
+    learningThreadId: thread.thread.id,
+    questionSetId: 'question-set:test',
+    questionIds: ['question:test:2'],
+    assessmentRole: evidence.AssessmentRole.Retention,
+    startedAt: 1_784_016_020_000,
+    elapsedMs: 20_000,
+    answers: [{
+      questionId: 'question:test:2',
+      optionId: 'D',
+      elapsedMs: 20_000,
+      answerChangeCount: 0
+    }]
+  });
+  const retentionFacts = await sessionRepository.findById(retentionSubset.sessionId);
+  assert.equal(retentionSubset.total, 1, 'wrong-book review must submit only the selected question subset');
+  assert.equal(retentionFacts.session.sessionType, evidence.LearningSessionType.Retention);
+  assert.equal(retentionFacts.attempts[0].questionId, 'question:test:2');
+  assert.equal(outboxRepository.events.filter((item) => item.eventType === 'learning_session.objective_submitted').length, 2);
   console.log('Learning evidence verification passed.');
 } finally {
   await server.close();
@@ -228,7 +419,9 @@ class MemoryDiagnosisRepository {
   async append(values) { this.values.push(...values); }
   async listBySession(sessionId) { return this.values.filter((item) => item.sessionId === sessionId); }
   async find(id) { return this.values.find((item) => item.id === id); }
+  async findMany(ids) { const wanted = new Set(ids); return this.values.filter((item) => wanted.has(item.id)); }
   async findByIdempotencyKey(key) { return this.values.find((item) => item.idempotencyKey === key); }
+  async findByIdempotencyKeys(keys) { const wanted = new Set(keys); return this.values.filter((item) => wanted.has(item.idempotencyKey)); }
   async appendConfirmation(confirmation, projection, expectedVersion) {
     const current = this.projections.get(confirmation.diagnosisId);
     if (current?.version !== expectedVersion || projection.version !== (expectedVersion ?? 0) + 1) {
@@ -295,6 +488,12 @@ function questionSet() {
       contentVersion: 1,
       content: { options: [{ id: 'A' }, { id: 'B' }, { id: 'C' }, { id: 'D' }] },
       correctAnswer: { optionId: 'B' }
+    }, {
+      id: 'question:test:2',
+      capabilityNodeId: 'capability:aptitude:judgment:weaken',
+      contentVersion: 1,
+      content: { options: [{ id: 'A' }, { id: 'B' }, { id: 'C' }, { id: 'D' }] },
+      correctAnswer: { optionId: 'D' }
     }]
   };
 }

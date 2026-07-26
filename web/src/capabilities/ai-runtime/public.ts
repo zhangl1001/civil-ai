@@ -4,10 +4,12 @@ export {
   ProviderErrorKind,
   ProviderGatewayError,
   type ModelMessage,
+  type ModelToolCall,
   type ProviderGateway,
   type ProviderRequest,
   type ProviderResponse,
   type ProviderTextDelta,
+  type ProviderToolDefinition,
   type ProviderUsage
 } from './contracts/ProviderGateway';
 export {
@@ -18,9 +20,19 @@ export {
   type PromptVariables
 } from './prompt/PromptContracts';
 export { PromptCompiler } from './prompt/PromptCompiler';
+export {
+  GENERATION_AUTONOMY_LIMITS,
+  GenerationConstraintClass,
+  type GenerationConstraintClass as GenerationConstraintClassValue
+} from './prompt/GenerationBoundaryPolicy';
 export { PromptRegistry } from './prompt/PromptRegistry';
-export { weakeningQuestionPromptV1 } from './fixtures/weakeningQuestionPromptV1';
+export { structuredObjectivePromptV2 } from './fixtures/structuredObjectivePromptV2';
 export { errorDiagnosisPromptV1 } from './fixtures/errorDiagnosisPromptV1';
+export { errorDiagnosisBatchPromptV1 } from './fixtures/errorDiagnosisBatchPromptV1';
+export {
+  BusinessTutorPromptCode,
+  businessTutorPromptCatalog
+} from './fixtures/businessTutorPromptCatalog';
 export type { PromptRepository } from './contracts/PromptRepository';
 export {
   InvocationValidationStatus,
@@ -28,7 +40,11 @@ export {
   type AIInvocationRepository,
   type InvocationValidationStatus as InvocationValidationStatusCode
 } from './contracts/AIInvocationRepository';
-export { EnsurePromptBundle } from './prompt/EnsurePromptBundle';
+export {
+  EnsurePromptBundle,
+  PromptBundleEnsureStatus,
+  type PromptBundleEnsureStatus as PromptBundleEnsureStatusCode
+} from './prompt/EnsurePromptBundle';
 export { FetchHttpTransport, type HttpTransport, type HttpTransportRequest } from './contracts/HttpTransport';
 export { AnthropicGateway, type AnthropicGatewayConfig } from './providers/AnthropicGateway';
 export {
@@ -36,8 +52,25 @@ export {
   type OpenAICompatibleGatewayConfig
 } from './providers/OpenAICompatibleGateway';
 export {
+  AnthropicStreamAccumulator,
+  OpenAIStreamAccumulator,
   anthropicTextDelta,
   openAITextDelta,
   parseAnthropicResponse,
   parseOpenAIResponse
 } from './providers/ProviderResponseParser';
+export {
+  anthropicInputSchema,
+  anthropicMessagesEndpoint,
+  normalizeAnthropicModelName
+} from './providers/AnthropicCompatibility';
+export {
+  parseStructuredJson,
+  StructuredJsonParseError
+} from './parsing/StructuredJson';
+export {
+  AI_EXECUTION_BUDGET,
+  createProviderExecutionDeadline,
+  generationExecutionBudgetMs,
+  type ProviderExecutionDeadline
+} from './providers/ProviderExecutionPolicy';

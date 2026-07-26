@@ -4,12 +4,19 @@ import App from './App.vue';
 import router from './router';
 import { bootstrapLocalApp } from './services/AppBootstrap';
 import { capacitorRuntime, installNativePlatformClass } from './platform/capacitor';
+import { probeNativeStreamingHttp } from './platform/NativeStreamingHttpAdapter';
+import { installDatabaseStallRecovery } from './platform/DatabaseStallRecovery';
 
 // Global styles
 import './assets/styles/design-tokens.css';
 import './assets/styles/main.css';
 
 installNativePlatformClass();
+installDatabaseStallRecovery();
+
+void probeNativeStreamingHttp().then((available) => {
+  if (available) console.info('[AITransport] Native streaming transport is ready.');
+});
 
 bootstrapLocalApp().catch((error) => {
   console.warn('[bootstrapLocalApp]', error);

@@ -51,6 +51,18 @@ export class IndexedDbMasteryRepository implements MasteryRepository {
       .sort((left, right) => right.priority - left.priority || left.dueAt - right.dueAt).slice(0, limit);
   }
 
+  async listReviews(examCycleId: ExamCycleId, limit: number): Promise<readonly ReviewQueueItem[]> {
+    assertLimit(limit, 'Review');
+    return (await this.listAllReviews(examCycleId)).slice(0, limit);
+  }
+
+  async listAllReviews(examCycleId: ExamCycleId): Promise<readonly ReviewQueueItem[]> {
+    const reviews = await this.database.getAll<ReviewQueueItem>(TutorIndexedDbStore.ReviewQueue);
+    return reviews
+      .filter((review) => review.examCycleId === examCycleId)
+      .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
+  }
+
   async listPriorityTracks(examCycleId: ExamCycleId, limit: number): Promise<readonly MasteryTrack[]> {
     assertLimit(limit, 'Track');
     const rank: Record<MasteryTrack['state'], number> = { regressed: 0, learning: 1, practicing: 2, consolidating: 3, diagnosed: 4, unassessed: 5, mastered: 6, maintaining: 7 };
@@ -58,6 +70,18 @@ export class IndexedDbMasteryRepository implements MasteryRepository {
     return tracks.filter((track) => track.examCycleId === examCycleId)
       .sort((left, right) => rank[left.state] - rank[right.state] || left.stability - right.stability || left.confidence - right.confidence || left.updatedAt - right.updatedAt)
       .slice(0, limit);
+  }
+
+  async listTracks(examCycleId: ExamCycleId, limit: number): Promise<readonly MasteryTrack[]> {
+    assertLimit(limit, 'Track');
+    return (await this.listAllTracks(examCycleId)).slice(0, limit);
+  }
+
+  async listAllTracks(examCycleId: ExamCycleId): Promise<readonly MasteryTrack[]> {
+    const tracks = await this.database.getAll<StoredTrack>(TutorIndexedDbStore.MasteryTracks);
+    return tracks
+      .filter((track) => track.examCycleId === examCycleId)
+      .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id));
   }
 }
 

@@ -1,12 +1,6 @@
-import { database } from '@/db/database';
-import { STORES } from '@/db/schema';
-import type { AbilityProfile } from '@/domain/learning';
-import type { ExamPlan } from '@/domain/plan';
-import type { Question } from '@/domain/question';
-import type { WrongItem } from '@/domain/wrongbook';
-import { practiceFlowService } from './PracticeFlowService';
-import { projectRepository } from './ProjectRepository';
-import { planService } from './PlanService';
+import { initializeTutorRuntime } from '@/composition-root/public';
+import type { CapabilityNode } from '@/modules/curriculum/public';
+import type { MasteryTrack } from '@/modules/mastery/public';
 
 export type SprintIntensity = 'normal' | 'high' | 'extreme';
 
@@ -49,9 +43,9 @@ function addDays(date: Date, days: number): Date {
   return next;
 }
 
-function remainDays(plan: ExamPlan): number | null {
-  if (!plan.exam_date) return null;
-  const end = new Date(`${plan.exam_date}T00:00:00`);
+function remainDays(examDate?: string): number | null {
+  if (!examDate) return null;
+  const end = new Date(`${examDate}T00:00:00`);
   if (Number.isNaN(end.getTime())) return null;
   return Math.max(0, Math.ceil((end.getTime() - Date.now()) / 86400000));
 }
@@ -68,29 +62,39 @@ function dailyQuestions(intensity: SprintIntensity): number {
   return 16;
 }
 
-function normalizeCategory(reason?: string): string | undefined {
-  if (!reason || reason === '练习答错') return undefined;
-  if (reason.includes('概念')) return '概念性';
-  if (reason.includes('理解')) return '理解性';
-  if (reason.includes('执行')) return '执行性';
-  return reason;
-}
-
 export class SprintService {
   async dashboard(overrideIntensity?: SprintIntensity): Promise<SprintDashboard> {
-    const project = await projectRepository.getActiveProject();
-    const [plan, profiles, wrongItems] = await Promise.all([
-      planService.getPlan(project.id),
-      database.queryByIndex<AbilityProfile>(STORES.abilityProfiles, 'projectId', project.id),
-      database.queryByIndex<WrongItem>(STORES.wrongItems, 'projectId', project.id)
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) {
+      return {
+        remainDays: null,
+        phase: '请先建立备考档案',
+        intensity: overrideIntensity || 'normal',
+        dailyQuestions: dailyQuestions(overrideIntensity || 'normal'),
+        weekMissions: [],
+        weakPoints: [],
+        emergencyReview: []
+      };
+    }
+    const [curriculum, tracks, reviews, wrongEntries] = await Promise.all([
+      runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
+      runtime.masteryRepository.listPriorityTracks(cycle.examCycle.id, 100),
+      runtime.masteryRepository.listReviews(cycle.examCycle.id, 100),
+      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 })
     ]);
-    const days = remainDays(plan);
+    const days = remainDays(cycle.examCycle.examDate);
     const intensity = overrideIntensity || intensityFor(days);
-    const weakPoints = await this.weakPoints(wrongItems.filter((item) => item.status !== 'mastered'), profiles);
+    const weakPoints = this.weakPoints(tracks, curriculum?.capabilityNodes || [], wrongEntries);
     const missions = this.missions(weakPoints, intensity);
+    const nodeMap = new Map((curriculum?.capabilityNodes || []).map((node) => [node.id, node]));
+    const dueNames = new Set(reviews
+      .filter((item) => item.status === 'scheduled' && Number(item.dueAt) <= Date.now())
+      .map((item) => nodeMap.get(item.capabilityNodeId)?.name)
+      .filter((name): name is string => Boolean(name)));
 
     return {
-      examDate: plan.exam_date,
+      examDate: cycle.examCycle.examDate,
       remainDays: days,
       phase: days === null ? '请先设置备考计划' : intensity === 'extreme' ? '极限冲刺期' : intensity === 'high' ? '强化冲刺期' : '稳步冲刺期',
       intensity,
@@ -98,54 +102,41 @@ export class SprintService {
       todayMission: missions.find((mission) => mission.date === iso()) || missions[0],
       weekMissions: missions,
       weakPoints,
-      emergencyReview: weakPoints.filter((point) => point.proficiency < 40).slice(0, 5)
+      emergencyReview: weakPoints
+        .filter((point) => point.proficiency < 40 || dueNames.has(point.name))
+        .slice(0, 5)
     };
   }
 
-  startWeakPractice(point?: SprintWeakPoint): void {
-    practiceFlowService.writeStartContext({
-      module: point?.module || '资料分析',
-      knowledgePoint: point?.name,
-      date: iso(),
-      mode: 'practice',
-      source: 'sprint',
-      questionCount: 10
+  private weakPoints(
+    tracks: readonly MasteryTrack[],
+    nodes: readonly CapabilityNode[],
+    wrongEntries: readonly { attempt: { capabilityNodeId: string }; diagnoses: readonly { causeCode: string }[] }[]
+  ): SprintWeakPoint[] {
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+    const moduleNames = new Map(nodes.filter((node) => node.nodeType === 'module').map((node) => [node.module, node.name]));
+    const wrongCounts = new Map<string, number>();
+    const causes = new Map<string, string>();
+    wrongEntries.forEach((entry) => {
+      const key = entry.attempt.capabilityNodeId;
+      wrongCounts.set(key, (wrongCounts.get(key) || 0) + 1);
+      const cause = errorCauseLabel(entry.diagnoses[0]?.causeCode);
+      if (cause) causes.set(key, cause);
     });
-  }
-
-  private async weakPoints(wrongItems: WrongItem[], profiles: AbilityProfile[]): Promise<SprintWeakPoint[]> {
-    const questions = await this.questionMap(wrongItems.map((item) => item.questionId));
-    const grouped = new Map<string, SprintWeakPoint>();
-    const profileMap = new Map(profiles.map((profile) => [profile.module, profile]));
-    for (const item of wrongItems) {
-      const question = questions.get(item.questionId);
-      const module = item.module || question?.module || '专项练习';
-      const name = question?.knowledgePoint || this.inferPoint(question?.stem) || module;
-      const key = `${module}:${name}`;
-      const current = grouped.get(key) || {
-        module,
-        name,
-        proficiency: profileMap.has(module) ? profileMap.get(module)!.accuracy : 50,
-        wrongCount: 0,
-        dominantError: normalizeCategory(item.reason)
-      };
-      current.wrongCount += Math.max(1, item.wrongCount || 1);
-      current.proficiency = Math.max(0, Math.min(current.proficiency, 100 - current.wrongCount * 12));
-      current.dominantError = current.dominantError || normalizeCategory(item.reason);
-      grouped.set(key, current);
-    }
-    return Array.from(grouped.values()).sort((a, b) => a.proficiency - b.proficiency || b.wrongCount - a.wrongCount).slice(0, 12);
-  }
-
-  private async questionMap(questionIds: string[]): Promise<Map<string, Question>> {
-    const pairs = await Promise.all(Array.from(new Set(questionIds)).map(async (id) => [id, await database.get<Question>(STORES.questions, id)] as const));
-    return new Map(pairs.filter((pair): pair is readonly [string, Question] => Boolean(pair[1])));
-  }
-
-  private inferPoint(stem?: string): string | undefined {
-    if (!stem) return undefined;
-    const clean = stem.replace(/\s+/g, '');
-    return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
+    return tracks
+      .filter((track) => track.effectiveSample > 0)
+      .map((track) => {
+        const node = nodeMap.get(track.capabilityNodeId);
+        return {
+          module: moduleNames.get(node?.module || '') || node?.module || '专项练习',
+          name: node?.name || String(track.capabilityNodeId),
+          proficiency: Math.round(track.accuracy * 100),
+          wrongCount: wrongCounts.get(track.capabilityNodeId) || 0,
+          dominantError: causes.get(track.capabilityNodeId)
+        };
+      })
+      .sort((left, right) => left.proficiency - right.proficiency || right.wrongCount - left.wrongCount)
+      .slice(0, 12);
   }
 
   private missions(points: SprintWeakPoint[], intensity: SprintIntensity): SprintMission[] {
@@ -168,3 +159,20 @@ export class SprintService {
 }
 
 export const sprintService = new SprintService();
+
+function errorCauseLabel(code?: string): string | undefined {
+  const labels: Record<string, string> = {
+    concept_gap: '概念缺口',
+    recognition_error: '题型识别',
+    method_selection_error: '方法选择',
+    reasoning_error: '推理链',
+    calculation_error: '计算',
+    evidence_extraction_error: '材料定位',
+    trap_misjudgment: '陷阱识别',
+    time_management_error: '时间管理',
+    careless_error: '粗心',
+    transfer_failure: '迁移失败',
+    retention_failure: '遗忘'
+  };
+  return code ? labels[code] : undefined;
+}

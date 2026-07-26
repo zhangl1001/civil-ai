@@ -1,0 +1,209 @@
+import type { InstantMs, JsonObject, PromptVersionId } from '@/kernel/public';
+import type { PromptBundle } from '../prompt/PromptContracts';
+import { PromptSectionCode } from '../prompt/PromptContracts';
+import { GENERATION_AUTONOMY_LIMITS } from '../prompt/GenerationBoundaryPolicy';
+
+const responseSchema: JsonObject = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['lecture', 'materialGroups', 'questions'],
+  properties: {
+    lecture: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['sections'],
+      properties: {
+        sections: {
+          type: 'array',
+          minItems: GENERATION_AUTONOMY_LIMITS.lectureSections.min,
+          maxItems: GENERATION_AUTONOMY_LIMITS.lectureSections.max,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'kind', 'title', 'markdown'],
+            properties: {
+              id: { type: 'string', minLength: 1 },
+              kind: {
+                type: 'string',
+                enum: ['concept', 'boundary', 'method', 'example', 'trap', 'summary', 'training']
+              },
+              title: { type: 'string', minLength: 1 },
+              markdown: { type: 'string', minLength: 1 }
+            }
+          }
+        }
+      }
+    },
+    materialGroups: {
+      type: 'array',
+      maxItems: GENERATION_AUTONOMY_LIMITS.materialGroups.max,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'markdown'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          markdown: { type: 'string', minLength: 1 }
+        }
+      }
+    },
+    questions: {
+      type: 'array',
+      minItems: GENERATION_AUTONOMY_LIMITS.objectiveQuestions.min,
+      maxItems: GENERATION_AUTONOMY_LIMITS.objectiveQuestions.max,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'materialGroupId', 'material', 'prompt', 'options', 'correctOptionId', 'explanation'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          materialGroupId: { type: ['string', 'null'] },
+          material: { type: ['string', 'null'] },
+          prompt: { type: 'string', minLength: 1 },
+          options: {
+            type: 'array',
+            minItems: 4,
+            maxItems: 4,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['id', 'text'],
+              properties: {
+                id: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
+                text: { type: 'string', minLength: 1 }
+              }
+            }
+          },
+          correctOptionId: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
+          explanation: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['knowledgePoint', 'conclusion', 'steps', 'optionAnalysis', 'pitfalls'],
+            properties: {
+              knowledgePoint: { type: 'string', minLength: 2 },
+              conclusion: { type: 'string', minLength: 1 },
+              steps: {
+                type: 'array',
+                minItems: GENERATION_AUTONOMY_LIMITS.explanationSteps.min,
+                maxItems: GENERATION_AUTONOMY_LIMITS.explanationSteps.max,
+                items: { type: 'string', minLength: 1 }
+              },
+              optionAnalysis: {
+                type: 'array',
+                minItems: 4,
+                maxItems: 4,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['optionId', 'verdict', 'analysis'],
+                  properties: {
+                    optionId: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
+                    verdict: { type: 'string', enum: ['correct', 'incorrect'] },
+                    analysis: { type: 'string', minLength: 1 }
+                  }
+                }
+              },
+              pitfalls: {
+                type: 'array',
+                minItems: GENERATION_AUTONOMY_LIMITS.explanationPitfalls.min,
+                maxItems: GENERATION_AUTONOMY_LIMITS.explanationPitfalls.max,
+                items: { type: 'string', minLength: 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
+export const structuredObjectivePromptV2: PromptBundle = {
+  definitionId: 'prompt-definition:content-generate-structured-objective',
+  versionId: 'prompt-version:content-generate-structured-objective:v9' as PromptVersionId,
+  promptCode: 'content.generate.aptitude.structured_objective',
+  taskType: 'lecture_with_questions',
+  description: '围绕指定能力节点生成结构化讲义与单选训练题',
+  version: '2.0.0',
+  contentHash: 'sha256:6d1e9ee2c57ea1fcce0e5288e2c0129eaadf0cd8f1e36336485df84accd96f11',
+  createdAt: 1784016000000 as InstantMs,
+  requiredVariables: ['QUESTION_COUNT', 'ASSESSMENT_ROLE', 'DIFFICULTY_MIN', 'DIFFICULTY_MAX'],
+  compatibleSchemaVersions: ['content.v1', 'question.single_choice.v2'],
+  responseSchema,
+  sections: [
+    {
+      code: PromptSectionCode.Role,
+      title: '命题身份与边界',
+      order: 10,
+      template: [
+        '你是公务员考试 AI 私教教研员，负责围绕输入中的目标能力节点进行教学和命题。',
+        '你只生成可被学习系统校验的结构化内容，不输出思考过程、草稿、前言或 代码围栏。',
+        '不得伪造官方真题来源；未提供可靠来源时，内容来源只能视为 AI 生成。',
+        '必须严格以用户消息 studentContext.capability 中的 name、code、module、prerequisites、related 为本次教学边界。'
+      ].join('\n')
+    },
+    {
+      code: PromptSectionCode.TeachingObjective,
+      title: '教学目标',
+      order: 20,
+      template: [
+        '本次生成 {{QUESTION_COUNT}} 道题，评估角色为 {{ASSESSMENT_ROLE}}，难度范围 {{DIFFICULTY_MIN}} 至 {{DIFFICULTY_MAX}}。',
+        '讲义应根据目标能力、学生证据和本次教学目的，自主选择最有帮助的章节、例子、方法和提醒，不为凑固定数量重复内容。',
+        '每道题都必须评估当前目标能力节点。允许通过材料、难度和干扰项做前置能力或相邻迁移变化，但不得改变本题的目标能力归属。',
+        '题目必须使用单选合同，但题干和选项可使用 GFM Markdown、表格或安全的内联 SVG。',
+        '资料分析优先把完整数据表保存到 materialGroups；数量关系解析必须给出关键算式；图形推理必须提供单个有 viewBox 的 SVG 画布并保持图形比例。',
+        '长材料多问必须使用 materialGroups；普通单题不得为了排版而伪造公共材料组。'
+      ].join('\n')
+    },
+    {
+      code: PromptSectionCode.InputContract,
+      title: '输入规格',
+      order: 30,
+      template: [
+        '用户消息提供本次 GenerationSpec、能力节点、学生证据摘要和约束。',
+        'constraints.selectionAuthority 为 user 时，用户明确选择的当前能力节点、题量和难度是最高优先级；学生证据只用于调整讲解方式，不得改题或切换私教计划。',
+        'constraints.selectionAuthority 为 tutor_engine 时，按私教计划、复习任务和学生证据完成当前能力节点教学。',
+        '学生自报成绩只能作为低可信背景，不得当作已测量掌握度。',
+        '只使用输入中明确给出的事实；缺失事实不得自行编造。'
+      ].join('\n')
+    },
+    {
+      code: PromptSectionCode.OutputContract,
+      title: '输出合同',
+      order: 40,
+      template: [
+        '只输出一个 JSON 对象，根字段固定为 lecture、materialGroups 和 questions。',
+        'lecture.sections 是可自由组合的教学章节。根据本次教学需要选择 kind、章节数量、顺序和深度；不要求凑齐全部 kind，markdown 保存章节完整内容。',
+        '每道题使用本次响应内唯一的稳定 id；题干、材料、选项、答案和解析各在固定字段中，禁止从正文格式暗示区域。',
+        '不要输出 capabilityCode。该字段属于确定性业务元数据，由应用按照当前 GenerationSpec 统一注入，避免模型误写导致题组归属漂移。',
+        'explanation 使用 knowledgePoint、conclusion、steps、optionAnalysis、pitfalls 作为稳定渲染槽位。steps 和 pitfalls 的条数由题目复杂度决定；optionAnalysis 因与四个可作答选项对应，必须逐项覆盖 A/B/C/D，且只有正确项 verdict 为 correct。',
+        '普通单题的 materialGroupId 必须为 null，material 可填写本题独立材料或为 null。',
+        '只有一个完整公共材料对应至少两道小题时才使用 materialGroups：公共材料只保存一次，每道小题用相同 materialGroupId 引用，且 material 必须为 null。',
+        '多段文字仍是一个完整材料，不得按段落拆成多个 materialGroups；小题问法只写入 prompt，不得混进公共材料。',
+        '每个 option 使用稳定且唯一的 id；correctOptionId 必须精确引用其中一个 option id。',
+        '不得输出内部页面 ContentDocument、HTML 或临时字段；应用会把当前作者结构确定性转换为页面内容块。'
+      ].join('\n')
+    },
+    {
+      code: PromptSectionCode.QualityRules,
+      title: '命题质量规则',
+      order: 50,
+      template: [
+        '每题必须只有一个最优答案，干扰项应体现真实误区，不能靠绝对化措辞送分。',
+        '解析应围绕真实解题需要组织：指出目标能力点、结论和四个选项为何成立或无效；步骤、例子和易错提醒按题目复杂度自主增减，禁止为满足数量重复表达。',
+        '讲义示例不得复用正式题目的关键关系；retention、transfer、anchor 角色不得泄露答案或提供作答提示。',
+        '题目之间不得只替换人名、数字或场景，考查点、材料结构或干扰项设计要有实质变化。'
+      ].join('\n')
+    },
+    {
+      code: PromptSectionCode.SelfCheck,
+      title: '提交前质检',
+      order: 60,
+      template: [
+        '输出前在内部逐项检查：JSON 可解析、渲染必需字段完整、题量准确、答案引用存在、答案唯一、讲义与题目知识点一致。',
+        '检查每题是否确实服务于 studentContext.capability.name；扩展情境仍必须考查这个目标能力，不得生成同模块泛题。',
+        '检查公共材料引用存在、同组至少两道小题、题量按可作答小题计数，且材料没有混入选项、答案或解析。',
+        '检查不得包含思考过程。完成检查后只输出最终 JSON。'
+      ].join('\n')
+    }
+  ]
+};

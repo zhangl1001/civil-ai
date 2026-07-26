@@ -1,6 +1,6 @@
 <template>
   <div class="study-page app-page">
-    <PageHeader title="考点精讲" :meta="activeModule || '按大纲学习和补弱'">
+    <PageHeader :title="lectureTitle || '考点精讲'" :meta="lectureTitle ? 'AI 私教讲义' : activeModule || '按大纲学习和补弱'">
       <template #actions>
         <HeaderMoreMenu title="精讲设置" subtitle="筛选模块">
           <div class="menu-field">
@@ -24,6 +24,7 @@
 
     <PullToRefresh class="study-content" :on-refresh="load">
       <AppStateView v-if="isLoading" state="loading" title="加载考点精讲" />
+      <LectureContent v-else-if="lectureContent" :markdown="lectureContent" surface />
       <template v-else-if="dashboard">
         <section class="study-hero app-card">
           <div>
@@ -72,19 +73,25 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { BookOpenIcon, SearchIcon } from 'lucide-vue-next';
+import { initializeTutorRuntime } from '@/composition-root/public';
 import { studyService, type StudyDashboard, type StudyPoint } from '@/services/StudyService';
 import { useAIChatStore } from '@/stores/aiChat';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import LectureContent from '@/components/content/LectureContent.vue';
 
 const chat = useAIChatStore();
+const route = useRoute();
 const dashboard = ref<StudyDashboard | null>(null);
 const isLoading = ref(false);
 const query = ref('');
 const activeModule = ref('');
 const opened = reactive(new Set<string>());
+const lectureContent = ref('');
+const lectureTitle = ref('');
 
 const visibleModules = computed(() => {
   const modules = dashboard.value?.modules || [];
@@ -96,6 +103,14 @@ onMounted(load);
 async function load() {
   isLoading.value = true;
   try {
+    const assetId = typeof route.query.assetId === 'string' ? route.query.assetId : '';
+    if (assetId) {
+      const runtime = await initializeTutorRuntime();
+      const asset = await runtime.learningAssetStore.find(assetId);
+      lectureContent.value = typeof asset?.payload.content === 'string' ? asset.payload.content : '';
+      lectureTitle.value = asset?.title || '';
+      if (lectureContent.value) return;
+    }
     dashboard.value = await studyService.dashboard();
     if (!opened.size && dashboard.value.modules[0]) opened.add(dashboard.value.modules[0].name);
   } finally {
