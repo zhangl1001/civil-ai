@@ -117,7 +117,12 @@ function titleFor(aggregate: AgentRunAggregate): string {
 }
 
 function detailFor(aggregate: AgentRunAggregate): string {
-  if (aggregate.run.errorCode) return taskErrorText(aggregate.run.errorCode);
+  if (aggregate.run.errorCode) {
+    return taskErrorText(
+      aggregate.run.errorCode,
+      textField(aggregate.run.checkpoint.errorMessage) || textField(aggregate.run.checkpoint.message)
+    );
+  }
   if (aggregate.run.cancellationReason) return aggregate.run.cancellationReason;
   if (
     aggregate.run.runType === AgentRunType.ErrorDiagnosis
@@ -150,7 +155,7 @@ function errorDiagnosisDetail(aggregate: AgentRunAggregate): string {
   return '错因分析等待恢复';
 }
 
-function taskErrorText(code: string): string {
+function taskErrorText(code: string, diagnostic?: string): string {
   if (code === 'agent.AbortError') return '模型连接意外中断，请重新执行任务';
   if (
     code === 'agent.GeneratedContentParseError'
@@ -173,7 +178,8 @@ function taskErrorText(code: string): string {
   if (code === 'provider.protocol') return '模型接口返回格式不兼容，请检查 Base URL';
   if (code === 'provider.transient') return '模型网络或服务暂时异常，请稍后重试';
   if (code.startsWith('provider.')) return '模型服务请求失败，请检查模型配置';
-  return code;
+  if (diagnostic && !/^agent\.(error|Error|unknown_error)$/.test(code)) return diagnostic;
+  return diagnostic || '任务执行失败，请重新生成';
 }
 
 function chatToolDetail(aggregate: AgentRunAggregate): string {

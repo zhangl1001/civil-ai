@@ -76,7 +76,15 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   ): Promise<ProviderResponse> {
     const response = await this.transport.send(this.httpRequest(request, false, structuredMode, signal));
     await assertProviderResponse(response);
-    return assertNonEmptyProviderResult(parseOpenAIResponse(await response.json()));
+    try {
+      return assertNonEmptyProviderResult(parseOpenAIResponse(await response.json()));
+    } catch (error) {
+      if (error instanceof ProviderGatewayError) throw error;
+      throw new ProviderGatewayError(
+        'OpenAI-compatible provider returned an invalid response format',
+        ProviderErrorKind.Protocol
+      );
+    }
   }
 
   private httpRequest(

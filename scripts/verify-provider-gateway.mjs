@@ -334,7 +334,7 @@ try {
   const deepSeekBody = JSON.parse(deepSeekRequest.body);
   assert.equal(deepSeekGateway.model, 'deepseek-v4-flash');
   assert.equal(deepSeekBody.model, 'deepseek-v4-flash');
-  assert.equal(deepSeekRequest.url, 'https://api.deepseek.com/anthropic/v1/messages');
+  assert.equal(deepSeekRequest.url, 'https://api.deepseek.com/anthropic/messages');
   assert.equal(deepSeekBody.tools[0].name, 'submit_structured_result');
   assert.equal(deepSeekBody.tool_choice.type, 'tool');
   assert.equal(deepSeekBody.thinking.type, 'disabled');

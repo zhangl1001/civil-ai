@@ -86,7 +86,15 @@ export class AnthropicGateway implements ProviderGateway {
   ): Promise<ProviderResponse> {
     const response = await this.transport.send(this.httpRequest(request, false, structuredMode, signal));
     await assertProviderResponse(response);
-    return assertNonEmptyProviderResult(parseAnthropicResponse(await response.json()));
+    try {
+      return assertNonEmptyProviderResult(parseAnthropicResponse(await response.json()));
+    } catch (error) {
+      if (error instanceof ProviderGatewayError) throw error;
+      throw new ProviderGatewayError(
+        'Anthropic-compatible provider returned an invalid response format',
+        ProviderErrorKind.Protocol
+      );
+    }
   }
 
   private httpRequest(

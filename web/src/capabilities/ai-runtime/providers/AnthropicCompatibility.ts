@@ -13,6 +13,11 @@ export function normalizeAnthropicModelName(baseUrl: string, model: string): str
 export function anthropicMessagesEndpoint(baseUrl: string): string {
   const normalized = baseUrl.trim().replace(/\/+$/, '');
   if (normalized.endsWith('/messages')) return normalized;
+  // DeepSeek's Anthropic-compatible endpoint is /anthropic/messages,
+  // unlike the native Anthropic /v1/messages endpoint.
+  if (isDeepSeekAnthropicBaseUrl(normalized) && normalized.endsWith('/anthropic')) {
+    return `${normalized}/messages`;
+  }
   if (normalized.endsWith('/v1')) return `${normalized}/messages`;
   return `${normalized}/v1/messages`;
 }
