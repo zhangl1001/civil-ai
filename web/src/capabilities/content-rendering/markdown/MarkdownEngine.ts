@@ -65,12 +65,15 @@ export class MarkdownEngine {
 }
 
 /**
- * Normalizes the two presentation problems most often produced by model output:
- * incomplete pipe tables and decorative emoji that compete with the reading
- * hierarchy. Fenced code blocks remain untouched.
+ * Normalizes the presentation problems most often produced by model output:
+ * transport escapes, document-level Markdown fences, incomplete pipe tables
+ * and decorative emoji that compete with the reading hierarchy. Ordinary
+ * fenced code blocks remain untouched.
  */
 export function normalizeMarkdownSource(source: string): string {
-  const document = unwrapMarkdownDocumentFence(source.replace(/\r\n?/g, '\n'));
+  const document = unwrapMarkdownDocumentFence(
+    decodeMarkdownTransportEscapes(source.replace(/\r\n?/g, '\n'))
+  );
   const lines = document.split('\n');
   const normalized: string[] = [];
   let inFence = false;
@@ -104,8 +107,20 @@ export function normalizeMarkdownSource(source: string): string {
 }
 
 function unwrapMarkdownDocumentFence(source: string): string {
-  const match = source.match(/^\s*(```|~~~)\s*(?:markdown|md|gfm)\s*\n([\s\S]*?)\n\s*\1\s*$/i);
-  return match?.[2] ?? source;
+  const match = source.match(/^\s*(```|~~~)([^\n]*)\n([\s\S]*?)\n\s*\1\s*$/i);
+  if (!match) return source;
+  const language = match[2].trim().toLowerCase();
+  const content = match[3];
+  const isMarkdownLanguage = language === 'markdown' || language === 'md' || language === 'gfm';
+  const looksLikeMarkdown = /(^|\n)\s{0,3}#{1,6}\s|(^|\n)\s*[|｜][^|\n]+[|｜]/m.test(content);
+  return isMarkdownLanguage || looksLikeMarkdown ? content : source;
+}
+
+function decodeMarkdownTransportEscapes(source: string): string {
+  if (!source.includes('\\n') || source.includes('\n')) return source;
+  const decoded = source.replace(/\\r?\\n/g, '\n');
+  const looksLikeMarkdown = /(^|\n)\s{0,3}#{1,6}\s|(^|\n)\s*[|｜][^|\n]+[|｜]/m.test(decoded);
+  return looksLikeMarkdown ? decoded : source;
 }
 
 function normalizeFullWidthPipeRow(line: string): string {
