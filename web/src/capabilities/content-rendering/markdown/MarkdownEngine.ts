@@ -124,7 +124,7 @@ function decodeMarkdownTransportEscapes(source: string): string {
 }
 
 function normalizeFullWidthPipeRow(line: string): string {
-  const normalized = line.replaceAll('｜', '|');
+  const normalized = line.replace(/｜/g, '|');
   const value = normalized.trim();
   if (
     normalized === line
@@ -162,8 +162,13 @@ function pipeDelimiter(columnCount: number): string {
 }
 
 function stripDecorativeEmoji(value: string): string {
-  return value
-    .replace(/\p{Extended_Pictographic}/gu, '')
+  let normalized = value;
+  try {
+    normalized = normalized.replace(new RegExp('\\p{Extended_Pictographic}', 'gu'), '');
+  } catch {
+    // Older iOS JavaScript runtimes may not recognize this Unicode property.
+  }
+  return normalized
     .replace(/[\uFE0F\u200D\u20E3]/g, '')
     .replace(/[ \t]{2,}/g, ' ')
     .trimEnd();
