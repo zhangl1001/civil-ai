@@ -16,15 +16,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         return true
     }
 
-    private func clearWebViewResourceCache() {
-        URLCache.shared.removeAllCachedResponses()
-        let cacheTypes: Set<String> = [
-            WKWebsiteDataTypeDiskCache,
-            WKWebsiteDataTypeMemoryCache
-        ]
-        WKWebsiteDataStore.default().removeData(ofTypes: cacheTypes, modifiedSince: .distantPast) {}
-    }
-
     private func applyStableWebViewBackground() {
         let backgroundColor = UIColor(red: 0.961, green: 0.965, blue: 0.980, alpha: 1.0) // #F5F6FA
         window?.backgroundColor = backgroundColor
@@ -78,7 +69,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         if let route = response.notification.request.content.userInfo["route"] as? String {
-            UserDefaults.standard.set(route, forKey: "zhangl.pendingNotificationRoute")
+            UserDefaults.standard.set(
+                ["route": route, "at": Date().timeIntervalSince1970],
+                forKey: "zhangl.pendingNotificationRoute"
+            )
             NotificationCenter.default.post(name: .examTutorNotificationRoute, object: nil, userInfo: ["route": route])
         }
         completionHandler()

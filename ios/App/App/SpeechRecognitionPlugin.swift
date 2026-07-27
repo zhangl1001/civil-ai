@@ -37,6 +37,12 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func start(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            self?.startOnMain(call)
+        }
+    }
+
+    private func startOnMain(_ call: CAPPluginCall) {
         guard let recognizer = recognizer, recognizer.isAvailable else {
             call.reject("Speech recognizer is unavailable", "SPEECH_UNAVAILABLE")
             return
@@ -54,24 +60,33 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        let inputNode = audioEngine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            call.reject("Audio input is unavailable", "AUDIO_INPUT_UNAVAILABLE")
+            return
+        }
+
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         recognitionRequest = request
 
-        let inputNode = audioEngine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak request] buffer, _ in
             request?.append(buffer)
         }
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            if let text = result?.bestTranscription.formattedString {
-                self?.transcript = text
-            }
-            if error != nil || result?.isFinal == true {
-                self?.audioEngine.stop()
-                inputNode.removeTap(onBus: 0)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let text = result?.bestTranscription.formattedString {
+                    self.transcript = text
+                }
+                if error != nil || result?.isFinal == true {
+                    self.audioEngine.stop()
+                    self.audioEngine.inputNode.removeTap(onBus: 0)
+                }
             }
         }
 
@@ -86,12 +101,18 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func stop(_ call: CAPPluginCall) {
-        let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
-        stopRecognition()
-        call.resolve([
-            "transcript": transcript,
-            "durationSeconds": Int(duration.rounded())
-        ])
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                call.resolve(["transcript": "", "durationSeconds": 0])
+                return
+            }
+            let duration = self.startedAt.map { Date().timeIntervalSince($0) } ?? 0
+            self.stopRecognition()
+            call.resolve([
+                "transcript": self.transcript,
+                "durationSeconds": Int(duration.rounded())
+            ])
+        }
     }
 
     private func stopRecognition() {

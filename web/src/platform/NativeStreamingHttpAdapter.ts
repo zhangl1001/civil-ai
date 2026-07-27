@@ -59,6 +59,7 @@ export class NativeStreamingHttpAdapter {
 
     const response = new Promise<Response>((resolve, reject) => {
       const fail = (error: unknown) => {
+        request.signal?.removeEventListener('abort', abort);
         if (settled) {
           try {
             controller?.error(error);
@@ -138,6 +139,11 @@ async function ensureNativeStreamingAvailable(): Promise<void> {
     if (!status.available) {
       throw new Error('NativeStreamingHTTP plugin reported unavailable');
     }
+  }).catch((error: unknown) => {
+    if (!isNativeStreamingPluginUnavailable(error)) {
+      availabilityProbe = undefined;
+    }
+    throw error;
   });
   return availabilityProbe;
 }
