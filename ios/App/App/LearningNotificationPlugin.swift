@@ -49,6 +49,7 @@ public final class LearningNotificationPlugin: CAPPlugin, CAPBridgedPlugin {
             let center = UNUserNotificationCenter.current()
             let ids = payload.items.map { $0.id }
             center.removePendingNotificationRequests(withIdentifiers: ids)
+            var scheduled = 0
             for item in payload.items {
                 guard let date = parseDate(item.at), date > Date() else { continue }
                 let content = UNMutableNotificationContent()
@@ -59,8 +60,9 @@ public final class LearningNotificationPlugin: CAPPlugin, CAPBridgedPlugin {
                 let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
                 let request = UNNotificationRequest(identifier: item.id, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
                 center.add(request)
+                scheduled += 1
             }
-            call.resolve(["scheduled": ids.count])
+            call.resolve(["scheduled": scheduled])
         } catch {
             call.reject("Invalid notification payload", "NOTIFICATION_PAYLOAD_INVALID", error)
         }
@@ -100,8 +102,19 @@ public final class LearningNotificationPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func consumePendingRoute(_ call: CAPPluginCall) {
         let key = "zhangl.pendingNotificationRoute"
-        let route = UserDefaults.standard.string(forKey: key)
-        UserDefaults.standard.removeObject(forKey: key)
-        call.resolve(["route": route ?? NSNull()])
+        let maxPendingRouteAge: TimeInterval = 300
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        if let payload = UserDefaults.standard.dictionary(forKey: key),
+           let route = payload["route"] as? String,
+           let at = payload["at"] as? TimeInterval {
+            if Date().timeIntervalSince1970 - at <= maxPendingRouteAge {
+                call.resolve(["route": route])
+            } else {
+                call.resolve(["route": NSNull()])
+            }
+            return
+        }
+        let legacyRoute = UserDefaults.standard.string(forKey: key)
+        call.resolve(["route": legacyRoute ?? NSNull()])
     }
 }

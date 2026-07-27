@@ -72,9 +72,9 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             return
         }
         lock.lock()
-        let context = streams.values.first { $0.requestId == requestId }
+        let matching = streams.values.filter { $0.requestId == requestId }
         lock.unlock()
-        context?.task.cancel()
+        matching.forEach { $0.task.cancel() }
         call.resolve()
     }
 
