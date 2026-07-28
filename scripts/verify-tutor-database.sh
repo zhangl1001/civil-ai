@@ -22,6 +22,15 @@ agent_workspace_sessions_schema_file="$project_root/web/src/capabilities/databas
 practice_session_drafts_schema_file="$project_root/web/src/capabilities/database/migrations/017_practice_session_drafts.sql"
 agent_work_pools_schema_file="$project_root/web/src/capabilities/database/migrations/018_agent_work_pools.sql"
 practice_manifests_schema_file="$project_root/web/src/capabilities/database/migrations/019_practice_manifests.sql"
+error_diagnosis_guidance_schema_file="$project_root/web/src/capabilities/database/migrations/020_error_diagnosis_guidance.sql"
+question_set_practice_status_schema_file="$project_root/web/src/capabilities/database/migrations/021_question_set_practice_status.sql"
+question_source_foundation_schema_file="$project_root/web/src/capabilities/database/migrations/022_question_source_foundation.sql"
+question_import_drafts_schema_file="$project_root/web/src/capabilities/database/migrations/023_question_import_drafts.sql"
+true_question_reference_packs_schema_file="$project_root/web/src/capabilities/database/migrations/024_true_question_reference_packs.sql"
+tutor_cycle_conclusions_schema_file="$project_root/web/src/capabilities/database/migrations/025_tutor_cycle_conclusions.sql"
+ability_calibration_snapshots_schema_file="$project_root/web/src/capabilities/database/migrations/026_ability_calibration_snapshots.sql"
+web_research_import_method_schema_file="$project_root/web/src/capabilities/database/migrations/027_web_research_import_method.sql"
+reference_pack_comparison_questions_schema_file="$project_root/web/src/capabilities/database/migrations/028_reference_pack_comparison_questions.sql"
 database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.XXXXXX.sqlite")"
 
 cleanup() {
@@ -51,6 +60,13 @@ PRAGMA foreign_keys = ON;
 .read $practice_session_drafts_schema_file
 .read $agent_work_pools_schema_file
 .read $practice_manifests_schema_file
+.read $error_diagnosis_guidance_schema_file
+.read $question_set_practice_status_schema_file
+.read $question_source_foundation_schema_file
+.read $question_import_drafts_schema_file
+.read $true_question_reference_packs_schema_file
+.read $tutor_cycle_conclusions_schema_file
+.read $ability_calibration_snapshots_schema_file
 
 INSERT INTO metadata_packages(
   id, package_type, exam_type, region_scope, version, status, source,
@@ -284,6 +300,67 @@ INSERT INTO learning_assets(
   '答题进度', 'draft', '{"version":1,"answers":{"question-1":"A"}}', 1, 1700, 1700
 );
 
+INSERT INTO question_sources(
+  id, identity_hash, source_type, provider, exam_type, exam_year, province,
+  paper_name, provenance_json, import_method, content_hash, source_version,
+  status, created_at, updated_at
+) VALUES (
+  'source-1', 'source-identity-0123456789abcdef', 'official', '测试考试局',
+  'civil_service', 2025, '江苏', '测试真题', '{}', 'structured_file',
+  'source-content-0123456789abcdef', '1', 'active', 1800, 1800
+);
+
+INSERT INTO question_source_links(
+  id, question_id, source_id, source_sequence, relation_role, calibration_role, created_at
+) VALUES ('source-link-1', 'question-1', 'source-1', 1, 'original', 'anchor', 1800);
+
+INSERT INTO question_source_import_receipts(
+  id, idempotency_key, source_id, payload_hash, imported_question_count, created_at
+) VALUES ('source-receipt-1', 'source-import:1', 'source-1', 'payload-hash-0123456789abcdef', 1, 1800);
+
+INSERT INTO question_import_drafts(
+  id, exam_cycle_id, capability_node_id, capability_code, module, owner_session_id,
+  source_type, import_method, source_metadata_json, raw_payload_hash, status,
+  issues_json, idempotency_key, published_question_set_id, version, created_at, updated_at
+) VALUES (
+  'import-draft-1', 'cycle-1', 'capability-1', 'aptitude.judgment.weakening',
+  '判断推理', 'chat-session-1', 'official', 'structured_file', '{}',
+  'draft-payload-0123456789abcdef', 'published', '[]', 'draft:1',
+  'question-set-1', 1, 1800, 1800
+);
+
+INSERT INTO question_import_candidates(
+  id, draft_id, sequence, raw_json, content_json, content_hash, difficulty,
+  status, issues_json, published_question_id, created_at, updated_at
+) VALUES (
+  'import-candidate-1', 'import-draft-1', 1, '{}', '{}',
+  'candidate-content-0123456789abcdef', 0.5, 'published', '[]',
+  'question-1', 1800, 1800
+);
+
+INSERT INTO question_import_publish_receipts(
+  id, draft_id, idempotency_key, payload_hash, question_set_id, source_id,
+  published_question_count, created_at
+) VALUES (
+  'publish-receipt-1', 'import-draft-1', 'publish:1',
+  'publish-payload-0123456789abcdef', 'question-set-1', 'source-1', 1, 1800
+);
+
+INSERT INTO question_reference_packs(
+  id, exam_cycle_id, capability_node_id, module, exam_scope_json,
+  source_question_count, source_set_count, source_ids_json,
+  question_type_distribution_json, difficulty_distribution_json,
+  structural_distribution_json, distractor_patterns_json,
+  representative_questions_json, policy_version, content_hash, created_at
+) VALUES (
+  'reference-pack-1', 'cycle-1', 'capability-1', '判断推理', '{}', 1, 1,
+  '["source-1"]', '{}', '{}', '{}', '[]', '[]',
+  'true-question-reference.v1', 'reference-pack-0123456789abcdef', 1800
+);
+
+.read $web_research_import_method_schema_file
+.read $reference_pack_comparison_questions_schema_file
+
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
 SQL
@@ -315,6 +392,12 @@ expect_count "SELECT COUNT(*) FROM learning_assets WHERE kind = 'practice_sessio
 expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'learning_sessions_question_set_idx';" "1" "question set session index"
 expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'tutor_agent_runs_target_status_idx';" "1" "agent run target index"
 expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('conversation_sessions', 'conversation_messages');" "0" "conversation tables excluded from business database"
+expect_count "SELECT COUNT(*) FROM question_sources WHERE id = 'source-1' AND import_method = 'structured_file';" "1" "question source retained after enum migration"
+expect_count "SELECT COUNT(*) FROM question_source_links WHERE id = 'source-link-1';" "1" "question source link retained after enum migration"
+expect_count "SELECT COUNT(*) FROM question_import_drafts WHERE id = 'import-draft-1' AND status = 'published';" "1" "published import draft retained after enum migration"
+expect_count "SELECT COUNT(*) FROM question_import_candidates WHERE id = 'import-candidate-1' AND status = 'published';" "1" "published import candidate retained after enum migration"
+expect_count "SELECT COUNT(*) FROM question_import_publish_receipts WHERE id = 'publish-receipt-1';" "1" "publish receipt retained after enum migration"
+expect_count "SELECT COUNT(*) FROM pragma_table_info('question_reference_packs') WHERE name = 'comparison_questions_json';" "1" "reference pack comparison column"
 
 expect_constraint_failure() {
   local statement="$1"
@@ -335,14 +418,10 @@ expect_constraint_failure "INSERT INTO decision_observations(id, attempt_id, obs
 expect_constraint_failure "INSERT INTO tutor_agent_runs(id, run_type, work_pool, status, input_snapshot_json, checkpoint_json, attempt_count, idempotency_key, created_at, updated_at, version) VALUES ('agent-run-invalid-pool', 'content_generation', 'unknown_pool', 'queued', '{}', '{}', 0, 'agent-run-invalid-pool', 1000, 1000, 1);"
 expect_constraint_failure "UPDATE learning_evidence SET value = 1 WHERE id = 'evidence-1';"
 
-sqlite3 "$database_file" "PRAGMA foreign_keys=ON; DELETE FROM projects WHERE id='project-1';"
-expect_count "SELECT COUNT(*) FROM exam_cycles;" "0" "exam cycles after project deletion"
-expect_count "SELECT COUNT(*) FROM generation_workflows;" "0" "generation workflows after project deletion"
-expect_count "SELECT COUNT(*) FROM questions;" "0" "questions after project deletion"
-expect_count "SELECT COUNT(*) FROM ai_invocations;" "0" "AI invocations after project deletion"
-expect_count "SELECT COUNT(*) FROM learning_threads;" "0" "learning threads after project deletion"
-expect_count "SELECT COUNT(*) FROM attempts;" "0" "attempts after project deletion"
-expect_count "SELECT COUNT(*) FROM learning_evidence;" "0" "learning evidence after project deletion"
+expect_constraint_failure "DELETE FROM projects WHERE id='project-1';"
+expect_count "SELECT COUNT(*) FROM projects WHERE id='project-1';" "1" "project retained while official source evidence exists"
+expect_count "SELECT COUNT(*) FROM questions WHERE id='question-1';" "1" "official source-linked question retained"
+expect_count "SELECT COUNT(*) FROM question_source_links WHERE id='source-link-1';" "1" "official source link retained"
 expect_count "SELECT COUNT(*) FROM content_schema_versions;" "1" "global content schemas after project deletion"
 expect_count "SELECT COUNT(*) FROM prompt_definitions WHERE prompt_code='question.generate.weakening';" "1" "prompt definition after version upgrade"
 expect_count "SELECT COUNT(*) FROM prompt_versions WHERE prompt_definition_id='prompt-question';" "2" "prompt versions after definition reuse"

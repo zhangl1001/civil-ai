@@ -6,10 +6,10 @@ import { createServer } from '../web/node_modules/vite/dist/node/index.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
 const server = await createServer({ root, configFile: false, resolve: { alias: { '@': path.join(root, 'src') } }, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
 const now = 1_800_000_000_000;
-const evidence = (id, value, role = 'practice', type = 'correctness') => ({
+const evidence = (id, value, role = 'practice', type = 'correctness', origin = 'ai_generated') => ({
   id, examCycleId: 'cycle:1', capabilityNodeId: 'node:1', assessmentRole: role, evidenceType: type,
   value, weight: 1, quality: 1, source: 'deterministic_grader', validationPolicyVersion: 'test:v1',
-  occurredAt: now, idempotencyKey: id, metadata: {}
+  occurredAt: now, idempotencyKey: id, metadata: { questionOriginType: origin }
 });
 
 try {
@@ -25,9 +25,9 @@ try {
   const proven = mastery.projectMastery({
     now,
     evidence: [
-      ...Array.from({ length: 24 }, (_, index) => evidence(`anchor:${index}`, 1, 'anchor')),
-      evidence('retention:1', 1, 'retention', 'retention'),
-      evidence('transfer:1', 1, 'transfer', 'transfer'),
+      ...Array.from({ length: 24 }, (_, index) => evidence(`anchor:${index}`, 1, 'anchor', 'correctness', 'official')),
+      evidence('retention:1', 1, 'retention', 'retention', 'official'),
+      evidence('transfer:1', 1, 'transfer', 'transfer', 'official'),
       evidence('method:1', 1, 'practice', 'method_recognition'),
       evidence('concept:1', 1, 'teaching', 'teaching_comprehension')
     ]

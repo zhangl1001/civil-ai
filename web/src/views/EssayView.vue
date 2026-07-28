@@ -263,13 +263,13 @@
     </BottomSheet>
 
     <BottomSheet v-model="showQuestionHistorySheet" title="历史题目" subtitle="按题型和日期选择" variant="actions">
-      <div v-if="questionHistory.length" class="essay-history-list">
-        <button v-for="item in questionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)">
-          <span>{{ item.state.question?.title }}</span>
-          <em>{{ item.context.date }} · {{ item.context.topic }}</em>
-        </button>
-      </div>
-      <div v-else class="sheet-empty">暂无历史题目</div>
+      <InfiniteScrollPagination :has-more="questionHistoryVisibleCount < questionHistory.length" :has-items="Boolean(questionHistory.length)" :on-load-more="loadMoreQuestionHistory">
+        <div v-if="questionHistory.length" class="essay-history-list">
+          <button v-for="item in visibleQuestionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)"><span>{{ item.state.question?.title }}</span><em>{{ item.context.date }} · {{ item.context.topic }}</em>
+          </button>
+        </div>
+      </InfiniteScrollPagination>
+      <div v-if="!questionHistory.length" class="sheet-empty">暂无历史题目</div>
     </BottomSheet>
 
     <ConfirmDialog
@@ -295,6 +295,7 @@ import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
+import { InfiniteScrollPagination } from '@/capabilities/design-system/public';
 import type { EssayHistoryRecord, EssayLecture, EssayStateHistoryItem } from '@/services/EssayRepository';
 import { essayRepository } from '@/services/EssayRepository';
 import { useEssayStore } from '@/stores/essay';
@@ -312,7 +313,8 @@ const showDeleteConfirmSheet = ref(false);
 const isGenerating = ref(false);
 const pendingGenerationTaskId = ref('');
 const visibleGenerationTask = ref<AgentRunView | undefined>();
-const questionHistory = ref<EssayStateHistoryItem[]>([]);
+const questionHistory = ref<EssayStateHistoryItem[]>([]); const questionHistoryVisibleCount = ref(20);
+const visibleQuestionHistory = computed(() => questionHistory.value.slice(0, questionHistoryVisibleCount.value));
 const customTopic = ref('归纳概括');
 const customQuestionCount = ref(1);
 const answerSheetHeight = ref(42);
@@ -322,7 +324,6 @@ let timerId: number | null = null;
 let taskPollId: number | null = null;
 let resizeStartY = 0;
 let resizeStartHeight = 0;
-
 const topicGroups = [
   { label: '小题', children: ['归纳概括', '综合分析', '提出对策', '贯彻执行'] },
   { label: '大作文', children: ['申发论述'] }
@@ -491,10 +492,9 @@ function openHistoryItem(item: EssayHistoryRecord) {
 }
 
 async function openQuestionHistory() {
-  questionHistory.value = await essayRepository.listStates();
-  showQuestionHistorySheet.value = true;
+  questionHistory.value = await essayRepository.listStates(); questionHistoryVisibleCount.value = 20; showQuestionHistorySheet.value = true;
 }
-
+function loadMoreQuestionHistory() { questionHistoryVisibleCount.value = Math.min(questionHistory.value.length, questionHistoryVisibleCount.value + 20); }
 async function openQuestionHistoryItem(item: EssayStateHistoryItem) {
   showQuestionHistorySheet.value = false;
   isAnswerSheetOpen.value = false;

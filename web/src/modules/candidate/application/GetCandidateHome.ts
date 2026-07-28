@@ -31,6 +31,9 @@ export interface InitialDiagnosisEvidenceSummary {
 
 export interface InitialDiagnosisEvidencePort {
   list(examCycleId: ExamCycleId): Promise<readonly InitialDiagnosisEvidenceSummary[]>;
+  coverage?(examCycleId: ExamCycleId): Promise<{
+    readonly status: 'not_started' | 'in_progress' | 'sufficient';
+  } | undefined>;
 }
 
 export class GetCandidateHome {
@@ -42,7 +45,10 @@ export class GetCandidateHome {
   async execute(): Promise<CandidateHomeSnapshot | undefined> {
     const cycle = await this.candidateRepository.findCurrentCycle();
     if (!cycle) return undefined;
-    const diagnosisEvidence = await this.diagnosisEvidence?.list(cycle.examCycle.id) ?? [];
+    const [diagnosisEvidence, diagnosisCoverage] = await Promise.all([
+      this.diagnosisEvidence?.list(cycle.examCycle.id) ?? [],
+      this.diagnosisEvidence?.coverage?.(cycle.examCycle.id)
+    ]);
 
     const scores = cycle.scoreTargets
       .filter((target) => target.status === 'active')
@@ -67,7 +73,7 @@ export class GetCandidateHome {
       examName: cycle.examCycle.examName || cycle.examCycle.examType,
       examDate: cycle.examCycle.examDate,
       phase: cycle.examCycle.phase,
-      diagnosisStatus: resolveDiagnosisStatus(scores, diagnosisEvidence),
+      diagnosisStatus: resolveDiagnosisStatus(scores, diagnosisEvidence, diagnosisCoverage?.status),
       scores
     };
   }
@@ -86,8 +92,11 @@ function latestMeasurement(
 
 function resolveDiagnosisStatus(
   scores: readonly CandidateHomeScore[],
-  evidence: readonly InitialDiagnosisEvidenceSummary[]
+  evidence: readonly InitialDiagnosisEvidenceSummary[],
+  coverageStatus?: 'not_started' | 'in_progress' | 'sufficient'
 ): InitialDiagnosisStatusCode {
+  if (coverageStatus === 'sufficient') return InitialDiagnosisStatus.Sufficient;
+  if (coverageStatus === 'in_progress') return InitialDiagnosisStatus.InProgress;
   const effectiveSample = evidence.reduce((sum, item) => sum + item.effectiveSample, 0);
   const reliableCapabilities = evidence.filter((item) => item.effectiveSample >= 2 && item.confidence >= 0.2);
   const confidence = reliableCapabilities.length

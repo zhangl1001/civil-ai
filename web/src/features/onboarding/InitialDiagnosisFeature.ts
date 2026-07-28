@@ -10,11 +10,14 @@ export class InitialDiagnosisFeature {
   async start() {
     const cycle = await this.runtime.candidateRepository.findCurrentCycle();
     if (!cycle) return undefined;
-    const [curriculum, tracks] = await Promise.all([
+    const [curriculum, tracks, calibration] = await Promise.all([
       this.runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
-      this.runtime.masteryRepository.listTracks(cycle.examCycle.id, 100)
+      this.runtime.masteryRepository.listTracks(cycle.examCycle.id, 100),
+      this.runtime.buildAbilityCalibration.execute({ persist: false })
     ]);
-    const capability = selectCoverageGapCapability(curriculum?.capabilityNodes ?? [], tracks);
+    const capability = curriculum?.capabilityNodes.find(
+      (node) => node.id === calibration?.baseline.nextCapabilityNodeId
+    ) ?? selectCoverageGapCapability(curriculum?.capabilityNodes ?? [], tracks);
     if (!capability) throw new Error('当前考试大纲没有可用于诊断的能力节点。');
     const scopeKey = `diagnosis:${cycle.examCycle.id}:${capability.id}`;
     await new StructuredPracticeTaskCenter(this.runtime).start({

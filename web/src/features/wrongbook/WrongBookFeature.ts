@@ -6,6 +6,8 @@ import type { WrongBookEntry } from '@/modules/evidence/public';
 
 let cachedEntries: readonly WrongBookEntry[] | undefined;
 let pendingList: Promise<readonly WrongBookEntry[]> | undefined;
+let sessionOffset = 0;
+let moreEntriesAvailable = true;
 
 export function peekWrongBookEntries(): readonly WrongBookEntry[] | undefined {
   return cachedEntries;
@@ -16,18 +18,40 @@ export class WrongBookFeature {
   constructor(private readonly runtime: TutorDatabaseRuntime) {}
 
   async list(limit = 80, options: { readonly refresh?: boolean } = {}) {
-    if (!options.refresh && cachedEntries) return cachedEntries.slice(0, limit);
-    pendingList ??= this.runtime.candidateRepository.findCurrentCycle().then(async (cycle) => {
-      if (!cycle) throw new Error('请先完成备考档案。');
-      cachedEntries = await this.runtime.getWrongBookEntries.execute({
-        examCycleId: cycle.examCycle.id,
-        limit: Math.max(80, limit)
-      });
-      return cachedEntries;
-    }).finally(() => {
-      pendingList = undefined;
-    });
+    if (options.refresh) {
+      cachedEntries = undefined;
+      sessionOffset = 0;
+      moreEntriesAvailable = true;
+    }
+    if (!options.refresh && cachedEntries !== undefined && cachedEntries.length >= limit) return cachedEntries.slice(0, limit);
+    pendingList ??= this.loadUntil(limit).finally(() => { pendingList = undefined; });
     return (await pendingList).slice(0, limit);
+  }
+
+  hasMore(): boolean {
+    return moreEntriesAvailable;
+  }
+
+  private async loadUntil(limit: number): Promise<readonly WrongBookEntry[]> {
+    const cycle = await this.runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const loaded = new Map((cachedEntries ?? []).map((entry) => [entry.id, entry]));
+    let attempts = 0;
+    while (loaded.size < limit && moreEntriesAvailable && attempts < 20) {
+      const page = await this.runtime.getWrongBookEntries.execute({
+        examCycleId: cycle.examCycle.id,
+        limit: Math.min(40, Math.max(20, limit - loaded.size)),
+        sessionOffset,
+        sessionLimit: 12
+      });
+      page.entries.forEach((entry) => loaded.set(entry.id, entry));
+      moreEntriesAvailable = page.hasMore;
+      if (page.nextSessionOffset === undefined || page.nextSessionOffset === sessionOffset) break;
+      sessionOffset = page.nextSessionOffset;
+      attempts += 1;
+    }
+    cachedEntries = [...loaded.values()];
+    return cachedEntries;
   }
 
   async analyze(entry: WrongBookEntry): Promise<void> {

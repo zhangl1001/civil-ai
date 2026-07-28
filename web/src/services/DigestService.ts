@@ -1,8 +1,11 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
+import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
 import type { DigestSection, DigestTab } from '@/domain/digest';
 import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
+import { prescribeDailyLearningLoad } from '@/modules/mastery/public';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
+import type { InstantMs } from '@/kernel/public';
 
 export interface DigestDashboard {
   date: string;
@@ -32,7 +35,8 @@ function businessKey(tab: DigestTab, date: string): string {
 }
 
 function parseSections(content: string, prefix: string): DigestSection[] {
-  const lines = content.split(/\r?\n/);
+  const normalizedContent = normalizeMarkdownSource(content);
+  const lines = normalizedContent.split(/\r?\n/);
   const sections: Array<{ title: string; body: string[] }> = [];
   let current: { title: string; body: string[] } | undefined;
   for (const line of lines) {
@@ -45,7 +49,7 @@ function parseSections(content: string, prefix: string): DigestSection[] {
     }
   }
   if (current) sections.push(current);
-  if (!sections.length && content.trim()) sections.push({ title: '今日内容', body: [content] });
+  if (!sections.length && normalizedContent.trim()) sections.push({ title: '今日内容', body: [normalizedContent] });
   return sections.map((section, index) => ({
     id: `${prefix}:${index}`,
     title: section.title,
@@ -73,7 +77,9 @@ export class DigestService {
       LearningAssetKind.DigestDaily,
       businessKey(tab, date)
     );
-    const content = typeof current?.payload.content === 'string' ? current.payload.content : '';
+    const content = typeof current?.payload.content === 'string'
+      ? normalizeMarkdownSource(current.payload.content)
+      : '';
     const assets = await runtime.learningAssetStore.list({
       examCycleId: cycle.examCycle.id,
       kinds: [LearningAssetKind.DigestDaily],
@@ -114,12 +120,31 @@ export class DigestService {
       kind: LearningAssetKind.DigestDaily,
       businessKey: businessKey(tab, date),
       title: `${date} ${TITLE_BY_TAB[tab]}`,
-      payload: { tab, date, content }
+      payload: { tab, date, content: normalizeMarkdownSource(content) }
     });
   }
 
   async enqueueGenerate(tab: DigestTab, date = today()): Promise<AgentTaskEnqueueResult> {
     this.writeActiveTab(tab);
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const availableMinutes = availableMinutesForDate(
+      date,
+      cycle.studyConstraints.weekdayMinutes,
+      cycle.studyConstraints.weekendMinutes
+    );
+    const [tracks, reviews] = await Promise.all([
+      runtime.masteryRepository.listPriorityTracks(cycle.examCycle.id, 8),
+      runtime.masteryRepository.listDueReviews(cycle.examCycle.id, Date.now() as InstantMs, 8)
+    ]);
+    const learningLoad = prescribeDailyLearningLoad({
+      availableMinutes,
+      remainingDays: daysUntil(cycle.examCycle.examDate),
+      phase: cycle.examCycle.phase,
+      dueReviewCount: reviews.length,
+      priorityTracks: tracks
+    });
     return generationTaskService.enqueue({
       intent: 'daily',
       title: TITLE_BY_TAB[tab],
@@ -128,7 +153,8 @@ export class DigestService {
       sourceId: `${tab}:${date}`,
       payload: {
         digestTab: tab,
-        digestDate: date
+        digestDate: date,
+        learningLoad
       }
     });
   }
@@ -157,4 +183,15 @@ export const digestService = new DigestService();
 
 function digestTaskScope(projectId: string, tab: DigestTab, date: string): string {
   return `daily:${projectId}:${tab}:${date}`;
+}
+
+function availableMinutesForDate(date: string, weekdayMinutes: number, weekendMinutes: number): number {
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  return Math.max(5, weekday === 0 || weekday === 6 ? weekendMinutes : weekdayMinutes);
+}
+
+function daysUntil(examDate: string): number | undefined {
+  const target = Date.parse(`${examDate}T12:00:00`);
+  if (!Number.isFinite(target)) return undefined;
+  return Math.max(0, Math.ceil((target - Date.now()) / 86_400_000));
 }

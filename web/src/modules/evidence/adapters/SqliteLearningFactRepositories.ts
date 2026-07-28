@@ -142,14 +142,14 @@ export class SqliteLearningSessionRepository implements LearningSessionRepositor
     return Promise.all(rows.map((row) => this.load(row)));
   }
 
-  async listRecent(examCycleId: ExamCycleId, limit: number): Promise<readonly ObjectiveSessionFacts[]> {
-    assertLimit(limit);
+  async listRecent(examCycleId: ExamCycleId, limit: number, offset = 0): Promise<readonly ObjectiveSessionFacts[]> {
+    assertLimit(limit, offset);
     const rows = await this.database.query<SessionRow>(
       `SELECT * FROM learning_sessions
        WHERE exam_cycle_id = ?
        ORDER BY started_at DESC, id DESC
-       LIMIT ?`,
-      [examCycleId, limit]
+       LIMIT ? OFFSET ?`,
+      [examCycleId, limit, offset]
     );
     return Promise.all(rows.map((row) => this.load(row)));
   }
@@ -695,6 +695,6 @@ function emptyCorrectionPlan(): ErrorCorrectionPlan {
     successCriteria: ''
   };
 }
-function assertLimit(limit: number): void {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new RangeError('Evidence query limit must be between 1 and 500');
+function assertLimit(limit: number, offset = 0): void {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500 || !Number.isInteger(offset) || offset < 0) throw new RangeError('Evidence query limit/offset is invalid');
 }

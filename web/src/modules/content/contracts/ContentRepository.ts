@@ -10,7 +10,10 @@ import type {
   LectureId,
   LearningThreadId,
   QuestionId,
+  QuestionLineageId,
+  QuestionReferencePackId,
   QuestionSetId,
+  QuestionSourceId,
   QuestionTemplateVersionId,
   PromptVersionId,
   TeachingBlueprintId,
@@ -32,6 +35,11 @@ import type {
   QuestionSetEntryMode,
   QuestionTemplateCode
 } from '../domain/ContentCodes';
+import type {
+  QuestionCalibrationRole,
+  QuestionGenerationIntent,
+  QuestionOriginType
+} from '../domain/QuestionSourceCodes';
 
 export interface ContentSchemaVersion {
   readonly id: ContentSchemaVersionId;
@@ -74,6 +82,10 @@ export interface GenerationSpecRecord {
   readonly questionTemplateVersionId?: QuestionTemplateVersionId;
   readonly contentSchemaVersionId: ContentSchemaVersionId;
   readonly promptVersionId: PromptVersionId;
+  readonly referencePackId?: QuestionReferencePackId;
+  readonly referencePolicyVersion?: string;
+  readonly generationIntent?: QuestionGenerationIntent;
+  readonly calibrationTarget?: string;
   readonly requestedCount?: number;
   readonly difficulty: JsonObject;
   readonly constraints: JsonObject;
@@ -138,6 +150,9 @@ export interface QuestionSetRecord {
   readonly purpose: QuestionSetPurpose;
   readonly assessmentRole: AssessmentRole;
   readonly module: string;
+  readonly originType?: QuestionOriginType;
+  readonly sourceId?: QuestionSourceId;
+  readonly calibrationRole?: QuestionCalibrationRole;
   readonly status: QuestionSetStatus;
   readonly practiceStatus: QuestionSetPracticeStatus;
   readonly questionCount: number;
@@ -159,7 +174,32 @@ export interface QuestionSetLibraryEntry {
   readonly practiceStatus: QuestionSetPracticeStatus;
   readonly entryMode: QuestionSetEntryMode;
   readonly source?: string;
+  readonly originType?: QuestionOriginType;
+  readonly sourceId?: QuestionSourceId;
+  readonly sourceMetadata?: QuestionSetSourceSummary;
   readonly createdAt: InstantMs;
+}
+
+export interface QuestionSetSourceSummary {
+  readonly sourceType: QuestionOriginType;
+  readonly provider?: string;
+  readonly examType?: string;
+  readonly examYear?: number;
+  readonly province?: string;
+  readonly examBatch?: string;
+  readonly paperName?: string;
+  readonly sectionName?: string;
+}
+
+export interface QuestionSetLibraryQuery {
+  readonly examCycleId: ExamCycleId;
+  readonly capabilityNodeIds?: readonly CapabilityNodeId[];
+  readonly originTypes?: readonly QuestionOriginType[];
+  readonly modules?: readonly string[];
+  readonly practiceStatuses?: readonly QuestionSetPracticeStatus[];
+  readonly examYears?: readonly number[];
+  readonly provinces?: readonly string[];
+  readonly limit: number;
 }
 
 export interface QuestionRecord {
@@ -174,6 +214,12 @@ export interface QuestionRecord {
   readonly purpose: string;
   readonly assessmentRole: AssessmentRole;
   readonly variantGroupId?: string;
+  readonly originType?: QuestionOriginType;
+  readonly sourceId?: QuestionSourceId;
+  readonly sourceSequence?: number;
+  readonly lineageId?: QuestionLineageId;
+  readonly calibrationRole?: QuestionCalibrationRole;
+  readonly isOfficial?: boolean;
   readonly content: QuestionContent;
   readonly correctAnswer: JsonObject;
   readonly qualityStatus: QuestionQualityStatus;
@@ -220,6 +266,7 @@ export interface ContentRepository {
     examCycleId: ExamCycleId,
     limit: number
   ): Promise<readonly QuestionSetLibraryEntry[]>;
+  queryQuestionSetLibrary(query: QuestionSetLibraryQuery): Promise<readonly QuestionSetLibraryEntry[]>;
   listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]>;
   listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]>;
   updateQuestionSetPracticeStatus(

@@ -44,7 +44,7 @@ export class KnowledgeGraphService {
     const [curriculum, tracks, wrongEntries] = await Promise.all([
       runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
       runtime.masteryRepository.listTracks(cycle.examCycle.id, 100),
-      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 })
+      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 }).then((page) => page.entries)
     ]);
     if (!curriculum) throw new Error('当前考试大纲不可用。');
 

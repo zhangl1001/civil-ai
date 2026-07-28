@@ -19,6 +19,13 @@ import agentWorkPoolsSql from './018_agent_work_pools.sql?raw';
 import practiceManifestsSql from './019_practice_manifests.sql?raw';
 import errorDiagnosisGuidanceSql from './020_error_diagnosis_guidance.sql?raw';
 import questionSetPracticeStatusSql from './021_question_set_practice_status.sql?raw';
+import questionSourceFoundationSql from './022_question_source_foundation.sql?raw';
+import questionImportDraftsSql from './023_question_import_drafts.sql?raw';
+import trueQuestionReferencePacksSql from './024_true_question_reference_packs.sql?raw';
+import tutorCycleConclusionsSql from './025_tutor_cycle_conclusions.sql?raw';
+import abilityCalibrationSnapshotsSql from './026_ability_calibration_snapshots.sql?raw';
+import webResearchImportMethodSql from './027_web_research_import_method.sql?raw';
+import referencePackComparisonQuestionsSql from './028_reference_pack_comparison_questions.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -147,5 +154,47 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'question_set_practice_status',
     checksum: 'sha256:7f6356296ef751d6fb75f0e6354c0d488363c63c5214b977586719bffd91c680',
     sql: questionSetPracticeStatusSql
+  },
+  {
+    version: 22,
+    name: 'question_source_foundation',
+    checksum: 'sha256:e5c5c690679ebaaafab7d883195474d32121891d8a2350ed9e5a8ec35974abe8',
+    sql: questionSourceFoundationSql
+  },
+  {
+    version: 23,
+    name: 'question_import_drafts',
+    checksum: 'sha256:10bb3b08c49122a6925f0b726c0268401fc28e30e696930964b320d8fa47a19f',
+    sql: questionImportDraftsSql
+  },
+  {
+    version: 24,
+    name: 'true_question_reference_packs',
+    checksum: 'sha256:07f58b1b6649f5123a7424399207fffe23455aaf8446c651f433e95dc1b75a67',
+    sql: trueQuestionReferencePacksSql
+  },
+  {
+    version: 25,
+    name: 'tutor_cycle_conclusions',
+    checksum: 'sha256:7a517c7b0d44b0047e0a15535287f3106a1eec0086814d3fd39f742b741c0adc',
+    sql: tutorCycleConclusionsSql
+  },
+  {
+    version: 26,
+    name: 'ability_calibration_snapshots',
+    checksum: 'sha256:c82cea65fba4fdaea2dec113b286278531f1ee59ab133a69c163b1b9d0abea36',
+    sql: abilityCalibrationSnapshotsSql
+  },
+  {
+    version: 27,
+    name: 'web_research_import_method',
+    checksum: 'sha256:8e2283e75dee1a44cbb34810787ab65f24d7f569d7ef56813034bfb5cf58b4bd',
+    sql: webResearchImportMethodSql
+  },
+  {
+    version: 28,
+    name: 'reference_pack_comparison_questions',
+    checksum: 'sha256:46325ab71bb7b86eaddc68460f9040d1fbeb1a802aff1c0b75a073abe8c6b76b',
+    sql: referencePackComparisonQuestionsSql
   }
 ];

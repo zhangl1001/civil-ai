@@ -1,0 +1,161 @@
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createServer } from '../web/node_modules/vite/dist/node/index.js';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
+const server = await createServer({
+  root,
+  configFile: false,
+  resolve: { alias: { '@': path.join(root, 'src') } },
+  server: { middlewareMode: true, hmr: false, ws: false },
+  appType: 'custom'
+});
+
+const now = 1_800_000_000_000;
+const modules = [
+  ['judgment', '判断推理', .25],
+  ['verbal', '言语理解', .30],
+  ['data_analysis', '资料分析', .20],
+  ['quantity', '数量关系', .15],
+  ['common_sense', '常识判断', .10]
+];
+
+try {
+  const [calibration, evidenceModule] = await Promise.all([
+    server.ssrLoadModule('/src/modules/calibration/public.ts'),
+    server.ssrLoadModule('/src/modules/evidence/public.ts')
+  ]);
+
+  const officialWeight = evidenceModule.objectiveEvidencePolicyV2.correctnessWeight(
+    'anchor', 0, evidenceModule.ObjectiveEvidenceOrigin.OfficialTrue
+  );
+  const aiWeight = evidenceModule.objectiveEvidencePolicyV2.correctnessWeight(
+    'anchor', 0, evidenceModule.ObjectiveEvidenceOrigin.AiTraining
+  );
+  assert.ok(officialWeight > aiWeight, 'Official evidence must outweigh AI training evidence');
+
+  const snapshots = [];
+  const repository = {
+    async findLatest(examCycleId) {
+      return snapshots.filter((item) => item.examCycleId === examCycleId).at(-1);
+    },
+    async findByFingerprint(fingerprint) {
+      return snapshots.find((item) => item.inputFingerprint === fingerprint);
+    },
+    async append(snapshot) {
+      if (snapshots.some((item) => item.inputFingerprint === snapshot.inputFingerprint)) {
+        throw new Error('duplicate fingerprint');
+      }
+      snapshots.push(snapshot);
+    }
+  };
+  const evidence = baselineEvidence();
+  let id = 0;
+  const builder = new calibration.BuildAbilityCalibration(
+    { async run(work) { return work({}); } },
+    repository,
+    { async findCurrentCycle() { return candidateCycle(); } },
+    { async findBundle() { return curriculumBundle(); } },
+    { async listAllValid() { return evidence; } },
+    { async listAllTracks() { return []; } },
+    { now() { return now; } },
+    { next(namespace) { id += 1; return `${namespace}:${id}`; } }
+  );
+
+  const first = await builder.execute();
+  assert(first);
+  assert.equal(first.baseline.status, 'sufficient');
+  assert.equal(first.baseline.coveredModuleCount, 5);
+  assert.equal(first.baseline.uncoveredModules.length, 0);
+  const judgment = first.modules.find((item) => item.module === 'judgment');
+  assert(judgment);
+  assert.equal(judgment.trainingAccuracy, 1);
+  assert.equal(judgment.trueQuestionAccuracy, .5);
+  assert.ok(judgment.calibrationGap < 0);
+  const aptitude = first.scoreForecasts.find((item) => item.subject === 'aptitude');
+  assert(aptitude?.low !== undefined && aptitude.high !== undefined && aptitude.center !== undefined);
+  assert.ok(aptitude.low <= aptitude.center && aptitude.center <= aptitude.high);
+  assert.ok(aptitude.high - aptitude.low >= 8, 'Low-confidence forecast must remain an interval');
+
+  const repeated = await builder.execute();
+  assert.equal(repeated?.id, first.id);
+  assert.equal(snapshots.length, 1, 'Same evidence fingerprint must not create another snapshot');
+
+  evidence.push(makeEvidence('judgment:true:3', 'cap:judgment', 1, 'official'));
+  const changed = await builder.execute();
+  assert.notEqual(changed?.id, first.id);
+  assert.equal(snapshots.length, 2);
+  assert.ok(changed?.changes.some((item) => item.module === 'judgment'));
+  console.log('Ability calibration verification passed.');
+} finally {
+  await server.close();
+}
+
+function candidateCycle() {
+  return {
+    project: { id: 'ProjectId:1', name: '江苏省考' },
+    profile: { id: 'CandidateProfileId:1' },
+    examCycle: {
+      id: 'ExamCycleId:1', curriculumVersionId: 'CurriculumVersionId:1', phase: 'foundation'
+    },
+    scoreTargets: [
+      { id: 'ScoreTargetId:1', subject: 'aptitude', targetScore: 80, maxScore: 100, status: 'active' },
+      { id: 'ScoreTargetId:2', subject: 'essay', targetScore: 70, maxScore: 100, status: 'active' }
+    ],
+    scoreMeasurements: [
+      { id: 'ScoreMeasurementId:1', subject: 'aptitude', score: 55, maxScore: 100, confidence: .45, measurementType: 'self_report', measuredAt: now },
+      { id: 'ScoreMeasurementId:2', subject: 'essay', score: 52, maxScore: 100, confidence: .4, measurementType: 'self_report', measuredAt: now }
+    ]
+  };
+}
+
+function curriculumBundle() {
+  return {
+    curriculum: { id: 'CurriculumVersionId:1' },
+    capabilityNodes: modules.flatMap(([module, name, scoreWeight]) => [
+      {
+        id: `module:${module}`, code: `aptitude.${module}`, name, module, subject: 'aptitude',
+        nodeType: 'module', status: 'active', scoreWeight
+      },
+      {
+        id: `cap:${module}`, code: `aptitude.${module}.core`, name: `${name}核心`, module,
+        subject: 'aptitude', nodeType: 'knowledge_point', status: 'active', scoreWeight
+      }
+    ])
+  };
+}
+
+function baselineEvidence() {
+  return modules.flatMap(([module]) => {
+    const values = [1, 1, 1].map((value, index) => makeEvidence(
+      `${module}:training:${index}`,
+      `cap:${module}`,
+      value,
+      'diagnostic_anchor'
+    ));
+    if (module === 'judgment') {
+      values.push(makeEvidence('judgment:true:1', 'cap:judgment', 1, 'official'));
+      values.push(makeEvidence('judgment:true:2', 'cap:judgment', 0, 'official'));
+    }
+    return values;
+  });
+}
+
+function makeEvidence(id, capabilityNodeId, value, origin) {
+  return {
+    id,
+    examCycleId: 'ExamCycleId:1',
+    capabilityNodeId,
+    assessmentRole: 'anchor',
+    evidenceType: 'correctness',
+    value,
+    weight: origin === 'official' ? 1 : .85,
+    quality: 1,
+    source: 'deterministic_grader',
+    validationPolicyVersion: 'aptitude-objective:v2',
+    occurredAt: now,
+    idempotencyKey: id,
+    metadata: { questionOriginType: origin }
+  };
+}

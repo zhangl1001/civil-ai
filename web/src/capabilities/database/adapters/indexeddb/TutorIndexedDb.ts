@@ -1,7 +1,7 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
-export const TUTOR_INDEXEDDB_VERSION = 23;
+export const TUTOR_INDEXEDDB_VERSION = 28;
 
 export const TutorIndexedDbStore = {
   CandidateCycleBundles: 'candidate_cycle_bundles',
@@ -27,7 +27,17 @@ export const TutorIndexedDbStore = {
   LearningEvidenceAggregates: 'learning_evidence_aggregates',
   SystemMessages: 'system_messages',
   ProactiveSignals: 'proactive_signals',
-  LearningAssets: 'learning_assets'
+  LearningAssets: 'learning_assets',
+  QuestionSources: 'question_sources',
+  QuestionSourceLinks: 'question_source_links',
+  QuestionLineages: 'question_lineages',
+  QuestionSourceImportReceipts: 'question_source_import_receipts',
+  QuestionImportDrafts: 'question_import_drafts',
+  QuestionImportCandidates: 'question_import_candidates',
+  QuestionImportPublishReceipts: 'question_import_publish_receipts',
+  QuestionReferencePacks: 'question_reference_packs',
+  TutorCycleConclusions: 'tutor_cycle_conclusions',
+  AbilityCalibrationSnapshots: 'ability_calibration_snapshots'
 } as const;
 
 export type TutorIndexedDbStore = typeof TutorIndexedDbStore[keyof typeof TutorIndexedDbStore];
@@ -235,6 +245,84 @@ export class TutorIndexedDb {
         }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.LearningAssets)) {
           database.createObjectStore(TutorIndexedDbStore.LearningAssets, { keyPath: 'id' });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionSources)) {
+          const sourceStore = database.createObjectStore(TutorIndexedDbStore.QuestionSources, { keyPath: 'id' });
+          sourceStore.createIndex('by_identity_hash', 'identityHash', { unique: true });
+          sourceStore.createIndex('by_content_hash', 'contentHash', { unique: true });
+          sourceStore.createIndex('by_status', 'status', { unique: false });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionSourceLinks)) {
+          const linkStore = database.createObjectStore(TutorIndexedDbStore.QuestionSourceLinks, { keyPath: 'id' });
+          linkStore.createIndex('by_question', 'questionId', { unique: false });
+          linkStore.createIndex('by_source', 'sourceId', { unique: false });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionLineages)) {
+          const lineageStore = database.createObjectStore(TutorIndexedDbStore.QuestionLineages, { keyPath: 'id' });
+          lineageStore.createIndex('by_question', 'questionId', { unique: true });
+          lineageStore.createIndex('by_parent', 'parentQuestionId', { unique: false });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionSourceImportReceipts)) {
+          const receiptStore = database.createObjectStore(
+            TutorIndexedDbStore.QuestionSourceImportReceipts,
+            { keyPath: 'id' }
+          );
+          receiptStore.createIndex('by_idempotency_key', 'idempotencyKey', { unique: true });
+          receiptStore.createIndex('by_source', 'sourceId', { unique: false });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionImportDrafts)) {
+          const draftStore = database.createObjectStore(
+            TutorIndexedDbStore.QuestionImportDrafts,
+            { keyPath: 'id' }
+          );
+          draftStore.createIndex('by_idempotency_key', 'idempotencyKey', { unique: true });
+          draftStore.createIndex('by_status', ['examCycleId', 'status'], { unique: false });
+          draftStore.createIndex('by_owner', 'ownerSessionId', { unique: false });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionImportCandidates)) {
+          const candidateStore = database.createObjectStore(
+            TutorIndexedDbStore.QuestionImportCandidates,
+            { keyPath: 'id' }
+          );
+          candidateStore.createIndex('by_draft', 'draftId', { unique: false });
+          candidateStore.createIndex('by_draft_sequence', ['draftId', 'sequence'], { unique: true });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionImportPublishReceipts)) {
+          const publishReceiptStore = database.createObjectStore(
+            TutorIndexedDbStore.QuestionImportPublishReceipts,
+            { keyPath: 'id' }
+          );
+          publishReceiptStore.createIndex('by_draft', 'draftId', { unique: true });
+          publishReceiptStore.createIndex('by_idempotency_key', 'idempotencyKey', { unique: true });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionReferencePacks)) {
+          const referencePackStore = database.createObjectStore(
+            TutorIndexedDbStore.QuestionReferencePacks,
+            { keyPath: 'id' }
+          );
+          referencePackStore.createIndex('by_content_hash', 'contentHash', { unique: true });
+          referencePackStore.createIndex(
+            'by_scope',
+            ['examCycleId', 'capabilityNodeId'],
+            { unique: false }
+          );
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.TutorCycleConclusions)) {
+          const tutorCycleStore = database.createObjectStore(
+            TutorIndexedDbStore.TutorCycleConclusions,
+            { keyPath: 'id' }
+          );
+          tutorCycleStore.createIndex('by_idempotency_key', 'idempotencyKey', { unique: true });
+          tutorCycleStore.createIndex('by_exam_cycle', 'examCycleId', { unique: false });
+          tutorCycleStore.createIndex('by_thread', 'learningThreadId', { unique: false });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.AbilityCalibrationSnapshots)) {
+          const calibrationStore = database.createObjectStore(
+            TutorIndexedDbStore.AbilityCalibrationSnapshots,
+            { keyPath: 'id' }
+          );
+          calibrationStore.createIndex('by_input_fingerprint', 'inputFingerprint', { unique: true });
+          calibrationStore.createIndex('by_exam_cycle', 'examCycleId', { unique: false });
         }
         if (event.oldVersion < 23 && database.objectStoreNames.contains('conversation_sessions')) {
           database.deleteObjectStore('conversation_sessions');

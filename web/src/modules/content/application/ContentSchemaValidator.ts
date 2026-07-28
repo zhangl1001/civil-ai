@@ -13,6 +13,7 @@ import type {
 } from '../contracts/ContentDocument';
 import type { SingleChoiceOption, SingleChoiceQuestionContent } from '../contracts/QuestionContent';
 import { CalloutKind, ContentAlignment, ContentBlockType, QuestionTemplateCode } from '../domain/ContentCodes';
+import { resolveQuestionPresentation } from '../domain/QuestionPresentation';
 
 export interface ContentValidationIssue {
   readonly code: string;
@@ -48,7 +49,9 @@ export class ContentSchemaValidator {
     const schemaVersion = readString(record.schemaVersion, '$.schemaVersion', issues);
     const capabilityCode = readString(record.capabilityCode, '$.capabilityCode', issues);
     const prompt = parseDocument(record.prompt, '$.prompt', issues, 0);
-    const explanation = parseDocument(record.explanation, '$.explanation', issues, 0);
+    const explanation = record.explanation === undefined || record.explanation === null
+      ? emptyDocument('question:explanation:empty')
+      : parseDocument(record.explanation, '$.explanation', issues, 0);
     const material = record.material === undefined || record.material === null
       ? undefined
       : parseDocument(record.material, '$.material', issues, 0);
@@ -61,7 +64,7 @@ export class ContentSchemaValidator {
     if (issues.length || !schemaVersion || !capabilityCode || !prompt || !explanation || !options || !correctOptionId) {
       return failure({ code: 'content.schema_invalid', issues });
     }
-    return success({
+    const normalized = {
       templateCode: QuestionTemplateCode.SingleChoice,
       schemaVersion,
       capabilityCode,
@@ -71,6 +74,10 @@ export class ContentSchemaValidator {
       options,
       correctOptionId,
       explanation
+    };
+    return success({
+      ...normalized,
+      presentationCode: resolveQuestionPresentation(normalized)
     });
   }
 }
@@ -122,6 +129,12 @@ function parseBlock(
     const markup = readString(record.markup, `${path}.markup`, issues);
     const alt = readString(record.alt, `${path}.alt`, issues);
     const viewBox = readOptionalString(record.viewBox, `${path}.viewBox`, issues);
+    if (markup && !hasSvgRoot(markup)) {
+      issue(issues, 'content.svg_root_invalid', `${path}.markup`, 'SVG diagram must contain one svg root element');
+    }
+    if (markup && !hasSvgViewBox(markup)) {
+      issue(issues, 'content.svg_viewbox_missing', `${path}.viewBox`, 'SVG diagram requires a valid viewBox for proportional scaling');
+    }
     if (!markup || !alt) return undefined;
     return { id, type, markup, alt, viewBox, fit: 'contain' } satisfies SvgDiagramBlock;
   }
@@ -129,6 +142,9 @@ function parseBlock(
     const assetRef = readString(record.assetRef, `${path}.assetRef`, issues);
     const alt = readString(record.alt, `${path}.alt`, issues);
     const caption = readOptionalString(record.caption, `${path}.caption`, issues);
+    if (assetRef && !isRenderableImageRef(assetRef)) {
+      issue(issues, 'content.image_ref_invalid', `${path}.assetRef`, 'Image reference must use https, an app path, or an inline image data URI');
+    }
     return assetRef && alt ? { id, type, assetRef, alt, caption } satisfies ImageBlock : undefined;
   }
   if (type === ContentBlockType.Formula) {
@@ -181,8 +197,8 @@ function parseDataTable(
     return undefined;
   }
   const columns = record.columns.map((column, index) => parseColumn(column, `${path}.columns[${index}]`, issues));
-  if (!Array.isArray(record.rows)) {
-    issue(issues, 'content.table_rows_invalid', `${path}.rows`, 'Table rows must be an array');
+  if (!Array.isArray(record.rows) || record.rows.length === 0) {
+    issue(issues, 'content.table_rows_invalid', `${path}.rows`, 'Table must contain at least one row');
     return undefined;
   }
   const keys = new Set(columns.filter(Boolean).map((column) => column!.key));
@@ -237,8 +253,8 @@ function parseRow(
 }
 
 function parseOptions(input: unknown, issues: ContentValidationIssue[]): readonly SingleChoiceOption[] | undefined {
-  if (!Array.isArray(input) || input.length < 2) {
-    issue(issues, 'question.options_invalid', '$.options', 'Single choice question requires at least two options');
+  if (!Array.isArray(input) || input.length < 2 || input.length > 8) {
+    issue(issues, 'question.options_invalid', '$.options', 'Single choice question requires between two and eight options');
     return undefined;
   }
   const options = input.map((option, index) => {
@@ -252,6 +268,10 @@ function parseOptions(input: unknown, issues: ContentValidationIssue[]): readonl
   const ids = options.filter(Boolean).map((option) => option!.id);
   if (new Set(ids).size !== ids.length) issue(issues, 'question.option_id_duplicate', '$.options', 'Option ids must be unique');
   return options.every(Boolean) ? options as SingleChoiceOption[] : undefined;
+}
+
+function emptyDocument(id: string): ContentDocument {
+  return { schemaVersion: 'content.v1', blocks: [{ id, type: 'text', source: '' }] };
 }
 
 function asRecord(input: unknown, path: string, issues: ContentValidationIssue[]): Record<string, unknown> | undefined {
@@ -282,4 +302,22 @@ function readOptionalString(input: unknown, path: string, issues: ContentValidat
 
 function issue(issues: ContentValidationIssue[], code: string, path: string, message: string): void {
   issues.push({ code, path, message });
+}
+
+function hasSvgRoot(markup: string): boolean {
+  return /^\s*<svg(?:\s|>)[\s\S]*<\/svg>\s*$/i.test(markup);
+}
+
+function hasSvgViewBox(markup: string): boolean {
+  const candidate = markup.match(/\bviewBox\s*=\s*["']([^"']+)["']/i)?.[1];
+  if (!candidate) return false;
+  const values = candidate.trim().split(/[\s,]+/).map(Number);
+  return values.length === 4
+    && values.every(Number.isFinite)
+    && values[2]! > 0
+    && values[3]! > 0;
+}
+
+function isRenderableImageRef(value: string): boolean {
+  return /^(https:\/\/|\/|data:image\/)/i.test(value);
 }

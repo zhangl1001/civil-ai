@@ -3,7 +3,11 @@ export {
   ProviderCode,
   ProviderErrorKind,
   ProviderGatewayError,
+  type ModelContentPart,
+  type ModelImageContentPart,
   type ModelMessage,
+  type ModelMessageContent,
+  type ModelTextContentPart,
   type ModelToolCall,
   type ProviderGateway,
   type ProviderRequest,
@@ -27,6 +31,7 @@ export {
 } from './prompt/GenerationBoundaryPolicy';
 export { PromptRegistry } from './prompt/PromptRegistry';
 export { structuredObjectivePromptV2 } from './fixtures/structuredObjectivePromptV2';
+export { questionImportPolicyV1 } from './fixtures/questionImportPolicyV1';
 export { errorDiagnosisPromptV1 } from './fixtures/errorDiagnosisPromptV1';
 export { errorDiagnosisBatchPromptV1 } from './fixtures/errorDiagnosisBatchPromptV1';
 export {

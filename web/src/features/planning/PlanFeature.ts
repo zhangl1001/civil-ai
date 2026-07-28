@@ -25,7 +25,9 @@ export class PlanFeature {
     const cycle = await this.requireCycle();
     const proposal = await this.runtime.buildDailyPlanProposal.execute({
       examCycleId: cycle.examCycle.id,
-      availableMinutes: Math.max(5, availableMinutes)
+      availableMinutes: Math.max(5, availableMinutes),
+      examDate: cycle.examCycle.examDate,
+      phase: cycle.examCycle.phase
     });
     return this.runtime.persistDailyPlanProposal.execute({
       proposal,

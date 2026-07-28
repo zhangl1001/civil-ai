@@ -27,6 +27,7 @@ final class MainViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(SpeechRecognitionPlugin())
         bridge?.registerPluginInstance(NativeStreamingHTTPPlugin())
         bridge?.registerPluginInstance(NativeAgentWorkspacePlugin())
+        bridge?.registerPluginInstance(NativeDocumentTextPlugin())
         NotificationCenter.default.addObserver(self, selector: #selector(openLearningRoute(_:)), name: .examTutorNotificationRoute, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)

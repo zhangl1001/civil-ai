@@ -15,7 +15,7 @@ export interface LearningSessionRepository {
   findByIdempotencyKey(idempotencyKey: string): Promise<ObjectiveSessionFacts | undefined>;
   findById(sessionId: LearningSessionId): Promise<ObjectiveSessionFacts | undefined>;
   listByQuestionSet(questionSetId: QuestionSetId, limit: number): Promise<readonly ObjectiveSessionFacts[]>;
-  listRecent(examCycleId: ExamCycleId, limit: number): Promise<readonly ObjectiveSessionFacts[]>;
+  listRecent(examCycleId: ExamCycleId, limit: number, offset?: number): Promise<readonly ObjectiveSessionFacts[]>;
   listAll(examCycleId: ExamCycleId): Promise<readonly ObjectiveSessionFacts[]>;
 }
 

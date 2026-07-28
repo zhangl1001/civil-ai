@@ -8,6 +8,7 @@ export interface GeneratedLectureQuestionSet {
   readonly raw: JsonObject;
   readonly lecture: ContentDocument;
   readonly questions: readonly SingleChoiceQuestionContent[];
+  readonly referenceQuestionIds: readonly (string | undefined)[];
 }
 
 export class GeneratedContentParseError extends Error {
@@ -38,7 +39,9 @@ export class GeneratedContentParser {
   }
 
   parseObject(input: unknown, expectedCapabilityCode?: string): GeneratedLectureQuestionSet {
-    const root = normalizeAuthoringRoot(asRecord(input), expectedCapabilityCode);
+    const authoringRoot = asRecord(input);
+    const referenceQuestionIds = authoringReferenceQuestionIds(authoringRoot.questions);
+    const root = normalizeAuthoringRoot(authoringRoot, expectedCapabilityCode);
     const extraKeys = Object.keys(root).filter((key) => key !== 'lecture' && key !== 'questions');
     if (extraKeys.length) {
       throw new GeneratedContentParseError('generation.root_fields_invalid', extraKeys.map((key) => ({
@@ -47,9 +50,11 @@ export class GeneratedContentParser {
         message: 'Generated root only permits lecture and questions'
       })));
     }
-    const lectureInput = decodeEmbeddedJson(root.lecture);
+    const lectureInput = root.lecture === undefined
+      ? emptyDocument('lecture:empty')
+      : decodeEmbeddedJson(root.lecture);
     const lectureResult = this.validator.parseDocument(lectureInput);
-    if (!lectureResult.ok) {
+    if (!lectureResult.ok && (!Array.isArray(root.questions) || root.questions.length === 0)) {
       throw new GeneratedContentParseError(
         'generation.lecture_schema_invalid',
         lectureResult.error.issues.map((issue) => ({
@@ -58,6 +63,7 @@ export class GeneratedContentParser {
         }))
       );
     }
+    const lecture = lectureResult.ok ? lectureResult.value : emptyDocument('lecture:invalid');
     if (!Array.isArray(root.questions)) {
       throw new GeneratedContentParseError('generation.questions_invalid', [{
         code: 'generation.questions_invalid', path: '$.questions', message: 'Questions must be an array'
@@ -73,11 +79,30 @@ export class GeneratedContentParser {
     });
     if (issues.length) throw new GeneratedContentParseError('generation.question_schema_invalid', issues);
     return {
-      raw: { ...root, lecture: lectureInput, questions: questionInputs } as JsonObject,
-      lecture: lectureResult.value,
-      questions
+      raw: {
+        ...root,
+        lecture: lectureInput,
+        questions: questionInputs.map((question, index) => {
+          const referenceQuestionId = referenceQuestionIds[index];
+          return referenceQuestionId && question && typeof question === 'object' && !Array.isArray(question)
+            ? { ...question, referenceQuestionId }
+            : question;
+        })
+      } as JsonObject,
+      lecture,
+      questions,
+      referenceQuestionIds
     };
   }
+}
+
+function authoringReferenceQuestionIds(input: unknown): readonly (string | undefined)[] {
+  const decoded = decodeEmbeddedJson(input);
+  if (!Array.isArray(decoded)) return [];
+  return decoded.map((question) => {
+    const value = asOptionalRecord(decodeEmbeddedJson(question))?.referenceQuestionId;
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  });
 }
 
 function asRecord(input: unknown): Record<string, unknown> {
@@ -105,14 +130,19 @@ function normalizeAuthoringRoot(
   root: Record<string, unknown>,
   expectedCapabilityCode?: string
 ): Record<string, unknown> {
-  const lecture = asOptionalRecord(decodeEmbeddedJson(root.lecture));
-  if (!lecture || !Array.isArray(lecture.sections)) {
+  const decodedLecture = decodeEmbeddedJson(root.lecture);
+  if (decodedLecture !== undefined && decodedLecture !== null && !asOptionalRecord(decodedLecture)) {
+    return injectCapabilityCode(root, expectedCapabilityCode);
+  }
+  const lecture = asOptionalRecord(decodedLecture);
+  if (lecture && !Array.isArray(lecture.sections)) {
     return injectCapabilityCode(root, expectedCapabilityCode);
   }
   const issues: ContentValidationIssue[] = [];
   const materialGroups = authoringMaterialGroups(root.materialGroups, issues);
   const materialGroupUseCounts = countMaterialGroupUses(root.questions);
-  const blocks = lecture.sections.map((section, index) => authoringSection(section, index, issues));
+  const lectureSections: unknown[] = lecture && Array.isArray(lecture.sections) ? lecture.sections : [];
+  const blocks = lectureSections.map((section, index) => authoringSection(section, index, issues));
   const decodedQuestions = decodeEmbeddedJson(root.questions);
   const questions = Array.isArray(decodedQuestions)
     ? decodedQuestions.map((question, index) => authoringQuestion(
@@ -148,7 +178,7 @@ function authoringSection(
     issues.push({ code: 'generation.section_invalid', path, message: 'Lecture section must be an object' });
     return undefined;
   }
-  const id = requiredAuthorText(section.id, `${path}.id`, issues);
+  const id = `lecture-section-${index + 1}`;
   const kind = requiredAuthorText(section.kind, `${path}.kind`, issues);
   const title = requiredAuthorText(section.title, `${path}.title`, issues);
   const markdown = requiredAuthorText(section.markdown, `${path}.markdown`, issues);
@@ -176,20 +206,22 @@ function authoringQuestion(
 ): Record<string, unknown> | undefined {
   const question = asOptionalRecord(input);
   if (question?.templateCode === 'single_choice') {
+    const { referenceQuestionId: _referenceQuestionId, ...contentQuestion } = question;
     return expectedCapabilityCode
-      ? { ...question, capabilityCode: expectedCapabilityCode }
-      : question;
+      ? { ...contentQuestion, capabilityCode: expectedCapabilityCode }
+      : contentQuestion;
   }
   const path = `$.questions[${index}]`;
   if (!question) {
     issues.push({ code: 'generation.question_invalid', path, message: 'Question must be an object' });
     return undefined;
   }
-  const id = requiredAuthorText(question.id, `${path}.id`, issues);
+  const id = `generated-question-${index + 1}`;
   const capabilityCode = expectedCapabilityCode
     ?? requiredAuthorText(question.capabilityCode, `${path}.capabilityCode`, issues);
   const prompt = requiredAuthorText(question.prompt, `${path}.prompt`, issues);
-  const correctOptionId = requiredAuthorText(question.correctOptionId, `${path}.correctOptionId`, issues);
+  const promptVisual = authoringVisual(question.visual);
+  const correctOptionId = normalizedOptionId(question.correctOptionId, `${path}.correctOptionId`, issues);
   if (!Array.isArray(question.options)) {
     issues.push({ code: 'generation.options_invalid', path: `${path}.options`, message: 'Options must be an array' });
     return undefined;
@@ -201,10 +233,15 @@ function authoringQuestion(
       issues.push({ code: 'generation.option_invalid', path: optionPath, message: 'Option must be an object' });
       return undefined;
     }
-    const optionId = requiredAuthorText(option.id, `${optionPath}.id`, issues);
-    const text = requiredAuthorText(option.text, `${optionPath}.text`, issues);
-    return optionId && text
-      ? { id: optionId, content: authorDocument(`${id || `question-${index}`}:option:${optionId}`, text) }
+    const optionId = optionLetters[optionIndex];
+    const text = optionalAuthorTextValue(option.text);
+    const visual = authoringVisual(option.visual);
+    if (!text && !visual) {
+      issues.push({ code: 'generation.option_content_invalid', path: optionPath, message: 'Option needs text or a renderable visual' });
+      return undefined;
+    }
+    return optionId
+      ? { id: optionId, content: authorDocumentWithVisual(`${id || `question-${index}`}:option:${optionId}`, text || '', visual) }
       : undefined;
   });
   const optionIds = options.flatMap((option) => option ? [option.id] : []);
@@ -239,7 +276,7 @@ function authoringQuestion(
     capabilityCode,
     ...(materialGroupId ? { materialGroupId } : {}),
     material,
-    prompt: authorDocument(`${id}:prompt`, prompt),
+    prompt: authorDocumentWithVisual(`${id}:prompt`, prompt, promptVisual),
     options,
     correctOptionId,
     explanation
@@ -282,34 +319,36 @@ function authoringExplanation(
   issues: ContentValidationIssue[]
 ): Record<string, unknown> | undefined {
   const explanation = asOptionalRecord(decodeEmbeddedJson(input));
-  if (!explanation) {
-    issues.push({ code: 'generation.explanation_invalid', path, message: 'Explanation must be a structured object' });
-    return undefined;
-  }
-  const knowledgePoint = requiredAuthorText(explanation.knowledgePoint, `${path}.knowledgePoint`, issues);
-  const conclusion = requiredAuthorText(explanation.conclusion, `${path}.conclusion`, issues);
-  const steps = authorTextArray(explanation.steps, `${path}.steps`, issues, 1);
-  const pitfalls = authorTextArray(explanation.pitfalls, `${path}.pitfalls`, issues, 0);
-  const optionAnalysis = authorOptionAnalysis(explanation.optionAnalysis, optionIds, `${path}.optionAnalysis`, issues);
-  if (!knowledgePoint || !conclusion || !steps || !pitfalls || !optionAnalysis) return undefined;
+  if (!explanation) return { schemaVersion: 'content.v1', blocks: [] };
+  const knowledgePoint = optionalAuthorTextValue(explanation.knowledgePoint);
+  const conclusion = optionalAuthorTextValue(explanation.conclusion);
+  const steps = flexibleAuthorTextArray(explanation.steps, `${path}.steps`, issues);
+  const pitfalls = flexibleAuthorTextArray(explanation.pitfalls, `${path}.pitfalls`, issues);
+  const optionAnalysis = authorOptionAnalysis(explanation.optionAnalysis, optionIds);
+  if (!steps || !pitfalls) return { schemaVersion: 'content.v1', blocks: [] };
   const correctAnalyses = optionAnalysis.filter((item) => item.verdict === 'correct');
-  if (correctAnalyses.length !== 1 || correctAnalyses[0]?.optionId !== correctOptionId) {
-    issues.push({
-      code: 'generation.explanation_answer_mismatch',
-      path: `${path}.optionAnalysis`,
-      message: 'Exactly the correct option must have verdict correct'
-    });
-    return undefined;
-  }
+  const safeOptionAnalysis = correctAnalyses.length === 1 && correctAnalyses[0]?.optionId === correctOptionId
+    ? optionAnalysis
+    : [];
   const blocks = [
-    calloutBlock(`${questionId}:explanation:conclusion`, 'conclusion', '结论与考点', `**考点：${knowledgePoint}**\n\n${conclusion}`),
-    calloutBlock(`${questionId}:explanation:steps`, 'method', '解题思路', steps.map((item, index) => `${index + 1}. ${item}`).join('\n')),
-    calloutBlock(
+    ...(knowledgePoint || conclusion ? [calloutBlock(
+      `${questionId}:explanation:conclusion`,
+      'conclusion',
+      '结论与考点',
+      `${knowledgePoint ? `**考点：${knowledgePoint}**\n\n` : ''}${conclusion || ''}`
+    )] : []),
+    ...(steps.length ? [calloutBlock(
+      `${questionId}:explanation:steps`,
+      'method',
+      '解题思路',
+      steps.map((item, index) => `${index + 1}. ${item}`).join('\n')
+    )] : []),
+    ...(safeOptionAnalysis.length ? [calloutBlock(
       `${questionId}:explanation:options`,
       'hint',
       '选项辨析',
-      optionAnalysis.map((item) => `**${item.optionId} · ${item.verdict === 'correct' ? '正确' : '排除'}**\n\n${item.analysis}`).join('\n\n')
-    )
+      safeOptionAnalysis.map((item) => `**${item.optionId} · ${item.verdict === 'correct' ? '正确' : '排除'}**\n\n${item.analysis}`).join('\n\n')
+    )] : [])
   ];
   if (pitfalls.length) {
     blocks.push(calloutBlock(
@@ -322,70 +361,57 @@ function authoringExplanation(
   return { schemaVersion: 'content.v1', blocks };
 }
 
-function authorTextArray(
+function flexibleAuthorTextArray(
   input: unknown,
   path: string,
-  issues: ContentValidationIssue[],
-  minimum: number
+  issues: ContentValidationIssue[]
 ): readonly string[] | undefined {
-  if (!Array.isArray(input) || input.length < minimum) {
-    issues.push({ code: 'generation.explanation_list_invalid', path, message: `Expected at least ${minimum} items` });
+  if (input === undefined || input === null) return [];
+  if (typeof input === 'string') return input.trim() ? [input.trim()] : [];
+  if (!Array.isArray(input)) {
+    issues.push({ code: 'generation.explanation_list_invalid', path, message: 'Expected a text list' });
     return undefined;
   }
   const values = input.map((item, index) => requiredAuthorText(item, `${path}[${index}]`, issues));
   return values.some((item) => !item) ? undefined : values as string[];
 }
 
-function authorOptionAnalysis(
+function normalizedOptionId(
   input: unknown,
-  expectedOptionIds: readonly string[],
   path: string,
   issues: ContentValidationIssue[]
-): readonly { optionId: string; verdict: string; analysis: string }[] | undefined {
-  if (
-    expectedOptionIds.length < 2
-    || expectedOptionIds.length > 8
-    || !Array.isArray(input)
-    || input.length !== expectedOptionIds.length
-  ) {
-    issues.push({
-      code: 'generation.option_analysis_invalid',
-      path,
-      message: 'Option analysis must cover every generated option exactly once'
-    });
-    return undefined;
+): string | undefined {
+  if (typeof input === 'string') {
+    const value = input.trim().toUpperCase();
+    if (['A', 'B', 'C', 'D'].includes(value)) return value;
   }
+  if (typeof input === 'string') {
+    const value = input.trim().toUpperCase();
+    if (optionLetters.some((letter) => letter === value)) return value;
+  }
+  issues.push({ code: 'generation.answer_invalid', path, message: 'Correct option must reference an option from A to H' });
+  return undefined;
+}
+
+const optionLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;
+
+function authorOptionAnalysis(
+  input: unknown,
+  expectedOptionIds: readonly string[]
+): readonly { optionId: string; verdict: string; analysis: string }[] {
+  if (!Array.isArray(input)) return [];
   const expected = new Set(expectedOptionIds);
-  const values = input.map((item, index) => {
+  const values = input.flatMap((item) => {
     const record = asOptionalRecord(item);
-    const itemPath = `${path}[${index}]`;
-    if (!record) {
-      issues.push({ code: 'generation.option_analysis_item_invalid', path: itemPath, message: 'Option analysis item must be an object' });
-      return undefined;
-    }
-    const optionId = requiredAuthorText(record.optionId, `${itemPath}.optionId`, issues);
-    const verdict = requiredAuthorText(record.verdict, `${itemPath}.verdict`, issues);
-    const analysis = requiredAuthorText(record.analysis, `${itemPath}.analysis`, issues);
-    if (!optionId || !expected.has(optionId) || !verdict || !['correct', 'incorrect'].includes(verdict) || !analysis) {
-      issues.push({ code: 'generation.option_analysis_contract_invalid', path: itemPath, message: 'Option analysis contract is invalid' });
-      return undefined;
-    }
-    return { optionId, verdict, analysis };
+    const optionId = typeof record?.optionId === 'string' ? record.optionId.trim().toUpperCase() : '';
+    const verdict = typeof record?.verdict === 'string' ? record.verdict.trim() : '';
+    const analysis = typeof record?.analysis === 'string' ? record.analysis.trim() : '';
+    return expected.has(optionId) && ['correct', 'incorrect'].includes(verdict) && analysis
+      ? [{ optionId, verdict, analysis }]
+      : [];
   });
-  const optionIds = new Set(values.flatMap((item) => item ? [item.optionId] : []));
-  if (
-    values.some((item) => !item)
-    || optionIds.size !== expected.size
-    || [...expected].some((optionId) => !optionIds.has(optionId))
-  ) {
-    issues.push({
-      code: 'generation.option_analysis_duplicate',
-      path,
-      message: 'Option analysis must cover each option once'
-    });
-    return undefined;
-  }
-  return values as { optionId: string; verdict: string; analysis: string }[];
+  const unique = new Map(values.map((item) => [item.optionId, item]));
+  return [...unique.values()];
 }
 
 function calloutBlock(id: string, kind: string, title: string, source: string): Record<string, unknown> {
@@ -438,6 +464,65 @@ function authorDocument(id: string, source: string): Record<string, unknown> {
   };
 }
 
+function emptyDocument(id: string): ContentDocument {
+  return { schemaVersion: 'content.v1', blocks: [{ id, type: 'text', source: '' }] };
+}
+
+interface AuthoringVisual {
+  readonly svg: string;
+  readonly alt: string;
+  readonly viewBox?: string;
+}
+
+function authorDocumentWithVisual(
+  id: string,
+  source: string,
+  visual?: AuthoringVisual
+): Record<string, unknown> {
+  return {
+    schemaVersion: 'content.v1',
+    blocks: [
+      { id: `${id}:text`, type: 'text', source },
+      ...(visual ? [{
+        id: `${id}:visual`,
+        type: 'svg_diagram',
+        markup: normalizeAuthoringSvg(visual.svg, visual.viewBox),
+        alt: visual.alt,
+        ...(visual.viewBox ? { viewBox: visual.viewBox } : {})
+      }] : [])
+    ]
+  };
+}
+
+function authoringVisual(input: unknown): AuthoringVisual | undefined {
+  const value = asOptionalRecord(decodeEmbeddedJson(input));
+  if (
+    typeof value?.svg !== 'string'
+    || !/^\s*<svg(?:\s|>)[\s\S]*<\/svg>\s*$/i.test(value.svg)
+    || typeof value.alt !== 'string'
+    || !value.alt.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    svg: value.svg.trim(),
+    alt: value.alt.trim(),
+    viewBox: typeof value.viewBox === 'string' && value.viewBox.trim() ? value.viewBox.trim() : undefined
+  };
+}
+
+function normalizeAuthoringSvg(markup: string, viewBox?: string): string {
+  if (/\bviewBox\s*=\s*["'][^"']+["']/i.test(markup)) return markup;
+  const resolvedViewBox = viewBox?.trim() || inferredSvgViewBox(markup) || '0 0 100 100';
+  return markup.replace(/<svg(\s|>)/i, `<svg viewBox="${resolvedViewBox}"$1`);
+}
+
+function inferredSvgViewBox(markup: string): string | undefined {
+  const width = markup.match(/\bwidth\s*=\s*["']([\d.]+)["']/i)?.[1];
+  const height = markup.match(/\bheight\s*=\s*["']([\d.]+)["']/i)?.[1];
+  return width && height ? `0 0 ${width} ${height}` : undefined;
+}
+
 function requiredAuthorText(
   input: unknown,
   path: string,
@@ -446,6 +531,10 @@ function requiredAuthorText(
   if (typeof input === 'string' && input.trim()) return input.trim();
   issues.push({ code: 'generation.author_text_invalid', path, message: 'Expected a non-empty string' });
   return undefined;
+}
+
+function optionalAuthorTextValue(input: unknown): string | undefined {
+  return typeof input === 'string' && input.trim() ? input.trim() : undefined;
 }
 
 function optionalAuthorText(

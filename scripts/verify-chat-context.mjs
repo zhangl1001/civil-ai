@@ -14,6 +14,7 @@ const server = await createServer({
 
 try {
   const { buildChatContext, buildConversationSummary, sanitizeContextMessage } = await server.ssrLoadModule('/src/ai/ChatContextBuilder.ts');
+  const { paginateAIChatMessages } = await server.ssrLoadModule('/src/ai/ChatMessagePagination.ts');
   assert.equal(sanitizeContextMessage('回复失败：network'), '');
   assert.equal(sanitizeContextMessage('先回答\n\n[[ZH_AI_STOPPED]]'), '先回答');
   assert.equal(sanitizeContextMessage('  '), '');
@@ -42,6 +43,14 @@ try {
   assert.equal(summary.includes('用户近期关注'), true);
   assert.equal(summary.includes('工具执行中'), false);
   assert.equal(summary.includes('回复失败'), false);
+
+  const pagedHistory = Array.from({ length: 55 }, (_, index) => message(`page-${index + 1}`, 'user', `消息 ${index + 1}`));
+  const latestPage = paginateAIChatMessages(pagedHistory, undefined, 24);
+  assert.deepEqual(latestPage.messages.map((item) => item.id), pagedHistory.slice(31).map((item) => item.id));
+  assert.equal(latestPage.hasMore, true);
+  const olderPage = paginateAIChatMessages(pagedHistory, latestPage.messages[0].id, 24);
+  assert.deepEqual(olderPage.messages.map((item) => item.id), pagedHistory.slice(7, 31).map((item) => item.id));
+  assert.equal(olderPage.hasMore, true);
 
   console.log('Chat context verification passed.');
 } finally {

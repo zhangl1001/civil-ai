@@ -10,6 +10,7 @@ const server = await createServer({
   root,
   configFile: false,
   resolve: { alias: { '@': path.join(root, 'src') } },
+  optimizeDeps: { noDiscovery: true },
   server: { middlewareMode: true, hmr: false, ws: false },
   appType: 'custom'
 });

@@ -4,6 +4,7 @@
       <span>正确答案</span>
       <b>{{ correctOptionId }}</b>
     </header>
+    <slot name="after-answer" />
     <article
       v-for="block in document.blocks"
       :key="block.id"

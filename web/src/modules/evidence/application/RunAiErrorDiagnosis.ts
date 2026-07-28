@@ -5,7 +5,14 @@ import {
   parseStructuredJson
 } from '@/capabilities/ai-runtime/public';
 import type { UnitOfWork } from '@/capabilities/database/public';
-import type { AgentRunId, Clock, ErrorDiagnosisId, IdGenerator, JsonObject } from '@/kernel/public';
+import type {
+  AgentRunId,
+  Clock,
+  ErrorDiagnosisId,
+  IdGenerator,
+  JsonObject,
+  LearningSessionId
+} from '@/kernel/public';
 import { AgentRunAction, InvokeAgentModel, TransitionAgentRun } from '@/modules/agent/public';
 import type { OutboxRepository } from '@/modules/task/public';
 import type { ErrorDiagnosisRepository } from '../contracts/LearningRepositories';
@@ -33,6 +40,14 @@ interface RunAiErrorDiagnosisCommand {
   readonly items: readonly ErrorDiagnosisBatchItem[];
 }
 
+export interface AiErrorDiagnosisCompletionObserver {
+  completed(input: {
+    readonly agentRunId: AgentRunId;
+    readonly sessionId: LearningSessionId;
+    readonly diagnosisIds: readonly ErrorDiagnosisId[];
+  }): Promise<unknown>;
+}
+
 interface DiagnosisOutput {
   readonly provisionalDiagnosisId?: ErrorDiagnosisId;
   readonly causeCode: typeof ErrorCauseCode[keyof typeof ErrorCauseCode];
@@ -58,7 +73,8 @@ export class RunAiErrorDiagnosis {
     private readonly invoke: InvokeAgentModel,
     private readonly transition: TransitionAgentRun,
     private readonly clock: Clock,
-    private readonly ids: IdGenerator
+    private readonly ids: IdGenerator,
+    private readonly completionObserver?: AiErrorDiagnosisCompletionObserver
   ) {}
 
   async execute(
@@ -89,8 +105,10 @@ export class RunAiErrorDiagnosis {
       return { item, provisional };
     });
     const diagnosisIds = committed.map((item) => item.id);
+    const sessionId = requireSingleSessionId([...committed, ...provisionalRecords]);
 
     if (!pending.length) {
+      await this.completionObserver?.completed({ agentRunId: command.agentRunId, sessionId, diagnosisIds });
       await this.completeRun(command.agentRunId, diagnosisIds, [], 0);
       return diagnosisIds;
     }
@@ -119,6 +137,7 @@ export class RunAiErrorDiagnosis {
       }]));
     }
 
+    await this.completionObserver?.completed({ agentRunId: command.agentRunId, sessionId, diagnosisIds });
     await this.completeRun(
       command.agentRunId,
       diagnosisIds,
@@ -263,6 +282,12 @@ export class RunAiErrorDiagnosis {
       }
     });
   }
+}
+
+function requireSingleSessionId(records: readonly ErrorDiagnosisRecord[]): LearningSessionId {
+  const sessionIds = [...new Set(records.map((item) => item.sessionId))];
+  if (sessionIds.length !== 1) throw new Error('AI diagnosis batch must belong to exactly one learning session');
+  return sessionIds[0]!;
 }
 
 function parseBatch(

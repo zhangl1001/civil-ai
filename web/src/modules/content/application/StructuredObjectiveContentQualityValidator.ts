@@ -2,18 +2,40 @@ import { canonicalJson, type JsonObject } from '@/kernel/public';
 import type { ContentDocument } from '../contracts/ContentDocument';
 import type { SingleChoiceQuestionContent } from '../contracts/QuestionContent';
 import { contentBlockText, contentDocumentText } from '../domain/ContentDocumentText';
+import { QuestionPresentationCode } from '../domain/ContentCodes';
 import type { GeneratedLectureQuestionSet } from './GeneratedContentParser';
 
 export interface ContentQualityIssue {
   readonly code: string;
   readonly path: string;
   readonly message: string;
+  readonly priority: ContentQualityPriority;
 }
+
+export const ContentQualityPriority = {
+  Blocking: 'blocking',
+  PendingEnrichment: 'pending_enrichment',
+  Advisory: 'advisory'
+} as const;
+
+export type ContentQualityPriority = typeof ContentQualityPriority[keyof typeof ContentQualityPriority];
+
+export const ContentReadiness = {
+  Ready: 'ready',
+  ReadyWithPendingEnrichment: 'ready_with_pending_enrichment',
+  Invalid: 'invalid'
+} as const;
+
+export type ContentReadiness = typeof ContentReadiness[keyof typeof ContentReadiness];
 
 export interface ContentQualityReport {
   readonly valid: boolean;
+  readonly readiness: ContentReadiness;
   readonly issues: readonly ContentQualityIssue[];
   readonly blockingIssues: readonly ContentQualityIssue[];
+  readonly pendingIssues: readonly ContentQualityIssue[];
+  readonly advisories: readonly ContentQualityIssue[];
+  /** @deprecated Use pendingIssues and advisories when the distinction matters. */
   readonly warnings: readonly ContentQualityIssue[];
   readonly metrics: JsonObject;
 }
@@ -22,13 +44,20 @@ export interface ContentQualityReport {
 // references. Quality review must only block defects that make the committed
 // question set unusable; pedagogical quality signals remain observable warnings.
 const blockingIssueCodes = new Set<string>([
-  'quality.lecture_empty',
   'quality.question_count_mismatch',
   'quality.option_count_invalid',
   'quality.option_empty',
   'quality.option_duplicate',
   'quality.material_group_content_missing',
   'quality.material_group_inconsistent'
+]);
+const pendingIssueCodes = new Set<string>([
+  'quality.lecture_empty',
+  'quality.question_count_partial',
+  'quality.explanation_section_missing',
+  'quality.option_analysis_incomplete',
+  'quality.expected_graphic_missing',
+  'quality.data_material_not_structured'
 ]);
 const PARTIAL_ACCEPTANCE_RATIO = 0.8;
 
@@ -55,17 +84,30 @@ export class StructuredObjectiveContentQualityValidator {
     ));
     validateMaterialGroups(output.questions, issues);
     const blockingIssues = issues.filter((item) => isBlockingIssue(item.code));
-    const warnings = issues.filter((item) => !isBlockingIssue(item.code));
+    const pendingIssues = issues.filter((item) => item.priority === ContentQualityPriority.PendingEnrichment);
+    const advisories = issues.filter((item) => item.priority === ContentQualityPriority.Advisory);
+    const warnings = [...pendingIssues, ...advisories];
+    const readiness = blockingIssues.length
+      ? ContentReadiness.Invalid
+      : pendingIssues.length
+        ? ContentReadiness.ReadyWithPendingEnrichment
+        : ContentReadiness.Ready;
     return {
       valid: blockingIssues.length === 0,
+      readiness,
       issues,
       blockingIssues,
+      pendingIssues,
+      advisories,
       warnings,
       metrics: {
+        readiness,
         questionCount: output.questions.length,
         lectureCharacters: compactLength(lectureText),
         issueCount: issues.length,
         blockingIssueCount: blockingIssues.length,
+        pendingIssueCount: pendingIssues.length,
+        advisoryCount: advisories.length,
         warningCount: warnings.length
       }
     };
@@ -80,30 +122,45 @@ function isAcceptablePartialCount(actualCount: number, expectedCount: number): b
   return expectedCount > 0
     && actualCount > 0
     && actualCount < expectedCount
-    && actualCount / expectedCount > PARTIAL_ACCEPTANCE_RATIO;
+    && actualCount / expectedCount >= PARTIAL_ACCEPTANCE_RATIO;
 }
 
 function validateMaterialGroups(
   questions: readonly SingleChoiceQuestionContent[],
   issues: ContentQualityIssue[]
 ): void {
-  const groups = new Map<string, SingleChoiceQuestionContent[]>();
-  questions.forEach((question) => {
+  const groups = new Map<string, Array<{ question: SingleChoiceQuestionContent; index: number }>>();
+  questions.forEach((question, index) => {
     if (!question.materialGroupId) return;
     const current = groups.get(question.materialGroupId) ?? [];
-    current.push(question);
+    current.push({ question, index });
     groups.set(question.materialGroupId, current);
   });
   groups.forEach((items, groupId) => {
     if (items.length < 2) {
-      issue(issues, 'quality.material_group_too_small', '$.questions', `Material group ${groupId} must contain at least two questions`);
+      items.forEach(({ index }) => issue(
+        issues,
+        'quality.material_group_too_small',
+        `$.questions[${index}].materialGroupId`,
+        `Material group ${groupId} should contain at least two questions`
+      ));
     }
-    const materials = new Set(items.map((item) => item.material ? JSON.stringify(item.material) : ''));
+    const materials = new Set(items.map(({ question }) => question.material ? JSON.stringify(question.material) : ''));
     if (materials.has('')) {
-      issue(issues, 'quality.material_group_content_missing', '$.questions', `Material group ${groupId} is missing its shared material`);
+      items.filter(({ question }) => !question.material).forEach(({ index }) => issue(
+        issues,
+        'quality.material_group_content_missing',
+        `$.questions[${index}].material`,
+        `Material group ${groupId} is missing its shared material`
+      ));
     }
     if (materials.size !== 1) {
-      issue(issues, 'quality.material_group_inconsistent', '$.questions', `Material group ${groupId} must resolve to one identical material`);
+      items.forEach(({ index }) => issue(
+        issues,
+        'quality.material_group_inconsistent',
+        `$.questions[${index}].material`,
+        `Material group ${groupId} must resolve to one identical material`
+      ));
     }
   });
 }
@@ -123,14 +180,18 @@ function validateQuestion(
   }
   const prompt = contentDocumentText(question.prompt);
   const material = question.material ? contentDocumentText(question.material) : '';
-  if (question.options.length !== 4) issue(issues, 'quality.option_count_invalid', `${path}.options`, 'Civil service single-choice questions require four options');
+  if (expectedCapabilityCode && isGraphicCapability(expectedCapabilityCode)
+    && question.presentationCode !== QuestionPresentationCode.GraphicChoice) {
+    issue(issues, 'quality.expected_graphic_missing', `${path}.prompt`, 'Graphic reasoning content should include a renderable visual');
+  }
+  if (question.options.length < 2 || question.options.length > 8) issue(issues, 'quality.option_count_invalid', `${path}.options`, 'Single-choice questions require between two and eight options');
   if (!/(下列|以下|根据|选择|哪项|问|判断|推出|符合|削弱|加强|支持|解释|评价|？|\?)/.test(prompt)) {
     issue(issues, 'quality.question_task_missing', `${path}.prompt`, 'Question prompt does not express a clear answering task');
   }
   if (/(正确答案|答案为|应选[ABCD])/i.test(`${material}${prompt}`)) {
     issue(issues, 'quality.answer_leak', path, 'Question material or prompt leaks the answer');
   }
-  validateExplanationStructure(question.explanation, `${path}.explanation`, issues);
+  validateExplanationStructure(question.explanation, `${path}.explanation`, issues, question.options.map((option) => option.id));
   const optionTexts = question.options.map((option) => contentDocumentText(option.content).replace(/\s+/g, ''));
   if (optionTexts.some((text) => text.length < 1)) issue(issues, 'quality.option_empty', `${path}.options`, 'Options must not be empty');
   if (new Set(optionTexts).size !== optionTexts.length) issue(issues, 'quality.option_duplicate', `${path}.options`, 'Options must be unique');
@@ -145,36 +206,44 @@ function validateQuestion(
 function validateExplanationStructure(
   explanation: ContentDocument,
   path: string,
-  issues: ContentQualityIssue[]
+  issues: ContentQualityIssue[],
+  optionIds: readonly string[]
 ): void {
   const callouts = explanation.blocks.filter((block) => block.type === 'callout');
-  const requiredKinds = ['conclusion', 'method', 'hint'] as const;
-  requiredKinds.forEach((kind) => {
-    if (!callouts.some((block) => block.kind === kind)) {
-      issue(
-        issues,
-        'quality.explanation_section_missing',
-        path,
-        `Explanation requires a ${kind} section`
-      );
-    }
-  });
+  if (explanation.blocks.length === 0) {
+    issue(issues, 'quality.explanation_section_missing', path, 'Explanation is pending enrichment');
+    return;
+  }
   const optionSection = callouts.find((block) => block.kind === 'hint');
   const optionText = optionSection ? contentBlockText(optionSection) : '';
-  if (!['A', 'B', 'C', 'D'].every((optionId) => new RegExp(`(?:^|\\s|\\*)${optionId}(?:\\s|·|[.．、:：]|\\*)`).test(optionText))) {
+  if (optionSection && !optionIds.every((optionId) => new RegExp(`(?:^|\\s|\\*)${escapeRegExp(optionId)}(?:\\s|·|[.．、:：]|\\*)`).test(optionText))) {
     issue(
       issues,
       'quality.option_analysis_incomplete',
       path,
-      'Explanation must analyze options A, B, C and D'
+      'Explanation option analysis does not cover every available option'
     );
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function compactLength(value: string): number {
   return value.replace(/\s+/g, '').length;
 }
 
+function isGraphicCapability(value: string): boolean {
+  return /(?:visual|graphic|figure|sequence|图形|图推)/i.test(value);
+}
+
 function issue(issues: ContentQualityIssue[], code: string, path: string, message: string): void {
-  issues.push({ code, path, message });
+  issues.push({ code, path, message, priority: issuePriority(code) });
+}
+
+function issuePriority(code: string): ContentQualityPriority {
+  if (blockingIssueCodes.has(code)) return ContentQualityPriority.Blocking;
+  if (pendingIssueCodes.has(code)) return ContentQualityPriority.PendingEnrichment;
+  return ContentQualityPriority.Advisory;
 }

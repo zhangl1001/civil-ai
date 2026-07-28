@@ -25,6 +25,11 @@ import {
 } from '@/kernel/public';
 import type { OutboxRepository } from '@/modules/task/public';
 import type { ContentRepository, GenerationWorkflowRecord } from '../contracts/ContentRepository';
+import type {
+  QuestionReferencePackRepository,
+  TrueQuestionReferencePack
+} from '../contracts/QuestionReferencePackRepository';
+import type { QuestionSourceRepository } from '../contracts/QuestionSourceRepository';
 import type { GenerationAggregate, GenerationRepository } from '../contracts/GenerationRepository';
 import {
   ContentEventType,
@@ -37,6 +42,7 @@ import { GenerationWorkflowMachine } from '../domain/GenerationWorkflowMachine';
 import { GeneratedContentCommitBuilder } from './GeneratedContentCommitBuilder';
 import { GeneratedContentParseError, GeneratedContentParser, type GeneratedLectureQuestionSet } from './GeneratedContentParser';
 import { StructuredObjectiveContentQualityValidator } from './StructuredObjectiveContentQualityValidator';
+import { TrueQuestionStructuralDifferenceValidator } from './TrueQuestionStructuralDifferenceValidator';
 
 export interface GenerationWorkflowResult {
   readonly workflow: GenerationWorkflowRecord;
@@ -52,6 +58,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
   private readonly machine = new GenerationWorkflowMachine();
   private readonly parser = new GeneratedContentParser();
   private readonly qualityValidator = new StructuredObjectiveContentQualityValidator();
+  private readonly differenceValidator = new TrueQuestionStructuralDifferenceValidator();
   private readonly commitBuilder: GeneratedContentCommitBuilder;
 
   constructor(
@@ -61,6 +68,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
     private readonly promptRepository: PromptRepository,
     private readonly invocationRepository: AIInvocationRepository,
     private readonly outboxRepository: OutboxRepository,
+    private readonly referencePackRepository: QuestionReferencePackRepository,
+    private readonly questionSourceRepository: QuestionSourceRepository,
     private readonly promptCompiler: PromptCompiler,
     private readonly clock: Clock,
     private readonly ids: IdGenerator
@@ -92,9 +101,16 @@ export class RunStructuredObjectiveGenerationWorkflow {
       deadline.signal.throwIfAborted();
       const promptBundle = await this.promptRepository.findById(aggregate.spec.promptVersionId);
       if (!promptBundle) throw new Error(`Prompt version is unavailable: ${aggregate.spec.promptVersionId}`);
+      const referencePack = aggregate.spec.referencePackId
+        ? await this.referencePackRepository.find(aggregate.spec.referencePackId)
+        : undefined;
+      if (aggregate.spec.referencePackId && !referencePack) {
+        throw new Error(`Question reference pack is unavailable: ${aggregate.spec.referencePackId}`);
+      }
       let output: GeneratedLectureQuestionSet;
       if (aggregate.workflow.stagedResult) {
         output = this.parser.parseObject(aggregate.workflow.stagedResult, capabilityCode(aggregate));
+        this.assertStructuralDifference(output, referencePack);
       } else {
         await onProgress?.('compiling_prompt', '正在按能力节点组装讲义、题目与质检规则');
         aggregate = await this.advanceToInvocation(aggregate);
@@ -104,7 +120,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
         const compiled = this.promptCompiler.compile(
           promptBundle.promptCode,
           promptVariables(aggregate),
-          generationPayload(aggregate),
+          generationPayload(aggregate, referencePack),
           promptBundle.version
         );
         const invocationId = this.ids.next('AiInvocationId');
@@ -164,7 +180,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
           output = this.parseAndValidateCandidate(
             response.text,
             aggregate.spec.requestedCount ?? 0,
-            capabilityCode(aggregate)
+            capabilityCode(aggregate),
+            referencePack
           );
         } catch (error) {
           if (!(error instanceof GeneratedContentParseError)) throw error;
@@ -172,7 +189,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
             response.text,
             error,
             aggregate.spec.requestedCount ?? 0,
-            capabilityCode(aggregate)
+            capabilityCode(aggregate),
+            referencePack
           );
           if (acceptedSubset) {
             output = acceptedSubset.output;
@@ -252,7 +270,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
             output = this.parseAndValidateCandidate(
               repairedText,
               aggregate.spec.requestedCount ?? 0,
-              capabilityCode(aggregate)
+              capabilityCode(aggregate),
+              referencePack
             );
           }
         }
@@ -268,8 +287,13 @@ export class RunStructuredObjectiveGenerationWorkflow {
         aggregate = { spec: aggregate.spec, workflow: parsedWorkflow };
       }
 
+      const difference = this.differenceValidator.evaluate(output, referencePack);
+      output = {
+        ...output,
+        referenceQuestionIds: difference.referenceQuestionIds
+      };
       await onProgress?.('validating_content', '正在校验题量、选项、答案与材料结构');
-      aggregate = await this.finishValidationSteps(aggregate, output);
+      aggregate = await this.finishValidationSteps(aggregate, output, difference.metrics);
       aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.StageResult, GenerationWorkflowStep.CommitResult);
       aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.CommitResult, GenerationWorkflowStep.PublishOutbox);
       if (aggregate.workflow.currentStep !== GenerationWorkflowStep.PublishOutbox) {
@@ -282,10 +306,18 @@ export class RunStructuredObjectiveGenerationWorkflow {
       );
       const lectureSchema = await this.contentRepository.findPublishedSchema(ContentSchemaCode.Document);
       if (!lectureSchema) throw new Error(`Published content schema is unavailable: ${ContentSchemaCode.Document}`);
-      const bundle = await this.commitBuilder.build(aggregate.spec, completedWorkflow, lectureSchema.id, output);
+      const commit = await this.commitBuilder.build(
+        aggregate.spec,
+        completedWorkflow,
+        lectureSchema.id,
+        output,
+        referencePack
+      );
+      const bundle = commit.bundle;
       await onProgress?.('committing_result', '正在保存讲义、题组和学习主线');
       await this.unitOfWork.run(async (context) => {
         await this.contentRepository.commitQuestionSet(bundle, context);
+        await this.questionSourceRepository.saveLineages(commit.lineages, context);
         await this.generationRepository.replaceWorkflow(completedWorkflow, aggregate.workflow.version, context);
         await this.outboxRepository.append({
           id: this.ids.next('OutboxEventId'),
@@ -353,21 +385,40 @@ export class RunStructuredObjectiveGenerationWorkflow {
   private parseAndValidateCandidate(
     text: string,
     expectedCount: number,
-    expectedCapabilityCode: string
+    expectedCapabilityCode: string,
+    referencePack?: TrueQuestionReferencePack
   ): GeneratedLectureQuestionSet {
     const output = this.parser.parseText(text, expectedCapabilityCode);
     const report = this.qualityValidator.validate(output, expectedCount, expectedCapabilityCode);
     if (!report.valid) {
       throw new GeneratedContentParseError('generation.quality_invalid', report.blockingIssues);
     }
+    this.assertStructuralDifference(output, referencePack);
     return output;
+  }
+
+  private assertStructuralDifference(
+    output: GeneratedLectureQuestionSet,
+    referencePack?: TrueQuestionReferencePack
+  ): void {
+    const result = this.differenceValidator.evaluate(output, referencePack);
+    if (!result.nearDuplicateIndexes.length) return;
+    throw new GeneratedContentParseError(
+      'generation.true_question_near_duplicate',
+      result.nearDuplicateIndexes.map((index) => ({
+        code: 'generation.true_question_near_duplicate',
+        path: `$.questions[${index}]`,
+        message: 'Generated question is too similar to a source question and must be rewritten'
+      }))
+    );
   }
 
   private tryAcceptValidSubset(
     text: string,
     error: GeneratedContentParseError,
     expectedCount: number,
-    expectedCapabilityCode: string
+    expectedCapabilityCode: string,
+    referencePack?: TrueQuestionReferencePack
   ): { readonly output: GeneratedLectureQuestionSet; readonly droppedCount: number } | undefined {
     if (
       error.code !== 'generation.author_schema_invalid'
@@ -394,14 +445,15 @@ export class RunStructuredObjectiveGenerationWorkflow {
     if (
       expectedCount < 1
       || retainedQuestions.length < 1
-      || retainedQuestions.length / expectedCount <= 0.8
+      || retainedQuestions.length / expectedCount < 0.8
     ) return undefined;
     try {
       return {
         output: this.parseAndValidateCandidate(
           JSON.stringify({ ...root, questions: retainedQuestions }),
           expectedCount,
-          expectedCapabilityCode
+          expectedCapabilityCode,
+          referencePack
         ),
         droppedCount: root.questions.length - retainedQuestions.length
       };
@@ -412,7 +464,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
 
   private async finishValidationSteps(
     aggregate: GenerationAggregate,
-    output: GeneratedLectureQuestionSet
+    output: GeneratedLectureQuestionSet,
+    referenceDifference: JsonObject
   ): Promise<GenerationAggregate> {
     let current = await this.advanceIfAt(
       aggregate,
@@ -433,7 +486,9 @@ export class RunStructuredObjectiveGenerationWorkflow {
         current.workflow,
         GenerationWorkflowStep.ValidateDomain,
         this.clock.now(),
-        { validation: { schema: 'valid', domain: 'valid', quality: report.metrics } }
+        {
+          validation: { schema: 'valid', domain: 'valid', quality: report.metrics, readiness: report.readiness, pendingEnrichment: toJson(report.pendingIssues), trueQuestionDifference: referenceDifference }
+        }
       );
       await this.persistWorkflow(current, next);
       current = { spec: current.spec, workflow: next };
@@ -536,7 +591,10 @@ function capabilityCode(aggregate: GenerationAggregate): string {
   return code.trim();
 }
 
-function generationPayload(aggregate: GenerationAggregate): JsonObject {
+function generationPayload(
+  aggregate: GenerationAggregate,
+  referencePack?: TrueQuestionReferencePack
+): JsonObject {
   return {
     generationSpecId: aggregate.spec.id,
     examCycleId: aggregate.spec.examCycleId,
@@ -545,7 +603,28 @@ function generationPayload(aggregate: GenerationAggregate): JsonObject {
     requestedCount: aggregate.spec.requestedCount ?? null,
     difficulty: aggregate.spec.difficulty,
     constraints: aggregate.spec.constraints,
-    studentContext: aggregate.spec.contextSnapshot
+    studentContext: aggregate.spec.contextSnapshot,
+    trueQuestionReference: referencePack ? {
+      referencePackId: referencePack.id,
+      policyVersion: referencePack.policyVersion,
+      module: referencePack.module,
+      examScope: referencePack.examScope,
+      sourceQuestionCount: referencePack.sourceQuestionCount,
+      sourceSetCount: referencePack.sourceSetCount,
+      questionTypeDistribution: referencePack.questionTypeDistribution,
+      difficultyDistribution: referencePack.difficultyDistribution,
+      structuralDistribution: referencePack.structuralDistribution,
+      distractorPatterns: [...referencePack.distractorPatterns],
+      representativeQuestions: referencePack.representativeQuestions.map((question) => ({
+        questionId: question.questionId,
+        difficulty: question.difficulty,
+        material: question.material ?? null,
+        prompt: question.prompt,
+        options: question.options.map((option) => ({ ...option })),
+        correctOptionId: question.correctOptionId,
+        structuralSignature: question.structuralSignature
+      }))
+    } : null
   };
 }
 

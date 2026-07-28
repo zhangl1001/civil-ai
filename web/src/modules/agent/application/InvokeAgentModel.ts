@@ -17,6 +17,7 @@ import {
   type Clock,
   type IdGenerator,
   type JsonObject,
+  type JsonValue,
   type PromptVersionId
 } from '@/kernel/public';
 import type { AgentRunRepository } from '../contracts/AgentRunRepository';
@@ -98,7 +99,10 @@ export class InvokeAgentModel implements AgentModelInvoker {
       provider: gateway.provider,
       model: gateway.model,
       system: command.system,
-      messages: messages.map((message) => ({ role: message.role, content: message.content })),
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: hashableMessageContent(message.content)
+      })),
       responseSchema: command.responseSchema ?? null,
       tools: command.tools?.map((tool) => ({
         name: tool.name,
@@ -192,6 +196,18 @@ export class InvokeAgentModel implements AgentModelInvoker {
       deadline.dispose();
     }
   }
+}
+
+function hashableMessageContent(content: ModelMessage['content']): JsonValue {
+  if (typeof content === 'string') return content;
+  return content.map((part): JsonObject => part.type === 'text'
+    ? { type: 'text', text: part.text }
+    : {
+        type: 'image',
+        mediaType: part.mediaType,
+        attachmentId: part.attachmentId || null,
+        encodedBytes: part.dataBase64.length
+      });
 }
 
 function canFallbackFromStream(

@@ -4,6 +4,7 @@ import {
   AI_EXECUTION_BUDGET,
   createProviderExecutionDeadline,
   ModelMessageRole,
+  type ModelImageContentPart,
   type ModelMessage,
   type ModelToolCall
 } from '@/capabilities/ai-runtime/public';
@@ -12,34 +13,44 @@ import {
   initializeTutorRuntime,
   type TutorDatabaseRuntime
 } from '@/composition-root/public';
-import type { AISession } from '@/domain/ai';
-import type { AIMessage } from '@/domain/ai';
-import type { AgentRunId, JsonObject, SubjectCode } from '@/kernel/public';
+import type { AIMessage, AISession } from '@/domain/ai';
+import type {
+  AgentRunId,
+  JsonObject,
+  QuestionImportCandidateId,
+  QuestionImportDraftId,
+  SubjectCode
+} from '@/kernel/public';
 import {
   AgentRunAction,
   AgentRunType,
-  AgentToolRisk,
   RegisteredAgentToolExecutor,
   TaskCenterStep,
   TaskTargetType,
-  tutorToolCatalog,
   type AgentLoopCheckpoint,
-  type AgentRuntimeEvent,
-  type AgentToolDefinition
+  type AgentRuntimeEvent
 } from '@/modules/agent/public';
 import { aiBusinessTools, type AIBusinessToolName } from './AIBusinessTools';
+import { QuestionImportMethod, QuestionOriginType } from '@/modules/content/public';
 import { aiChatRepository } from './AIChatRepository';
 import { aiConfigService } from './AIConfigService';
 import { AIPracticeLibraryService } from './AIPracticeLibraryService';
 import { aiStudentContextService } from './AIStudentContextService';
 import { agentToolActivityService, type AgentToolActivityStatus } from './AgentToolActivityService';
-import { fileRepository } from './FileRepository';
-import { projectRepository } from './ProjectRepository';
+import { agentFileReader } from './AgentFileReader';
+import { chatTaskPresentation, publishChatTaskMessage } from './ChatAgentTaskPresentation';
+import {
+  chatAgentBusinessTools,
+  chatAgentWebResearchTools,
+  chatAgentSystemPromptComposer,
+  planChatAgentCapabilities
+} from './ChatAgentCapabilities';
+import { webResearchService } from './WebResearchService';
+import { planChatAgentTurn } from './ChatAgentTurnPolicy';
 
 export interface ChatAgentResult {
   readonly handled: boolean;
 }
-
 export interface ChatAssistantStreamUpdate {
   readonly sessionId: string;
   readonly messageId: string;
@@ -50,36 +61,15 @@ export interface ChatAssistantStreamUpdate {
 export interface ChatAgentOptions {
   readonly thinkingEnabled: boolean;
   readonly onAssistantStream?: (update: ChatAssistantStreamUpdate) => void | Promise<void>;
+  /** Ephemeral image parts for the current user turn; never persisted in chat history. */
+  readonly attachments?: readonly ModelImageContentPart[];
 }
-
-const businessTools: readonly AgentToolDefinition[] = aiBusinessTools.definitions()
-  .filter((tool) => tool.name !== 'generate_practice')
-  .map((tool) => ({
-    code: tool.name,
-    description: tool.description,
-    inputSchema: tool.parameters as unknown as JsonObject,
-    risk: AgentToolRisk.Write,
-    requiresConfirmation: false,
-    enabledFor: ['tutor_turn']
-  }));
-const catalogChatTools = tutorToolCatalog.filter((tool) => (
-  tool.code === 'student.read_profile'
-  || tool.code === 'practice.read_library'
-  || tool.code === 'practice.read_question_set'
-  || tool.code === 'learning.review_session'
-  || tool.code === 'teaching.request_practice'
-  || tool.code === 'file.read_text'
-  || tool.code === 'planning.propose_daily_plan'
-  || tool.code === 'candidate.change_target'
-));
-const chatTools = [...catalogChatTools, ...businessTools];
 
 interface ActiveChatRun {
   runId?: AgentRunId;
   readonly controller: AbortController;
   readonly guidanceQueue: string[];
 }
-
 export class ChatAgentService {
   private readonly activeRuns = new Map<string, ActiveChatRun>();
 
@@ -168,7 +158,7 @@ export class ChatAgentService {
         action: AgentRunAction.Start,
         reasonCode: 'chat_agent.started'
       });
-      await this.run(runtime, session, aggregate.run.id, undefined, undefined, options, active);
+      await this.run(runtime, session, aggregate.run.id, text, undefined, undefined, options, active, options.attachments);
       return { handled: true };
     } catch (error) {
       if (!active.controller.signal.aborted) throw error;
@@ -206,17 +196,19 @@ export class ChatAgentService {
       action: AgentRunAction.Resume,
       reasonCode: decision === 'confirm' ? 'chat_agent.confirmed' : 'chat_agent.rejected'
     });
-    await this.run(runtime, session, runId, checkpoint, decision, options, active);
+    await this.run(runtime, session, runId, '', checkpoint, decision, options, active);
   }
 
   private async run(
     runtime: TutorDatabaseRuntime,
     session: AISession,
     runId: Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0],
+    routingText: string,
     checkpoint: AgentLoopCheckpoint | undefined,
     confirmationDecision: 'confirm' | 'reject' | undefined,
     options: ChatAgentOptions,
-    active: ActiveChatRun
+    active: ActiveChatRun,
+    attachments?: readonly ModelImageContentPart[]
   ): Promise<void> {
     const controller = active.controller;
     controller.signal.throwIfAborted();
@@ -300,6 +292,7 @@ export class ChatAgentService {
             data: {
               ...(status.toolName ? { toolName: status.toolName } : {}),
               ...(status.taskId ? { taskId: status.taskId } : {}),
+              ...chatTaskPresentation(status.toolName),
               ...(linkedTask?.actionRoute ? { actionRoute: linkedTask.actionRoute } : {}),
               ...(linkedTask?.actionParams ? { actionParams: linkedTask.actionParams } : {})
             }
@@ -308,32 +301,29 @@ export class ChatAgentService {
       }
     };
     const history = await aiChatRepository.listMessages(session.id);
+    const currentPrompt = history.filter((item) => item.role === 'user').at(-1)?.content || '';
+    const currentUserContent: ModelMessage['content'] = attachments?.length
+      ? [{ type: 'text', text: currentPrompt }, ...attachments]
+      : currentPrompt;
     const messages: ModelMessage[] = [
       ...buildChatContext(history, { currentPrompt: history.at(-1)?.content || '' }).map((item) => ({
         role: item.role === 'assistant' ? ModelMessageRole.Assistant : ModelMessageRole.User,
         content: item.content
       })),
-      { role: ModelMessageRole.User, content: history.filter((item) => item.role === 'user').at(-1)?.content || '' }
+      { role: ModelMessageRole.User, content: currentUserContent }
     ];
+    const turnPolicy = planChatAgentTurn(routingText, history.filter((item) => item.role === 'user').map((item) => item.content), attachments);
     const studentContext = await aiStudentContextService.buildSystemContext();
-    const system = [
-      buildCompanionChatPrompt(options.thinkingEnabled, studentContext, session.summary || ''),
-      '',
-      '# Agent 执行规则',
-      '- 你是主动负责学习结果的私教，不是客服。',
-      '- 只有用户明确要求执行操作时才调用写工具；意图、模块或题量不明确时先用自然语言确认，不要猜。',
-      '- 用户要求执行操作但范围、内容、模块、题量或时间不明确时，先向用户确认；确认前不要扩大范围读取或派发任务。',
-      '- 读取工具可以按需调用；不要重复调用相同工具和参数。',
-      '- 用户询问题组是否生成、题库记录或练习生成状态时，必须先调用 practice.read_library 获取本地事实，不得根据会话记忆猜测。泛问题库是否有数据时用 scope=all，不得用 today 或 active 的空结果代表整个题库。',
-      '- 需要了解某个题组内容时，只能使用目录返回的 questionSetId 调用 practice.read_question_set，并按 overview、lecture 或最多 5 道 questions 分页读取；不要扫描无关题组。',
-      '- practice.read_question_set 的 overview 会返回该题组最近练习 sessionId；需要判断用户是否做过、答得怎样或错在哪里时，再调用 learning.review_session，不能只看题组存在就推断学习结果。',
-      '- 用户明确要求围绕当前能力或错因继续训练时，可调用 teaching.request_practice。模块、考点或题量不明确时先确认。',
-      '- 题库工具返回的标准答案属于内部教学事实，除非用户明确要求或已经完成该题，否则不要直接泄露答案。',
-      '- 用户导入文件后，必须按需调用 file.read_text 读取，不要假装已经看过文件。',
-      '- 工具只提供简要描述，具体业务规则由本地工具执行。',
-      '- 工具返回任务 ID 时，告诉用户任务已进入任务栏，不要伪造已完成结果。',
-      '- 不输出内部思考过程。最终回复使用简洁 Markdown。'
-    ].join('\n');
+    const exposure = planChatAgentCapabilities(turnPolicy.routingText, checkpoint?.pendingConfirmation?.name);
+    const system = chatAgentSystemPromptComposer.compose({
+      basePrompt: buildCompanionChatPrompt(
+        options.thinkingEnabled,
+        studentContext,
+        session.summary || ''
+      ),
+      exposure
+    });
+    const constrainedSystem = [system, turnPolicy.systemConstraint].filter(Boolean).join('\n\n');
     const config = await aiConfigService.load();
     const deadline = createProviderExecutionDeadline(
       controller.signal,
@@ -343,9 +333,9 @@ export class ChatAgentService {
     try {
       const result = await runtime.createAgentLoop(executor, observer).execute({
         agentRunId: runId,
-        system,
+        system: constrainedSystem,
         messages,
-        tools: chatTools,
+        tools: exposure.tools,
         executionContext: {
           agentRunId: runId,
           sessionId: session.id
@@ -354,9 +344,12 @@ export class ChatAgentService {
         confirmationDecision,
         maxTurns: 6,
         maxToolCalls: 8,
-        maxToolCallsPerTurn: 2,
+        maxToolCallsPerTurn: 4,
+        maxParallelReadToolCalls: config.maxConcurrentTasks,
         consumeGuidance: () => this.consumeGuidance(session.id, runId),
-        preferStream: config.streamingEnabled !== false
+        preferStream: config.streamingEnabled !== false,
+        requiredToolCode: turnPolicy.requiredToolCode,
+        forceRequiredToolOnFirstTurn: turnPolicy.forceRequiredToolOnFirstTurn
       }, await createConfiguredProviderGateway(), deadline.signal);
       if (result.status === 'waiting_user') {
         await persistAssistant(streamedText);
@@ -387,7 +380,7 @@ export class ChatAgentService {
       controller.signal.throwIfAborted();
       await persistAssistant(finalContent);
       const current = latest ?? await runtime.agentRunRepository.findById(runId);
-      await runtime.transitionAgentRun.execute({
+      const completed = await runtime.transitionAgentRun.execute({
         idempotencyKey: `chat-agent:${runId}:completed`,
         agentRunId: runId,
         action: AgentRunAction.Complete,
@@ -399,6 +392,7 @@ export class ChatAgentService {
           message: '已完成'
         }
       });
+      await publishChatTaskMessage(runtime, completed, 'completed');
     } catch (error) {
       const aborted = controller.signal.aborted;
       const visibleStreamedText = visibleAssistantText(streamedText);
@@ -413,7 +407,7 @@ export class ChatAgentService {
       if (interruptedContent) await persistAssistant(interruptedContent);
       const current = await runtime.agentRunRepository.findById(runId);
       if (current?.run.status === 'running') {
-        await runtime.transitionAgentRun.execute({
+        const failed = await runtime.transitionAgentRun.execute({
           idempotencyKey: `chat-agent:${runId}:${aborted ? 'cancelled' : 'failed'}:${Date.now()}`,
           agentRunId: runId,
           action: aborted ? AgentRunAction.Cancel : AgentRunAction.Fail,
@@ -422,6 +416,7 @@ export class ChatAgentService {
             ? { cancellationReason: 'user_cancelled_chat_agent' }
             : { errorCode: 'agent.execution_failed' })
         });
+        await publishChatTaskMessage(runtime, failed, aborted ? 'cancelled' : 'failed');
       }
     } finally {
       deadline.dispose();
@@ -442,7 +437,7 @@ export class ChatAgentService {
 function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): RegisteredAgentToolExecutor {
   const executor = new RegisteredAgentToolExecutor();
   const practiceLibrary = new AIPracticeLibraryService();
-  businessTools.forEach((definition) => {
+  chatAgentBusinessTools.forEach((definition) => {
     executor.register(definition.code, async (call) => {
       const result = await aiBusinessTools.execute({
         name: call.name as AIBusinessToolName,
@@ -453,6 +448,53 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
         resultRef: result.taskId
       };
     });
+  });
+  chatAgentWebResearchTools.forEach((definition) => {
+    if (definition.code === 'web.search') {
+      executor.register(definition.code, async (call, context) => {
+        const result = await webResearchService.searchForAgentRun({
+          agentRunId: context.agentRunId,
+          query: String(call.arguments.query || ''),
+          freshness: normalizeFreshness(call.arguments.freshness),
+          limit: Number(call.arguments.limit || 5),
+          signal: context.signal
+        });
+        return {
+          content: JSON.stringify({
+            query: result.query,
+            fetchedAt: result.fetchedAt,
+            results: result.hits.map((hit) => ({
+              title: hit.title,
+              url: hit.url,
+              domain: hit.domain,
+              snippet: (hit.snippet || hit.content || '').slice(0, 1_800),
+              publishedAt: hit.publishedAt ?? null
+            }))
+          }),
+          resultRef: result.hits[0]?.url
+        };
+      });
+      return;
+    }
+    executor.register(definition.code, async (call, context) => {
+      const page = await webResearchService.readPageForAgentRun({
+        agentRunId: context.agentRunId,
+        url: String(call.arguments.url || ''),
+        signal: context.signal
+      });
+      return {
+        content: JSON.stringify(page),
+        resultRef: page.url
+      };
+    });
+  });
+  executor.register('tutor.read_daily_context', async () => {
+    const context = await runtime.buildTutorDailyContext.execute();
+    if (!context) throw new Error('请先建立备考档案。');
+    return {
+      content: JSON.stringify(context),
+      resultRef: String(context.profile.examCycleId || '') || undefined
+    };
   });
   executor.register('student.read_profile', async () => {
     const [home, cycle] = await Promise.all([
@@ -552,18 +594,132 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
       resultRef: result.taskId
     };
   });
-  executor.register('file.read_text', async (call) => {
-    const path = String(call.arguments.path || '').trim();
-    if (!path || path.includes('..') || !path.startsWith('导入资料/')) {
-      throw new Error('只能读取当前对话已经导入的资料文件。');
+  executor.register('file.read_text', (call) => agentFileReader.read(call.arguments));
+  executor.register('question_bank.scan', async (call, context) => {
+    context.signal?.throwIfAborted();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先建立备考档案，再导入题目。');
+    const curriculum = await runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId);
+    if (!curriculum) throw new Error('当前备考大纲暂时无法读取。');
+    const capabilityText = String(call.arguments.capability || '').trim();
+    const exact = curriculum.capabilityNodes.filter((node) => (
+      node.status === 'active'
+      && (node.code.toLocaleLowerCase() === capabilityText.toLocaleLowerCase() || node.name === capabilityText)
+    ));
+    if (exact.length !== 1) {
+      const possible = curriculum.capabilityNodes
+        .filter((node) => node.status === 'active' && (
+          node.code.toLocaleLowerCase().includes(capabilityText.toLocaleLowerCase())
+          || node.name.includes(capabilityText)
+        ))
+        .slice(0, 5)
+        .map((node) => ({ code: node.code, name: node.name, module: node.module }));
+      throw new Error(`无法唯一确定能力节点，请让用户确认。候选：${JSON.stringify(possible)}`);
     }
-    const project = await projectRepository.getActiveProject();
-    const content = await fileRepository.readText(project.id, path);
-    if (!content) throw new Error('没有找到这个导入文件。');
+    const sourceMetadata = asJsonRecord(call.arguments.sourceMetadata);
+    const questions = asJsonRecordArray(call.arguments.questions, 'questions');
+    const materialGroups = Array.isArray(call.arguments.materialGroups)
+      ? asJsonRecordArray(call.arguments.materialGroups, 'materialGroups').map((group) => ({
+          id: String(group.id || ''),
+          markdown: String(group.markdown || '')
+        }))
+      : [];
+    const view = await runtime.scanQuestionImportDraft.execute({
+      idempotencyKey: `chat-agent:${context.agentRunId}:${call.id}:question-scan`,
+      examCycleId: cycle.examCycle.id,
+      capabilityNodeId: exact[0]!.id,
+      capabilityCode: exact[0]!.code,
+      module: String(call.arguments.module || exact[0]!.module),
+      ownerSessionId: sessionId,
+      sourceType: String(call.arguments.sourceType || '') as QuestionOriginType,
+      importMethod: String(call.arguments.importMethod || '') as QuestionImportMethod,
+      sourceMetadata: {
+        provider: optionalString(sourceMetadata.provider),
+        examType: optionalString(sourceMetadata.examType),
+        examYear: optionalNumber(sourceMetadata.examYear),
+        province: optionalString(sourceMetadata.province),
+        examBatch: optionalString(sourceMetadata.examBatch),
+        paperName: optionalString(sourceMetadata.paperName),
+        sectionName: optionalString(sourceMetadata.sectionName),
+        sourceVersion: optionalString(sourceMetadata.sourceVersion),
+        provenance: {
+          importedBy: 'chat_agent',
+          chatSessionId: sessionId,
+          agentRunId: context.agentRunId,
+          acquisitionChannel: String(call.arguments.importMethod || '') === QuestionImportMethod.WebResearch
+            ? 'agent_web_search'
+            : 'user_import',
+          sourceUrl: optionalString(sourceMetadata.sourceUrl) ?? null,
+          sourceDomain: optionalString(sourceMetadata.sourceDomain) ?? null,
+          searchQuery: optionalString(sourceMetadata.searchQuery) ?? null,
+          fetchedAt: optionalNumber(sourceMetadata.fetchedAt) ?? null
+        }
+      },
+      materialGroups,
+      candidates: questions.map((question) => ({
+        raw: question,
+        difficulty: optionalNumber(question.difficulty)
+      }))
+    });
+    return { content: JSON.stringify(view), resultRef: view.draftId };
+  });
+  executor.register('question_bank.resume', async () => {
+    const aggregate = await runtime.questionImportDraftRepository.findLatestPendingByOwner(sessionId);
+    if (!aggregate) {
+      return { content: JSON.stringify({ found: false }) };
+    }
     return {
-      content: content.slice(0, 24_000),
-      resultRef: path
+      content: JSON.stringify({
+        found: true,
+        draftId: aggregate.draft.id,
+        status: aggregate.draft.status,
+        version: aggregate.draft.version,
+        source: {
+          sourceType: aggregate.draft.sourceType,
+          examYear: aggregate.draft.sourceMetadata.examYear ?? null,
+          paperName: aggregate.draft.sourceMetadata.paperName ?? null
+        },
+        candidates: aggregate.candidates.map((candidate) => ({
+          candidateId: candidate.id,
+          sequence: candidate.sequence,
+          status: candidate.status,
+          issues: candidate.issues
+        }))
+      }),
+      resultRef: aggregate.draft.id
     };
+  });
+  executor.register('question_bank.confirm', async (call, context) => {
+    context.signal?.throwIfAborted();
+    const replacements = Array.isArray(call.arguments.replacements)
+      ? call.arguments.replacements.map((item) => {
+          const row = asJsonRecord(item);
+          return {
+            candidateId: String(row.candidateId || '') as QuestionImportCandidateId,
+            raw: asJsonRecord(row.question),
+            difficulty: optionalNumber(asJsonRecord(row.question).difficulty)
+          };
+        })
+      : [];
+    const rejectedCandidateIds = Array.isArray(call.arguments.rejectedCandidateIds)
+      ? call.arguments.rejectedCandidateIds.map((id) => String(id) as QuestionImportCandidateId)
+      : [];
+    const view = await runtime.confirmQuestionImportDraft.execute({
+      draftId: String(call.arguments.draftId || '') as QuestionImportDraftId,
+      expectedVersion: Number(call.arguments.expectedVersion),
+      replacements,
+      rejectedCandidateIds
+    });
+    return { content: JSON.stringify(view), resultRef: view.draftId };
+  });
+  executor.register('question_bank.publish', async (call, context) => {
+    context.signal?.throwIfAborted();
+    const result = await runtime.publishQuestionImportDraft.execute({
+      draftId: String(call.arguments.draftId || '') as QuestionImportDraftId,
+      expectedVersion: Number(call.arguments.expectedVersion),
+      idempotencyKey: `chat-agent:${context.agentRunId}:${call.id}:question-publish`
+    });
+    return { content: JSON.stringify(result), resultRef: result.questionSetId };
   });
   executor.register('planning.propose_daily_plan', async () => {
     const cycle = await runtime.candidateRepository.findCurrentCycle();
@@ -571,7 +727,9 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
     const minutes = isWeekend() ? cycle.studyConstraints.weekendMinutes : cycle.studyConstraints.weekdayMinutes;
     const proposal = await runtime.buildDailyPlanProposal.execute({
       examCycleId: cycle.examCycle.id,
-      availableMinutes: Math.max(5, minutes)
+      availableMinutes: Math.max(5, minutes),
+      examDate: cycle.examCycle.examDate,
+      phase: cycle.examCycle.phase
     });
     return { content: JSON.stringify(proposal), resultRef: cycle.examCycle.id };
   });
@@ -643,6 +801,12 @@ function confirmationText(call?: ModelToolCall): string {
   if (call.name === 'candidate.change_target') {
     return `准备把${subjectLabel(String(call.arguments.subject || ''))}目标分改为 ${String(call.arguments.targetScore || '')}。回复“确认”继续，回复“取消”终止。`;
   }
+  if (call.name === 'question_bank.confirm') {
+    return '准备确认本次扫描结果；这一步只锁定草稿，不会发布正式题组。回复“确认”继续，回复“取消”终止。';
+  }
+  if (call.name === 'question_bank.publish') {
+    return '准备把已确认草稿发布为正式题组。发布后题目会进入题库，回复“确认”继续，回复“取消”终止。';
+  }
   return `准备执行“${toolLabel(call.name)}”。回复“确认”继续，回复“取消”终止。`;
 }
 
@@ -662,14 +826,21 @@ function toolLabel(code: string): string {
   return ({
     student_read_profile: '读取学习档案',
     'student.read_profile': '读取学习档案',
+    'tutor.read_daily_context': '读取今日教学状态',
     practice_read_library: '读取题库状态',
     'practice.read_library': '读取题库状态',
     'practice.read_question_set': '读取题组内容',
     'learning.review_session': '读取练习复盘',
     'teaching.request_practice': '创建针对性训练',
     'file.read_text': '读取导入文件',
+    'question_bank.scan': '扫描题目草稿',
+    'question_bank.resume': '恢复导入草稿',
+    'question_bank.confirm': '确认题目草稿',
+    'question_bank.publish': '发布正式题组',
     'planning.propose_daily_plan': '分析今日计划',
     'candidate.change_target': '修改目标分',
+    'web.search': '搜索公开资料',
+    'web.read_page': '读取网页证据',
     generate_practice: '生成专项练习',
     generate_mock: '生成模拟考试',
     generate_essay: '生成申论练习',
@@ -679,6 +850,12 @@ function toolLabel(code: string): string {
     grade_essay: '申论批改',
     review_interview: '面试点评'
   } as Record<string, string>)[code] || code;
+}
+
+function normalizeFreshness(value: unknown): 'day' | 'week' | 'month' | 'year' | 'any' {
+  return value === 'day' || value === 'week' || value === 'month' || value === 'year'
+    ? value
+    : 'any';
 }
 
 function activityStatus(
@@ -715,8 +892,31 @@ function compactText(value: string): string {
   return value.length > 80 ? `${value.slice(0, 80)}...` : value;
 }
 
+function asJsonRecord(value: unknown): JsonObject {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('工具参数必须是对象。');
+  }
+  return value as JsonObject;
+}
+
+function asJsonRecordArray(value: unknown, field: string): readonly JsonObject[] {
+  if (!Array.isArray(value)) throw new TypeError(`${field} 必须是数组。`);
+  return value.map(asJsonRecord);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function chatExecutionFailureText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error || '');
+  if (/multimodal|vision|image input|image_url|media_type|图片.*不支持|不支持.*图片/i.test(message)) {
+    return '当前模型不支持图片理解，请在 AI 配置中换用支持视觉输入的模型后重试。';
+  }
   if (/network|fetch|timeout|超时|连接|provider\.transient|provider\.rate_limited/i.test(message)) {
     return '模型服务暂时没有响应，请稍后重试。';
   }

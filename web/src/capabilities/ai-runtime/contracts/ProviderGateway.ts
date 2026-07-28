@@ -15,9 +15,29 @@ export const ModelMessageRole = {
 
 export type ModelMessageRole = typeof ModelMessageRole[keyof typeof ModelMessageRole];
 
+export interface ModelTextContentPart {
+  readonly type: 'text';
+  readonly text: string;
+}
+
+/**
+ * Image data is intentionally an in-memory request part. Agent checkpoints
+ * strip this part before persistence so user photos never enter SQLite.
+ */
+export interface ModelImageContentPart {
+  readonly type: 'image';
+  readonly mediaType: string;
+  readonly dataBase64: string;
+  readonly attachmentId?: string;
+  readonly name?: string;
+}
+
+export type ModelContentPart = ModelTextContentPart | ModelImageContentPart;
+export type ModelMessageContent = string | readonly ModelContentPart[];
+
 export interface ModelMessage {
   readonly role: ModelMessageRole;
-  readonly content: string;
+  readonly content: ModelMessageContent;
   readonly toolCallId?: string;
   readonly toolCalls?: readonly ModelToolCall[];
 }
@@ -66,6 +86,10 @@ export interface ProviderTextDelta {
 export interface ProviderGateway {
   readonly provider: ProviderCode;
   readonly model: string;
+  /** Protocol capability; a concrete model may still reject unsupported media. */
+  readonly capabilities: {
+    readonly multimodalInput: boolean;
+  };
   complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse>;
   stream?(
     request: ProviderRequest,

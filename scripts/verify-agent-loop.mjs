@@ -17,6 +17,8 @@ try {
   const agent = await server.ssrLoadModule('/src/modules/agent/public.ts');
   const ai = await server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts');
   const toolActivity = await server.ssrLoadModule('/src/services/AgentToolActivityService.ts');
+  const chatCapabilities = await server.ssrLoadModule('/src/services/ChatAgentCapabilities.ts');
+  const chatTurnPolicy = await server.ssrLoadModule('/src/services/ChatAgentTurnPolicy.ts');
   const practiceLibraryTool = agent.tutorToolCatalog.find((tool) => tool.code === 'practice.read_library');
   const practiceQuestionSetTool = agent.tutorToolCatalog.find((tool) => tool.code === 'practice.read_question_set');
   assert.ok(practiceLibraryTool);
@@ -25,19 +27,155 @@ try {
   assert.equal(practiceLibraryTool.inputSchema.properties.scope.enum.includes('all'), true);
   assert.equal(practiceLibraryTool.description.includes('不读取题目正文'), true);
   assert.equal(
-    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.daily_coaching')
+    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.practice_library')
       .toolCodes.includes('practice.read_library'),
     true
   );
   assert.equal(
-    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.daily_coaching')
+    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.practice_library')
       .toolCodes.includes('practice.read_question_set'),
     true
   );
   assert.equal(
-    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.daily_coaching')
+    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.practice_library')
       .toolCodes.includes('learning.review_session'),
     true
+  );
+  const companionExposure = chatCapabilities.planChatAgentCapabilities('你好呀');
+  assert.equal(companionExposure.skills.length, 0);
+  assert.equal(companionExposure.tools.length, 0, 'ordinary chat must not expose business tools');
+  const dailyExposure = chatCapabilities.planChatAgentCapabilities('今天应该学什么？');
+  assert.deepEqual(dailyExposure.skillCodes, ['tutor.daily_coaching']);
+  assert.deepEqual(dailyExposure.tools.map((tool) => tool.code), [
+    'tutor.read_daily_context',
+    'planning.propose_daily_plan',
+    'teaching.request_practice'
+  ]);
+  const libraryExposure = chatCapabilities.planChatAgentCapabilities('题库里现在有几套题组？');
+  assert.deepEqual(libraryExposure.skillCodes, ['tutor.practice_library']);
+  assert.deepEqual(libraryExposure.tools.map((tool) => tool.code), [
+    'practice.read_library',
+    'practice.read_question_set',
+    'learning.review_session'
+  ]);
+  const essayExposure = chatCapabilities.planChatAgentCapabilities('帮我生成一套申论练习');
+  assert.deepEqual(essayExposure.skillCodes, ['tutor.essay_workflow']);
+  assert.deepEqual(essayExposure.tools.map((tool) => tool.code), ['generate_essay', 'grade_essay']);
+  const hotspotExposure = chatCapabilities.planChatAgentCapabilities('整理一下今天的时政热点');
+  assert.deepEqual(hotspotExposure.skillCodes, ['research.current_affairs']);
+  assert.deepEqual(hotspotExposure.tools.map((tool) => tool.code), ['web.search', 'web.read_page']);
+  const digestExposure = chatCapabilities.planChatAgentCapabilities('生成每日热点');
+  assert.deepEqual(digestExposure.skillCodes, ['research.current_affairs', 'tutor.digest_generation']);
+  assert.deepEqual(digestExposure.tools.map((tool) => tool.code), [
+    'web.search',
+    'web.read_page',
+    'generate_digest',
+    'generate_monthly_digest'
+  ]);
+  const trueQuestionExposure = chatCapabilities.planChatAgentCapabilities('帮我上网找一下近三年江苏判断推理真题');
+  assert.deepEqual(trueQuestionExposure.skillCodes, ['research.true_questions']);
+  assert.deepEqual(trueQuestionExposure.tools.map((tool) => tool.code), [
+    'web.search',
+    'web.read_page',
+    'question_bank.scan',
+    'question_bank.resume',
+    'question_bank.confirm',
+    'question_bank.publish'
+  ]);
+  const syllabusExposure = chatCapabilities.planChatAgentCapabilities('查询最新江苏省考考试大纲官网来源');
+  assert.deepEqual(syllabusExposure.skillCodes, ['research.exam_syllabus']);
+  assert.deepEqual(syllabusExposure.tools.map((tool) => tool.code), ['web.search', 'web.read_page']);
+  const pendingImportExposure = chatCapabilities.planChatAgentCapabilities('', 'question_bank.confirm');
+  assert.deepEqual(pendingImportExposure.skillCodes, ['tutor.question_bank_ingestion']);
+  assert.equal(pendingImportExposure.tools.some((tool) => tool.code === 'question_bank.publish'), true);
+  assert.equal(
+    agent.tutorToolCatalog.find((tool) => tool.code === 'question_bank.publish').requiresConfirmation,
+    true,
+    'publishing a confirmed question-bank draft requires a second explicit confirmation'
+  );
+  const importPrompt = '请扫描并导入真题。\n【已导入本地文件：江苏省考.pdf】';
+  const initialImportPolicy = chatTurnPolicy.planChatAgentTurn(importPrompt, [importPrompt]);
+  assert.equal(initialImportPolicy.requiredToolCode, 'question_bank.scan');
+  assert.equal(initialImportPolicy.forceRequiredToolOnFirstTurn, undefined);
+  const imageImportPolicy = chatTurnPolicy.planChatAgentTurn(importPrompt, [importPrompt], [{ type: 'image' }]);
+  assert.equal(imageImportPolicy.forceRequiredToolOnFirstTurn, undefined);
+  const importContinuationPolicy = chatTurnPolicy.planChatAgentTurn('你生了吗', [importPrompt, '你生了吗']);
+  assert.equal(importContinuationPolicy.requiredToolCode, 'question_bank.resume');
+  assert.match(importContinuationPolicy.routingText, /扫描并导入真题/);
+  assert.deepEqual(
+    chatCapabilities.planChatAgentCapabilities(importContinuationPolicy.routingText).skillCodes,
+    ['tutor.question_bank_ingestion']
+  );
+  const retryImportPolicy = chatTurnPolicy.planChatAgentTurn('重新录入吧', [importPrompt, '重新录入吧']);
+  assert.equal(retryImportPolicy.requiredToolCode, 'question_bank.resume');
+  assert.equal(retryImportPolicy.forceRequiredToolOnFirstTurn, true);
+  const composedSystem = chatCapabilities.chatAgentSystemPromptComposer.compose({
+    basePrompt: '你是个人公考 AI 私教。',
+    exposure: dailyExposure
+  });
+  assert.match(composedSystem, /当前按需能力/);
+  assert.match(composedSystem, /基于今日计划、能力证据和到期复习安排下一步学习/);
+  assert.match(composedSystem, /不得只回复“正在导入”后结束/);
+  assert.doesNotMatch(composedSystem, /tutor\.read_daily_context|planning\.propose_daily_plan/);
+
+  const extensionRegistry = new agent.AgentToolRegistry();
+  extensionRegistry.registerBundle({
+    tools: [{
+      code: 'research.search',
+      description: '检索少量外部来源。',
+      inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+      risk: agent.AgentToolRisk.Read,
+      requiresConfirmation: false,
+      enabledFor: ['tutor_turn']
+    }],
+    skills: [{
+      code: 'research.exam',
+      description: '研究考试公开资料。',
+      toolCodes: ['research.search'],
+      contextBudgetTokens: 300
+    }]
+  });
+  const extensionPlan = new agent.ToolExposurePlanner(extensionRegistry).plan(
+    ['research.exam'],
+    'tutor_turn'
+  );
+  assert.deepEqual(extensionPlan.tools.map((tool) => tool.code), ['research.search']);
+  assert.throws(() => extensionRegistry.registerBundle({
+    tools: [{
+      code: 'research.search',
+      description: '重复工具。',
+      inputSchema: { type: 'object', properties: {} },
+      risk: agent.AgentToolRisk.Read,
+      requiresConfirmation: false,
+      enabledFor: ['tutor_turn']
+    }],
+    skills: []
+  }), /Duplicate agent tool/);
+  assert.deepEqual(
+    extensionRegistry.resolve(['research.exam'], 'tutor_turn').tools.map((tool) => tool.code),
+    ['research.search'],
+    'a rejected capability bundle must not corrupt the existing registry'
+  );
+  assert.throws(() => extensionRegistry.registerBundle({
+    tools: [{
+      code: 'research.read_page',
+      description: '读取单个页面。',
+      inputSchema: { type: 'object', properties: {} },
+      risk: agent.AgentToolRisk.Read,
+      requiresConfirmation: false,
+      enabledFor: ['tutor_turn']
+    }],
+    skills: [{
+      code: 'research.invalid_bundle',
+      description: '无效扩展包。',
+      toolCodes: ['research.missing_tool'],
+      contextBudgetTokens: 300
+    }]
+  }), /unknown tool/);
+  assert.throws(
+    () => extensionRegistry.resolve(['research.invalid_bundle'], 'tutor_turn'),
+    /Unknown agent skill/,
+    'an invalid capability bundle must be rejected atomically'
   );
   const requests = [];
   const gateway = {
@@ -98,7 +236,13 @@ try {
   const result = await loop.execute({
     agentRunId: 'agent-run-1',
     system: '你是个人公考 AI 私教。',
-    messages: [{ role: ai.ModelMessageRole.User, content: '今天学什么？' }],
+    messages: [{
+      role: ai.ModelMessageRole.User,
+      content: [
+        { type: 'text', text: '今天学什么？' },
+        { type: 'image', mediaType: 'image/jpeg', dataBase64: 'ephemeral-image-data', attachmentId: 'image-1' }
+      ]
+    }],
     tools: [agent.tutorToolCatalog[0]],
     executionContext: { agentRunId: 'agent-run-1' }
   }, gateway);
@@ -111,8 +255,66 @@ try {
   assert.equal(requests[1].messages.at(-1).role, ai.ModelMessageRole.Tool);
   assert.equal(requests[1].messages.at(-1).toolCallId, 'call-1');
   assert.equal(checkpoints.at(-1).turnCount, 2);
+  assert.equal(typeof checkpoints.at(-1).messages[0].content, 'string');
+  assert.equal(JSON.stringify(checkpoints.at(-1)).includes('ephemeral-image-data'), false);
   assert.equal(events.some((event) => event.type === 'tool_call_started'), true);
   assert.equal(events.some((event) => event.type === 'tool_call_succeeded'), true);
+
+  const requiredToolRequests = [];
+  const requiredToolEvents = [];
+  let requiredToolExecutions = 0;
+  const scanTool = agent.tutorToolCatalog.find((tool) => tool.code === 'question_bank.scan');
+  const requiredToolLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.write_allowed' }; } },
+    {
+      async execute(definition) {
+        assert.equal(definition.code, 'question_bank.scan');
+        requiredToolExecutions += 1;
+        return { content: '{"draftId":"draft-1","totalCount":5}', resultRef: 'draft-1' };
+      }
+    },
+    { async save() {} },
+    { onEvent(event) { requiredToolEvents.push(event); } }
+  );
+  const requiredToolResult = await requiredToolLoop.execute({
+    agentRunId: 'agent-run-required-scan',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: importPrompt }],
+    tools: [scanTool],
+    requiredToolCode: 'question_bank.scan',
+    forceRequiredToolOnFirstTurn: true,
+    executionContext: { agentRunId: 'agent-run-required-scan' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete(request) {
+      requiredToolRequests.push(request);
+      if (requiredToolRequests.length === 1) {
+        assert.deepEqual(request.toolChoice, { name: 'question_bank_scan' });
+        return { text: '我现在正式调用 question_bank.scan，正在导入。', usage: {} };
+      }
+      if (requiredToolRequests.length === 2) {
+        assert.deepEqual(request.toolChoice, { name: 'question_bank_scan' });
+        return {
+          text: '',
+          toolCalls: [{ id: 'scan-call-1', name: 'question_bank_scan', arguments: {} }],
+          usage: {}
+        };
+      }
+      return { text: '已生成 5 道题的待确认扫描草稿。', usage: {} };
+    }
+  });
+  assert.equal(requiredToolResult.status, 'completed');
+  assert.equal(requiredToolResult.text, '已生成 5 道题的待确认扫描草稿。');
+  assert.equal(requiredToolExecutions, 1);
+  assert.equal(requiredToolRequests.length, 3);
+  assert.equal(requiredToolEvents.filter((event) => event.type === 'tool_call_started').length, 1);
+  assert.equal(
+    requiredToolEvents.some((event) => event.type === 'text_delta' && event.text.includes('question_bank.scan')),
+    false,
+    'unbacked operational narration must never be streamed to the user'
+  );
 
   const blankAfterToolRequests = [];
   const blankAfterToolLoop = new agent.RunAgentLoop(
@@ -289,6 +491,79 @@ try {
   assert.equal(resumed.text, '目标已按你的确认更新。');
   assert.equal(confirmedExecutions, 1);
   assert.equal(resumed.checkpoint.pendingConfirmation, undefined);
+
+  const mixedExecutions = [];
+  const mixedLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    {
+      async evaluate(definition) {
+        return definition.code === 'candidate.change_target'
+          ? { decision: agent.AgentToolPolicyDecision.Confirm, reasonCode: 'policy.user_confirmation_required' }
+          : { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' };
+      }
+    },
+    {
+      async execute(definition) {
+        mixedExecutions.push(definition.code);
+        return { content: JSON.stringify({ ok: true }) };
+      }
+    },
+    { async save() {} }
+  );
+  const mixedTools = [
+    agent.tutorToolCatalog.find((tool) => tool.code === 'student.read_profile'),
+    agent.tutorToolCatalog.find((tool) => tool.code === 'candidate.change_target')
+  ];
+  const mixedWaiting = await mixedLoop.execute({
+    agentRunId: 'agent-run-mixed-confirm',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '先查看档案，再把目标改为 90 分' }],
+    tools: mixedTools,
+    executionContext: { agentRunId: 'agent-run-mixed-confirm' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete() {
+      return {
+        text: '',
+        toolCalls: [
+          { id: 'call-read-before-confirm', name: 'student_read_profile', arguments: {} },
+          { id: 'call-write-confirm', name: 'candidate_change_target', arguments: { subject: 'aptitude', targetScore: 90 } }
+        ],
+        usage: {}
+      };
+    }
+  });
+  assert.equal(mixedWaiting.status, 'waiting_user');
+  assert.deepEqual(mixedExecutions, [], 'tools preceding a confirmation must not execute out of order');
+  assert.equal(
+    mixedWaiting.checkpoint.messages.some((message) => (
+      message.role === ai.ModelMessageRole.Tool && message.toolCallId === 'call-read-before-confirm'
+    )),
+    true,
+    'every deferred sibling tool call must receive a protocol result'
+  );
+  const mixedResumed = await mixedLoop.execute({
+    agentRunId: 'agent-run-mixed-confirm',
+    system: 'system',
+    messages: [],
+    tools: mixedTools,
+    executionContext: { agentRunId: 'agent-run-mixed-confirm' },
+    checkpoint: mixedWaiting.checkpoint,
+    confirmationDecision: 'confirm'
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete(request) {
+      const resultIds = request.messages
+        .filter((message) => message.role === ai.ModelMessageRole.Tool)
+        .map((message) => message.toolCallId);
+      assert.deepEqual(resultIds, ['call-read-before-confirm', 'call-write-confirm']);
+      return { text: '目标已更新。', usage: {} };
+    }
+  });
+  assert.equal(mixedResumed.status, 'completed');
+  assert.deepEqual(mixedExecutions, ['candidate.change_target']);
 
   const budgeter = new agent.AgentContextBudgeter();
   const budgeted = budgeter.compile([

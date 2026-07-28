@@ -81,7 +81,7 @@ export class SprintService {
       runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
       runtime.masteryRepository.listPriorityTracks(cycle.examCycle.id, 100),
       runtime.masteryRepository.listReviews(cycle.examCycle.id, 100),
-      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 })
+      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 }).then((page) => page.entries)
     ]);
     const days = remainDays(cycle.examCycle.examDate);
     const intensity = overrideIntensity || intensityFor(days);

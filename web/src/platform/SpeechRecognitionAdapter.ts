@@ -1,4 +1,4 @@
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import type { InterviewSpeechMetrics } from '@/domain/interview';
 
 interface NativeSpeechPlugin {
@@ -8,14 +8,15 @@ interface NativeSpeechPlugin {
   stop(): Promise<{ transcript: string; durationSeconds: number }>;
 }
 
+const speechPlugin = registerPlugin<NativeSpeechPlugin>('SpeechRecognition');
+
 export interface SpeechRecognitionResult {
   transcript: string;
   metrics: InterviewSpeechMetrics;
 }
 
 function nativeSpeech(): NativeSpeechPlugin | null {
-  const plugin = (Capacitor as any).Plugins?.SpeechRecognition as NativeSpeechPlugin | undefined;
-  return plugin || null;
+  return Capacitor.isNativePlatform() ? speechPlugin : null;
 }
 
 function countWords(text: string): number {

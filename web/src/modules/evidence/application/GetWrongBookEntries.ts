@@ -32,6 +32,12 @@ export interface WrongBookDiagnosis {
   readonly detail: string;
 }
 
+export interface WrongBookPage {
+  readonly entries: readonly WrongBookEntry[];
+  readonly nextSessionOffset?: number;
+  readonly hasMore: boolean;
+}
+
 export class GetWrongBookEntries {
   constructor(
     private readonly sessions: LearningSessionRepository,
@@ -39,11 +45,21 @@ export class GetWrongBookEntries {
     private readonly content: ContentRepository
   ) {}
 
-  async execute(command: { readonly examCycleId: ExamCycleId; readonly limit: number }): Promise<readonly WrongBookEntry[]> {
+  async execute(command: {
+    readonly examCycleId: ExamCycleId;
+    readonly limit: number;
+    readonly sessionOffset?: number;
+    readonly sessionLimit?: number;
+  }): Promise<WrongBookPage> {
     assertLimit(command.limit);
+    const sessionOffset = command.sessionOffset ?? 0;
+    const sessionLimit = command.sessionLimit ?? 12;
+    assertOffset(sessionOffset);
+    assertSessionLimit(sessionLimit);
     const sessions = await this.sessions.listRecent(
       command.examCycleId,
-      Math.min(500, Math.max(100, command.limit * 5))
+      sessionLimit,
+      sessionOffset
     );
     const relevantSessions = sessions.filter((facts) => (
       facts.attempts.some((attempt) => attempt.result === AttemptResult.Incorrect)
@@ -62,10 +78,13 @@ export class GetWrongBookEntries {
     const diagnosesBySession = groupBySession(diagnoses);
     const projectionsById = new Map(projections.map((projection) => [projection.diagnosisId, projection]));
     const entries: WrongBookEntry[] = [];
+    let consumedSessions = 0;
+    let stoppedAtLimit = false;
 
-    for (const facts of relevantSessions) {
-      if (entries.length >= command.limit) break;
+    for (const facts of sessions) {
+      consumedSessions += 1;
       const incorrectAttempts = facts.attempts.filter((attempt) => attempt.result === AttemptResult.Incorrect);
+      if (!incorrectAttempts.length) continue;
       const bundle = bundlesById.get(facts.session.questionSetId);
       if (!bundle) continue;
       const questions = new Map(bundle.questions.map((question) => [question.id, question]));
@@ -73,7 +92,6 @@ export class GetWrongBookEntries {
       const diagnosesByAttempt = groupByAttempt(diagnosesBySession.get(facts.session.id) ?? []);
 
       for (const attempt of incorrectAttempts) {
-        if (entries.length >= command.limit) break;
         const question = questions.get(attempt.questionId);
         const grading = gradings.get(attempt.id);
         if (!question || !grading) continue;
@@ -97,8 +115,17 @@ export class GetWrongBookEntries {
           diagnoses: resolved
         });
       }
+      if (entries.length >= command.limit) {
+        stoppedAtLimit = true;
+        break;
+      }
     }
-    return entries;
+    const hasMore = stoppedAtLimit || sessions.length === sessionLimit;
+    return {
+      entries,
+      hasMore,
+      ...(hasMore ? { nextSessionOffset: sessionOffset + consumedSessions } : {})
+    };
   }
 }
 
@@ -128,4 +155,14 @@ function assertLimit(limit: number): void {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new RangeError('Wrong-book query limit must be between 1 and 100');
   }
+}
+
+function assertSessionLimit(limit: number): void {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new RangeError('Wrong-book session page must be between 1 and 50');
+  }
+}
+
+function assertOffset(offset: number): void {
+  if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Wrong-book session offset must be non-negative');
 }

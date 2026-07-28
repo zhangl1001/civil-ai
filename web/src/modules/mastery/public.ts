@@ -9,6 +9,13 @@ export {
   type DailyPlanProposalItem,
   type DailyTeachingAction
 } from './domain/DailyPlanPolicy';
+export {
+  DailyLearningIntensity,
+  prescribeDailyLearningLoad,
+  questionCountForDailyAction,
+  type DailyLearningIntensity as DailyLearningIntensityCode,
+  type DailyLearningLoadPrescription
+} from './domain/DailyLearningLoadPolicy';
 export { BuildDailyPlanProposal } from './application/BuildDailyPlanProposal';
 export { StartReviewQueueItem } from './application/StartReviewQueueItem';
 export { CompleteReviewQueueItem } from './application/CompleteReviewQueueItem';

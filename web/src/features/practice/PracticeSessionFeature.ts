@@ -1,7 +1,8 @@
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import {
   LearningAssetKind,
-  type CommittedQuestionSetBundle
+  type CommittedQuestionSetBundle,
+  type QuestionSetSourceSummary
 } from '@/modules/content/public';
 import type { ObjectiveSessionReview } from '@/modules/evidence/public';
 import { isAssessmentRole, type AssessmentRole } from '@/kernel/public';
@@ -18,6 +19,7 @@ export interface PracticeSessionLoadResult {
   readonly durationMinutes: number;
   readonly capabilityName: string;
   readonly previousReviews: readonly ObjectiveSessionReview[];
+  readonly sourceMetadata?: QuestionSetSourceSummary;
   readonly assessmentRoleOverride?: AssessmentRole;
 }
 
@@ -38,7 +40,12 @@ export class PracticeSessionFeature {
     const bundle = manifest?.bundle ?? singleBundle;
     if (!bundle) throw new Error('题组不存在或已不可用。');
 
-    const cycle = await this.runtime.candidateRepository.findCurrentCycle();
+    const [cycle, source] = await Promise.all([
+      this.runtime.candidateRepository.findCurrentCycle(),
+      bundle.questionSet.sourceId
+        ? this.runtime.questionSourceRepository.findSource(bundle.questionSet.sourceId)
+        : undefined
+    ]);
     const curriculum = cycle
       ? await this.runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId)
       : undefined;
@@ -66,6 +73,16 @@ export class PracticeSessionFeature {
         )?.name ?? ''
       ),
       previousReviews,
+      sourceMetadata: source ? {
+        sourceType: source.sourceType,
+        provider: source.provider,
+        examType: source.examType,
+        examYear: source.examYear,
+        province: source.province,
+        examBatch: source.examBatch,
+        paperName: source.paperName,
+        sectionName: source.sectionName
+      } : undefined,
       assessmentRoleOverride: manifest?.assessmentRoleOverride
     };
   }
@@ -104,12 +121,17 @@ export class PracticeSessionFeature {
     const sections = loaded.filter((item): item is PracticeManifestSection => Boolean(item));
     if (!sections.length) throw new Error('模考清单内没有可用题组。');
     return {
-      bundle: mergeQuestionBundles(sections.map((section) => section.bundle)),
+      bundle: mergeQuestionBundles(
+        sections.map((section) => section.bundle),
+        textValue(manifest.payload.module)
+      ),
       sections,
       durationMinutes: finitePositiveNumber(manifest.payload.durationMinutes),
       capabilityName: textValue(manifest.payload.capabilityName)
         || (manifest.kind === LearningAssetKind.PracticeManifest ? '错题重做' : ''),
-      restorePrevious: manifest.kind !== LearningAssetKind.PracticeManifest,
+      restorePrevious: typeof manifest.payload.restorePrevious === 'boolean'
+        ? manifest.payload.restorePrevious
+        : manifest.kind !== LearningAssetKind.PracticeManifest,
       assessmentRoleOverride: isAssessmentRole(manifest.payload.assessmentRole)
         ? manifest.payload.assessmentRole
         : undefined
@@ -134,7 +156,10 @@ function selectQuestionSubset(
   };
 }
 
-function mergeQuestionBundles(values: readonly CommittedQuestionSetBundle[]): CommittedQuestionSetBundle {
+function mergeQuestionBundles(
+  values: readonly CommittedQuestionSetBundle[],
+  module?: string
+): CommittedQuestionSetBundle {
   const first = values[0];
   if (!first) throw new Error('模考题组为空。');
   const questions = values.flatMap((value) => value.questions);
@@ -145,7 +170,11 @@ function mergeQuestionBundles(values: readonly CommittedQuestionSetBundle[]): Co
     lectureLinks: [],
     questions,
     capabilityLinks: values.flatMap((value) => value.capabilityLinks),
-    questionSet: { ...first.questionSet, module: '行测模考', questionCount: questions.length }
+    questionSet: {
+      ...first.questionSet,
+      module: module?.trim() || '行测模考',
+      questionCount: questions.length
+    }
   };
 }
 

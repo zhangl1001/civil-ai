@@ -164,9 +164,13 @@ try {
   const validEvidence = await evidenceRepository.listValid('cycle:test', 'capability:aptitude:judgment:weaken', 10);
   assert.equal(validEvidence.length, 2);
   const correctnessEvidence = validEvidence.find((item) => item.evidenceType === evidence.EvidenceType.Correctness);
-  assert.equal(correctnessEvidence?.weight, 0.6);
+  assert.equal(correctnessEvidence?.weight, 0.42);
   assert.equal(validEvidence.some((item) => item.evidenceType === evidence.EvidenceType.Speed), true);
-  assert.equal(evidence.objectiveEvidencePolicyV1.correctnessWeight(evidence.AssessmentRole.Practice, 2), 0.42);
+  assert.equal(evidence.objectiveEvidencePolicyV2.correctnessWeight(
+    evidence.AssessmentRole.Practice,
+    2,
+    evidence.ObjectiveEvidenceOrigin.AiTraining
+  ), 0.29);
   const repeatedSubmission = await submit.execute(command);
   assert.equal(repeatedSubmission.sessionId, result.sessionId, 'objective submission must be idempotent');
   assert.equal(repeatedSubmission.diagnosisCount, 1);

@@ -89,34 +89,47 @@ export class AgentWorkerCoordinator {
       return gatewayPromise;
     };
     const workerSessionId = crypto.randomUUID();
-    await Promise.all(Array.from(
+    const controller = new AbortController();
+    const lanes = Array.from(
       { length: DEFAULT_MAX_CONCURRENT_AGENT_RUNS },
-      (_, laneIndex) => this.runLane(runtime, laneIndex, workerSessionId, getGateway)
-    ));
+      (_, laneIndex) => this.runLane(runtime, laneIndex, workerSessionId, getGateway, controller.signal)
+    );
+    try {
+      await Promise.all(lanes);
+    } catch (error) {
+      controller.abort();
+      await Promise.allSettled(lanes);
+      throw error;
+    }
   }
 
   private async runLane(
     runtime: TutorDatabaseRuntime,
     laneIndex: number,
     workerSessionId: string,
-    getGateway: () => ReturnType<typeof createConfiguredProviderGateway>
+    getGateway: () => ReturnType<typeof createConfiguredProviderGateway>,
+    signal: AbortSignal
   ): Promise<void> {
     const workerId = `agent-worker:${workerSessionId}:${laneIndex + 1}`;
     let schedulingCycle = 0;
     while (true) {
+      signal.throwIfAborted();
       await tutorDatabaseLifecycleCoordinator.waitUntilReady();
       const activeLimit = this.concurrency.activeLimit;
       if (laneIndex >= activeLimit) {
-        await delay(WORKER_POLL_INTERVAL_MS);
+        await delay(WORKER_POLL_INTERVAL_MS, signal);
         continue;
       }
       const workPools = agentWorkPoolsForLane(laneIndex, activeLimit, schedulingCycle);
       schedulingCycle += 1;
       const now = Date.now() as Parameters<typeof runtime.agentRunRepository.nextWorkAt>[0];
       const nextWorkAt = await runtime.agentRunRepository.nextWorkAt(now, workPools);
-      if (nextWorkAt === undefined) return;
+      if (nextWorkAt === undefined) {
+        await delay(WORKER_POLL_INTERVAL_MS, signal);
+        continue;
+      }
       if (nextWorkAt > now) {
-        await delay(Math.min(WORKER_POLL_INTERVAL_MS, nextWorkAt - now));
+        await delay(Math.min(WORKER_POLL_INTERVAL_MS, nextWorkAt - now), signal);
         continue;
       }
       const batch = await runtime.runTutorAgentBatch.execute({
@@ -132,9 +145,9 @@ export class AgentWorkerCoordinator {
         this.concurrency.recordSuccess(batch.completed);
       }
       if (batch.claimed === 0 && batch.recovered === 0) {
-        await delay(WORKER_POLL_INTERVAL_MS);
+        await delay(WORKER_POLL_INTERVAL_MS, signal);
       } else if (batch.retried > 0) {
-        await delay(WORKER_POLL_INTERVAL_MS * 2);
+        await delay(WORKER_POLL_INTERVAL_MS * 2, signal);
       }
     }
   }
@@ -145,8 +158,19 @@ export class AgentWorkerCoordinator {
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      window.clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
 }
 
 export const agentWorkerCoordinator = new AgentWorkerCoordinator();

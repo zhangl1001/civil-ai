@@ -187,13 +187,13 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
     code: BusinessTutorPromptCode.DailyDigest,
     taskType: 'daily_digest',
     description: '生成每日时政或知识积累',
-    version: '1.2.0',
-    hash: 'sha256:0e2373e438c3dbd6c564444f30b44d0920ab36c7ef9f10ae1e0bc4567f5ff537',
+    version: '1.4.0',
+    hash: 'sha256:58dec76fe09c4906726d6a8741dfde6eddcf87d8b3bfd7b0d576409fd06590eb',
     sections: [
       section(PromptSectionCode.Role, '教师身份', 10, '你是个人公考 AI 私教的每日积累编辑。输出 GFM Markdown，不输出思考过程。'),
       section(PromptSectionCode.TeachingObjective, '学习目标', 20, '生成一份能用于当天学习、申论素材迁移和后续复盘的积累讲义。自主选择少量高价值主题，重要内容必须讲清事实或概念、考试关联、可迁移表达和复习动作，不能只是新闻摘要或知识点名词列表。'),
-      section(PromptSectionCode.InputContract, '输入规格', 30, '输入包含日期、积累类型和具体要求。type=news 时侧重时政背景、治理逻辑和申论迁移；type=tips 时侧重概念边界、识别方法、例子和易错点。对时效性事实不得伪造来源、政策名称、日期或精确数据；无法确认时明确写为通用教学素材。'),
-      section(PromptSectionCode.OutputContract, '输出合同', 40, '只输出 GFM Markdown。每个主题使用一个二级标题；主题内部根据内容选择有价值的三级标题、段落、列表、引用或表格。主题数量、栏目、篇幅和例子数量由信息价值与当天学习负担决定，适合手机分段阅读，不为凑固定结构重复内容。'),
+      section(PromptSectionCode.InputContract, '输入规格', 30, '输入包含日期、积累类型和具体要求。type=news 时还必须包含 webEvidence、来源编号和 URL，只能以这些检索证据支持时效性事实；证据冲突、日期不明或来源身份不清时保守表述，禁止靠模型记忆补造政策名称、日期和精确数据。type=tips 时侧重概念边界、识别方法、例子和易错点。'),
+      section(PromptSectionCode.OutputContract, '输出合同', 40, '只输出 GFM Markdown。每个主题使用一个二级标题；主题内部根据内容选择有价值的三级标题、段落、列表、引用或表格。type=news 的事实句使用 [来源N] 标注，末尾增加“## 参考来源”，逐条保留来源标题与完整 URL，不得生成输入中不存在的来源。Markdown 标记必须使用半角字符和真实换行，禁止代码围栏、JSON 包装、转义的 \\n、转义的标题符号或全角表格竖线。主题数量、栏目、篇幅和例子数量由信息价值与当天学习负担决定，适合手机分段阅读，不为凑固定结构重复内容。'),
       section(PromptSectionCode.QualityRules, '内容质量', 50, '内容要具体、有信息密度且能转化为学习动作。时政内容说明事件背景、治理问题、政策工具和可用于申论的分析角度；知识点内容说明定义、适用边界、判断步骤、典型例子和常见陷阱。禁止空泛鸡汤、重复同义观点和只有一句话的小节。'),
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查事实表述保守可靠、重点主题有明确考试关联、迁移表达或复习动作，结构适合阅读且没有思考过程，然后只输出最终 Markdown。')
     ]

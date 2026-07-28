@@ -1,10 +1,15 @@
 import type { InstantMs } from '@/kernel/public';
-import type { LearningEvidenceRecord } from '@/modules/evidence/public';
+import {
+  ObjectiveEvidenceOrigin,
+  objectiveEvidenceOriginFrom,
+  objectiveEvidenceOriginReliability,
+  type LearningEvidenceRecord
+} from '@/modules/evidence/public';
 import { AssessmentRole } from '@/kernel/assessmentRole';
 import { MasteryState, type MasteryState as MasteryStateCode } from './MasteryCodes';
 import type { MasteryTrack } from '../contracts/MasteryRepository';
 
-export const MASTERY_ALGORITHM_VERSION = 'mastery-evidence:v1';
+export const MASTERY_ALGORITHM_VERSION = 'mastery-evidence:v2';
 
 export interface MasteryProjectionInput {
   readonly current?: MasteryTrack;
@@ -80,7 +85,11 @@ function aggregate(values: readonly LearningEvidenceRecord[], now: InstantMs): {
     if (item.value === undefined) continue;
     const ageDays = Math.max(0, Number(now) - Number(item.occurredAt)) / 86_400_000;
     const recency = Math.pow(0.5, ageDays / 45);
-    const itemWeight = item.weight * item.quality * recency;
+    const legacySourceFactor = item.validationPolicyVersion === 'aptitude-objective:v1'
+      && (item.evidenceType === 'correctness' || item.evidenceType === 'speed')
+      ? objectiveEvidenceOriginReliability(objectiveEvidenceOriginFrom(item.metadata.questionOriginType))
+      : 1;
+    const itemWeight = item.weight * item.quality * legacySourceFactor * recency;
     weightedTotal += clamp(item.value) * itemWeight;
     weight += itemWeight;
   }
@@ -89,9 +98,15 @@ function aggregate(values: readonly LearningEvidenceRecord[], now: InstantMs): {
 
 function sourceDiversity(evidence: readonly LearningEvidenceRecord[]): number {
   const roles = new Set(evidence.map((item) => item.assessmentRole));
-  if (roles.size >= 3) return 1;
-  if (roles.size === 2) return 0.85;
-  return roles.size === 1 ? 0.7 : 0;
+  const origins = new Set(evidence.map((item) => objectiveEvidenceOriginFrom(item.metadata.questionOriginType)));
+  const hasTrueQuestion = [...origins].some((origin) => (
+    origin === ObjectiveEvidenceOrigin.OfficialTrue
+    || origin === ObjectiveEvidenceOrigin.ImportedTrue
+    || origin === ObjectiveEvidenceOrigin.UserTrue
+  ));
+  const roleFactor = roles.size >= 3 ? 1 : roles.size === 2 ? 0.85 : roles.size === 1 ? 0.7 : 0;
+  const sourceFactor = hasTrueQuestion ? 1 : origins.size >= 2 ? 0.82 : 0.7;
+  return roleFactor * sourceFactor;
 }
 
 function determineState(values: {

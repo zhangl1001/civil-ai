@@ -49,9 +49,14 @@ const html = computed(() => {
 
 <style scoped>
 .markdown-content {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
   color: inherit;
   font-size: inherit;
   line-height: 1.72;
+  overflow-wrap: anywhere;
 }
 .markdown-content :deep(p) {
   margin: 0 0 8px;
@@ -125,6 +130,7 @@ const html = computed(() => {
   padding: 1px 5px;
   background: rgba(var(--color-ink-rgb), .07);
   font-size: .92em;
+  overflow-wrap: anywhere;
 }
 .markdown-content :deep(pre) {
   overflow-x: auto;
@@ -186,6 +192,7 @@ const html = computed(() => {
 .markdown-content :deep(table) {
   width: 100%;
   min-width: 420px;
+  max-width: 100%;
   border-collapse: collapse;
   margin: 0;
   font-size: var(--type-size-caption);
@@ -193,6 +200,8 @@ const html = computed(() => {
 }
 .markdown-content :deep(.markdown-table-scroll) {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   margin: 10px 0;
   overflow-x: auto;
   border-radius: 10px;
@@ -207,6 +216,7 @@ const html = computed(() => {
   padding: 8px 9px;
   text-align: left;
   white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .markdown-content :deep(th) {
   color: #374151;
@@ -217,7 +227,7 @@ const html = computed(() => {
   background: rgba(246, 248, 251, .58);
 }
 .markdown-content-data :deep(table) {
-  min-width: max(100%, 520px);
+  min-width: 420px;
   font-size: var(--type-size-caption);
 }
 .markdown-content-data :deep(th:first-child),
@@ -286,5 +296,28 @@ const html = computed(() => {
   color: #b3261e;
   font-size: var(--type-size-caption);
   font-weight: var(--type-weight-semibold);
+}
+
+@media (max-width: 600px) {
+  .markdown-content :deep(.markdown-table-scroll) {
+    overflow-x: hidden;
+  }
+  .markdown-content :deep(table),
+  .markdown-content-data :deep(table) {
+    width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+  }
+  .markdown-content :deep(th),
+  .markdown-content :deep(td) {
+    padding: 7px 5px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .markdown-content-data :deep(th:first-child),
+  .markdown-content-data :deep(td:first-child) {
+    position: static;
+  }
 }
 </style>

@@ -182,6 +182,23 @@ const removedRuntimeFiles = [
   'web/src/stores/practice.ts',
   'web/src/stores/wrongBook.ts'
 ];
+
+const runtimeContractFile = 'web/src/composition-root/database/TutorDatabaseRuntime.ts';
+if (!sourceByFile.has(runtimeContractFile)) {
+  addViolation(runtimeContractFile, 'platform-neutral runtime contract is required');
+}
+for (const file of [
+  'web/src/composition-root/database/createWebTutorDatabase.ts',
+  'web/src/composition-root/database/createNativeTutorDatabase.ts'
+]) {
+  const source = fs.readFileSync(path.join(projectRoot, file), 'utf8');
+  if (!source.includes("from './TutorDatabaseRuntime'")) {
+    addViolation(file, 'Web and Native composition roots must implement the shared TutorDatabaseRuntime contract');
+  }
+  if (/export\s+interface\s+(?:Web|Native)TutorDatabaseRuntime/.test(source)) {
+    addViolation(file, 'platform-specific runtime interfaces are forbidden');
+  }
+}
 for (const file of removedRuntimeFiles) {
   if (fs.existsSync(path.join(projectRoot, file))) {
     addViolation(file, 'removed runtime must not be restored; use the current module and composition-root APIs');

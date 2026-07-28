@@ -5,6 +5,10 @@ import {
   type LocalDate
 } from '@/kernel/public';
 import type { CapabilityNode } from '@/modules/curriculum/public';
+import {
+  prescribeDailyLearningLoad,
+  questionCountForDailyAction
+} from '@/modules/mastery/public';
 import type { DailyPlanAggregate, DailyPlanItemRecord } from '@/modules/planning/public';
 import { DailyPlanReasonCode } from '@/modules/mastery/public';
 import { ReviewPracticeFeature } from './ReviewPracticeFeature';
@@ -42,7 +46,9 @@ export class TutorDailyPracticeFeature {
     if (!plan) {
       const proposal = await this.runtime.buildDailyPlanProposal.execute({
         examCycleId: cycle.examCycle.id,
-        availableMinutes: availableMinutesForToday(cycle.studyConstraints.weekdayMinutes, cycle.studyConstraints.weekendMinutes)
+        availableMinutes: availableMinutesForToday(cycle.studyConstraints.weekdayMinutes, cycle.studyConstraints.weekendMinutes),
+        examDate: cycle.examCycle.examDate,
+        phase: cycle.examCycle.phase
       });
       if (proposal.items.length) {
         plan = await this.runtime.persistDailyPlanProposal.execute({
@@ -68,7 +74,12 @@ export class TutorDailyPracticeFeature {
     );
     if (!capability) throw new Error('当前大纲没有可训练的能力节点。');
 
-    const requestedCount = clampCount(planItem?.targetCount ?? defaultCountFor(planItem));
+    const load = prescribeDailyLearningLoad({
+      availableMinutes: plan?.plan.availableMinutes ?? availableMinutesForToday(cycle.studyConstraints.weekdayMinutes, cycle.studyConstraints.weekendMinutes),
+      remainingDays: daysUntil(cycle.examCycle.examDate),
+      phase: cycle.examCycle.phase
+    });
+    const requestedCount = clampCount(planItem?.targetCount ?? defaultCountFor(planItem, load));
     return {
       plan,
       planItem,
@@ -165,10 +176,22 @@ function clampCount(count: number): number {
   return Math.max(1, Math.min(20, Math.round(count)));
 }
 
-function defaultCountFor(item?: DailyPlanItemRecord): number {
-  if (item?.itemType === 'lecture') return 4;
-  if (item?.itemType === 'diagnosis') return 8;
-  return 6;
+function defaultCountFor(
+  item: DailyPlanItemRecord | undefined,
+  load: ReturnType<typeof prescribeDailyLearningLoad>
+): number {
+  const action = item?.itemType === 'lecture'
+    ? 'lecture'
+    : item?.itemType === 'guided_practice'
+      ? 'guided_practice'
+      : item?.itemType === 'transfer'
+        ? 'transfer'
+        : item?.itemType === 'review'
+          ? 'review'
+          : item?.itemType === 'diagnosis'
+            ? 'repair'
+            : 'independent_practice';
+  return questionCountForDailyAction(action, item?.targetMinutes ?? 20, load);
 }
 
 function roleFor(item?: DailyPlanItemRecord) {
@@ -211,4 +234,10 @@ function planReasonLabel(reason: string): string {
     [DailyPlanReasonCode.MasteryEvidenceIncomplete]: '当前掌握证据还不充分'
   };
   return labels[reason] ?? '根据当前能力证据安排';
+}
+
+function daysUntil(examDate: string): number | undefined {
+  const target = Date.parse(`${examDate}T12:00:00`);
+  if (!Number.isFinite(target)) return undefined;
+  return Math.max(0, Math.ceil((target - Date.now()) / 86_400_000));
 }

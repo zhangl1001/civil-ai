@@ -1,9 +1,11 @@
 import { buildCompanionChatPrompt } from '@/ai/prompts';
 import { buildEssayRepairPrompt, validateEssayQuestion } from '@/ai/QuestionValidation';
 import { BusinessTutorPromptCode, parseStructuredJson } from '@/capabilities/ai-runtime/public';
+import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
 import type { JsonObject } from '@/kernel/public';
 import type { DigestTab } from '@/domain/digest';
 import { aiChatRepository } from '@/services/AIChatRepository';
+import { webResearchService } from '@/services/WebResearchService'; import { buildDailyDigestRequest } from '@/services/DailyDigestGenerationPolicy';
 import type { EssayQuestionRecord } from '@/services/EssayRepository';
 import type { AITextMessage, AITextRequestOptions } from '../ai/ConfiguredAIClient';
 import { LearningAssetKind, type LearningAssetKind as LearningAssetKindCode } from '@/modules/content/public';
@@ -750,20 +752,28 @@ export const digestExecutor: BusinessAgentExecutor = async (task, context) => {
       kind: LearningAssetKind.DigestMonthly,
       businessKey: `digest:monthly:${monthPrefix}`,
       title: `${monthLabel}时政月报`,
-      payload: { year, month, monthLabel, content: result, sourceCount: items.length }
+      payload: { year, month, monthLabel, content: normalizeMarkdownSource(result), sourceCount: items.length }
     });
     await context.setResult({ resultRef: saved.id, payload: { assetId: saved.id, year, month } });
     await context.update(94, '月度复盘已生成');
     return;
   }
-
   const tab: DigestTab = task.payload?.digestTab === 'tips' ? 'tips' : 'news';
   const date = asString(task.payload?.digestDate) || new Date().toISOString().slice(0, 10);
-  await context.update(24, tab === 'news' ? '生成时政热点' : '生成知识点积累');
+  const learningLoad = asRecord(task.payload?.learningLoad);
+  const research = tab === 'news'
+    ? await collectDailyDigestResearch(date, context)
+    : undefined;
+  await context.update(research ? 42 : 24, tab === 'news' ? '整理时政热点' : '生成知识点积累');
   const prompt = context.compilePrompt(BusinessTutorPromptCode.DailyDigest, {
     date,
     type: tab,
-    request: task.detail || (tab === 'news' ? '生成今日公考相关时政热点积累' : '生成今日公考知识点积累')
+    request: buildDailyDigestRequest(tab, task.detail, learningLoad),
+    ...(research ? {
+      webSearchQuery: research.query,
+      webEvidence: research.evidence,
+      evidenceRule: '只能使用 webEvidence 支持时效性事实；正文用 [来源1] 形式标注，并在末尾列出来源标题和 URL。'
+    } : {})
   });
   const result = await context.complete([
     { role: 'system', content: prompt.system },
@@ -774,12 +784,38 @@ export const digestExecutor: BusinessAgentExecutor = async (task, context) => {
     kind: LearningAssetKind.DigestDaily,
     businessKey: digestBusinessKey(tab, date),
     title: tab === 'news' ? `${date} 每日热点` : `${date} 知识积累`,
-    payload: { tab, date, content: result }
+    payload: {
+      tab,
+      date,
+      content: normalizeMarkdownSource(result),
+      ...(Object.keys(learningLoad).length ? { learningLoad } : {}),
+      ...(research ? {
+        sourceMode: 'web_research',
+        searchQuery: research.query,
+        sources: research.sources.map((source) => ({
+          title: source.title,
+          url: source.url,
+          domain: source.domain,
+          excerpt: source.snippet.slice(0, 800),
+          publishedAt: source.publishedAt ?? null,
+          fetchedAt: source.fetchedAt
+        }))
+      } : { sourceMode: 'model_knowledge' })
+    }
   });
   await context.setResult({ resultRef: saved.id, payload: { assetId: saved.id, tab, date } });
   await context.update(92, '每日积累已保存');
 };
 
+async function collectDailyDigestResearch(
+  date: string,
+  context: BusinessAgentExecutionContext
+) {
+  await context.update(12, '检索近期时政来源');
+  const research = await webResearchService.collectDailyHotspots(date, context.signal);
+  await context.log(`网络检索完成：${research.sources.length} 个来源`);
+  return research;
+}
 export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
   const topic = asString(task.payload?.topic) || task.detail || '公考考点';
   const module = asString(task.payload?.module) || '公考';
@@ -799,7 +835,7 @@ export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
     kind: LearningAssetKind.StudyLecture,
     businessKey: `study:${module}:${topic}`,
     title: `${module} · ${topic}`,
-    payload: { module, topic, content: result }
+    payload: { module, topic, content: normalizeMarkdownSource(result) }
   });
   await context.setResult({ resultRef: saved.id, payload: { assetId: saved.id, module, topic } });
   await context.update(94, '考点精讲已生成');

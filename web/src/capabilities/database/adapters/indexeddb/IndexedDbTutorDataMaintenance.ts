@@ -24,7 +24,9 @@ const cycleStores = [
   TutorIndexedDbStore.DailyPlanAggregates,
   TutorIndexedDbStore.LearningEvidenceAggregates,
   TutorIndexedDbStore.ProactiveSignals,
-  TutorIndexedDbStore.LearningAssets
+  TutorIndexedDbStore.LearningAssets,
+  TutorIndexedDbStore.TutorCycleConclusions,
+  TutorIndexedDbStore.AbilityCalibrationSnapshots
 ] as const;
 
 export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
