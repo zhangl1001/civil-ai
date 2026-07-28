@@ -17,7 +17,7 @@
   <Teleport to="body">
     <Transition name="ai-overlay">
       <div v-if="chat.isOpen" class="ai-overlay" @click.self="chat.close()">
-        <Transition name="ai-sheet" appear>
+        <Transition name="ai-sheet" appear @after-enter="scrollToLatest">
           <section
             :class="['ai-sheet', { 'has-task-process': taskRows.length, 'task-process-open': taskOpen, 'keyboard-open': isKeyboardOpen }]"
             :style="sheetStyle"
@@ -83,7 +83,7 @@
               </Transition>
             </div>
 
-            <main ref="messageListRef" class="ai-messages">
+            <main ref="messageListRef" class="ai-messages" @scroll.passive="loadOlderAtTop">
               <div v-if="chat.isLoading" class="empty-state">加载对话中...</div>
               <div v-else-if="!displayMessages.length" class="empty-state">
                 <span :class="['empty-cat', { active: hasRunning }]" aria-hidden="true"><CatIcon /></span>
@@ -142,9 +142,14 @@
                   ref="fileInputRef"
                   class="file-input"
                   type="file"
-                  accept=".txt,.md,.markdown,.json,.csv,text/*,application/json"
+                  multiple
+                  :accept="DOCUMENT_IMPORT_ACCEPT"
                   @change="handleFileSelected"
                 />
+                <div v-if="isExtractingAttachment" class="attachment-chip is-loading" role="status">
+                  <LoaderCircleIcon />
+                  <span>正在准备 AI 阅读材料</span>
+                </div>
                 <div v-if="attachment" class="attachment-chip">
                   <FileTextIcon />
                   <span>{{ attachment.name }}</span>
@@ -190,7 +195,7 @@
                       v-else
                       class="send-toggle"
                       type="submit"
-                      :disabled="!draft.trim() && !attachment"
+                      :disabled="isExtractingAttachment || (!draft.trim() && !attachment)"
                       title="发送"
                       aria-label="发送"
                     >
@@ -221,6 +226,7 @@ import {
   CornerDownRightIcon,
   MessageSquareIcon,
   FileTextIcon,
+  LoaderCircleIcon,
   MonitorIcon,
   NewspaperIcon,
   PaperclipIcon,
@@ -236,8 +242,8 @@ import {
 } from 'lucide-vue-next';
 import { useAIChatStore } from '@/stores/aiChat';
 import { useTaskCenterStore } from '@/stores/taskCenter';
-import { fileRepository } from '@/services/FileRepository';
-import { projectRepository } from '@/services/ProjectRepository';
+import { chatAttachmentService, type ImportedChatAttachment } from '@/services/ChatAttachmentService';
+import { DOCUMENT_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
 import {
   agentToolActivityService,
   type AgentToolActivity,
@@ -247,7 +253,8 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import type { AIMessage } from '@/domain/ai';
 import type { AgentRunStatus, AgentRunView } from '@/modules/agent/public';
 import MarkdownContent from '@/components/MarkdownContent.vue';
-
+import { chatErrorText, clampChatSheetHeight, compactGuidanceText, formatSessionTime } from '@/components/ai-chat/AIChatPresentation';
+import { useChatMessageScroll } from '@/components/ai-chat/useChatMessageScroll';
 const chat = useAIChatStore();
 const taskCenter = useTaskCenterStore();
 const { runs: agentRuns } = storeToRefs(taskCenter);
@@ -260,7 +267,8 @@ const sessionMenuOpen = ref(false);
 const messageListRef = ref<HTMLElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
-const attachment = ref<{ name: string; path: string } | null>(null);
+const attachment = ref<ImportedChatAttachment | null>(null);
+const isExtractingAttachment = ref(false);
 const composerError = ref('');
 const guidancePreview = ref('');
 const toolActivities = ref<readonly AgentToolActivity[]>([]);
@@ -276,10 +284,9 @@ const fabDragging = ref(false);
 const fabMoved = ref(false);
 const fabStart = ref({ x: 0, y: 0, left: 0, top: 0 });
 let guidancePreviewTimer: ReturnType<typeof setTimeout> | undefined;
-
+const { loadOlderAtTop, scrollToLatest } = useChatMessageScroll(messageListRef, () => chat.loadOlderMessages());
 type ProcessStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 type ProcessType = 'generate' | 'grade' | 'essay' | 'digest' | 'study' | 'mock' | 'redo' | 'read';
-
 interface ProcessItem {
   id: string;
   type: ProcessType;
@@ -326,7 +333,7 @@ let stopToolActivitySubscription: (() => void) | undefined;
 
 const taskRows = computed<ProcessItem[]>(() => {
   return agentRuns.value
-    .filter((run) => run.targetResourceType !== 'chat_tool')
+    .filter((run) => run.taskCenterVisible)
     .sort((left, right) => Number(right.isActive) - Number(left.isActive) || right.updatedAt - left.updatedAt)
     .slice(0, 2)
     .map(agentRunToProcessItem);
@@ -472,7 +479,8 @@ function taskIcon(task?: ProcessItem) {
 function processMetaText(rows: ProcessItem[]): string {
   const first = rows[0];
   if (!first) return '';
-  return `${first.statusText} · 1/${rows.length}`;
+  const completed = rows.filter((row) => row.status === 'done').length;
+  return `${first.statusText} · ${completed}/${rows.length}`;
 }
 
 function compactTaskSummary(task: ProcessItem): string {
@@ -488,7 +496,7 @@ watch(
   async () => {
     void refreshAgentRuns();
     await nextTick();
-    messageListRef.value?.scrollTo({ top: messageListRef.value.scrollHeight, behavior: 'smooth' });
+    scrollToLatest();
   }
 );
 
@@ -499,6 +507,7 @@ watch(
     syncViewportMetrics();
     await nextTick();
     resizeComposer();
+    scrollToLatest();
   }
 );
 
@@ -522,20 +531,20 @@ watch(
 
 watch(keyboardInset, async () => {
   await nextTick();
-  messageListRef.value?.scrollTo({ top: messageListRef.value.scrollHeight });
+  scrollToLatest();
 });
 
 watch(
   () => chat.session?.id,
   () => {
     refreshToolActivities();
-    void refreshAgentRuns();
+    void refreshAgentRuns(); void nextTick().then(scrollToLatest);
   }
 );
 
 watch(hasRunning, async () => {
   await nextTick();
-  messageListRef.value?.scrollTo({ top: messageListRef.value.scrollHeight, behavior: 'smooth' });
+  scrollToLatest();
 });
 
 function isStreamingAssistant(message: AIMessage): boolean {
@@ -585,10 +594,6 @@ function guidanceDraftText(): string {
   const text = draft.value.trim();
   if (text) return text;
   return attachment.value ? `导入文件：${attachment.value.name}` : '';
-}
-
-function compactGuidanceText(value: string): string {
-  return value.length > 60 ? `${value.slice(0, 60)}...` : value;
 }
 
 async function cancelProcessTask(task: ProcessItem) {
@@ -644,7 +649,7 @@ async function submit() {
   processOpen.value = false;
   composerError.value = '';
   try {
-    await chat.send(text);
+    await chat.send(text, pendingAttachment?.imageParts);
   } catch (error) {
     draft.value = pendingDraft;
     attachment.value = pendingAttachment;
@@ -656,19 +661,19 @@ async function submit() {
 
 async function handleFileSelected(event: Event) {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
+  const files = input.files ? [...input.files] : [];
   input.value = '';
-  if (!file) return;
-  const content = await file.text();
-  const project = await projectRepository.getActiveProject();
-  const safeName = file.name.replace(/[/:\\]/g, '_');
-  const path = `导入资料/${Date.now()}-${safeName}`;
-  await fileRepository.writeText(project.id, path, content);
-  attachment.value = {
-    name: file.name,
-    path
-  };
-  scheduleGuidancePreview();
+  if (!files.length) return;
+  isExtractingAttachment.value = true;
+  composerError.value = '';
+  try {
+    attachment.value = await chatAttachmentService.importMany(files);
+    scheduleGuidancePreview();
+  } catch (error) {
+    composerError.value = chatErrorText(error);
+  } finally {
+    isExtractingAttachment.value = false;
+  }
 }
 
 function clearAttachment() {
@@ -684,7 +689,10 @@ function buildPromptWithAttachment(text: string): string {
     '',
     `【已导入本地文件：${attachment.value.name}】`,
     `本地路径：${attachment.value.path}`,
-    '请按需调用 file.read_text 读取文件内容。'
+    `输入方式：${attachment.value.method}，共 ${attachment.value.pageCount} 页。`,
+    attachment.value.imageParts?.length
+      ? `原图已作为 ${attachment.value.imageParts.length} 个多模态附件交给你，请优先理解图片中的版面、表格和题目结构。`
+      : '请按需调用 file.read_text 分段读取文件内容；文件信息不足时先向我确认，不要推测。'
   ].join('\n');
 }
 
@@ -734,18 +742,6 @@ async function deleteOtherSessions() {
   }
 }
 
-function chatErrorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error || '');
-  if (/not implemented|unimplemented/i.test(message)) return '本地会话组件尚未加载，请重新运行最新版本。';
-  if (/network|fetch|连接|网络/i.test(message)) return '模型服务连接失败，请检查网络和 AI 配置。';
-  return message.trim() || '操作没有完成，请重试。';
-}
-
-function formatSessionTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
-}
-
 function syncViewportMetrics() {
   const layoutHeight = window.innerHeight;
   const viewport = window.visualViewport;
@@ -784,7 +780,7 @@ function startResize(event: PointerEvent) {
 function resizeSheet(event: PointerEvent) {
   if (!isDragging.value) return;
   const delta = dragStartY.value - event.clientY;
-  sheetHeight.value = clampHeight(dragStartHeight.value + (delta / window.innerHeight) * 100);
+  sheetHeight.value = clampChatSheetHeight(dragStartHeight.value + (delta / window.innerHeight) * 100);
 }
 
 function stopResize() {
@@ -795,10 +791,6 @@ function stopResize() {
   sheetHeight.value = stops.reduce((best, value) => {
     return Math.abs(value - sheetHeight.value) < Math.abs(best - sheetHeight.value) ? value : best;
   }, stops[0]);
-}
-
-function clampHeight(value: number): number {
-  return Math.max(42, Math.min(92, value));
 }
 
 function readFabPosition() {
@@ -1704,6 +1696,14 @@ function clampFabPosition(position: { left: number; top: number }) {
   height: 14px;
   color: var(--primary-color);
   flex-shrink: 0;
+}
+
+.attachment-chip.is-loading > svg {
+  animation: attachment-spin .85s linear infinite;
+}
+
+@keyframes attachment-spin {
+  to { transform: rotate(360deg); }
 }
 
 .attachment-chip span {

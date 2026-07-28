@@ -4,9 +4,12 @@ import {
   type Clock,
   type ContentSchemaVersionId,
   type IdGenerator,
-  type JsonValue
+  type JsonValue,
+  type QuestionId
 } from '@/kernel/public';
 import type { CommittedQuestionSetBundle, GenerationSpecRecord, GenerationWorkflowRecord } from '../contracts/ContentRepository';
+import type { QuestionLineageRecord } from '../contracts/QuestionSourceRepository';
+import type { TrueQuestionReferencePack } from '../contracts/QuestionReferencePackRepository';
 import {
   ContentAssetStatus,
   ContentDocumentType,
@@ -15,7 +18,17 @@ import {
   QuestionSetPurpose,
   QuestionSetStatus
 } from '../domain/ContentCodes';
+import {
+  QuestionCalibrationRole,
+  QuestionDerivationType,
+  QuestionOriginType
+} from '../domain/QuestionSourceCodes';
 import type { GeneratedLectureQuestionSet } from './GeneratedContentParser';
+
+export interface GeneratedContentCommit {
+  readonly bundle: CommittedQuestionSetBundle;
+  readonly lineages: readonly QuestionLineageRecord[];
+}
 
 export class GeneratedContentCommitBuilder {
   constructor(
@@ -27,8 +40,9 @@ export class GeneratedContentCommitBuilder {
     spec: GenerationSpecRecord,
     completedWorkflow: GenerationWorkflowRecord,
     lectureSchemaVersionId: ContentSchemaVersionId,
-    output: GeneratedLectureQuestionSet
-  ): Promise<CommittedQuestionSetBundle> {
+    output: GeneratedLectureQuestionSet,
+    referencePack?: TrueQuestionReferencePack
+  ): Promise<GeneratedContentCommit> {
     if (!spec.questionTemplateVersionId) throw new Error('Question generation spec requires a question template');
     const now = this.clock.now();
     const lectureDocumentId = this.ids.next('ContentDocumentId');
@@ -38,28 +52,73 @@ export class GeneratedContentCommitBuilder {
     const questionHashes = await Promise.all(output.questions.map((question) => sha256Json(toJson(question))));
     const questionSetHash = await sha256Json({ questionHashes });
     const capabilityNodeId = spec.capabilityNodeId as CapabilityNodeId;
-    const questions = output.questions.map((question, index) => ({
-      id: this.ids.next('QuestionId'),
-      questionSetId,
-      examCycleId: spec.examCycleId,
-      capabilityNodeId,
-      questionTemplateVersionId: spec.questionTemplateVersionId!,
-      sequence: index + 1,
-      difficulty: averageDifficulty(spec),
-      cognitiveLevel: 'application',
-      purpose: purposeForRole(spec.assessmentRole),
-      assessmentRole: spec.assessmentRole,
-      variantGroupId: question.materialGroupId,
-      content: question,
-      correctAnswer: { optionId: question.correctOptionId },
-      qualityStatus: QuestionQualityStatus.Published,
-      contentHash: questionHashes[index],
-      contentSchemaVersionId: spec.contentSchemaVersionId,
-      contentVersion: 1,
-      generatorWorkflowId: completedWorkflow.id,
-      createdAt: now
-    }));
+    const references = new Map(
+      referencePack?.representativeQuestions.map((question) => [question.questionId, question]) ?? []
+    );
+    const questionIds = output.questions.map(() => this.ids.next('QuestionId'));
+    const lineageIds = output.referenceQuestionIds.map((referenceQuestionId) => (
+      referenceQuestionId && references.has(referenceQuestionId as QuestionId)
+        ? this.ids.next('QuestionLineageId')
+        : undefined
+    ));
+    const questions = output.questions.map((question, index) => {
+      const referenceQuestionId = output.referenceQuestionIds[index] as QuestionId | undefined;
+      const reference = referenceQuestionId ? references.get(referenceQuestionId) : undefined;
+      const difficulty = distributedDifficulty(spec, index, output.questions.length);
+      return {
+        id: questionIds[index]!,
+        questionSetId,
+        examCycleId: spec.examCycleId,
+        capabilityNodeId,
+        questionTemplateVersionId: spec.questionTemplateVersionId!,
+        sequence: index + 1,
+        difficulty,
+        cognitiveLevel: 'application',
+        purpose: purposeForRole(spec.assessmentRole),
+        assessmentRole: spec.assessmentRole,
+        variantGroupId: question.materialGroupId,
+        originType: reference ? QuestionOriginType.AiVariant : QuestionOriginType.AiGenerated,
+        lineageId: lineageIds[index],
+        calibrationRole: reference
+          ? QuestionCalibrationRole.StyleReference
+          : referencePack
+            ? QuestionCalibrationRole.DistributionReference
+            : QuestionCalibrationRole.None,
+        isOfficial: false,
+        content: question,
+        correctAnswer: { optionId: question.correctOptionId },
+        qualityStatus: QuestionQualityStatus.Published,
+        contentHash: questionHashes[index],
+        contentSchemaVersionId: spec.contentSchemaVersionId,
+        contentVersion: 1,
+        generatorWorkflowId: completedWorkflow.id,
+        createdAt: now
+      };
+    });
+    const lineages = output.referenceQuestionIds.flatMap((rawReferenceQuestionId, index) => {
+      const referenceQuestionId = rawReferenceQuestionId as QuestionId | undefined;
+      const reference = referenceQuestionId ? references.get(referenceQuestionId) : undefined;
+      const lineageId = lineageIds[index];
+      if (!reference || !lineageId) return [];
+      return [{
+        id: lineageId,
+        questionId: questionIds[index]!,
+        parentQuestionId: reference.questionId,
+        derivationType: derivationType(spec.assessmentRole),
+        generationWorkflowId: completedWorkflow.id,
+        referenceSnapshot: {
+          referencePackId: referencePack!.id,
+          referencePolicyVersion: referencePack!.policyVersion,
+          parentDifficulty: reference.difficulty,
+          generatedDifficulty: distributedDifficulty(spec, index, output.questions.length),
+          parentStructuralSignature: reference.structuralSignature
+        },
+        createdAt: now
+      } satisfies QuestionLineageRecord];
+    });
+    const calibratedAsVariants = lineages.length > 0 && lineages.length === questions.length;
     return {
+      bundle: {
       generationSpec: spec,
       generationWorkflow: completedWorkflow,
       documents: [{
@@ -97,6 +156,14 @@ export class GeneratedContentCommitBuilder {
         purpose: purposeForRole(spec.assessmentRole),
         assessmentRole: spec.assessmentRole,
         module: capability.module,
+        originType: calibratedAsVariants
+          ? QuestionOriginType.AiVariant
+          : QuestionOriginType.AiGenerated,
+        calibrationRole: referencePack
+          ? calibratedAsVariants
+            ? QuestionCalibrationRole.StyleReference
+            : QuestionCalibrationRole.DistributionReference
+          : QuestionCalibrationRole.None,
         status: QuestionSetStatus.Ready,
         practiceStatus: QuestionSetPracticeStatus.NotStarted,
         questionCount: questions.length,
@@ -112,8 +179,17 @@ export class GeneratedContentCommitBuilder {
         relationRole: 'primary',
         weight: 1
       }))
+      },
+      lineages
     };
   }
+}
+
+function derivationType(
+  role: GenerationSpecRecord['assessmentRole']
+): QuestionDerivationType {
+  if (role === 'transfer') return QuestionDerivationType.Transfer;
+  return QuestionDerivationType.Variant;
 }
 
 function capabilitySnapshot(spec: GenerationSpecRecord): { name: string; module: string } {
@@ -131,11 +207,17 @@ function purposeForRole(role: GenerationSpecRecord['assessmentRole']): QuestionS
   return role;
 }
 
-function averageDifficulty(spec: GenerationSpecRecord): number {
+function distributedDifficulty(spec: GenerationSpecRecord, index: number, count: number): number {
   const min = spec.difficulty.min;
   const max = spec.difficulty.max;
   if (typeof min !== 'number' || typeof max !== 'number') throw new TypeError('Generation difficulty snapshot is invalid');
-  return Math.round(((min + max) / 2) * 100) / 100;
+  if (count <= 1 || min === max) return roundDifficulty((min + max) / 2);
+  const normalizedIndex = Math.max(0, Math.min(index, count - 1));
+  return roundDifficulty(min + ((max - min) * normalizedIndex) / (count - 1));
+}
+
+function roundDifficulty(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function toJson(value: unknown): JsonValue {

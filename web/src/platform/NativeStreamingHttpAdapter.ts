@@ -115,7 +115,7 @@ export class NativeStreamingHttpAdapter {
           url: request.url,
           method: request.method,
           headers: { ...request.headers },
-          body: request.body
+          body: request.body ?? ''
         });
       }).catch(fail);
     });

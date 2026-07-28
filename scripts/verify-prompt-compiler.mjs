@@ -65,11 +65,13 @@ try {
   assert(compiled.system.includes('# 第6章 提交前质检'));
   assert(compiled.system.includes('本次生成 5 道题'));
   assert(!compiled.system.includes('{{QUESTION_COUNT}}'));
-  assert.equal(compiled.version, '2.0.0');
+  assert.equal(compiled.version, '2.2.0');
+  assert(compiled.system.includes('最小真题参考包'));
+  assert(!compiled.responseSchema.properties.questions.items.required.includes('referenceQuestionId'));
   assert.equal(compiled.responseSchema.properties.questions.items.properties.capabilityCode, undefined);
   assert(compiled.system.includes('由应用按照当前 GenerationSpec 统一注入'));
   assert(compiled.system.includes('不要求凑齐全部 kind'));
-  assert.equal(compiled.responseSchema.properties.lecture.properties.sections.minItems, 1);
+  assert.equal(compiled.responseSchema.properties.lecture.properties.sections.minItems, 0);
   assert.equal(
     compiled.responseSchema.properties.questions.items.properties.explanation.properties.pitfalls.minItems,
     0

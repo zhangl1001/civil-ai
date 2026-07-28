@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
@@ -28,6 +29,20 @@ try {
   assert.equal(completed.status, 'completed');
   assert.throws(() => machine.transition(completed, agent.AgentRunAction.Resume, clock));
   assert.equal(agent.DEFAULT_MAX_CONCURRENT_AGENT_RUNS, 3);
+  const workerCoordinatorSource = await readFile(path.join(
+    root,
+    'src/composition-root/agent/AgentWorkerCoordinator.ts'
+  ), 'utf8');
+  assert.doesNotMatch(
+    workerCoordinatorSource,
+    /nextWorkAt\s*===\s*undefined\)\s*return/,
+    'an idle worker lane must remain alive for tasks enqueued while another lane is busy'
+  );
+  assert.match(workerCoordinatorSource, /Promise\.allSettled\(lanes\)/);
+  const taskDockSource = await readFile(path.join(root, 'src/components/TaskDock.vue'), 'utf8');
+  const chatSheetSource = await readFile(path.join(root, 'src/components/AIChatSheet.vue'), 'utf8');
+  assert.match(taskDockSource, /run\.taskCenterVisible/);
+  assert.match(chatSheetSource, /run\.taskCenterVisible/);
   assert.equal(aiConfig.normalizeAIConfig({
     provider: 'openai',
     apiKey: '',
@@ -109,6 +124,77 @@ try {
     agent.agentWorkPoolsForLane(0, 1, 0)[0],
     agent.agentWorkPoolsForLane(0, 1, 1)[0],
     'single-lane scheduling must rotate foreground pools instead of starving one business line'
+  );
+
+  let agentTurn = 0;
+  let activeReadTools = 0;
+  let maxActiveReadTools = 0;
+  let activeObserverWrites = 0;
+  let maxActiveObserverWrites = 0;
+  let secondTurnMessages = [];
+  const readToolDefinitions = [1, 2, 3].map((index) => ({
+    code: `web.read_${index}`,
+    description: `并行读取 ${index}`,
+    inputSchema: { type: 'object', properties: {} },
+    risk: agent.AgentToolRisk.Read,
+    requiresConfirmation: false,
+    enabledFor: ['tutor_turn']
+  }));
+  const concurrentLoop = new agent.RunAgentLoop(
+    {
+      async invoke(invocation) {
+        agentTurn += 1;
+        if (agentTurn === 1) {
+          return {
+            text: '',
+            usage: {},
+            toolCalls: [1, 2, 3].map((index) => ({
+              id: `call:${index}`,
+              name: `web_read_${index}`,
+              arguments: {}
+            }))
+          };
+        }
+        secondTurnMessages = invocation.messages;
+        return { text: '并行读取完成', usage: {} };
+      }
+    },
+    new agent.DefaultAgentToolPolicy(),
+    {
+      async execute(_definition, call) {
+        activeReadTools += 1;
+        maxActiveReadTools = Math.max(maxActiveReadTools, activeReadTools);
+        await new Promise((resolve) => setTimeout(resolve, (4 - Number(call.id.split(':')[1])) * 8));
+        activeReadTools -= 1;
+        return { content: `result:${call.id}` };
+      }
+    },
+    { async save() {} },
+    {
+      async onEvent(event) {
+        if (!event.type.startsWith('tool_call_')) return;
+        activeObserverWrites += 1;
+        maxActiveObserverWrites = Math.max(maxActiveObserverWrites, activeObserverWrites);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        activeObserverWrites -= 1;
+      }
+    }
+  );
+  const concurrentResult = await concurrentLoop.execute({
+    agentRunId: 'AgentRunId:parallel-read-test',
+    system: 'test',
+    messages: [{ role: ai.ModelMessageRole.User, content: '并行搜索' }],
+    tools: readToolDefinitions,
+    executionContext: { agentRunId: 'AgentRunId:parallel-read-test' },
+    maxParallelReadToolCalls: 3
+  }, {});
+  assert.equal(concurrentResult.text, '并行读取完成');
+  assert.equal(maxActiveReadTools, 3, 'read-only tools from one model turn should execute concurrently');
+  assert.equal(maxActiveObserverWrites, 1, 'tool UI/database observer events must remain serialized');
+  assert.deepEqual(
+    secondTurnMessages.filter((message) => message.role === ai.ModelMessageRole.Tool).map((message) => message.content),
+    ['result:call:1', 'result:call:2', 'result:call:3'],
+    'parallel tool results must be appended in provider call order'
   );
 
   const streamedDeltas = [];
@@ -420,6 +506,29 @@ try {
   assert.equal(retryTransitions[0].action, agent.AgentRunAction.Retry);
   assert.equal(retryTransitions[0].errorCode, 'provider.transient');
   assert.equal(retryTransitions[0].payload.retryAfterMs, 1000);
+
+  retryTransitions.length = 0;
+  const rateLimitBatch = new agent.RunTutorAgentBatch(
+    { async execute() { return []; } },
+    { async execute() { return []; } },
+    { async execute(command) { retryTransitions.push(command); } },
+    clock,
+    [{
+      runType: agent.AgentRunType.ContentGeneration,
+      async execute() {
+        throw new ai.ProviderGatewayError(
+          'provider busy',
+          ai.ProviderErrorKind.RateLimited,
+          429,
+          5_000
+        );
+      }
+    }]
+  );
+  const rateLimitResult = await rateLimitBatch.executeRuns([retryRun]);
+  assert.equal(rateLimitResult.retried, 1);
+  assert.equal(retryTransitions[0].errorCode, 'provider.rate_limited');
+  assert.equal(retryTransitions[0].payload.retryAfterMs, 5_000);
 
   retryTransitions.length = 0;
   const exhaustedResult = await retryBatch.executeRuns([{

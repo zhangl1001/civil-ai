@@ -3,6 +3,7 @@ import {
   ProviderErrorKind,
   ProviderGatewayError,
   type ProviderGateway,
+  type ModelContentPart,
   type ProviderRequest,
   type ProviderResponse,
   type ProviderTextDelta
@@ -11,6 +12,7 @@ import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTranspo
 import { assertNonEmptyProviderResult, assertProviderResponse } from './ProviderHttpSupport';
 import { AnthropicStreamAccumulator, parseAnthropicResponse } from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
+import { StructuredOutputCapability, type StructuredOutputMode } from './StructuredOutputCapability';
 import {
   anthropicInputSchema,
   anthropicMessagesEndpoint,
@@ -29,8 +31,10 @@ const STRUCTURED_RESULT_TOOL = 'submit_structured_result';
 
 export class AnthropicGateway implements ProviderGateway {
   readonly provider = ProviderCode.Anthropic;
+  readonly capabilities = { multimodalInput: true } as const;
   readonly model: string;
   private readonly config: AnthropicGatewayConfig;
+  private readonly structuredOutput = new StructuredOutputCapability();
 
   constructor(
     config: AnthropicGatewayConfig,
@@ -41,10 +45,12 @@ export class AnthropicGateway implements ProviderGateway {
   }
 
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
+    const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
     try {
-      return await this.sendCompletion(request, 'tool', signal);
+      return await this.sendCompletion(request, mode, signal);
     } catch (error) {
-      if (!request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
+      if (mode !== 'tool' || !request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
+      this.structuredOutput.markToolModeUnsupported();
       return this.sendCompletion(request, 'prompt', signal);
     }
   }
@@ -81,7 +87,7 @@ export class AnthropicGateway implements ProviderGateway {
 
   private async sendCompletion(
     request: ProviderRequest,
-    structuredMode: 'tool' | 'prompt',
+    structuredMode: StructuredOutputMode,
     signal?: AbortSignal
   ): Promise<ProviderResponse> {
     const response = await this.transport.send(this.httpRequest(request, false, structuredMode, signal));
@@ -100,7 +106,7 @@ export class AnthropicGateway implements ProviderGateway {
   private httpRequest(
     request: ProviderRequest,
     stream: boolean,
-    structuredMode: 'none' | 'tool' | 'prompt',
+    structuredMode: 'none' | StructuredOutputMode,
     signal?: AbortSignal
   ) {
     if (request.responseSchema && request.tools?.length) {
@@ -178,7 +184,7 @@ function toAnthropicMessages(messages: ProviderRequest['messages']): Array<Recor
     }
     if (message.role === 'assistant' && message.toolCalls?.length) {
       const content: Array<Record<string, unknown>> = [];
-      if (message.content) content.push({ type: 'text', text: message.content });
+      content.push(...toAnthropicContent(message.content));
       message.toolCalls.forEach((call) => content.push({
         type: 'tool_use',
         id: call.id,
@@ -187,11 +193,25 @@ function toAnthropicMessages(messages: ProviderRequest['messages']): Array<Recor
       }));
       result.push({ role: 'assistant', content });
     } else {
-      result.push({ role: message.role, content: message.content });
+      result.push({ role: message.role, content: toAnthropicContent(message.content) });
     }
     index += 1;
   }
   return result;
+}
+
+function toAnthropicContent(content: ProviderRequest['messages'][number]['content']): Array<Record<string, unknown>> {
+  if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : [];
+  return content.map((part: ModelContentPart) => part.type === 'text'
+    ? { type: 'text', text: part.text }
+    : {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: part.mediaType,
+          data: part.dataBase64
+        }
+      });
 }
 
 function anthropicToolChoice(choice: ProviderRequest['toolChoice']): unknown {

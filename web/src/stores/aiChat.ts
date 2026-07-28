@@ -2,11 +2,13 @@ import { defineStore } from 'pinia';
 import type { AIMessage, AISession } from '@/domain/ai';
 import { buildConversationSummary } from '@/ai/ChatContextBuilder';
 import { AI_MESSAGE_CHANGED_EVENT, aiChatRepository } from '@/services/AIChatRepository';
+import { AI_CHAT_MESSAGE_PAGE_SIZE } from '@/ai/ChatMessagePagination';
 import {
   chatAgentService,
   type ChatAssistantStreamUpdate
 } from '@/services/ChatAgentService';
 import { projectRepository } from '@/services/ProjectRepository';
+import type { ModelImageContentPart } from '@/capabilities/ai-runtime/public';
 
 let initializationPromise: Promise<void> | undefined;
 
@@ -20,6 +22,8 @@ export interface AIChatState {
   session: AISession | null;
   sessions: AISession[];
   messages: AIMessage[];
+  hasOlderMessages: boolean;
+  isLoadingOlderMessages: boolean;
   thinkingEnabled: boolean;
   activeRequestText: string;
   activeSessionId: string;
@@ -37,6 +41,8 @@ export const useAIChatStore = defineStore('aiChat', {
     session: null,
     sessions: [],
     messages: [],
+    hasOlderMessages: false,
+    isLoadingOlderMessages: false,
     thinkingEnabled: localStorage.getItem('ai-thinking-enabled') === '1',
     activeRequestText: '',
     activeSessionId: '',
@@ -53,10 +59,10 @@ export const useAIChatStore = defineStore('aiChat', {
   },
 
   actions: {
-    async open(prompt?: string) {
+    async open(prompt?: string, attachments?: readonly ModelImageContentPart[]) {
       this.isOpen = true;
       await this.init();
-      if (prompt) await this.send(prompt);
+      if (prompt) await this.send(prompt, attachments);
     },
 
     close() {
@@ -74,7 +80,9 @@ export const useAIChatStore = defineStore('aiChat', {
         const project = await projectRepository.getActiveProject();
         this.session = await aiChatRepository.getOrCreateSession(project.id);
         this.sessions = await aiChatRepository.listSessions(project.id);
-        this.messages = await aiChatRepository.listMessages(this.session.id);
+        const page = await aiChatRepository.listMessagePage(this.session.id);
+        this.messages = [...page.messages];
+        this.hasOlderMessages = page.hasMore;
         if (!this.initialized) {
           this.initialized = true;
           window.addEventListener(AI_MESSAGE_CHANGED_EVENT, (event) => {
@@ -103,7 +111,11 @@ export const useAIChatStore = defineStore('aiChat', {
 
     async refreshMessages() {
       if (!this.session) return;
-      const messages = [...await aiChatRepository.listMessages(this.session.id)];
+      const loadedCount = this.messages.filter(isPersistedMessage).length;
+      const page = await aiChatRepository.listMessagePage(this.session.id, {
+        limit: Math.max(AI_CHAT_MESSAGE_PAGE_SIZE, loadedCount)
+      });
+      const messages = [...page.messages];
       const isActiveSession = this.isSending && this.activeSessionId === this.session.id;
       if (isActiveSession && this.pendingAssistantMessageId) {
         messages.push({
@@ -115,7 +127,27 @@ export const useAIChatStore = defineStore('aiChat', {
         });
       }
       this.messages = messages;
+      this.hasOlderMessages = page.hasMore;
       this.streamingMessageId = isActiveSession ? this.pendingAssistantMessageId : '';
+    },
+
+    async loadOlderMessages(): Promise<number> {
+      if (!this.session || !this.hasOlderMessages || this.isLoadingOlderMessages) return 0;
+      const first = this.messages.find(isPersistedMessage);
+      if (!first) return 0;
+      this.isLoadingOlderMessages = true;
+      try {
+        const page = await aiChatRepository.listMessagePage(this.session.id, {
+          beforeMessageId: first.id
+        });
+        const existingIds = new Set(this.messages.map((message) => message.id));
+        const older = page.messages.filter((message) => !existingIds.has(message.id));
+        this.messages = [...older, ...this.messages];
+        this.hasOlderMessages = page.hasMore;
+        return older.length;
+      } finally {
+        this.isLoadingOlderMessages = false;
+      }
     },
 
     async refreshSessions() {
@@ -127,6 +159,7 @@ export const useAIChatStore = defineStore('aiChat', {
       const project = await projectRepository.getActiveProject();
       this.session = await aiChatRepository.createSession(project.id, title);
       this.messages = [];
+      this.hasOlderMessages = false;
       await this.refreshSessions();
     },
 
@@ -134,7 +167,9 @@ export const useAIChatStore = defineStore('aiChat', {
       const session = await aiChatRepository.getSession(sessionId);
       if (!session) return;
       this.session = session;
-      this.messages = await aiChatRepository.listMessages(session.id);
+      const page = await aiChatRepository.listMessagePage(session.id);
+      this.messages = [...page.messages];
+      this.hasOlderMessages = page.hasMore;
       await this.refreshSessions();
     },
 
@@ -170,7 +205,7 @@ export const useAIChatStore = defineStore('aiChat', {
       return true;
     },
 
-    async send(content: string) {
+    async send(content: string, attachments?: readonly ModelImageContentPart[]) {
       const text = content.trim();
       if (!text || this.isSending) return;
       await this.init();
@@ -211,6 +246,7 @@ export const useAIChatStore = defineStore('aiChat', {
         }
         const routed = await chatAgentService.handle(text, activeSession, {
           thinkingEnabled: this.thinkingEnabled,
+          attachments,
           onAssistantStream: (update) => this.applyAssistantStream(update)
         });
         if (!routed.handled) throw new Error('AI Agent 未接管当前消息');
@@ -266,9 +302,7 @@ export const useAIChatStore = defineStore('aiChat', {
     },
 
     async updateSessionSummary(sessionId: string) {
-      const messages = sessionId === this.session?.id
-        ? this.messages
-        : await aiChatRepository.listMessages(sessionId);
+      const messages = await aiChatRepository.listMessages(sessionId);
       const summary = buildConversationSummary(messages);
       await aiChatRepository.updateSessionSummary(sessionId, summary);
       if (this.session?.id === sessionId) {
@@ -277,3 +311,7 @@ export const useAIChatStore = defineStore('aiChat', {
     }
   }
 });
+
+function isPersistedMessage(message: AIMessage): boolean {
+  return !message.id.startsWith('optimistic-user:') && !message.id.startsWith('pending-assistant:');
+}

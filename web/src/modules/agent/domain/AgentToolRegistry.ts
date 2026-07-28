@@ -19,26 +19,33 @@ export interface AgentSkillDefinition {
   readonly contextBudgetTokens: number;
 }
 
+export interface AgentCapabilityBundle {
+  readonly tools: readonly AgentToolDefinition[];
+  readonly skills: readonly AgentSkillDefinition[];
+}
+
 /** Static registry. It exposes tool metadata to a model but never an executor or prompt body. */
 export class AgentToolRegistry {
   private readonly tools = new Map<string, AgentToolDefinition>();
   private readonly skills = new Map<string, AgentSkillDefinition>();
 
   registerTool(tool: AgentToolDefinition): void {
-    assertCode(tool.code, 'Tool');
-    if (!tool.description.trim() || !tool.enabledFor.length) throw new Error(`Invalid agent tool: ${tool.code}`);
-    if (this.tools.has(tool.code)) throw new Error(`Duplicate agent tool: ${tool.code}`);
-    this.tools.set(tool.code, freezeTool(tool));
+    registerTool(this.tools, tool);
   }
 
   registerSkill(skill: AgentSkillDefinition): void {
-    assertCode(skill.code, 'Skill');
-    if (!skill.description.trim() || !Number.isInteger(skill.contextBudgetTokens) || skill.contextBudgetTokens < 64 || skill.contextBudgetTokens > 8_192) {
-      throw new Error(`Invalid agent skill: ${skill.code}`);
-    }
-    if (skill.toolCodes.some((code) => !this.tools.has(code))) throw new Error(`Agent skill references unknown tool: ${skill.code}`);
-    if (this.skills.has(skill.code)) throw new Error(`Duplicate agent skill: ${skill.code}`);
-    this.skills.set(skill.code, Object.freeze({ ...skill, toolCodes: Object.freeze([...skill.toolCodes]) }));
+    registerSkill(this.tools, this.skills, skill);
+  }
+
+  registerBundle(bundle: AgentCapabilityBundle): void {
+    const nextTools = new Map(this.tools);
+    const nextSkills = new Map(this.skills);
+    bundle.tools.forEach((tool) => registerTool(nextTools, tool));
+    bundle.skills.forEach((skill) => registerSkill(nextTools, nextSkills, skill));
+    this.tools.clear();
+    nextTools.forEach((tool, code) => this.tools.set(code, tool));
+    this.skills.clear();
+    nextSkills.forEach((skill, code) => this.skills.set(code, skill));
   }
 
   resolve(skillCodes: readonly string[], audience: string): { readonly skills: readonly AgentSkillDefinition[]; readonly tools: readonly AgentToolDefinition[] } {
@@ -47,6 +54,30 @@ export class AgentToolRegistry {
     const tools = [...allowedCodes].map((code) => this.tools.get(code)!).filter((tool) => tool.enabledFor.includes(audience));
     return { skills, tools };
   }
+}
+
+function registerTool(
+  tools: Map<string, AgentToolDefinition>,
+  tool: AgentToolDefinition
+): void {
+  assertCode(tool.code, 'Tool');
+  if (!tool.description.trim() || !tool.enabledFor.length) throw new Error(`Invalid agent tool: ${tool.code}`);
+  if (tools.has(tool.code)) throw new Error(`Duplicate agent tool: ${tool.code}`);
+  tools.set(tool.code, freezeTool(tool));
+}
+
+function registerSkill(
+  tools: ReadonlyMap<string, AgentToolDefinition>,
+  skills: Map<string, AgentSkillDefinition>,
+  skill: AgentSkillDefinition
+): void {
+  assertCode(skill.code, 'Skill');
+  if (!skill.description.trim() || !Number.isInteger(skill.contextBudgetTokens) || skill.contextBudgetTokens < 64 || skill.contextBudgetTokens > 8_192) {
+    throw new Error(`Invalid agent skill: ${skill.code}`);
+  }
+  if (skill.toolCodes.some((code) => !tools.has(code))) throw new Error(`Agent skill references unknown tool: ${skill.code}`);
+  if (skills.has(skill.code)) throw new Error(`Duplicate agent skill: ${skill.code}`);
+  skills.set(skill.code, Object.freeze({ ...skill, toolCodes: Object.freeze([...skill.toolCodes]) }));
 }
 
 function assertCode(value: string, label: string): void {

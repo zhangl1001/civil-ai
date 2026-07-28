@@ -3,6 +3,7 @@ import { practiceModuleLabel } from '@/domain/labels';
 import type { CapabilityNode } from '@/modules/curriculum/public';
 import type { ObjectiveSessionFacts } from '@/modules/evidence/public';
 import type { MasteryTrack, ReviewQueueItem } from '@/modules/mastery/public';
+import type { AbilityCalibrationSnapshot } from '@/modules/calibration/public';
 
 export type DiagnosisType =
   | 'insufficient_sample'
@@ -90,6 +91,7 @@ export interface QualityDashboard {
   diagnosis: AbilityDiagnosis;
   diagnosisSummary: string;
   moduleDiagnoses: ModuleDiagnosis[];
+  calibration?: AbilityCalibrationSnapshot;
 }
 
 interface SessionSlice {
@@ -103,12 +105,13 @@ export class QualityDashboardService {
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先建立备考档案。');
 
-    const [curriculum, sessions, tracks, reviews, candidateHome] = await Promise.all([
+    const [curriculum, sessions, tracks, reviews, candidateHome, calibration] = await Promise.all([
       runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
       runtime.learningSessionRepository.listAll(cycle.examCycle.id),
       runtime.masteryRepository.listAllTracks(cycle.examCycle.id),
       runtime.masteryRepository.listAllReviews(cycle.examCycle.id),
-      runtime.getCandidateHome.execute()
+      runtime.getCandidateHome.execute(),
+      runtime.buildAbilityCalibration.execute({ persist: false })
     ]);
     if (!curriculum) throw new Error('当前考试大纲不可用。');
 
@@ -193,7 +196,8 @@ export class QualityDashboardService {
       advice: adviceFor({ totalQuestions, weakestModule, reviewDueCount, avgSecondsPerQuestion }),
       diagnosis,
       diagnosisSummary: diagnosisSummary(diagnosis),
-      moduleDiagnoses
+      moduleDiagnoses,
+      calibration
     };
   }
 }

@@ -11,6 +11,9 @@ import type {
   JsonObject,
   LectureId,
   LearningThreadId,
+  QuestionLineageId,
+  QuestionReferencePackId,
+  QuestionSourceId,
   TeachingBlueprintId,
   QuestionId,
   QuestionSetId,
@@ -32,6 +35,7 @@ import type {
   QuestionCapabilityLink,
   QuestionRecord,
   QuestionSetLibraryEntry,
+  QuestionSetLibraryQuery,
   QuestionSetRecord,
   QuestionTemplateVersion
 } from '../contracts/ContentRepository';
@@ -49,6 +53,11 @@ import type {
 } from '../domain/ContentCodes';
 import { QuestionSetEntryMode } from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
+import type {
+  QuestionCalibrationRole,
+  QuestionGenerationIntent,
+  QuestionOriginType
+} from '../domain/QuestionSourceCodes';
 
 interface ReleaseRow extends SqlRow { id: string; content_hash: string; }
 interface SchemaRow extends SqlRow {
@@ -64,6 +73,8 @@ interface SpecRow extends SqlRow {
   id: string; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; content_kind: GenerationSpecRecord['contentKind'];
   assessment_role: AssessmentRole; question_template_version_id: string | null; content_schema_version_id: string;
   prompt_version_id: string;
+  reference_pack_id: string | null; reference_policy_version: string | null;
+  generation_intent: QuestionGenerationIntent | null; calibration_target: string | null;
   requested_count: number | null; difficulty_json: string; constraints_json: string; context_snapshot_json: string;
   content_hash: string; created_at: number;
 }
@@ -85,15 +96,26 @@ interface LectureRow extends SqlRow {
 interface QuestionSetRow extends SqlRow {
   id: string; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; generation_spec_id: string;
   purpose: QuestionSetPurpose; assessment_role: AssessmentRole; module: string; status: QuestionSetStatus;
+  origin_type: QuestionOriginType; source_id: string | null; calibration_role: QuestionCalibrationRole;
   practice_status: QuestionSetPracticeStatus; question_count: number; content_hash: string | null; content_version: number; created_at: number;
 }
 interface QuestionSetLibraryRow extends QuestionSetRow {
   constraints_json: string;
+  source_type: QuestionOriginType | null;
+  source_provider: string | null;
+  source_exam_type: string | null;
+  source_exam_year: number | null;
+  source_province: string | null;
+  source_exam_batch: string | null;
+  source_paper_name: string | null;
+  source_section_name: string | null;
 }
 interface QuestionRow extends SqlRow {
   id: string; question_set_id: string; exam_cycle_id: string; capability_node_id: string;
   question_template_version_id: string; sequence: number; difficulty: number; cognitive_level: string;
   purpose: string; assessment_role: AssessmentRole; variant_group_id: string | null; content_json: string;
+  origin_type: QuestionOriginType; source_id: string | null; source_sequence: number | null;
+  lineage_id: string | null; calibration_role: QuestionCalibrationRole; is_official: number;
   correct_answer_json: string; quality_status: QuestionQualityStatus; content_hash: string;
   content_schema_version_id: string; content_version: number; generator_workflow_id: string; created_at: number;
 }
@@ -102,6 +124,20 @@ interface CapabilityLinkRow extends SqlRow {
 }
 interface LectureLinkRow extends SqlRow {
   lecture_id: string; question_set_id: string; relation_role: 'primary' | 'extension' | 'review';
+}
+
+function appendInFilter(
+  filters: string[],
+  params: Array<string | number>,
+  column: string,
+  values?: readonly (string | number)[]
+): void {
+  const normalized = [...new Set((values ?? []).filter((value) => (
+    typeof value === 'number' ? Number.isFinite(value) : Boolean(value.trim())
+  )))];
+  if (!normalized.length) return;
+  filters.push(`${column} IN (${normalized.map(() => '?').join(', ')})`);
+  params.push(...normalized);
 }
 
 export class SqliteContentRepository implements ContentRepository {
@@ -209,14 +245,38 @@ export class SqliteContentRepository implements ContentRepository {
     examCycleId: ExamCycleId,
     limit: number
   ): Promise<readonly QuestionSetLibraryEntry[]> {
+    return this.queryQuestionSetLibrary({ examCycleId, limit });
+  }
+
+  async queryQuestionSetLibrary(
+    query: QuestionSetLibraryQuery
+  ): Promise<readonly QuestionSetLibraryEntry[]> {
+    const { examCycleId, limit } = query;
     assertQuestionSetQueryLimit(limit);
+    const filters = [`question_set.exam_cycle_id = ?`, `question_set.status = 'ready'`];
+    const params: Array<string | number> = [examCycleId];
+    appendInFilter(filters, params, 'question_set.capability_node_id', query.capabilityNodeIds);
+    appendInFilter(filters, params, 'question_set.origin_type', query.originTypes);
+    appendInFilter(filters, params, 'question_set.module', query.modules);
+    appendInFilter(filters, params, 'question_set.practice_status', query.practiceStatuses);
+    appendInFilter(filters, params, 'source.exam_year', query.examYears);
+    appendInFilter(filters, params, 'source.province', query.provinces);
     const rows = await this.database.query<QuestionSetLibraryRow>(
-      `SELECT question_set.*, generation_spec.constraints_json
+      `SELECT question_set.*, generation_spec.constraints_json,
+              source.source_type,
+              source.provider AS source_provider,
+              source.exam_type AS source_exam_type,
+              source.exam_year AS source_exam_year,
+              source.province AS source_province,
+              source.exam_batch AS source_exam_batch,
+              source.paper_name AS source_paper_name,
+              source.section_name AS source_section_name
        FROM question_sets question_set
        JOIN generation_specs generation_spec ON generation_spec.id = question_set.generation_spec_id
-       WHERE question_set.exam_cycle_id = ? AND question_set.status = 'ready'
+       LEFT JOIN question_sources source ON source.id = question_set.source_id AND source.status = 'active'
+       WHERE ${filters.join(' AND ')}
        ORDER BY question_set.created_at DESC LIMIT ?`,
-      [examCycleId, limit]
+      [...params, limit]
     );
     return rows.map((row) => {
       const constraints = parseJsonObject(row.constraints_json, 'generation_specs.constraints_json');
@@ -240,6 +300,18 @@ export class SqliteContentRepository implements ContentRepository {
         practiceStatus: row.practice_status,
         entryMode,
         source: typeof constraints.source === 'string' ? constraints.source : undefined,
+        originType: row.origin_type,
+        sourceId: row.source_id as QuestionSourceId | null ?? undefined,
+        sourceMetadata: row.source_type ? {
+          sourceType: row.source_type,
+          provider: row.source_provider ?? undefined,
+          examType: row.source_exam_type ?? undefined,
+          examYear: row.source_exam_year ?? undefined,
+          province: row.source_province ?? undefined,
+          examBatch: row.source_exam_batch ?? undefined,
+          paperName: row.source_paper_name ?? undefined,
+          sectionName: row.source_section_name ?? undefined
+        } : undefined,
         createdAt: row.created_at as InstantMs
       };
     });
@@ -382,10 +454,12 @@ export class SqliteContentRepository implements ContentRepository {
     return transaction.run(
       `INSERT INTO question_sets(
         id, exam_cycle_id, learning_thread_id, teaching_blueprint_id, capability_node_id, generation_spec_id, purpose, assessment_role,
-        module, status, practice_status, question_count, content_hash, content_version, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        module, origin_type, source_id, calibration_role, status, practice_status, question_count,
+        content_hash, content_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [value.id, value.examCycleId, value.learningThreadId ?? null, value.teachingBlueprintId ?? null, value.capabilityNodeId, value.generationSpecId, value.purpose,
-        value.assessmentRole, value.module, value.status, value.practiceStatus, value.questionCount, value.contentHash ?? null,
+        value.assessmentRole, value.module, value.originType ?? 'ai_generated', value.sourceId ?? null,
+        value.calibrationRole ?? 'none', value.status, value.practiceStatus, value.questionCount, value.contentHash ?? null,
         value.contentVersion, value.createdAt]
     );
   }
@@ -395,12 +469,15 @@ export class SqliteContentRepository implements ContentRepository {
       `INSERT INTO questions(
         id, question_set_id, exam_cycle_id, capability_node_id, question_template_version_id,
         sequence, difficulty, cognitive_level, purpose, assessment_role, variant_group_id,
+        origin_type, source_id, source_sequence, lineage_id, calibration_role, is_official,
         content_json, correct_answer_json, quality_status, content_hash, content_schema_version_id,
         content_version, generator_workflow_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [value.id, value.questionSetId, value.examCycleId, value.capabilityNodeId,
         value.questionTemplateVersionId, value.sequence, value.difficulty, value.cognitiveLevel,
-        value.purpose, value.assessmentRole, value.variantGroupId ?? null, JSON.stringify(value.content),
+        value.purpose, value.assessmentRole, value.variantGroupId ?? null, value.originType ?? 'ai_generated',
+        value.sourceId ?? null, value.sourceSequence ?? null, value.lineageId ?? null,
+        value.calibrationRole ?? 'none', value.isOfficial ? 1 : 0, JSON.stringify(value.content),
         JSON.stringify(value.correctAnswer), value.qualityStatus, value.contentHash,
         value.contentSchemaVersionId, value.contentVersion, value.generatorWorkflowId, value.createdAt]
     );
@@ -445,6 +522,10 @@ export class SqliteContentRepository implements ContentRepository {
       questionTemplateVersionId: row.question_template_version_id as QuestionTemplateVersionId | null ?? undefined,
       contentSchemaVersionId: row.content_schema_version_id as ContentSchemaVersionId,
       promptVersionId: row.prompt_version_id as PromptVersionId,
+      referencePackId: row.reference_pack_id as QuestionReferencePackId | null ?? undefined,
+      referencePolicyVersion: row.reference_policy_version ?? undefined,
+      generationIntent: row.generation_intent ?? undefined,
+      calibrationTarget: row.calibration_target ?? undefined,
       requestedCount: row.requested_count ?? undefined,
       difficulty: parseJsonObject(row.difficulty_json, 'generation_specs.difficulty_json'),
       constraints: parseJsonObject(row.constraints_json, 'generation_specs.constraints_json'),
@@ -519,6 +600,9 @@ export class SqliteContentRepository implements ContentRepository {
       purpose: row.purpose,
       assessmentRole: row.assessment_role,
       module: row.module,
+      originType: row.origin_type,
+      sourceId: row.source_id as QuestionSourceId | null ?? undefined,
+      calibrationRole: row.calibration_role,
       status: row.status,
       practiceStatus: row.practice_status,
       questionCount: row.question_count,
@@ -543,6 +627,12 @@ export class SqliteContentRepository implements ContentRepository {
       purpose: row.purpose,
       assessmentRole: row.assessment_role,
       variantGroupId: row.variant_group_id ?? undefined,
+      originType: row.origin_type,
+      sourceId: row.source_id as QuestionSourceId | null ?? undefined,
+      sourceSequence: row.source_sequence ?? undefined,
+      lineageId: row.lineage_id as QuestionLineageId | null ?? undefined,
+      calibrationRole: row.calibration_role,
+      isOfficial: row.is_official === 1,
       content: parsed.value,
       correctAnswer: parseJsonObject(row.correct_answer_json, 'questions.correct_answer_json'),
       qualityStatus: row.quality_status,

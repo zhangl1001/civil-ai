@@ -21,6 +21,7 @@
 		A1B2C3D4E5F6000000000007 /* SpeechRecognitionPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000008 /* SpeechRecognitionPlugin.swift */; };
 		A1B2C3D4E5F6000000000009 /* NativeStreamingHTTPPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000010 /* NativeStreamingHTTPPlugin.swift */; };
 		A1B2C3D4E5F6000000000011 /* NativeAgentWorkspacePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000012 /* NativeAgentWorkspacePlugin.swift */; };
+		A1B2C3D4E5F6000000000013 /* NativeDocumentTextPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000014 /* NativeDocumentTextPlugin.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 		A1B2C3D4E5F6000000000008 /* SpeechRecognitionPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognitionPlugin.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000010 /* NativeStreamingHTTPPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeStreamingHTTPPlugin.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000012 /* NativeAgentWorkspacePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAgentWorkspacePlugin.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000000000014 /* NativeDocumentTextPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTextPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,6 +84,7 @@
 				A1B2C3D4E5F6000000000008 /* SpeechRecognitionPlugin.swift */,
 				A1B2C3D4E5F6000000000010 /* NativeStreamingHTTPPlugin.swift */,
 				A1B2C3D4E5F6000000000012 /* NativeAgentWorkspacePlugin.swift */,
+				A1B2C3D4E5F6000000000014 /* NativeDocumentTextPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -180,6 +183,7 @@
 				A1B2C3D4E5F6000000000007 /* SpeechRecognitionPlugin.swift in Sources */,
 				A1B2C3D4E5F6000000000009 /* NativeStreamingHTTPPlugin.swift in Sources */,
 				A1B2C3D4E5F6000000000011 /* NativeAgentWorkspacePlugin.swift in Sources */,
+				A1B2C3D4E5F6000000000013 /* NativeDocumentTextPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

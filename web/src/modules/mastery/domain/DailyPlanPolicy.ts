@@ -1,7 +1,13 @@
 import type { CapabilityNodeId, ExamCycleId } from '@/kernel/public';
 import type { MasteryTrack, ReviewQueueItem } from '../contracts/MasteryRepository';
+import {
+  prescribeDailyLearningLoad,
+  questionCountForDailyAction,
+  type DailyLearningLoadPrescription,
+  type DailyTeachingAction
+} from './DailyLearningLoadPolicy';
 
-export type DailyTeachingAction = 'review' | 'repair' | 'lecture' | 'guided_practice' | 'independent_practice' | 'transfer';
+export type { DailyTeachingAction } from './DailyLearningLoadPolicy';
 
 export const DailyPlanReasonCode = {
   MasteryRepairRequired: 'mastery_repair_required',
@@ -27,6 +33,7 @@ export interface DailyPlanProposal {
   readonly plannedMinutes: number;
   readonly items: readonly DailyPlanProposalItem[];
   readonly rationale: readonly string[];
+  readonly learningLoad: DailyLearningLoadPrescription;
 }
 
 /** Local first plan: due independent evidence precedes new drilling, and no item may exceed the time budget. */
@@ -35,6 +42,8 @@ export function proposeDailyPlan(input: {
   readonly availableMinutes: number;
   readonly dueReviews: readonly ReviewQueueItem[];
   readonly priorityTracks: readonly MasteryTrack[];
+  readonly remainingDays?: number;
+  readonly phase?: string;
 }): DailyPlanProposal {
   if (!Number.isInteger(input.availableMinutes) || input.availableMinutes < 5 || input.availableMinutes > 480) {
     throw new RangeError('Daily available minutes must be between 5 and 480');
@@ -42,10 +51,22 @@ export function proposeDailyPlan(input: {
   let remaining = input.availableMinutes;
   const items: DailyPlanProposalItem[] = [];
   const rationale: string[] = [];
+  const learningLoad = prescribeDailyLearningLoad({
+    availableMinutes: input.availableMinutes,
+    remainingDays: input.remainingDays,
+    phase: input.phase,
+    dueReviewCount: input.dueReviews.length,
+    priorityTracks: input.priorityTracks
+  });
   const add = (item: DailyPlanProposalItem) => {
+    if (items.length >= learningLoad.maxPlanItems) return;
     const minutes = Math.min(item.targetMinutes, remaining);
     if (minutes < 5) return;
-    items.push({ ...item, targetMinutes: minutes });
+    items.push({
+      ...item,
+      targetMinutes: minutes,
+      targetCount: questionCountForDailyAction(item.action, minutes, learningLoad)
+    });
     remaining -= minutes;
   };
 
@@ -67,5 +88,12 @@ export function proposeDailyPlan(input: {
     }
   }
   if (items.length && remaining >= 5) rationale.push('剩余时间刻意留白，避免为凑题量而牺牲反馈、休息和完成质量。');
-  return { examCycleId: input.examCycleId, availableMinutes: input.availableMinutes, plannedMinutes: input.availableMinutes - remaining, items, rationale };
+  return {
+    examCycleId: input.examCycleId,
+    availableMinutes: input.availableMinutes,
+    plannedMinutes: input.availableMinutes - remaining,
+    items,
+    rationale,
+    learningLoad
+  };
 }

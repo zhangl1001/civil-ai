@@ -94,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { onMounted, ref, type Component } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   ArrowLeftIcon,
@@ -172,7 +172,7 @@ function categoryClass(name: string): string {
 }
 
 function categoryIcon(name: string) {
-  const map: Record<string, any> = {
+  const map: Record<string, Component> = {
     政治: LandmarkIcon,
     经济: BriefcaseBusinessIcon,
     社会: UsersIcon,
@@ -182,7 +182,7 @@ function categoryIcon(name: string) {
     外交: GlobeIcon,
     综合: LayersIcon
   };
-  return computed(() => map[name] || LayersIcon).value;
+  return map[name] || LayersIcon;
 }
 </script>
 

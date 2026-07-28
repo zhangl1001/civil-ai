@@ -3,6 +3,7 @@ import {
   ProviderErrorKind,
   ProviderGatewayError,
   type ProviderGateway,
+  type ModelContentPart,
   type ProviderRequest,
   type ProviderResponse,
   type ProviderTextDelta
@@ -11,6 +12,7 @@ import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTranspo
 import { assertNonEmptyProviderResult, assertProviderResponse } from './ProviderHttpSupport';
 import { OpenAIStreamAccumulator, parseOpenAIResponse } from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
+import { StructuredOutputCapability, type StructuredOutputMode } from './StructuredOutputCapability';
 
 export interface OpenAICompatibleGatewayConfig {
   readonly apiKey: string;
@@ -22,7 +24,9 @@ const STRUCTURED_RESULT_TOOL = 'submit_structured_result';
 
 export class OpenAICompatibleGateway implements ProviderGateway {
   readonly provider = ProviderCode.OpenAICompatible;
+  readonly capabilities = { multimodalInput: true } as const;
   readonly model: string;
+  private readonly structuredOutput = new StructuredOutputCapability();
 
   constructor(
     private readonly config: OpenAICompatibleGatewayConfig,
@@ -32,10 +36,12 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   }
 
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
+    const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
     try {
-      return await this.sendCompletion(request, 'tool', signal);
+      return await this.sendCompletion(request, mode, signal);
     } catch (error) {
-      if (!request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
+      if (mode !== 'tool' || !request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
+      this.structuredOutput.markToolModeUnsupported();
       return this.sendCompletion(request, 'prompt', signal);
     }
   }
@@ -71,7 +77,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
 
   private async sendCompletion(
     request: ProviderRequest,
-    structuredMode: 'tool' | 'prompt',
+    structuredMode: StructuredOutputMode,
     signal?: AbortSignal
   ): Promise<ProviderResponse> {
     const response = await this.transport.send(this.httpRequest(request, false, structuredMode, signal));
@@ -90,7 +96,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   private httpRequest(
     request: ProviderRequest,
     stream: boolean,
-    structuredMode: 'none' | 'tool' | 'prompt',
+    structuredMode: 'none' | StructuredOutputMode,
     signal?: AbortSignal
   ) {
     if (request.responseSchema && request.tools?.length) {
@@ -166,7 +172,17 @@ function toOpenAIMessage(message: ProviderRequest['messages'][number]): Record<s
       }))
     };
   }
-  return { role: message.role, content: message.content };
+  return { role: message.role, content: toOpenAIContent(message.content) };
+}
+
+function toOpenAIContent(content: ProviderRequest['messages'][number]['content']): unknown {
+  if (typeof content === 'string') return content;
+  return content.map((part: ModelContentPart) => part.type === 'text'
+    ? { type: 'text', text: part.text }
+    : {
+        type: 'image_url',
+        image_url: { url: `data:${part.mediaType};base64,${part.dataBase64}` }
+      });
 }
 
 function openAIToolChoice(choice: ProviderRequest['toolChoice']): unknown {

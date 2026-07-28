@@ -38,12 +38,16 @@ try {
   const compiler = new ai.PromptCompiler(registry);
   const promptRepository = { findById: async (id) => id === ai.structuredObjectivePromptV2.versionId ? ai.structuredObjectivePromptV2 : undefined };
   const contextCompiler = new content.GenerationContextCompiler(candidateRepository, curriculumRepository);
+  const referencePackBuilder = { execute: async () => undefined };
+  const referencePackRepository = { find: async () => undefined };
+  const questionSourceRepository = { saveLineages: async () => undefined };
   const createWorkflow = new content.CreateGenerationWorkflow(
     unitOfWork,
     generationRepository,
     contentRepository,
     outboxRepository,
     contextCompiler,
+    referencePackBuilder,
     ai.structuredObjectivePromptV2.versionId,
     clock,
     ids
@@ -55,6 +59,8 @@ try {
     promptRepository,
     invocationRepository,
     outboxRepository,
+    referencePackRepository,
+    questionSourceRepository,
     compiler,
     clock,
     ids
@@ -141,7 +147,7 @@ try {
 
   const mostlyValid = await createWorkflow.execute(generationCommand('generation:test:mostly-valid', 10));
   const mostlyValidSource = validGeneratedContent(10);
-  mostlyValidSource.questions[7].options.pop();
+  mostlyValidSource.questions[7].options.splice(1);
   const mostlyValidGateway = new StubGateway(
     ai.ProviderCode.Anthropic,
     JSON.stringify(mostlyValidSource)
@@ -152,15 +158,35 @@ try {
   assert.equal(contentRepository.bundles.at(-1).questions.length, 9);
   assert.equal(contentRepository.bundles.at(-1).questionSet.questionCount, 9);
 
+  const exactlyEightyPercent = await createWorkflow.execute(generationCommand('generation:test:eighty-percent', 5));
+  const exactlyEightyPercentSource = validGeneratedContent(5);
+  exactlyEightyPercentSource.questions[4].options.splice(1);
+  const exactlyEightyPercentGateway = new StubGateway(
+    ai.ProviderCode.Anthropic,
+    JSON.stringify(exactlyEightyPercentSource)
+  );
+  const exactlyEightyPercentResult = await runWorkflow.execute(
+    exactlyEightyPercent.workflow.id,
+    exactlyEightyPercentGateway
+  );
+  assert.equal(exactlyEightyPercentResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    exactlyEightyPercentGateway.callCount,
+    1,
+    'a batch with exactly 80% valid questions must commit without repair'
+  );
+  assert.equal(contentRepository.bundles.at(-1).questions.length, 4);
+  assert.equal(contentRepository.bundles.at(-1).questionSet.questionCount, 4);
+
   const shortBatch = await createWorkflow.execute(generationCommand('generation:test:short-batch', 5));
-  const shortBatchSource = validGeneratedContent(4);
+  const shortBatchSource = validGeneratedContent(3);
   const shortBatchGateway = new SequenceGateway(ai.ProviderCode.Anthropic, [
     JSON.stringify(shortBatchSource),
     JSON.stringify({
-      questionPatches: [{
-        index: 4,
-        question: validGeneratedContent(5).questions[4]
-      }]
+      questionPatches: [3, 4].map((index) => ({
+        index,
+        question: validGeneratedContent(5).questions[index]
+      }))
     })
   ]);
   const shortBatchResult = await runWorkflow.execute(shortBatch.workflow.id, shortBatchGateway);
@@ -168,7 +194,7 @@ try {
   assert.equal(shortBatchGateway.callCount, 2);
   assert.deepEqual(
     shortBatchGateway.requests[1].responseSchema.properties.questionPatches.items.properties.index.enum,
-    [4],
+    [3, 4],
     'a short batch must request only its missing question slots'
   );
   assert.equal(contentRepository.bundles.at(-1).questions.length, 5);
@@ -203,8 +229,12 @@ try {
   const autonomousStructure = await createWorkflow.execute(generationCommand('generation:test:autonomous-structure'));
   const autonomousSource = authorGeneratedContentWithSingletonMaterial();
   autonomousSource.lecture.sections = autonomousSource.lecture.sections.slice(0, 1);
-  autonomousSource.questions[0].explanation.steps = autonomousSource.questions[0].explanation.steps.slice(0, 1);
-  autonomousSource.questions[0].explanation.pitfalls = [];
+  delete autonomousSource.lecture.sections[0].id;
+  delete autonomousSource.questions[0].id;
+  autonomousSource.questions[0].options.forEach((option) => delete option.id);
+  autonomousSource.questions[0].correctOptionId = 'a';
+  delete autonomousSource.questions[0].explanation.steps;
+  delete autonomousSource.questions[0].explanation.pitfalls;
   const autonomousGateway = new StubGateway(
     ai.ProviderCode.Anthropic,
     JSON.stringify(autonomousSource)
@@ -223,6 +253,16 @@ try {
     false,
     'an omitted optional teaching section must not render as an empty callout'
   );
+  assert.deepEqual(
+    contentRepository.bundles.at(-1).questions[0].content.options.map((option) => option.id),
+    ['A', 'B', 'C', 'D'],
+    'deterministic option ids must be injected without model repair'
+  );
+  assert.equal(
+    contentRepository.bundles.at(-1).questions[0].content.correctOptionId,
+    'A',
+    'safe answer-id casing differences must normalize locally'
+  );
 
   const emptyLectureSource = validGeneratedContent();
   emptyLectureSource.lecture.blocks = [];
@@ -231,10 +271,35 @@ try {
     1,
     'aptitude.judgment.weaken'
   );
-  assert.equal(emptyLectureReport.valid, false);
+  assert.equal(emptyLectureReport.valid, true);
+  assert.equal(emptyLectureReport.readiness, content.ContentReadiness.ReadyWithPendingEnrichment);
   assert(
-    emptyLectureReport.blockingIssues.some((issue) => issue.code === 'quality.lecture_empty'),
-    'an empty lecture must be rejected as a non-renderable structural result'
+    emptyLectureReport.pendingIssues.some((issue) => issue.code === 'quality.lecture_empty'),
+    'an empty lecture must be accepted as answerable content that still needs enrichment'
+  );
+
+  const standardPresentation = content.resolveQuestionPresentation(validGeneratedContent().questions[0]);
+  assert.equal(standardPresentation, content.QuestionPresentationCode.StandardChoice);
+  const graphicPresentationSource = validGeneratedContent().questions[0];
+  graphicPresentationSource.prompt.blocks[0].source = '<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="20" /></svg>';
+  assert.equal(
+    content.resolveQuestionPresentation(graphicPresentationSource),
+    content.QuestionPresentationCode.GraphicChoice,
+    'inline SVG questions must use the proportional graphic presentation'
+  );
+  const sharedPresentationSource = validGeneratedContent().questions[0];
+  sharedPresentationSource.materialGroupId = 'material:shared';
+  sharedPresentationSource.material = document('material:shared', '一段完整共用材料');
+  assert.equal(
+    content.resolveQuestionPresentation(sharedPresentationSource),
+    content.QuestionPresentationCode.SharedMaterialChoice,
+    'shared stems must use the shared-material presentation'
+  );
+  sharedPresentationSource.material.blocks[0].source = '| 年份 | 数值 |\n| --- | ---: |\n| 2025 | 100 |';
+  assert.equal(
+    content.resolveQuestionPresentation(sharedPresentationSource),
+    content.QuestionPresentationCode.DataMaterialChoice,
+    'shared Markdown tables must use the data-material presentation'
   );
 
   const duplicateOptionSource = validGeneratedContent();
@@ -253,7 +318,7 @@ try {
   const structuralRepair = await createWorkflow.execute(generationCommand('generation:test:structural-repair'));
   const structuralSource = authorGeneratedContentWithSingletonMaterial();
   const structuralQuestion = structuredClone(structuralSource.questions[0]);
-  structuralSource.questions[0].explanation.steps = [];
+  structuralSource.questions[0].explanation.optionAnalysis.pop();
   const structuralGateway = new SequenceGateway(ai.ProviderCode.Anthropic, [
     JSON.stringify(structuralSource),
     JSON.stringify({
@@ -262,15 +327,11 @@ try {
   ]);
   const structuralResult = await runWorkflow.execute(structuralRepair.workflow.id, structuralGateway);
   assert.equal(structuralResult.workflow.status, content.GenerationWorkflowStatus.Committed);
-  assert.equal(structuralGateway.callCount, 2);
-  assert.ok(
-    structuralGateway.requests[1].responseSchema.properties.questionPatches,
-    'question-specific schema failures must repair only invalid questions'
-  );
-  assert.equal(
-    'lecture' in structuralGateway.requests[1].responseSchema.properties,
-    false,
-    'question-specific schema repair must preserve a valid lecture'
+  assert.equal(structuralGateway.callCount, 1);
+  assert(
+    contentRepository.bundles.at(-1).generationWorkflow.validation.quality.readiness
+      === 'ready_with_pending_enrichment',
+    'incomplete option analysis must commit the answerable question and mark enrichment pending'
   );
 
   const repairable = await createWorkflow.execute(generationCommand('generation:test:repairable'));
@@ -289,7 +350,7 @@ try {
   const localized = await createWorkflow.execute(generationCommand('generation:test:localized', 2));
   const localizedSource = validGeneratedContent(2);
   const firstQuestion = localizedSource.questions[0];
-  localizedSource.questions[1].options.pop();
+  localizedSource.questions[1].options.splice(1);
   const localizedGateway = new SequenceGateway(ai.ProviderCode.Anthropic, [
     JSON.stringify(localizedSource),
     JSON.stringify({

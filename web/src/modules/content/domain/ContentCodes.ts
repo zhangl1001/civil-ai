@@ -43,6 +43,43 @@ export const QuestionTemplateCode = {
 
 export type QuestionTemplateCode = typeof QuestionTemplateCode[keyof typeof QuestionTemplateCode];
 
+export const QuestionPresentationCode = {
+  StandardChoice: 'standard_choice',
+  GraphicChoice: 'graphic_choice',
+  SharedMaterialChoice: 'shared_material_choice',
+  DataMaterialChoice: 'data_material_choice',
+  LongReadingChoice: 'long_reading_choice'
+} as const;
+
+export type QuestionPresentationCode = typeof QuestionPresentationCode[keyof typeof QuestionPresentationCode];
+
+/**
+ * Stable regions are the only contract shared by generated content and UI.
+ * A template may omit optional regions, but it must never infer regions from
+ * Markdown headings or display text.
+ */
+export const QuestionRegionCode = {
+  Material: 'material',
+  Prompt: 'prompt',
+  Options: 'options',
+  Explanation: 'explanation',
+  Diagnosis: 'diagnosis'
+} as const;
+
+export type QuestionRegionCode = typeof QuestionRegionCode[keyof typeof QuestionRegionCode];
+
+/**
+ * Region layouts only arrange stable question blocks. They never change the
+ * generated content contract, so new pages can reuse the same question data.
+ */
+export const QuestionRegionLayoutCode = {
+  Practice: 'practice',
+  WrongBook: 'wrong_book',
+  Flashcard: 'flashcard'
+} as const;
+
+export type QuestionRegionLayoutCode = typeof QuestionRegionLayoutCode[keyof typeof QuestionRegionLayoutCode];
+
 export const PublishedAssetStatus = {
   Draft: 'draft',
   Published: 'published',

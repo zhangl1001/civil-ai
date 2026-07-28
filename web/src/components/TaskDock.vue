@@ -127,7 +127,7 @@ onBeforeUnmount(() => {
   taskCenter.disconnect();
 });
 
-const taskAgentRuns = computed(() => agentRuns.value.filter((run) => run.targetResourceType !== 'chat_tool'));
+const taskAgentRuns = computed(() => agentRuns.value.filter((run) => run.taskCenterVisible));
 const latest = computed(() => taskAgentRuns.value[0]);
 const activeAgentRuns = computed(() => taskAgentRuns.value.filter((run) => run.isActive));
 const hasRunning = computed(() => activeAgentRuns.value.length > 0);

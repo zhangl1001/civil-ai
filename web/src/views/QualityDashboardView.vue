@@ -39,6 +39,30 @@
           </SurfaceCard>
         </section>
 
+        <section v-if="dashboard.calibration" class="section-group">
+          <div class="section-title">
+            <strong>基线与分数区间</strong>
+            <span>{{ dashboard.calibration.baseline.coveredModuleCount }}/{{ dashboard.calibration.baseline.requiredModuleCount }} 模块</span>
+          </div>
+          <SurfaceCard class="panel calibration-panel" compact>
+            <article v-for="forecast in dashboard.calibration.scoreForecasts" :key="forecast.subject" class="forecast-row">
+              <div>
+                <strong>{{ forecast.subject === 'aptitude' ? '行测' : forecast.subject === 'essay' ? '申论' : forecast.subject }}</strong>
+                <span>{{ forecast.explanation }}</span>
+              </div>
+              <em>{{ forecast.low === undefined ? '待校准' : `${forecast.low} - ${forecast.high}` }}</em>
+            </article>
+            <p class="baseline-note">{{ dashboard.calibration.baseline.nextRecommendation }}</p>
+            <div v-if="calibrationGaps.length" class="calibration-gaps">
+              <article v-for="module in calibrationGaps" :key="module.module">
+                <span>{{ module.name }}</span>
+                <em>训练 {{ Math.round((module.trainingAccuracy || 0) * 100) }}%</em>
+                <em>真题 {{ Math.round((module.trueQuestionAccuracy || 0) * 100) }}%</em>
+              </article>
+            </div>
+          </SurfaceCard>
+        </section>
+
         <section class="section-group">
           <div class="section-title">
             <strong>能力结构</strong>
@@ -127,7 +151,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ActivityIcon, RouteIcon, ShieldAlertIcon, TargetIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
@@ -147,6 +171,9 @@ const dashboard = ref<QualityDashboard | null>(null);
 const insight = ref<ProfileInsight | null>(null);
 const isLoading = ref(false);
 const isGeneratingInsight = ref(false);
+const calibrationGaps = computed(() => (dashboard.value?.calibration?.modules || []).filter((item) => (
+  item.trainingAccuracy !== undefined && item.trueQuestionAccuracy !== undefined
+)));
 
 onMounted(load);
 
@@ -269,6 +296,15 @@ function reasonText(code: string): string {
 .quality-row{gap:10px;padding:10px 0;border-top:1px solid rgba(var(--color-ink-rgb), .06)}
 .quality-row svg{width:19px;height:19px;color:var(--primary-color)}
 .quality-row strong{display:block;font-size: var(--type-size-section-title)}.quality-row span{color:var(--text-secondary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold);line-height:1.35}
+.forecast-row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:10px 0}
+.forecast-row+.forecast-row{border-top:1px solid rgba(var(--color-ink-rgb),.06)}
+.forecast-row div{min-width:0}.forecast-row strong,.forecast-row span{display:block}.forecast-row span,.baseline-note{color:var(--text-secondary-color);font-size:var(--type-size-micro);line-height:1.5}
+.forecast-row em{flex:none;color:var(--primary-color);font-style:normal;font-weight:var(--type-weight-bold)}
+.baseline-note{margin:8px 0 0}
+.calibration-gaps{margin-top:8px;padding-top:6px;border-top:1px solid rgba(var(--color-ink-rgb),.06)}
+.calibration-gaps article{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;padding:5px 0;font-size:var(--type-size-micro)}
+.calibration-gaps span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:var(--type-weight-semibold)}
+.calibration-gaps em{color:var(--text-secondary-color);font-style:normal}
 .advice{margin:8px 0 0;color:var(--text-secondary-color);font-size: var(--type-size-secondary);line-height:1.6}
 .insight-content{font-size: var(--type-size-secondary);color:var(--text-color)}
 .footer-actions .primary-button{width:100%}.footer-actions svg{width:16px;height:16px}

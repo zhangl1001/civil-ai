@@ -30,7 +30,8 @@ import type { DecisionObservationType } from '../domain/EvidenceCodes';
 import { AssessmentRole } from '../domain/AssessmentRole';
 import { EvidenceValidity } from '../domain/EvidenceValidity';
 import type { ObjectiveSubmissionBundle } from '../contracts/LearningFacts';
-import { objectiveEvidencePolicyV1 } from '../domain/ObjectiveEvidencePolicy';
+import { objectiveEvidenceOriginFrom } from '../domain/ObjectiveEvidenceOrigin';
+import { objectiveEvidencePolicyV2 } from '../domain/ObjectiveEvidencePolicy';
 
 export interface ObjectiveAnswerInput {
   readonly questionId: string;
@@ -178,6 +179,7 @@ export class SubmitObjectiveSession {
         : selectedOptionId === correctOptionId ? AttemptResult.Correct : AttemptResult.Incorrect;
       const attemptId = this.ids.next('AttemptId');
       return {
+        question,
         attempt: {
           id: attemptId,
           sessionId,
@@ -284,13 +286,23 @@ export class SubmitObjectiveSession {
       assessmentRole,
       evidenceType: EvidenceType.Correctness,
       value: item.attempt.score,
-      weight: objectiveEvidencePolicyV1.correctnessWeight(assessmentRole, item.attempt.hintLevel),
-      quality: objectiveEvidencePolicyV1.quality(item.attempt.hintLevel),
+      weight: objectiveEvidencePolicyV2.correctnessWeight(
+        assessmentRole,
+        item.attempt.hintLevel,
+        objectiveEvidenceOriginFrom(item.question.originType ?? 'ai_generated')
+      ),
+      quality: objectiveEvidencePolicyV2.quality(item.attempt.hintLevel),
       source: EvidenceSource.DeterministicGrader,
-      validationPolicyVersion: objectiveEvidencePolicyV1.version,
+      validationPolicyVersion: objectiveEvidencePolicyV2.version,
       occurredAt: now,
       idempotencyKey: `${command.idempotencyKey}:evidence:correctness:${item.attempt.questionId}`,
-      metadata: { hintLevel: item.attempt.hintLevel, questionContentVersion: item.attempt.questionContentVersion }
+      metadata: questionEvidenceMetadata(
+        item.question,
+        {
+          hintLevel: item.attempt.hintLevel,
+          questionContentVersion: item.attempt.questionContentVersion
+        }
+      )
     }));
     const speedEvidence = attempts.flatMap((item) => item.attempt.elapsedMs === undefined ? [] : [{
       id: this.ids.next('EvidenceId'),
@@ -300,17 +312,24 @@ export class SubmitObjectiveSession {
       assessmentRole,
       evidenceType: EvidenceType.Speed,
       value: speedScore(item.attempt.elapsedMs, speedTargetMs),
-      weight: objectiveEvidencePolicyV1.correctnessWeight(assessmentRole, item.attempt.hintLevel) * 0.65,
-      quality: objectiveEvidencePolicyV1.quality(item.attempt.hintLevel),
+      weight: objectiveEvidencePolicyV2.correctnessWeight(
+        assessmentRole,
+        item.attempt.hintLevel,
+        objectiveEvidenceOriginFrom(item.question.originType ?? 'ai_generated')
+      ) * 0.65,
+      quality: objectiveEvidencePolicyV2.quality(item.attempt.hintLevel),
       source: EvidenceSource.System,
-      validationPolicyVersion: objectiveEvidencePolicyV1.version,
+      validationPolicyVersion: objectiveEvidencePolicyV2.version,
       occurredAt: now,
       idempotencyKey: `${command.idempotencyKey}:evidence:speed:${item.attempt.questionId}`,
-      metadata: {
-        elapsedMs: item.attempt.elapsedMs,
-        targetMs: speedTargetMs,
-        questionContentVersion: item.attempt.questionContentVersion
-      }
+      metadata: questionEvidenceMetadata(
+        item.question,
+        {
+          elapsedMs: item.attempt.elapsedMs,
+          targetMs: speedTargetMs,
+          questionContentVersion: item.attempt.questionContentVersion
+        }
+      )
     }]);
     const evidence = [...correctnessEvidence, ...speedEvidence];
     const validity = evidence.map((item) => ({
@@ -383,6 +402,16 @@ function targetQuestionMs(constraints: JsonObject | undefined, questionCount: nu
     return Math.max(15_000, Math.round(durationMinutes * 60_000 / questionCount));
   }
   return 90_000;
+}
+
+function questionEvidenceMetadata(question: QuestionRecord, values: JsonObject): JsonObject {
+  return {
+    ...values,
+    questionOriginType: question.originType ?? 'ai_generated',
+    questionSourceId: question.sourceId ?? null,
+    questionCalibrationRole: question.calibrationRole ?? 'none',
+    questionIsOfficial: question.isOfficial ?? false
+  };
 }
 
 function speedScore(elapsedMs: number, targetMs: number): number {

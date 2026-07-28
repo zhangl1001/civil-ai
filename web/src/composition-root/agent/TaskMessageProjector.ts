@@ -79,7 +79,8 @@ export class TaskMessageProjector implements TutorAgentLifecycleObserver {
 }
 
 function shouldProject(run: AgentRunAggregate): boolean {
-  return run.run.targetResourceType !== TaskTargetType.ChatTool;
+  return run.run.targetResourceType !== TaskTargetType.ChatTool
+    || run.run.checkpoint.taskCenterVisible === true;
 }
 
 function businessLine(snapshot: JsonObject) {
@@ -90,6 +91,8 @@ function businessLine(snapshot: JsonObject) {
 }
 
 function title(run: AgentRunAggregate): string {
+  const taskCenterTitle = text(run.run.checkpoint.taskCenterTitle);
+  if (taskCenterTitle) return taskCenterTitle;
   const explicit = text(run.run.inputSnapshot.title);
   if (explicit) return explicit;
   if (run.run.runType === AgentRunType.ErrorDiagnosis) return 'AI 错因分析';

@@ -93,6 +93,44 @@ try {
   assert.equal(badTable.ok, false);
   assert(badTable.error.issues.some((issue) => issue.code === 'content.table_cell_invalid'));
 
+  const emptyTable = validator.parseDocument({
+    schemaVersion: 'content.v1',
+    blocks: [{
+      id: 'empty-table',
+      type: 'data_table',
+      columns: [{ key: 'value', label: '数值', alignment: 'right', valueType: 'number' }],
+      rows: []
+    }]
+  });
+  assert.equal(emptyTable.ok, false);
+  assert(emptyTable.error.issues.some((issue) => issue.code === 'content.table_rows_invalid'));
+
+  const invalidSvg = validator.parseDocument({
+    schemaVersion: 'content.v1',
+    blocks: [{ id: 'diagram', type: 'svg_diagram', markup: '<path d="M0 0" />', alt: '缺少画布的图形' }]
+  });
+  assert.equal(invalidSvg.ok, false);
+  assert(invalidSvg.error.issues.some((issue) => issue.code === 'content.svg_root_invalid'));
+  assert(invalidSvg.error.issues.some((issue) => issue.code === 'content.svg_viewbox_missing'));
+
+  const validSvg = validator.parseDocument({
+    schemaVersion: 'content.v1',
+    blocks: [{
+      id: 'diagram',
+      type: 'svg_diagram',
+      markup: '<svg viewBox="0 0 120 60"><circle cx="30" cy="30" r="18" /></svg>',
+      alt: '等比例圆形规律图'
+    }]
+  });
+  assert.equal(validSvg.ok, true);
+
+  const invalidImage = validator.parseDocument({
+    schemaVersion: 'content.v1',
+    blocks: [{ id: 'image', type: 'image', assetRef: 'javascript:alert(1)', alt: '无效图片' }]
+  });
+  assert.equal(invalidImage.ok, false);
+  assert(invalidImage.error.issues.some((issue) => issue.code === 'content.image_ref_invalid'));
+
   const parser = new content.GeneratedContentParser();
   const embeddedLecture = parser.parseObject({
     lecture: JSON.stringify(fixture.prompt),

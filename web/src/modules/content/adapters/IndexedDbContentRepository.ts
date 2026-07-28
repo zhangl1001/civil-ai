@@ -11,8 +11,10 @@ import type {
   ContentRepository,
   ContentSchemaVersion,
   QuestionSetLibraryEntry,
+  QuestionSetLibraryQuery,
   QuestionTemplateVersion
 } from '../contracts/ContentRepository';
+import type { QuestionSourceRecord } from '../contracts/QuestionSourceRepository';
 import {
   PublishedAssetStatus,
   QuestionSetEntryMode,
@@ -21,6 +23,10 @@ import {
   type QuestionTemplateCode
 } from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
+import {
+  QuestionCalibrationRole,
+  QuestionOriginType
+} from '../domain/QuestionSourceCodes';
 
 interface StoredContentMetadataBundle {
   readonly releaseId: string;
@@ -113,16 +119,33 @@ export class IndexedDbContentRepository implements ContentRepository {
     examCycleId: ExamCycleId,
     limit: number
   ): Promise<readonly QuestionSetLibraryEntry[]> {
+    return this.queryQuestionSetLibrary({ examCycleId, limit });
+  }
+
+  async queryQuestionSetLibrary(
+    query: QuestionSetLibraryQuery
+  ): Promise<readonly QuestionSetLibraryEntry[]> {
+    const { examCycleId, limit } = query;
     assertQuestionSetQueryLimit(limit);
-    const stored = await this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles);
+    const [stored, sources] = await Promise.all([
+      this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles),
+      this.database.getAll<QuestionSourceRecord>(TutorIndexedDbStore.QuestionSources)
+    ]);
+    const sourceById = new Map(sources.map((source) => [source.id, source]));
     return stored
       .filter((item) => (
         item.examCycleId === examCycleId
         && item.bundle.questionSet.status === QuestionSetStatus.Ready
       ))
       .sort((left, right) => right.createdAt - left.createdAt)
-      .slice(0, limit)
-      .map((item) => libraryEntry(normalizedBundle(item.bundle)));
+      .map((item) => {
+        const bundle = normalizedBundle(item.bundle);
+        return libraryEntry(bundle, bundle.questionSet.sourceId
+          ? sourceById.get(bundle.questionSet.sourceId)
+          : undefined);
+      })
+      .filter((entry) => matchesLibraryQuery(entry, query))
+      .slice(0, limit);
   }
 
   async listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]> {
@@ -172,7 +195,10 @@ function compareVersionsDescending(left: { readonly version: string }, right: { 
   return right.version.localeCompare(left.version, undefined, { numeric: true });
 }
 
-function libraryEntry(bundle: CommittedQuestionSetBundle): QuestionSetLibraryEntry {
+function libraryEntry(
+  bundle: CommittedQuestionSetBundle,
+  sourceMetadata?: QuestionSourceRecord
+): QuestionSetLibraryEntry {
   const explicit = bundle.generationSpec.constraints.entryMode;
   const entryMode = explicit === QuestionSetEntryMode.Self
     ? QuestionSetEntryMode.Self
@@ -196,18 +222,49 @@ function libraryEntry(bundle: CommittedQuestionSetBundle): QuestionSetLibraryEnt
     practiceStatus: bundle.questionSet.practiceStatus,
     entryMode,
     source,
+    originType: bundle.questionSet.originType,
+    sourceId: bundle.questionSet.sourceId,
+    sourceMetadata: sourceMetadata?.status === 'active' ? {
+      sourceType: sourceMetadata.sourceType,
+      provider: sourceMetadata.provider,
+      examType: sourceMetadata.examType,
+      examYear: sourceMetadata.examYear,
+      province: sourceMetadata.province,
+      examBatch: sourceMetadata.examBatch,
+      paperName: sourceMetadata.paperName,
+      sectionName: sourceMetadata.sectionName
+    } : undefined,
     createdAt: bundle.questionSet.createdAt
   };
 }
 
+function matchesLibraryQuery(entry: QuestionSetLibraryEntry, query: QuestionSetLibraryQuery): boolean {
+  return matches(query.capabilityNodeIds, entry.capabilityNodeId)
+    && matches(query.originTypes, entry.originType)
+    && matches(query.modules, entry.module)
+    && matches(query.practiceStatuses, entry.practiceStatus)
+    && matches(query.examYears, entry.sourceMetadata?.examYear)
+    && matches(query.provinces, entry.sourceMetadata?.province);
+}
+
+function matches<T extends string | number>(accepted: readonly T[] | undefined, value: T | undefined): boolean {
+  return !accepted?.length || (value !== undefined && accepted.includes(value));
+}
+
 function normalizedBundle(bundle: CommittedQuestionSetBundle): CommittedQuestionSetBundle {
-  return bundle.questionSet.practiceStatus
-    ? bundle
-    : {
-        ...bundle,
-        questionSet: {
-          ...bundle.questionSet,
-          practiceStatus: QuestionSetPracticeStatus.NotStarted
-        }
-      };
+  return {
+    ...bundle,
+    questionSet: {
+      ...bundle.questionSet,
+      practiceStatus: bundle.questionSet.practiceStatus ?? QuestionSetPracticeStatus.NotStarted,
+      originType: bundle.questionSet.originType ?? QuestionOriginType.AiGenerated,
+      calibrationRole: bundle.questionSet.calibrationRole ?? QuestionCalibrationRole.None
+    },
+    questions: bundle.questions.map((question) => ({
+      ...question,
+      originType: question.originType ?? QuestionOriginType.AiGenerated,
+      calibrationRole: question.calibrationRole ?? QuestionCalibrationRole.None,
+      isOfficial: question.isOfficial ?? false
+    }))
+  };
 }

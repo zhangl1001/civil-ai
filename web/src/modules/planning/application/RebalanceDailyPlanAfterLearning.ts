@@ -5,7 +5,7 @@ import { DailyPlanItemStatus, type DailyPlanRebalanceReason } from '../domain/Da
 import type { PersistDailyPlanProposal } from './PersistDailyPlanProposal';
 
 interface CandidatePlanContext {
-  readonly examCycle: { readonly id: ExamCycleId; readonly phase: string; readonly timeZone: TimeZoneId };
+  readonly examCycle: { readonly id: ExamCycleId; readonly phase: string; readonly timeZone: TimeZoneId; readonly examDate: string };
   readonly studyConstraints: { readonly weekdayMinutes: number; readonly weekendMinutes: number };
 }
 
@@ -14,7 +14,7 @@ interface CandidatePlanContextPort {
 }
 
 interface DailyPlanProposalPort {
-  execute(command: { readonly examCycleId: ExamCycleId; readonly availableMinutes: number }): Promise<DailyPlanProposal>;
+  execute(command: { readonly examCycleId: ExamCycleId; readonly availableMinutes: number; readonly examDate?: string; readonly phase?: string }): Promise<DailyPlanProposal>;
 }
 
 export class RebalanceDailyPlanAfterLearning {
@@ -44,7 +44,9 @@ export class RebalanceDailyPlanAfterLearning {
     if (remainingMinutes < 5) return current;
     const proposal = await this.proposals.execute({
       examCycleId: command.examCycleId,
-      availableMinutes: remainingMinutes
+      availableMinutes: remainingMinutes,
+      examDate: cycle.examCycle.examDate,
+      phase: cycle.examCycle.phase
     });
     return this.persist.execute({
       proposal,

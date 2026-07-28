@@ -2,9 +2,9 @@ import { ProviderErrorKind, ProviderGatewayError } from './ProviderGateway';
 
 export interface HttpTransportRequest {
   readonly url: string;
-  readonly method: 'POST';
+  readonly method: 'GET' | 'POST';
   readonly headers: Readonly<Record<string, string>>;
-  readonly body: string;
+  readonly body?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -18,7 +18,7 @@ export class FetchHttpTransport implements HttpTransport {
       return await fetch(request.url, {
         method: request.method,
         headers: request.headers,
-        body: request.body,
+        ...(request.body === undefined ? {} : { body: request.body }),
         signal: request.signal
       });
     } catch (error) {

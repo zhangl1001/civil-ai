@@ -26,6 +26,7 @@ export interface AgentRunView {
   readonly linkedTaskId?: string;
   readonly toolName?: string;
   readonly chatSessionId?: string;
+  readonly taskCenterVisible: boolean;
   readonly isActive: boolean;
   readonly canCancel: boolean;
   readonly eventCount: number;
@@ -90,6 +91,8 @@ export class GetAgentRunViews {
       linkedTaskId: linkedTaskId(aggregate),
       toolName: textField(aggregate.run.checkpoint.toolName) || textField(aggregate.run.inputSnapshot.toolName),
       chatSessionId: textField(aggregate.run.inputSnapshot.chatSessionId),
+      taskCenterVisible: aggregate.run.targetResourceType !== 'chat_tool'
+        || aggregate.run.checkpoint.taskCenterVisible === true,
       isActive: isActive(aggregate.run.status),
       canCancel: canCancel(aggregate.run.status),
       eventCount: aggregate.events.length,
@@ -105,6 +108,8 @@ function assertLimit(limit: number): void {
 }
 
 function titleFor(aggregate: AgentRunAggregate): string {
+  const taskCenterTitle = textField(aggregate.run.checkpoint.taskCenterTitle);
+  if (taskCenterTitle) return taskCenterTitle;
   const explicit = textField(aggregate.run.inputSnapshot.title);
   if (explicit) return explicit;
   if (aggregate.run.targetResourceType === 'chat_tool') return 'AI 工具执行';

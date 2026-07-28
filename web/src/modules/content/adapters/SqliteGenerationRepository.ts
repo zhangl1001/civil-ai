@@ -9,6 +9,7 @@ import type {
   InstantMs,
   JsonObject,
   LearningThreadId,
+  QuestionReferencePackId,
   QuestionTemplateVersionId,
   PromptVersionId,
   TeachingBlueprintId,
@@ -18,11 +19,14 @@ import type {
 import type { GenerationSpecRecord, GenerationWorkflowRecord } from '../contracts/ContentRepository';
 import type { GenerationAggregate, GenerationRepository } from '../contracts/GenerationRepository';
 import type { GenerationWorkflowStatus, GenerationWorkflowStep } from '../domain/ContentCodes';
+import type { QuestionGenerationIntent } from '../domain/QuestionSourceCodes';
 
 interface JoinedGenerationRow extends SqlRow {
   spec_id: string; spec_exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string;
   content_kind: GenerationSpecRecord['contentKind']; assessment_role: AssessmentRole;
   question_template_version_id: string | null; content_schema_version_id: string; prompt_version_id: string;
+  reference_pack_id: string | null; reference_policy_version: string | null;
+  generation_intent: QuestionGenerationIntent | null; calibration_target: string | null;
   requested_count: number | null; difficulty_json: string; constraints_json: string;
   context_snapshot_json: string; content_hash: string; spec_created_at: number;
   workflow_id: string; workflow_exam_cycle_id: string; generation_spec_id: string;
@@ -78,7 +82,9 @@ export class SqliteGenerationRepository implements GenerationRepository {
       `SELECT
         spec.id AS spec_id, spec.exam_cycle_id AS spec_exam_cycle_id, spec.learning_thread_id, spec.teaching_blueprint_id, spec.capability_node_id,
         spec.content_kind, spec.assessment_role, spec.question_template_version_id,
-        spec.content_schema_version_id, spec.prompt_version_id, spec.requested_count, spec.difficulty_json,
+        spec.content_schema_version_id, spec.prompt_version_id, spec.reference_pack_id,
+        spec.reference_policy_version, spec.generation_intent, spec.calibration_target,
+        spec.requested_count, spec.difficulty_json,
         spec.constraints_json, spec.context_snapshot_json, spec.content_hash,
         spec.created_at AS spec_created_at,
         workflow.id AS workflow_id, workflow.exam_cycle_id AS workflow_exam_cycle_id,
@@ -99,11 +105,14 @@ function insertSpec(transaction: SqlTransaction, value: GenerationSpecRecord): P
   return transaction.run(
     `INSERT INTO generation_specs(
       id, exam_cycle_id, learning_thread_id, teaching_blueprint_id, capability_node_id, content_kind, assessment_role,
-      question_template_version_id, content_schema_version_id, prompt_version_id, requested_count,
+      question_template_version_id, content_schema_version_id, prompt_version_id, reference_pack_id,
+      reference_policy_version, generation_intent, calibration_target, requested_count,
       difficulty_json, constraints_json, context_snapshot_json, content_hash, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [value.id, value.examCycleId, value.learningThreadId ?? null, value.teachingBlueprintId ?? null, value.capabilityNodeId, value.contentKind, value.assessmentRole,
-      value.questionTemplateVersionId ?? null, value.contentSchemaVersionId, value.promptVersionId, value.requestedCount ?? null,
+      value.questionTemplateVersionId ?? null, value.contentSchemaVersionId, value.promptVersionId,
+      value.referencePackId ?? null, value.referencePolicyVersion ?? null, value.generationIntent ?? null,
+      value.calibrationTarget ?? null, value.requestedCount ?? null,
       JSON.stringify(value.difficulty), JSON.stringify(value.constraints), JSON.stringify(value.contextSnapshot),
       value.contentHash, value.createdAt]
   );
@@ -135,6 +144,10 @@ function mapAggregate(row: JoinedGenerationRow): GenerationAggregate {
       questionTemplateVersionId: row.question_template_version_id as QuestionTemplateVersionId | null ?? undefined,
       contentSchemaVersionId: row.content_schema_version_id as ContentSchemaVersionId,
       promptVersionId: row.prompt_version_id as PromptVersionId,
+      referencePackId: row.reference_pack_id as QuestionReferencePackId | null ?? undefined,
+      referencePolicyVersion: row.reference_policy_version ?? undefined,
+      generationIntent: row.generation_intent ?? undefined,
+      calibrationTarget: row.calibration_target ?? undefined,
       requestedCount: row.requested_count ?? undefined,
       difficulty: parseObject(row.difficulty_json, 'generation_specs.difficulty_json'),
       constraints: parseObject(row.constraints_json, 'generation_specs.constraints_json'),

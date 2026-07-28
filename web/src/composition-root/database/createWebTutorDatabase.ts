@@ -1,11 +1,7 @@
 import { IndexedDbTransactionScope, IndexedDbUnitOfWork } from '@/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork';
 import { TutorIndexedDb } from '@/capabilities/database/adapters/indexeddb/TutorIndexedDb';
 import { IndexedDbTutorDataMaintenance } from '@/capabilities/database/adapters/indexeddb/IndexedDbTutorDataMaintenance';
-import type {
-  TutorDataMaintenance,
-  TutorDatabaseLifecycle,
-  UnitOfWork
-} from '@/capabilities/database/public';
+import type { TutorDatabaseLifecycle } from '@/capabilities/database/public';
 import { IndexedDbCandidateRepository } from '@/modules/candidate/adapters/IndexedDbCandidateRepository';
 import { WebAgentWorkspaceStorage } from '@/modules/agent/adapters/WebAgentWorkspaceStorage';
 import { ConversationMessageLog, ConversationSessionLog, ConversationStore } from '@/modules/conversation/public';
@@ -15,20 +11,17 @@ import {
   CreateCandidateCycle,
   GetCandidateHome,
   UpdateLearningPreferences,
-  UpdateScoreTargets,
-  type CandidateRepository
+  UpdateScoreTargets
 } from '@/modules/candidate/public';
 import { IndexedDbCurriculumRepository } from '@/modules/curriculum/adapters/IndexedDbCurriculumRepository';
 import {
   createBundledNationalCurriculum,
-  EnsureCurriculumBundle,
-  type CurriculumRepository
+  EnsureCurriculumBundle
 } from '@/modules/curriculum/public';
 import { IndexedDbOutboxRepository } from '@/modules/task/adapters/IndexedDbOutboxRepository';
 import { IndexedDbCommandReceiptRepository } from '@/modules/task/adapters/IndexedDbCommandReceiptRepository';
-import type { CommandReceiptRepository, OutboxRepository } from '@/modules/task/public';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
-import type { Clock, CurriculumVersionId } from '@/kernel/public';
+import type { Clock } from '@/kernel/public';
 import { IndexedDbPromptRepository } from '@/capabilities/ai-runtime/adapters/IndexedDbPromptRepository';
 import { IndexedDbAIInvocationRepository } from '@/capabilities/ai-runtime/adapters/IndexedDbAIInvocationRepository';
 import {
@@ -38,24 +31,29 @@ import {
   errorDiagnosisPromptV1,
   PromptCompiler,
   PromptRegistry,
-  structuredObjectivePromptV2,
-  type AIInvocationRepository,
-  type PromptRepository
+  questionImportPolicyV1,
+  structuredObjectivePromptV2
 } from '@/capabilities/ai-runtime/public';
 import { IndexedDbContentRepository } from '@/modules/content/adapters/IndexedDbContentRepository';
 import { IndexedDbGenerationRepository } from '@/modules/content/adapters/IndexedDbGenerationRepository';
 import { IndexedDbLearningAssetRepository } from '@/modules/content/adapters/IndexedDbLearningAssetRepository';
+import { IndexedDbQuestionSourceRepository } from '@/modules/content/adapters/IndexedDbQuestionSourceRepository';
+import { IndexedDbQuestionImportDraftRepository } from '@/modules/content/adapters/IndexedDbQuestionImportDraftRepository';
+import { IndexedDbQuestionReferencePackRepository } from '@/modules/content/adapters/IndexedDbQuestionReferencePackRepository';
 import {
+  ArchiveQuestionSource,
+  BuildTrueQuestionReferencePack,
+  ConfirmQuestionImportDraft,
   createBundledContentMetadata,
   CreateGenerationWorkflow,
   EnsureContentMetadata,
   GenerationContextCompiler,
   GetGenerationStatus,
+  ImportQuestionSource,
   LearningAssetStore,
+  PublishQuestionImportDraft,
   RunStructuredObjectiveGenerationWorkflow,
-  type ContentRepository,
-  type GenerationRepository,
-  type LearningAssetRepository
+  ScanQuestionImportDraft
 } from '@/modules/content/public';
 import { IndexedDbLearningThreadRepository } from '@/modules/teaching/adapters/IndexedDbLearningThreadRepository';
 import { IndexedDbAgentRunRepository } from '@/modules/agent/adapters/IndexedDbAgentRunRepository';
@@ -74,29 +72,23 @@ import {
   SaveAgentLoopCheckpoint,
   TransitionAgentRun,
   UpdateAgentRunProgress,
-  type AgentRunRepository,
-  type AgentMemoryRepository,
   type AgentRuntimeObserver,
   type AgentToolExecutor
 } from '@/modules/agent/public';
 import { IndexedDbMessageCenterRepository } from '@/modules/message-center/adapters/IndexedDbMessageCenterRepository';
-import {
-  MessageCenter,
-  type MessageCenterRepository
-} from '@/modules/message-center/public';
+import { MessageCenter } from '@/modules/message-center/public';
 import { IndexedDbProactiveSignalRepository } from '@/modules/proactive/adapters/IndexedDbProactiveSignalRepository';
-import { DeliverProactiveSignals, EvaluateProactiveSignals, type ProactiveSignalRepository } from '@/modules/proactive/public';
+import { DeliverProactiveSignals, EvaluateProactiveSignals } from '@/modules/proactive/public';
 import { IndexedDbMasteryRepository } from '@/modules/mastery/adapters/IndexedDbMasteryRepository';
 import { createGenerationLearningContextPort } from './createGenerationLearningContextPort';
-import { BuildDailyPlanProposal, CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem, type MasteryRepository } from '@/modules/mastery/public';
+import { BuildDailyPlanProposal, CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem } from '@/modules/mastery/public';
 import { IndexedDbDailyPlanRepository } from '@/modules/planning/adapters/IndexedDbDailyPlanRepository';
-import { DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus, type DailyPlanRepository } from '@/modules/planning/public';
+import { DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import {
   CreateLearningThread,
   StartStructuredTeaching,
   RequestStructuredPractice,
-  TransitionLearningThread,
-  type LearningThreadRepository
+  TransitionLearningThread
 } from '@/modules/teaching/public';
 import {
   IndexedDbErrorDiagnosisRepository,
@@ -114,88 +106,21 @@ import {
   RunAiErrorDiagnosis,
   RequestAiErrorDiagnosis,
   RecordSubjectiveAssessment,
-  SubmitObjectiveSession,
-  type ErrorDiagnosisRepository,
-  type LearningEvidenceRepository,
-  type LearningSessionRepository
+  SubmitObjectiveSession
 } from '@/modules/evidence/public';
 import { createTutorAgentHandlers } from '../agent/createTutorAgentHandlers';
 import { TaskMessageProjector } from '../agent/TaskMessageProjector';
+import { IndexedDbTutorCycleRepository } from '@/modules/tutoring/adapters/IndexedDbTutorCycleRepository';
+import { IndexedDbAbilityCalibrationRepository } from '@/modules/calibration/adapters/IndexedDbAbilityCalibrationRepository';
+import { BuildAbilityCalibration } from '@/modules/calibration/public';
+import {
+  BuildTutorDailyContext,
+  FinalizeObjectiveTutorConclusion,
+  RecordObjectiveTutorConclusion
+} from '@/modules/tutoring/public';
+import type { TutorDatabaseRuntime } from './TutorDatabaseRuntime';
 
-export interface WebTutorDatabaseRuntime {
-  readonly unitOfWork: UnitOfWork;
-  readonly dataMaintenance: TutorDataMaintenance;
-  readonly databaseLifecycle: TutorDatabaseLifecycle;
-  readonly candidateRepository: CandidateRepository;
-  readonly conversationStore: ConversationStore;
-  readonly agentMemoryRepository: AgentMemoryRepository;
-  readonly curriculumRepository: CurriculumRepository;
-  readonly contentRepository: ContentRepository;
-  readonly generationRepository: GenerationRepository;
-  readonly learningAssetRepository: LearningAssetRepository;
-  readonly learningAssetStore: LearningAssetStore;
-  readonly promptRepository: PromptRepository;
-  readonly promptCompiler: PromptCompiler;
-  readonly aiInvocationRepository: AIInvocationRepository;
-  readonly learningThreadRepository: LearningThreadRepository;
-  readonly learningSessionRepository: LearningSessionRepository;
-  readonly errorDiagnosisRepository: ErrorDiagnosisRepository;
-  readonly learningEvidenceRepository: LearningEvidenceRepository;
-  readonly agentRunRepository: AgentRunRepository;
-  readonly messageCenterRepository: MessageCenterRepository;
-  readonly messageCenter: MessageCenter;
-  readonly proactiveSignalRepository: ProactiveSignalRepository;
-  readonly evaluateProactiveSignals: EvaluateProactiveSignals;
-  readonly deliverProactiveSignals: DeliverProactiveSignals;
-  readonly masteryRepository: MasteryRepository;
-  readonly dailyPlanRepository: DailyPlanRepository;
-  readonly refreshMasteryTrack: RefreshMasteryTrack;
-  readonly startReviewQueueItem: StartReviewQueueItem;
-  readonly completeReviewQueueItem: CompleteReviewQueueItem;
-  readonly failReviewQueueItem: FailReviewQueueItem;
-  readonly retryReviewQueueItem: RetryReviewQueueItem;
-  readonly buildDailyPlanProposal: BuildDailyPlanProposal;
-  readonly persistDailyPlanProposal: PersistDailyPlanProposal;
-  readonly rebalanceDailyPlanAfterLearning: RebalanceDailyPlanAfterLearning;
-  readonly updateDailyPlanItemStatus: UpdateDailyPlanItemStatus;
-  readonly createGenerationWorkflow: CreateGenerationWorkflow;
-  readonly runStructuredObjectiveGenerationWorkflow: RunStructuredObjectiveGenerationWorkflow;
-  readonly getGenerationStatus: GetGenerationStatus;
-  readonly createLearningThread: CreateLearningThread;
-  readonly transitionLearningThread: TransitionLearningThread;
-  readonly startStructuredTeaching: StartStructuredTeaching;
-  readonly requestStructuredPractice: RequestStructuredPractice;
-  readonly submitObjectiveSession: SubmitObjectiveSession;
-  readonly correctLearningEvidence: CorrectLearningEvidence;
-  readonly confirmErrorDiagnosis: ConfirmErrorDiagnosis;
-  readonly getObjectiveSessionReview: GetObjectiveSessionReview;
-  readonly getWrongBookEntries: GetWrongBookEntries;
-  readonly runAiErrorDiagnosis: RunAiErrorDiagnosis;
-  readonly requestAiErrorDiagnosis: RequestAiErrorDiagnosis;
-  readonly completeObjectivePractice: CompleteObjectivePractice;
-  readonly processObjectiveSubmissionOutbox: ProcessObjectiveSubmissionOutbox;
-  readonly recordSubjectiveAssessment: RecordSubjectiveAssessment;
-  readonly createAgentRun: CreateAgentRun;
-  readonly transitionAgentRun: TransitionAgentRun;
-  readonly cancelAgentRun: CancelAgentRun;
-  readonly claimAgentRuns: ClaimAgentRuns;
-  readonly recoverExpiredAgentRuns: RecoverExpiredAgentRuns;
-  readonly getAgentRunViews: GetAgentRunViews;
-  readonly updateAgentRunProgress: UpdateAgentRunProgress;
-  readonly runTutorAgentBatch: RunTutorAgentBatch;
-  readonly invokeAgentModel: InvokeAgentModel;
-  readonly createAgentLoop: (executor: AgentToolExecutor, observer?: AgentRuntimeObserver) => RunAgentLoop;
-  readonly outboxRepository: OutboxRepository;
-  readonly commandReceiptRepository: CommandReceiptRepository;
-  readonly createCandidateCycle: CreateCandidateCycle;
-  readonly getCandidateHome: GetCandidateHome;
-  readonly updateLearningPreferences: UpdateLearningPreferences;
-  readonly updateScoreTargets: UpdateScoreTargets;
-  readonly defaultCurriculumVersionId: CurriculumVersionId;
-  initialize(): Promise<void>;
-  close(): Promise<void>;
-  resetForDevelopment(): Promise<void>;
-}
+export type WebTutorDatabaseRuntime = TutorDatabaseRuntime;
 
 export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const database = new TutorIndexedDb();
@@ -224,6 +149,37 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const contentRepository = new IndexedDbContentRepository(database, transactionScope);
   const generationRepository = new IndexedDbGenerationRepository(database, transactionScope);
   const learningAssetRepository = new IndexedDbLearningAssetRepository(database, transactionScope);
+  const questionSourceRepository = new IndexedDbQuestionSourceRepository(database, transactionScope);
+  const questionReferencePackRepository = new IndexedDbQuestionReferencePackRepository(database, transactionScope);
+  const questionImportDraftRepository = new IndexedDbQuestionImportDraftRepository(database, transactionScope);
+  const importQuestionSource = new ImportQuestionSource(
+    unitOfWork,
+    questionSourceRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
+  const archiveQuestionSource = new ArchiveQuestionSource(unitOfWork, questionSourceRepository, clock);
+  const scanQuestionImportDraft = new ScanQuestionImportDraft(
+    unitOfWork,
+    questionImportDraftRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
+  const confirmQuestionImportDraft = new ConfirmQuestionImportDraft(
+    unitOfWork,
+    questionImportDraftRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
+  const publishQuestionImportDraft = new PublishQuestionImportDraft(
+    unitOfWork,
+    questionImportDraftRepository,
+    generationRepository,
+    contentRepository,
+    questionSourceRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
   const learningAssetStore = new LearningAssetStore(
     unitOfWork,
     learningAssetRepository,
@@ -247,6 +203,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   );
   const masteryRepository = new IndexedDbMasteryRepository(database, transactionScope);
   const dailyPlanRepository = new IndexedDbDailyPlanRepository(database, transactionScope);
+  const tutorCycleRepository = new IndexedDbTutorCycleRepository(database, transactionScope);
+  const abilityCalibrationRepository = new IndexedDbAbilityCalibrationRepository(database, transactionScope);
   const evaluateProactiveSignals = new EvaluateProactiveSignals(unitOfWork,candidateRepository,dailyPlanRepository,masteryRepository,proactiveSignalRepository,clock,new UuidV7IdGenerator(clock));
   const deliverProactiveSignals = new DeliverProactiveSignals(unitOfWork,proactiveSignalRepository,messageCenter,clock);
   const outboxRepository = new IndexedDbOutboxRepository(database, transactionScope);
@@ -258,6 +216,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
   const promptRegistry = new PromptRegistry();
   promptRegistry.register(structuredObjectivePromptV2);
+  promptRegistry.register(questionImportPolicyV1);
   promptRegistry.register(errorDiagnosisPromptV1);
   promptRegistry.register(errorDiagnosisBatchPromptV1);
   businessTutorPromptCatalog.forEach((bundle) => promptRegistry.register(bundle));
@@ -267,12 +226,20 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     curriculumRepository,
     createGenerationLearningContextPort(masteryRepository, learningSessionRepository, errorDiagnosisRepository)
   );
+  const buildTrueQuestionReferencePack = new BuildTrueQuestionReferencePack(
+    unitOfWork,
+    contentRepository,
+    questionReferencePackRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
   const createGenerationWorkflow = new CreateGenerationWorkflow(
     unitOfWork,
     generationRepository,
     contentRepository,
     outboxRepository,
     generationContextCompiler,
+    buildTrueQuestionReferencePack,
     structuredObjectivePromptV2.versionId,
     clock,
     new UuidV7IdGenerator(clock)
@@ -284,6 +251,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     promptRepository,
     aiInvocationRepository,
     outboxRepository,
+    questionReferencePackRepository,
+    questionSourceRepository,
     promptCompiler,
     clock,
     new UuidV7IdGenerator(clock)
@@ -357,7 +326,24 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const createAgentLoop = (executor: AgentToolExecutor, observer?: AgentRuntimeObserver) => (
     new RunAgentLoop(invokeAgentModel, defaultAgentToolPolicy, executor, saveAgentLoopCheckpoint, observer)
   );
-  const runAiErrorDiagnosis = new RunAiErrorDiagnosis(unitOfWork,errorDiagnosisRepository,outboxRepository,promptCompiler,invokeAgentModel,transitionAgentRun,clock,new UuidV7IdGenerator(clock));
+  const finalizeObjectiveTutorConclusion = new FinalizeObjectiveTutorConclusion(
+    unitOfWork,
+    tutorCycleRepository,
+    errorDiagnosisRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
+  const runAiErrorDiagnosis = new RunAiErrorDiagnosis(
+    unitOfWork,
+    errorDiagnosisRepository,
+    outboxRepository,
+    promptCompiler,
+    invokeAgentModel,
+    transitionAgentRun,
+    clock,
+    new UuidV7IdGenerator(clock),
+    { completed: (input) => finalizeObjectiveTutorConclusion.execute(input) }
+  );
   const requestAiErrorDiagnosis = new RequestAiErrorDiagnosis(errorDiagnosisRepository,createAgentRun);
   const refreshMasteryTrack = new RefreshMasteryTrack(
     unitOfWork, masteryRepository, learningEvidenceRepository, clock, new UuidV7IdGenerator(clock)
@@ -411,6 +397,39 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const dailyPlanRebalancePort = { execute: (command:{examCycleId:Parameters<RebalanceDailyPlanAfterLearning['execute']>[0]['examCycleId'];sourceId:string}) => (
     rebalanceDailyPlanAfterLearning.execute({...command,reason:DailyPlanRebalanceReason.LearningResult})
   ) };
+  const recordObjectiveTutorConclusion = new RecordObjectiveTutorConclusion(
+    unitOfWork,
+    tutorCycleRepository,
+    getObjectiveSessionReview,
+    candidateRepository,
+    curriculumRepository,
+    masteryRepository,
+    dailyPlanRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
+  const buildAbilityCalibration = new BuildAbilityCalibration(
+    unitOfWork,
+    abilityCalibrationRepository,
+    candidateRepository,
+    curriculumRepository,
+    learningEvidenceRepository,
+    masteryRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
+  const buildTutorDailyContext = new BuildTutorDailyContext(
+    candidateRepository,
+    curriculumRepository,
+    masteryRepository,
+    dailyPlanRepository,
+    learningSessionRepository,
+    contentRepository,
+    learningThreadRepository,
+    tutorCycleRepository,
+    buildAbilityCalibration,
+    clock
+  );
   const objectiveSubmissionPostProcessor = new ObjectiveSubmissionPostProcessor(
     getObjectiveSessionReview,
     requestAiErrorDiagnosis,
@@ -418,7 +437,9 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     completeReviewQueueItem,
     updateDailyPlanItemStatus,
     dailyPlanRebalancePort,
-    proactiveTutorRefresh
+    proactiveTutorRefresh,
+    { execute: () => buildAbilityCalibration.execute() },
+    recordObjectiveTutorConclusion
   );
   const completeObjectivePractice = new CompleteObjectivePractice(
     submitObjectiveSession,
@@ -440,7 +461,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     candidateOnboardingPolicy
   );
   const getCandidateHome = new GetCandidateHome(candidateRepository, {
-    list: async (examCycleId) => masteryRepository.listTracks(examCycleId, 100)
+    list: async (examCycleId) => masteryRepository.listTracks(examCycleId, 100),
+    coverage: async (examCycleId) => (await abilityCalibrationRepository.findLatest(examCycleId))?.baseline
   });
   const updateLearningPreferences = new UpdateLearningPreferences(unitOfWork,candidateRepository,clock);
   const alignCandidateCurriculum = new AlignCandidateCurriculum(unitOfWork, candidateRepository, clock);
@@ -464,6 +486,16 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     generationRepository,
     learningAssetRepository,
     learningAssetStore,
+    questionSourceRepository,
+    questionReferencePackRepository,
+    tutorCycleRepository,
+    abilityCalibrationRepository,
+    questionImportDraftRepository,
+    importQuestionSource,
+    archiveQuestionSource,
+    scanQuestionImportDraft,
+    confirmQuestionImportDraft,
+    publishQuestionImportDraft,
     promptRepository,
     promptCompiler,
     aiInvocationRepository,
@@ -505,6 +537,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     completeObjectivePractice,
     processObjectiveSubmissionOutbox,
     recordSubjectiveAssessment,
+    buildTutorDailyContext,
+    buildAbilityCalibration,
     createAgentRun,
     transitionAgentRun,
     cancelAgentRun,
@@ -528,6 +562,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
       await alignCandidateCurriculum.execute(bundledCurriculum);
       await ensureContentMetadata.execute(bundledContentMetadata);
       await ensurePromptBundle.execute(structuredObjectivePromptV2);
+      await ensurePromptBundle.execute(questionImportPolicyV1);
       await ensurePromptBundle.execute(errorDiagnosisPromptV1);
       await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);
       for (const bundle of businessTutorPromptCatalog) {

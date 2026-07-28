@@ -55,7 +55,7 @@ export class ErrorReportService {
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) return this.emptyReport();
     const [wrongItems, curriculum, tracks] = await Promise.all([
-      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 }),
+      runtime.getWrongBookEntries.execute({ examCycleId: cycle.examCycle.id, limit: 100 }).then((page) => page.entries),
       runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
       runtime.masteryRepository.listTracks(cycle.examCycle.id, 100)
     ]);

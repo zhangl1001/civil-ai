@@ -44,8 +44,8 @@
               <p>{{ tutorDecisionDetail }}</p>
             </div>
             <div class="hero-meter">
-              <strong>{{ quality?.score ?? '--' }}</strong>
-              <span>{{ quality?.grade || '待诊断' }}</span>
+              <strong>{{ aptitudeForecastText }}</strong>
+              <span>{{ aptitudeForecast ? '行测预测分' : quality?.grade || '待诊断' }}</span>
             </div>
             <div class="hero-actions">
               <button class="primary-action" type="button" @click="router.push('/vue/plan')">
@@ -256,6 +256,14 @@ const cycleSubtitle = computed(() => {
 
 const scoreRows = computed(() => (candidateHome.value?.scores || []).map(formatScore));
 
+const aptitudeForecast = computed(() => quality.value?.calibration?.scoreForecasts.find(
+  (item) => item.subject === 'aptitude' && item.center !== undefined
+));
+
+const aptitudeForecastText = computed(() => aptitudeForecast.value
+  ? String(aptitudeForecast.value.center)
+  : quality.value?.score ?? '--');
+
 const weakModules = computed(() => {
   return (quality.value?.modules || [])
     .filter((item) => item.total > 0)
@@ -465,8 +473,8 @@ function roundChart(value: number): number {
 
 .tutor-hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 94px;
+  gap: 12px;
   background: var(--surface-feature-tutor);
 }
 
@@ -474,27 +482,11 @@ function roundChart(value: number): number {
   min-width: 0;
 }
 
-.hero-meter {
-  height: 76px;
-  border-radius: 18px;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  background: var(--surface-control);
-}
+.hero-meter { min-width:0; min-height:78px; border-radius:16px; padding:9px 6px; display:grid; place-items:center; align-content:center; overflow:hidden; background:rgba(var(--color-brand-rgb),.045); }
 
-.hero-meter strong {
-  color: var(--primary-color);
-  font-size: var(--type-size-metric);
-  line-height: 1;
-}
+.hero-meter strong { max-width:100%; color:var(--primary-color); font-size:34px; line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; }
 
-.hero-meter span {
-  margin-top: 3px;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-micro);
-  font-weight: var(--type-weight-semibold);
-}
+.hero-meter span { max-width:100%; margin-top:3px; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); text-overflow:ellipsis; white-space:nowrap; }
 
 .hero-actions {
   grid-column: 1 / -1;

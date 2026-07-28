@@ -1,9 +1,8 @@
 import { SystemClock } from '@/capabilities/platform/public';
 import { Capacitor } from '@capacitor/core';
-import type { NativeTutorDatabaseRuntime } from './createNativeTutorDatabase';
-import type { WebTutorDatabaseRuntime } from './createWebTutorDatabase';
+import type { TutorDatabaseRuntime } from './TutorDatabaseRuntime';
 
-export type TutorDatabaseRuntime = NativeTutorDatabaseRuntime | WebTutorDatabaseRuntime;
+export type { TutorDatabaseRuntime } from './TutorDatabaseRuntime';
 
 export async function createTutorDatabaseRuntime(): Promise<TutorDatabaseRuntime> {
   const clock = new SystemClock();

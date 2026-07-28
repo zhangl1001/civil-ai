@@ -33,31 +33,30 @@
     <main
       v-else-if="question"
       ref="questionScroll"
-      class="app-page-scroll session-scroll"
+      :class="['app-page-scroll', 'session-scroll', `question-presentation-${questionPresentation}`]"
       @touchstart.passive="handleQuestionTouchStart"
       @touchmove="handleQuestionTouchMove"
       @touchend="handleQuestionTouchEnd"
       @touchcancel="resetQuestionTouch"
     >
+      <p v-if="sourceMetadata" class="question-source-meta">
+        <span>{{ questionOriginLabel(sourceMetadata.sourceType) }}</span>
+        {{ questionSourceTitle(sourceMetadata) }}
+      </p>
       <p v-if="isSharedMaterialQuestion" class="material-group-meta">
         共用材料 · 第 {{ materialGroupPosition }} / {{ materialGroupSize }} 小题
       </p>
-      <ContentDocumentRenderer v-if="question.content.material" :document="question.content.material" text-variant="compact" />
-      <ContentDocumentRenderer :document="question.content.prompt" />
-      <QuestionOptionList
-        :options="question.content.options"
+      <QuestionContentTemplate
+        :question="question.content"
+        :presentation="questionPresentation"
         :selected-option-id="answers[question.id]"
-        :correct-option-id="question.content.correctOptionId"
         :reveal-result="submitted"
         :readonly-mode="submitted"
         :disabled="submitting"
+        :show-explanation="submitted"
         @select="selectOption"
-      />
-      <QuestionExplanationView
-        v-if="submitted"
-        :document="question.content.explanation"
-        :correct-option-id="question.content.correctOptionId"
-      />
+      >
+        <template #diagnosis>
       <section v-if="submitted" class="diagnosis" :class="{ pending: diagnosing }">
         <div class="diagnosis-heading">
           <strong>错因分析</strong>
@@ -90,6 +89,8 @@
         </template>
         <p v-else>{{ diagnosing ? '正在结合你的作答过程分析错因...' : '本题作答正确，继续保持。' }}</p>
       </section>
+        </template>
+      </QuestionContentTemplate>
       <p v-if="error" class="session-error">{{ error }}</p>
     </main>
     <main v-else class="session-empty">{{ error || '正在读取题目...' }}</main>
@@ -144,18 +145,23 @@ import { BookOpenIcon, Clock3Icon, ListChecksIcon, MessageCircleMoreIcon } from 
 import PageHeader from '@/components/layout/PageHeader.vue';
 import CenterDialog from '@/components/layout/CenterDialog.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
-import ContentDocumentRenderer from '@/components/content/ContentDocumentRenderer.vue';
 import LectureContent from '@/components/content/LectureContent.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import QuestionAnswerCard, { type AnswerCardQuestionItem } from '@/components/question/QuestionAnswerCard.vue';
-import QuestionExplanationView from '@/components/question/QuestionExplanationView.vue';
-import QuestionOptionList from '@/components/question/QuestionOptionList.vue';
+import QuestionContentTemplate from '@/components/question/QuestionContentTemplate.vue';
 import ErrorDiagnosisInsight from '@/components/learning/ErrorDiagnosisInsight.vue';
 import { agentWorkerCoordinator, initializeTutorRuntime } from '@/composition-root/public';
 import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evidence/ObjectiveSubmissionRecoveryCoordinator';
 import { practiceModuleLabel } from '@/domain/labels';
 import type { AssessmentRole } from '@/kernel/public';
-import { contentDocumentText, type CommittedQuestionSetBundle } from '@/modules/content/public';
+import {
+  contentDocumentText,
+  resolveQuestionPresentation,
+  questionOriginLabel,
+  questionSourceTitle,
+  type CommittedQuestionSetBundle,
+  type QuestionSetSourceSummary
+} from '@/modules/content/public';
 import {
   ErrorCauseCode,
   ErrorDiagnosisConfirmationAction,
@@ -190,6 +196,7 @@ const correctedCauseCode = ref(''); const correctedDetail = ref('');
 const elapsedByQuestion = ref<Record<string, number>>({}); const answerChanges = ref<Record<string, number>>({});
 const capabilityName = ref('');
 const assessmentRoleOverride = ref<AssessmentRole>();
+const sourceMetadata = ref<QuestionSetSourceSummary>();
 const askingAi = ref(false);
 const remainingSeconds = ref(0);
 const questionScroll = ref<HTMLElement>();
@@ -207,6 +214,9 @@ let touchCurrentY = 0;
 let touchStartedAt = 0;
 let horizontalTouch = false;
 const question = computed(() => bundle.value?.questions[index.value]);
+const questionPresentation = computed(() => question.value
+  ? resolveQuestionPresentation(question.value.content)
+  : 'standard_choice');
 const lectureDocument = computed(() => {
   const value = bundle.value;
   if (!value) return undefined;
@@ -282,6 +292,7 @@ async function load() {
     bundle.value = value;
     capabilityName.value = loaded.capabilityName;
     assessmentRoleOverride.value = loaded.assessmentRoleOverride;
+    sourceMetadata.value = loaded.sourceMetadata;
     startedAt = Date.now();
     questionStartedAt = startedAt;
     remainingSeconds.value = Math.round(loaded.durationMinutes * 60);
@@ -707,4 +718,7 @@ function sessionFeature(): Promise<PracticeSessionFeature> {
 
 <style scoped>
 .session-tabs { display:flex; align-self:center; gap:3px; margin:6px auto 0; padding:3px; border-radius:999px; background:rgba(var(--color-ink-rgb),.055); }.session-tabs button { min-width:74px; height:30px; border:0; border-radius:999px; color:var(--text-secondary-color); background:transparent; font:inherit; font-size:var(--type-size-caption); }.session-tabs button.active { color:var(--text-color); background:rgba(255,255,255,.78); box-shadow:0 1px 5px rgba(var(--color-ink-rgb),.08); }.session-scroll { display:flex; flex-direction:column; gap:16px; padding-top:12px; padding-bottom:76px; touch-action:pan-y; }.lecture-scroll { padding-bottom:24px; }.material-group-meta { margin:0; color:var(--primary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.session-header-meta { min-width:0; display:flex; align-items:center; gap:6px; color:var(--text-secondary-color); font-size:var(--type-size-micro); }.session-header-meta>span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.session-timer { flex:0 0 auto; height:19px; display:inline-flex; align-items:center; gap:3px; padding:0 6px; border-radius:999px; color:var(--text-secondary-color); background:rgba(var(--color-ink-rgb),.045); font-size:var(--type-size-micro); font-variant-numeric:tabular-nums; }.session-timer.warning { color:var(--red-color); background:rgba(255,59,48,.09); }.session-timer svg { width:12px; height:12px; }.answer-card-button { width:36px; height:36px; display:grid; place-items:center; border:0; border-radius:50%; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); }.answer-card-button svg { width:17px; height:17px; }.options { display:flex; flex-direction:column; gap:7px; }.options button { display:flex; align-items:flex-start; gap:9px; padding:10px; border:0; border-radius:8px; background:rgba(var(--color-ink-rgb),.035); color:inherit; text-align:left; }.options button.selected { background:rgba(var(--color-brand-rgb),.11); }.options button.correct { background:rgba(52,199,89,.14); }.options button.wrong { background:rgba(255,59,48,.12); }.options b { width:22px; height:22px; display:grid; place-items:center; border-radius:50%; background:rgba(var(--color-ink-rgb),.08); font-size:var(--type-size-caption); flex:0 0 auto; }.diagnosis { padding:12px; border-radius:8px; background:rgba(255,149,0,.075); }.diagnosis-heading { min-height:30px; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }.diagnosis-heading strong { margin:0; }.ask-ai-button { min-height:30px; display:flex; align-items:center; gap:5px; padding:0 9px; border:0; border-radius:999px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.ask-ai-button svg { width:14px; height:14px; }.ask-ai-button:disabled { opacity:.5; }.diagnosis.pending { animation:diagnosis-pulse 1.2s ease-in-out infinite; }.diagnosis b { display:block; font-size:var(--type-size-secondary); }.diagnosis p { margin:4px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-secondary); line-height:1.5; }.diagnosis small { display:block; margin-top:8px; color:var(--green-color); font-size:var(--type-size-micro); }.diagnosis-actions { display:flex; gap:8px; margin-top:10px; }.diagnosis-actions button { min-height:32px; padding:0 10px; border:0; border-radius:8px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-caption); }.diagnosis-actions button:disabled { opacity:.5; }@keyframes diagnosis-pulse { 50% { opacity:.62; } }.session-error { margin:0; color:var(--red-color); font-size:var(--type-size-caption); }.session-actions { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:8px max(12px,env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)); background:rgba(250,251,253,.9); backdrop-filter:blur(14px); }.session-actions button { flex:1; height:40px; border:0; border-radius:10px; background:rgba(var(--color-ink-rgb),.08); color:var(--text-color); font:inherit; }.session-actions button:last-child { background:var(--primary-color); color:#fff; }.session-actions button:disabled { opacity:.45; }.session-empty { display:grid; place-items:center; min-height:50vh; color:var(--text-secondary-color); padding:20px; text-align:center; }.answer-card-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }.answer-card-grid button { height:36px; border:0; border-radius:9px; color:var(--text-secondary-color); background:rgba(var(--color-ink-rgb),.06); font:inherit; }.answer-card-grid button.answered { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.12); }.answer-card-grid button.active { outline:2px solid var(--primary-color); outline-offset:1px; }.answer-card-grid button.wrong { color:var(--red-color); background:rgba(255,59,48,.12); }.correction-form { display:flex; flex-direction:column; gap:12px; }.correction-form>span,.correction-form label>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.cause-options { display:flex; flex-wrap:wrap; gap:7px; }.cause-options button { min-height:32px; padding:0 10px; border:0; border-radius:999px; color:var(--text-secondary-color); background:var(--surface-control); font:inherit; font-size:var(--type-size-caption); }.cause-options button.active { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.12); }.correction-form label { display:flex; flex-direction:column; gap:6px; }.correction-form textarea { width:100%; resize:none; border:0; border-radius:8px; padding:10px; color:var(--text-color); background:var(--surface-control); font:inherit; line-height:1.5; }.correction-submit { min-height:40px; border:0; border-radius:10px; color:#fff; background:var(--primary-color); font:inherit; }.correction-submit:disabled { opacity:.45; }
+.question-source-meta { margin:0; display:flex; align-items:center; gap:7px; color:var(--text-secondary-color); font-size:var(--type-size-caption); line-height:1.4; }
+.question-source-meta span { flex:0 0 auto; padding:3px 7px; border-radius:999px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); }
+.question-material-region,.question-answer-region { display:flex; flex-direction:column; gap:14px; min-width:0; }.question-presentation-data_material_choice .question-material-region,.question-presentation-shared_material_choice .question-material-region,.question-presentation-long_reading_choice .question-material-region { padding-bottom:4px; border-bottom:1px solid rgba(var(--color-ink-rgb),.06); }
 </style>

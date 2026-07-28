@@ -265,6 +265,31 @@
                   </div>
                   <small>同时最多执行 {{ aiForm.maxConcurrentTasks }} 个 AI 任务，遇到限流会自动降速</small>
                 </label>
+                <button class="toggle-row toggle-button" type="button" @click="webResearchForm.enabled = !webResearchForm.enabled">
+                  <span>网络研究</span>
+                  <i :class="['switch-control', { active: webResearchForm.enabled }]" aria-hidden="true"></i>
+                </button>
+                <template v-if="webResearchForm.enabled">
+                  <label>
+                    <span>搜索服务</span>
+                    <div class="option-group provider-options">
+                      <button
+                        v-for="item in webSearchProviderOptions"
+                        :key="item.value"
+                        type="button"
+                        :class="{ active: webResearchForm.provider === item.value }"
+                        @click="webResearchForm.provider = item.value"
+                      >
+                        {{ item.label }}
+                      </button>
+                    </div>
+                    <small>每日热点、真题和考试大纲按需联网，普通聊天不会加载搜索工具</small>
+                  </label>
+                  <label v-if="webResearchForm.provider !== WebSearchProvider.BuiltIn">
+                    <span>搜索 API Key</span>
+                    <input v-model="webResearchForm.apiKey" type="password" placeholder="搜索服务密钥" autocomplete="off" />
+                  </label>
+                </template>
                 <div class="config-actions">
                   <button type="button" @click="saveAIConfig" :disabled="isSavingConfig">
                     {{ isSavingConfig ? '保存中...' : '保存配置' }}
@@ -315,8 +340,15 @@ import {
   type AIConfig,
   type AIProviderType
 } from '@/domain/ai';
+import {
+  WebSearchFreshness,
+  WebSearchProvider,
+  type WebSearchProviderCode
+} from '@/capabilities/web-research/public';
 import { configuredAIClient } from '@/composition-root/public';
 import { aiConfigService } from '@/services/AIConfigService';
+import { webResearchConfigService } from '@/services/WebResearchConfigService';
+import { webResearchService } from '@/services/WebResearchService';
 import { learningNotificationAdapter, type LearningNotificationStatus } from '@/platform/LearningNotificationAdapter';
 import { dataManagementService, type DataSummary } from '@/services/DataManagementService';
 import { THEME_PRESETS, themeService, type ThemeSettings } from '@/services/ThemeService';
@@ -360,6 +392,11 @@ const aiProviderOptions: Array<{ value: AIProviderType; label: string }> = [
   { value: 'openai', label: 'OpenAI 兼容协议' },
   { value: 'anthropic', label: 'Anthropic 原生协议' }
 ];
+const webSearchProviderOptions: Array<{ value: WebSearchProviderCode; label: string }> = [
+  { value: WebSearchProvider.BuiltIn, label: '内置免费搜索' },
+  { value: WebSearchProvider.Jina, label: 'Jina Search' },
+  { value: WebSearchProvider.Brave, label: 'Brave Search' }
+];
 const aiForm = reactive<Omit<AIConfig, 'updatedAt'>>({
   provider: 'openai',
   apiKey: '',
@@ -367,6 +404,11 @@ const aiForm = reactive<Omit<AIConfig, 'updatedAt'>>({
   model: 'gpt-4o-mini',
   streamingEnabled: true,
   maxConcurrentTasks: 3
+});
+const webResearchForm = reactive({
+  enabled: true,
+  provider: WebSearchProvider.BuiltIn as WebSearchProviderCode,
+  apiKey: ''
 });
 const reminderForm = reactive(learningNotificationAdapter.loadSettings());
 const proactiveLevel = ref<typeof ProactiveLevel[keyof typeof ProactiveLevel]>(
@@ -471,28 +513,45 @@ function evidenceLabel(source: CandidateHomeSnapshot['scores'][number]['evidence
 }
 
 async function loadAIConfig() {
-  const config = await aiConfigService.load();
+  const [config, webConfig] = await Promise.all([
+    aiConfigService.load(),
+    webResearchConfigService.load()
+  ]);
   aiForm.provider = config.provider as AIProviderType;
   aiForm.apiKey = config.apiKey;
   aiForm.baseUrl = config.baseUrl || '';
   aiForm.model = config.model;
   aiForm.streamingEnabled = config.streamingEnabled !== false;
   aiForm.maxConcurrentTasks = config.maxConcurrentTasks;
+  webResearchForm.enabled = webConfig.enabled;
+  webResearchForm.provider = webConfig.provider;
+  webResearchForm.apiKey = webConfig.apiKey;
 }
 
 async function saveAIConfig() {
   if (isSavingConfig.value) return;
+  if (requiresWebSearchKey(webResearchForm.provider) && !webResearchForm.apiKey.trim()) {
+    configMessage.value = '开启网络研究后需要填写搜索 API Key';
+    return;
+  }
   isSavingConfig.value = true;
   configMessage.value = '';
   try {
-    await aiConfigService.save({
-      provider: aiForm.provider,
-      apiKey: aiForm.apiKey.trim(),
-      baseUrl: aiForm.baseUrl?.trim(),
-      model: aiForm.model.trim(),
-      streamingEnabled: aiForm.streamingEnabled !== false,
-      maxConcurrentTasks: aiForm.maxConcurrentTasks
-    });
+    await Promise.all([
+      aiConfigService.save({
+        provider: aiForm.provider,
+        apiKey: aiForm.apiKey.trim(),
+        baseUrl: aiForm.baseUrl?.trim(),
+        model: aiForm.model.trim(),
+        streamingEnabled: aiForm.streamingEnabled !== false,
+        maxConcurrentTasks: aiForm.maxConcurrentTasks
+      }),
+      webResearchConfigService.save({
+        enabled: webResearchForm.enabled,
+        provider: webResearchForm.provider,
+        apiKey: webResearchForm.apiKey.trim()
+      })
+    ]);
     configMessage.value = aiConfigService.isNativeSecure() ? '已保存到 iOS Keychain' : '已保存到本地开发存储';
   } finally {
     isSavingConfig.value = false;
@@ -501,20 +560,40 @@ async function saveAIConfig() {
 
 async function testAIConfig() {
   if (isTestingConfig.value) return;
+  if (requiresWebSearchKey(webResearchForm.provider) && !webResearchForm.apiKey.trim()) {
+    configMessage.value = '开启网络研究后需要填写搜索 API Key';
+    return;
+  }
   isTestingConfig.value = true;
   configMessage.value = '';
   try {
-    await aiConfigService.save({
-      provider: aiForm.provider,
-      apiKey: aiForm.apiKey.trim(),
-      baseUrl: aiForm.baseUrl?.trim(),
-      model: aiForm.model.trim(),
-      streamingEnabled: aiForm.streamingEnabled !== false,
-      maxConcurrentTasks: aiForm.maxConcurrentTasks
-    });
+    await Promise.all([
+      aiConfigService.save({
+        provider: aiForm.provider,
+        apiKey: aiForm.apiKey.trim(),
+        baseUrl: aiForm.baseUrl?.trim(),
+        model: aiForm.model.trim(),
+        streamingEnabled: aiForm.streamingEnabled !== false,
+        maxConcurrentTasks: aiForm.maxConcurrentTasks
+      }),
+      webResearchConfigService.save({
+        enabled: webResearchForm.enabled,
+        provider: webResearchForm.provider,
+        apiKey: webResearchForm.apiKey.trim()
+      })
+    ]);
     const result = await configuredAIClient.testConnection();
     await configuredAIClient.testStructuredOutput();
-    configMessage.value = `连接正常：${result.slice(0, 24)}`;
+    if (webResearchForm.enabled) {
+      const search = await webResearchService.search({
+        query: '中国 公务员考试 时政',
+        freshness: WebSearchFreshness.Month,
+        limit: 1
+      });
+      configMessage.value = `模型与网络搜索正常：${result.slice(0, 18)} · ${search.hits.length} 条来源`;
+    } else {
+      configMessage.value = `连接正常：${result.slice(0, 24)}`;
+    }
   } catch (error) {
     configMessage.value = error instanceof Error ? error.message : '连接测试失败';
   } finally {
@@ -523,9 +602,16 @@ async function testAIConfig() {
 }
 
 async function clearAIConfig() {
-  await aiConfigService.clear();
+  await Promise.all([aiConfigService.clear(), webResearchConfigService.clear()]);
   aiForm.apiKey = '';
+  webResearchForm.enabled = true;
+  webResearchForm.provider = WebSearchProvider.BuiltIn;
+  webResearchForm.apiKey = '';
   configMessage.value = '已清空 AI 配置';
+}
+
+function requiresWebSearchKey(provider: WebSearchProviderCode): boolean {
+  return webResearchForm.enabled && provider !== WebSearchProvider.BuiltIn;
 }
 
 function openAISheet() {

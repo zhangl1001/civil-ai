@@ -24,6 +24,22 @@ try {
   assert.equal(ai.generationExecutionBudgetMs(5), 160_000);
   assert.equal(ai.generationExecutionBudgetMs(10), 200_000);
   assert.equal(ai.generationExecutionBudgetMs(25), 300_000);
+  const parentDeadlineController = new AbortController();
+  const parentDeadline = ai.createProviderExecutionDeadline(
+    parentDeadlineController.signal,
+    10_000,
+    '用户取消测试'
+  );
+  parentDeadlineController.abort(new DOMException('user stopped', 'AbortError'));
+  assert.equal(parentDeadline.signal.aborted, true);
+  assert.equal(parentDeadline.signal.reason.name, 'AbortError');
+  parentDeadline.dispose();
+
+  const timeoutDeadline = ai.createProviderExecutionDeadline(undefined, 1_000, '模型调用测试');
+  await new Promise((resolve) => timeoutDeadline.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal(timeoutDeadline.signal.reason.kind, ai.ProviderErrorKind.Transient);
+  assert.match(timeoutDeadline.signal.reason.message, /超时/);
+  timeoutDeadline.dispose();
   assert.deepEqual(ai.parseStructuredJson('{"ok":true}'), { ok: true });
   assert.deepEqual(ai.parseStructuredJson('结果如下：\n```json\n{"ok":true,"text":"包含 } 字符"}\n```\n请查收。'), {
     ok: true,
@@ -298,6 +314,21 @@ try {
   assert.equal(anthropicFallbackBodies[0].tools[0].name, 'submit_structured_result');
   assert.equal('tools' in anthropicFallbackBodies[1], false);
   assert.match(anthropicFallbackBodies[1].system, /structured_output/);
+  await anthropicFallbackGateway.complete({
+    system: 'system',
+    messages: [{ role: 'user', content: 'generate again' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: 'anthropic-fallback-request-id-2'
+  });
+  assert.equal(anthropicFallbackBodies.length, 3);
+  assert.equal('tools' in anthropicFallbackBodies[2], false, 'unsupported structured tool mode must stay disabled');
 
   let deepSeekRequest;
   const deepSeekGateway = new ai.AnthropicGateway({
@@ -432,6 +463,21 @@ try {
   assert.equal(fallbackBodies.length, 2);
   assert.equal('tools' in fallbackBodies[1], false);
   assert.match(fallbackBodies[1].messages[0].content, /structured_output/);
+  await fallbackGateway.complete({
+    system: 'system',
+    messages: [{ role: 'user', content: 'generate again' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: 'fallback-request-id-2'
+  });
+  assert.equal(fallbackBodies.length, 3);
+  assert.equal('tools' in fallbackBodies[2], false, 'unsupported structured tool mode must stay disabled');
 
   let openAIAgentRequest;
   const openAIAgentGateway = new ai.OpenAICompatibleGateway({

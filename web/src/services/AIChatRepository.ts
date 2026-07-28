@@ -1,5 +1,6 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 import type { AIMessage, AIMessageRole, AISession } from '@/domain/ai';
+import { paginateAIChatMessages, type AIMessagePage } from '@/ai/ChatMessagePagination';
 import { agentToolActivityService } from './AgentToolActivityService';
 
 export const AI_MESSAGE_CHANGED_EVENT = 'zhangl-ai-message-changed';
@@ -62,6 +63,17 @@ export class AIChatRepository {
     const runtime = await initializeTutorRuntime();
     return [...await runtime.conversationStore.listMessages(sessionId)]
       .filter((message) => message.role !== 'tool') as AIMessage[];
+  }
+
+  async listMessagePage(
+    sessionId: string,
+    options: { readonly beforeMessageId?: string; readonly limit?: number } = {}
+  ): Promise<AIMessagePage> {
+    return paginateAIChatMessages(
+      await this.listMessages(sessionId),
+      options.beforeMessageId,
+      options.limit
+    );
   }
 
   async addMessage(input: {

@@ -19,17 +19,19 @@ export class PlatformHttpTransport implements HttpTransport {
   async send(request: HttpTransportRequest): Promise<Response> {
     request.signal?.throwIfAborted();
     if (!Capacitor.isNativePlatform()) return this.sendWithFetch(request);
-    try {
-      return await this.streaming.send(request);
-    } catch (error) {
-      if (request.signal?.aborted) throw request.signal.reason;
-      if (!isNativeStreamingPluginUnavailable(error)) throw networkError(error);
-      if (!warnedAboutNativeTransportFallback) {
-        warnedAboutNativeTransportFallback = true;
-        console.warn(
-          '[AITransport] NativeStreamingHTTP registration probe failed; AI requests use the CapacitorHttp fallback for this app process.',
-          error
-        );
+    if (request.method === 'POST' && request.body !== undefined) {
+      try {
+        return await this.streaming.send(request);
+      } catch (error) {
+        if (request.signal?.aborted) throw request.signal.reason;
+        if (!isNativeStreamingPluginUnavailable(error)) throw networkError(error);
+        if (!warnedAboutNativeTransportFallback) {
+          warnedAboutNativeTransportFallback = true;
+          console.warn(
+            '[AITransport] NativeStreamingHTTP registration probe failed; AI requests use the CapacitorHttp fallback for this app process.',
+            error
+          );
+        }
       }
     }
 
@@ -38,15 +40,16 @@ export class PlatformHttpTransport implements HttpTransport {
 
   private async sendWithCapacitorHttp(request: HttpTransportRequest): Promise<Response> {
     try {
-      const response = await settleWithAbort(
-        CapacitorHttp.request({
+      const requestOptions = {
           url: request.url,
           method: request.method,
           headers: { ...request.headers },
-          data: JSON.parse(request.body) as unknown,
           connectTimeout: 30_000,
-          readTimeout: 300_000
-        }),
+          readTimeout: 300_000,
+          ...(request.body === undefined ? {} : { data: parseRequestBody(request.body) })
+        };
+      const response = await settleWithAbort(
+        CapacitorHttp.request(requestOptions),
         request.signal
       );
       request.signal?.throwIfAborted();
@@ -66,13 +69,21 @@ export class PlatformHttpTransport implements HttpTransport {
       return await fetch(request.url, {
         method: request.method,
         headers: request.headers,
-        body: request.body,
+        ...(request.body === undefined ? {} : { body: request.body }),
         signal: request.signal
       });
     } catch (error) {
       if (request.signal?.aborted) throw request.signal.reason;
       throw networkError(error);
     }
+  }
+}
+
+function parseRequestBody(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return body;
   }
 }
 

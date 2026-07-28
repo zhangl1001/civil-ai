@@ -9,7 +9,25 @@ export {
 } from './domain/AgentRunCodes';
 export { TaskCenterStep, TaskTargetType, type TaskCenterStep as TaskCenterStepCode, type TaskTargetType as TaskTargetTypeCode } from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
-export { AgentToolRisk, AgentToolRegistry, type AgentSkillDefinition, type AgentToolDefinition, type AgentToolRisk as AgentToolRiskCode } from './domain/AgentToolRegistry';
+export {
+  AgentToolRisk,
+  AgentToolRegistry,
+  type AgentCapabilityBundle,
+  type AgentSkillDefinition,
+  type AgentToolDefinition,
+  type AgentToolRisk as AgentToolRiskCode
+} from './domain/AgentToolRegistry';
+export {
+  AgentSkillRouter,
+  type AgentSkillRoutingInput,
+  type AgentSkillRoutingRule
+} from './domain/AgentSkillRouter';
+export {
+  ToolExposurePlanner,
+  type ToolExposureLimits,
+  type ToolExposurePlan
+} from './domain/ToolExposurePlanner';
+export { AgentSystemPromptComposer, type AgentSystemPromptInput } from './domain/AgentSystemPromptComposer';
 export { AgentContextBudgeter, estimateTokens, type BudgetedAgentContext } from './domain/AgentContextBudgeter';
 export { AdaptiveAgentConcurrency } from './domain/AdaptiveAgentConcurrency';
 export { agentWorkPoolsForLane } from './domain/AgentWorkPoolPolicy';

@@ -30,6 +30,19 @@ interface ProactiveTutorRefreshPort {
   execute(examCycleId: string): Promise<unknown>;
 }
 
+interface AbilityCalibrationRefreshPort {
+  execute(): Promise<unknown>;
+}
+
+interface TutorConclusionPort {
+  execute(command: {
+    readonly idempotencyKey: string;
+    readonly sessionId: LearningSessionId;
+    readonly diagnosisRunIds: readonly string[];
+    readonly pendingSteps: readonly string[];
+  }): Promise<unknown>;
+}
+
 export interface ObjectiveSubmissionPostProcessCommand {
   readonly idempotencyKey: string;
   readonly sessionId: LearningSessionId;
@@ -55,7 +68,9 @@ export class ObjectiveSubmissionPostProcessor {
     private readonly completeReview?: ReviewCompletionPort,
     private readonly updateDailyPlanItem?: DailyPlanItemStatusPort,
     private readonly rebalanceDailyPlan?: DailyPlanRebalancePort,
-    private readonly refreshProactiveTutor?: ProactiveTutorRefreshPort
+    private readonly refreshProactiveTutor?: ProactiveTutorRefreshPort,
+    private readonly refreshAbilityCalibration?: AbilityCalibrationRefreshPort,
+    private readonly recordTutorConclusion?: TutorConclusionPort
   ) {}
 
   async execute(
@@ -124,6 +139,12 @@ export class ObjectiveSubmissionPostProcessor {
       }
     }
 
+    await attempt(
+      'ability_calibration.refresh',
+      pendingSteps,
+      () => this.refreshAbilityCalibration?.execute()
+    );
+
     const diagnosisItems = sessionReview.items
       .filter((item) => item.grading.result === 'incorrect')
       .flatMap((item) => item.diagnoses
@@ -141,6 +162,14 @@ export class ObjectiveSubmissionPostProcessor {
       }));
       if (run) diagnosisRunIds.push(run.run.id);
     }
+
+    const conclusionPendingSteps = unique(pendingSteps);
+    await attempt('tutor_conclusion.record', pendingSteps, () => this.recordTutorConclusion?.execute({
+      idempotencyKey: `${command.idempotencyKey}:tutor-conclusion:v1`,
+      sessionId: sessionReview.session.id,
+      diagnosisRunIds,
+      pendingSteps: conclusionPendingSteps
+    }));
 
     return { diagnosisRunIds, pendingSteps: unique(pendingSteps) };
   }

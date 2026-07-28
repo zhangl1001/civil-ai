@@ -33,7 +33,7 @@ export class PersistDailyPlanProposal {
       status:DailyPlanItemStatus.Pending,
       actualMinutes:0
     }));
-    const aggregate:DailyPlanAggregate={plan:{id:planId,examCycleId:command.proposal.examCycleId,planDate:command.planDate,version:(previous?.plan.version??0)+1,status:DailyPlanStatus.Active,phase:command.phase.trim(),availableMinutes:command.availableMinutes??command.proposal.availableMinutes,decisionSummary:command.proposal.rationale.join(' ')||'已根据最新学习结果调整剩余安排。',decisionFactors:{plannedMinutes:command.proposal.plannedMinutes,rationale:[...command.proposal.rationale],...(command.decisionFactors??{})} as JsonObject,createdBy:'system',createdAt:now,supersedesPlanId:previous?.plan.id},items:[...retained,...proposed]};
+    const aggregate:DailyPlanAggregate={plan:{id:planId,examCycleId:command.proposal.examCycleId,planDate:command.planDate,version:(previous?.plan.version??0)+1,status:DailyPlanStatus.Active,phase:command.phase.trim(),availableMinutes:command.availableMinutes??command.proposal.availableMinutes,decisionSummary:command.proposal.rationale.join(' ')||'已根据最新学习结果调整剩余安排。',decisionFactors:{plannedMinutes:command.proposal.plannedMinutes,rationale:[...command.proposal.rationale],learningLoad:command.proposal.learningLoad,...(command.decisionFactors??{})} as unknown as JsonObject,createdBy:'system',createdAt:now,supersedesPlanId:previous?.plan.id},items:[...retained,...proposed]};
     await this.unitOfWork.run(context=>this.repository.replaceCurrent(aggregate,previous?.plan,context));return aggregate;
   }
 }

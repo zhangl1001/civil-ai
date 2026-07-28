@@ -23,6 +23,8 @@ import {
   QuestionTemplateCode
 } from '../domain/ContentCodes';
 import { GenerationContextCompiler } from './GenerationContextCompiler';
+import { BuildTrueQuestionReferencePack } from './BuildTrueQuestionReferencePack';
+import { QuestionGenerationIntent } from '../domain/QuestionSourceCodes';
 
 export interface CreateGenerationWorkflowCommand {
   readonly idempotencyKey: string;
@@ -44,6 +46,7 @@ export class CreateGenerationWorkflow {
     private readonly contentRepository: ContentRepository,
     private readonly outboxRepository: OutboxRepository,
     private readonly contextCompiler: GenerationContextCompiler,
+    private readonly buildReferencePack: BuildTrueQuestionReferencePack,
     private readonly promptVersionId: PromptVersionId,
     private readonly clock: Clock,
     private readonly ids: IdGenerator
@@ -53,8 +56,9 @@ export class CreateGenerationWorkflow {
     if (!command.idempotencyKey.trim()) throw new Error('Generation idempotency key is required');
     const existing = await this.generationRepository.findByIdempotencyKey(command.idempotencyKey);
     if (existing) return existing;
-    const [compiled, schema, template] = await Promise.all([
+    const [compiled, referencePack, schema, template] = await Promise.all([
       this.contextCompiler.compile(command),
+      this.buildReferencePack.execute(command),
       this.contentRepository.findPublishedSchema(ContentSchemaCode.SingleChoiceQuestion),
       this.contentRepository.findPublishedQuestionTemplate(QuestionTemplateCode.SingleChoice)
     ]);
@@ -78,6 +82,12 @@ export class CreateGenerationWorkflow {
       questionTemplateVersionId: template.id,
       contentSchemaVersionId: schema.id,
       promptVersionId: this.promptVersionId,
+      referencePackId: referencePack?.id ?? null,
+      referencePolicyVersion: referencePack?.policyVersion ?? null,
+      generationIntent: generationIntent(command),
+      calibrationTarget: referencePack
+        ? `${referencePack.module}:${referencePack.capabilityNodeId}`
+        : null,
       requestedCount: command.requestedCount,
       difficulty,
       constraints,
@@ -94,6 +104,12 @@ export class CreateGenerationWorkflow {
       questionTemplateVersionId: template.id,
       contentSchemaVersionId: schema.id,
       promptVersionId: this.promptVersionId,
+      referencePackId: referencePack?.id,
+      referencePolicyVersion: referencePack?.policyVersion,
+      generationIntent: generationIntent(command),
+      calibrationTarget: referencePack
+        ? `${referencePack.module}:${referencePack.capabilityNodeId}`
+        : undefined,
       requestedCount: command.requestedCount,
       difficulty,
       constraints,
@@ -142,4 +158,14 @@ export class CreateGenerationWorkflow {
       throw error;
     }
   }
+}
+
+function generationIntent(command: CreateGenerationWorkflowCommand): QuestionGenerationIntent {
+  const authority = command.constraints?.selectionAuthority;
+  const source = command.constraints?.source;
+  if (authority === 'user' || source === 'custom') return QuestionGenerationIntent.UserDirected;
+  if (command.assessmentRole === 'retention') return QuestionGenerationIntent.RetentionReview;
+  if (command.assessmentRole === 'transfer') return QuestionGenerationIntent.TransferAssessment;
+  if (command.assessmentRole === 'anchor') return QuestionGenerationIntent.DiagnosticBaseline;
+  return QuestionGenerationIntent.TargetedTraining;
 }

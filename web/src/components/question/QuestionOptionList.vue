@@ -1,5 +1,5 @@
 <template>
-  <div :class="['question-option-list', { compact }]">
+  <div :class="['question-option-list', `question-option-list-${presentation}`, { compact }]">
     <button
       v-for="option in options"
       :key="option.id"
@@ -16,10 +16,15 @@
 
 <script setup lang="ts">
 import ContentDocumentRenderer from '@/components/content/ContentDocumentRenderer.vue';
-import type { SingleChoiceOption } from '@/modules/content/public';
+import {
+  QuestionPresentationCode,
+  type QuestionPresentationCodeValue,
+  type SingleChoiceOption
+} from '@/modules/content/public';
 
 const props = withDefaults(defineProps<{
   readonly options: readonly SingleChoiceOption[];
+  readonly presentation?: QuestionPresentationCodeValue;
   readonly selectedOptionId?: string;
   readonly correctOptionId?: string;
   readonly revealResult?: boolean;
@@ -32,7 +37,8 @@ const props = withDefaults(defineProps<{
   revealResult: false,
   disabled: false,
   readonlyMode: false,
-  compact: false
+  compact: false,
+  presentation: QuestionPresentationCode.StandardChoice
 });
 
 const emit = defineEmits<{
@@ -131,6 +137,19 @@ function select(optionId: string) {
   max-width: 100%;
   height: auto;
   max-height: 150px;
+  object-fit: contain;
+}
+
+.question-option-list-graphic_choice .option-content :deep(.content-svg),
+.question-option-list-graphic_choice .option-content :deep(.content-image) {
+  height: min(24vw, 112px);
+  max-height: 112px;
+}
+
+.question-option-list-graphic_choice .option-content :deep(svg),
+.question-option-list-graphic_choice .option-content :deep(img) {
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
 </style>

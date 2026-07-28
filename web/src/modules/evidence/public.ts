@@ -44,7 +44,13 @@ export type {
   LearningEvidenceRepository,
   LearningSessionRepository
 } from './contracts/LearningRepositories';
-export { objectiveEvidencePolicyV1 } from './domain/ObjectiveEvidencePolicy';
+export { objectiveEvidencePolicyV2 } from './domain/ObjectiveEvidencePolicy';
+export {
+  ObjectiveEvidenceOrigin,
+  objectiveEvidenceOriginFrom,
+  objectiveEvidenceOriginReliability,
+  type ObjectiveEvidenceOrigin as ObjectiveEvidenceOriginCode
+} from './domain/ObjectiveEvidenceOrigin';
 export {
   SubmitObjectiveSession,
   type ObjectiveAnswerInput,
@@ -53,7 +59,10 @@ export {
 } from './application/SubmitObjectiveSession';
 export { CorrectLearningEvidence, type CorrectLearningEvidenceCommand } from './application/CorrectLearningEvidence';
 export { ConfirmErrorDiagnosis, type ConfirmErrorDiagnosisCommand } from './application/ConfirmErrorDiagnosis';
-export { RunAiErrorDiagnosis } from './application/RunAiErrorDiagnosis';
+export {
+  RunAiErrorDiagnosis,
+  type AiErrorDiagnosisCompletionObserver
+} from './application/RunAiErrorDiagnosis';
 export { RequestAiErrorDiagnosis } from './application/RequestAiErrorDiagnosis';
 export { CompleteObjectivePractice, type CompleteObjectivePracticeResult } from './application/CompleteObjectivePractice';
 export {
@@ -78,5 +87,6 @@ export {
 export {
   GetWrongBookEntries,
   type WrongBookDiagnosis,
-  type WrongBookEntry
+  type WrongBookEntry,
+  type WrongBookPage
 } from './application/GetWrongBookEntries';

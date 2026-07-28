@@ -82,9 +82,10 @@ export class IndexedDbLearningSessionRepository implements LearningSessionReposi
       .map(factsOf);
   }
 
-  async listRecent(examCycleId: ExamCycleId, limit: number): Promise<readonly ObjectiveSessionFacts[]> {
+  async listRecent(examCycleId: ExamCycleId, limit: number, offset = 0): Promise<readonly ObjectiveSessionFacts[]> {
     assertSessionLimit(limit);
-    return (await this.listAll(examCycleId)).slice(0, limit);
+    if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Evidence query offset must be a non-negative integer');
+    return (await this.listAll(examCycleId)).slice(offset, offset + limit);
   }
 
   async listAll(examCycleId: ExamCycleId): Promise<readonly ObjectiveSessionFacts[]> {

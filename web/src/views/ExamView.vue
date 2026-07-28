@@ -60,7 +60,8 @@
         <AppStateView v-else-if="!history.length" compact :title="`还没有${subject}模考记录`" description="完成一次模考后，成绩会自动回流到这里。">
           <template #icon><BookOpenIcon /></template>
         </AppStateView>
-        <div v-else class="history-groups">
+        <InfiniteScrollPagination v-else :has-more="historyVisibleCount < history.length" :has-items="Boolean(history.length)" :on-load-more="loadMoreHistory">
+        <div class="history-groups">
           <div v-for="group in groupedHistory" :key="group.month" class="history-group">
             <div class="month-label">
               <strong>{{ group.label }}</strong>
@@ -82,6 +83,7 @@
             </button>
           </div>
         </div>
+        </InfiniteScrollPagination>
       </section>
     </PullToRefresh>
 
@@ -171,7 +173,7 @@ import {
 } from '@/services/ExamFlowService';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, InfiniteScrollPagination, PullToRefresh } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 
 const router = useRouter();
@@ -188,11 +190,10 @@ const dashboard = ref<ExamDashboard | null>(null);
 const isLoading = ref(false);
 const isStarting = ref(false);
 const notice = ref('');
-const showSettingsSheet = ref(false);
-
+const showSettingsSheet = ref(false); const historyVisibleCount = ref(30);
 const history = computed(() => dashboard.value?.history || []);
 const stats = computed(() => dashboard.value?.stats || { total: 0, averageAccuracy: 0, bestAccuracy: 0 });
-const groupedHistory = computed(() => groupHistoryByMonth(history.value));
+const groupedHistory = computed(() => groupHistoryByMonth(history.value.slice(0, historyVisibleCount.value)));
 const startButtonText = computed(() => {
   if (isStarting.value) return '任务派发中...';
   return subject.value === '行测' ? '生成并进入行测模考' : '生成并进入申论模考';
@@ -202,7 +203,6 @@ const currentConfigText = computed(() => {
   const tags = selectedTags.value.length ? ` · ${selectedTags.value.slice(0, 2).join('、')}` : '';
   return `${date.value} · ${questionCount.value}题 · ${durationMinutes.value}分钟${tags}`;
 });
-
 onMounted(async () => {
   await loadDashboard();
   applyDefaultScheme();
@@ -212,14 +212,14 @@ async function loadDashboard() {
   isLoading.value = true;
   notice.value = '';
   try {
-    dashboard.value = await examFlowService.dashboard(subject.value);
+    dashboard.value = await examFlowService.dashboard(subject.value); historyVisibleCount.value = 30;
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '模考数据加载失败';
   } finally {
     isLoading.value = false;
   }
 }
-
+function loadMoreHistory() { historyVisibleCount.value = Math.min(history.value.length, historyVisibleCount.value + 30); }
 async function switchSubject(next: ExamSubject) {
   if (subject.value === next) return;
   subject.value = next;

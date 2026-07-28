@@ -6,21 +6,20 @@ import { GENERATION_AUTONOMY_LIMITS } from '../prompt/GenerationBoundaryPolicy';
 const responseSchema: JsonObject = {
   type: 'object',
   additionalProperties: false,
-  required: ['lecture', 'materialGroups', 'questions'],
-  properties: {
+  required: ['questions'],
+          properties: {
     lecture: {
       type: 'object',
       additionalProperties: false,
-      required: ['sections'],
       properties: {
         sections: {
           type: 'array',
-          minItems: GENERATION_AUTONOMY_LIMITS.lectureSections.min,
+          minItems: 0,
           maxItems: GENERATION_AUTONOMY_LIMITS.lectureSections.max,
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['id', 'kind', 'title', 'markdown'],
+            required: ['kind', 'title', 'markdown'],
             properties: {
               id: { type: 'string', minLength: 1 },
               kind: {
@@ -54,31 +53,51 @@ const responseSchema: JsonObject = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'materialGroupId', 'material', 'prompt', 'options', 'correctOptionId', 'explanation'],
+            required: ['prompt', 'options', 'correctOptionId'],
         properties: {
           id: { type: 'string', minLength: 1 },
+          referenceQuestionId: { type: ['string', 'null'] },
           materialGroupId: { type: ['string', 'null'] },
-          material: { type: ['string', 'null'] },
-          prompt: { type: 'string', minLength: 1 },
+            material: { type: ['string', 'null'] },
+            visual: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['svg', 'alt'],
+              properties: {
+                svg: { type: 'string', minLength: 1 },
+                alt: { type: 'string', minLength: 1 },
+                viewBox: { type: 'string', minLength: 1 }
+              }
+            },
+            prompt: { type: 'string', minLength: 1 },
           options: {
             type: 'array',
-            minItems: 4,
-            maxItems: 4,
+          minItems: 2,
+          maxItems: 8,
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['id', 'text'],
-              properties: {
-                id: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
-                text: { type: 'string', minLength: 1 }
-              }
+                properties: {
+                  id: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] },
+                  text: { type: 'string', minLength: 1 },
+                  visual: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['svg', 'alt'],
+                    properties: {
+                      svg: { type: 'string', minLength: 1 },
+                      alt: { type: 'string', minLength: 1 },
+                      viewBox: { type: 'string', minLength: 1 }
+                    }
+                  }
+                }
             }
           },
-          correctOptionId: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
+          correctOptionId: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] },
           explanation: {
             type: 'object',
             additionalProperties: false,
-            required: ['knowledgePoint', 'conclusion', 'steps', 'optionAnalysis', 'pitfalls'],
+            required: ['knowledgePoint', 'conclusion'],
             properties: {
               knowledgePoint: { type: 'string', minLength: 2 },
               conclusion: { type: 'string', minLength: 1 },
@@ -90,14 +109,14 @@ const responseSchema: JsonObject = {
               },
               optionAnalysis: {
                 type: 'array',
-                minItems: 4,
-                maxItems: 4,
+                minItems: 0,
+                maxItems: 8,
                 items: {
                   type: 'object',
                   additionalProperties: false,
                   required: ['optionId', 'verdict', 'analysis'],
                   properties: {
-                    optionId: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
+                    optionId: { type: 'string', enum: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] },
                     verdict: { type: 'string', enum: ['correct', 'incorrect'] },
                     analysis: { type: 'string', minLength: 1 }
                   }
@@ -119,12 +138,12 @@ const responseSchema: JsonObject = {
 
 export const structuredObjectivePromptV2: PromptBundle = {
   definitionId: 'prompt-definition:content-generate-structured-objective',
-  versionId: 'prompt-version:content-generate-structured-objective:v9' as PromptVersionId,
+  versionId: 'prompt-version:content-generate-structured-objective:v11' as PromptVersionId,
   promptCode: 'content.generate.aptitude.structured_objective',
   taskType: 'lecture_with_questions',
   description: '围绕指定能力节点生成结构化讲义与单选训练题',
-  version: '2.0.0',
-  contentHash: 'sha256:6d1e9ee2c57ea1fcce0e5288e2c0129eaadf0cd8f1e36336485df84accd96f11',
+  version: '2.2.0',
+  contentHash: 'sha256:678c637f664d167e1e5b3e2232bf82070dbd25fa59beaa9c589a8e919e724393',
   createdAt: 1784016000000 as InstantMs,
   requiredVariables: ['QUESTION_COUNT', 'ASSESSMENT_ROLE', 'DIFFICULTY_MIN', 'DIFFICULTY_MAX'],
   compatibleSchemaVersions: ['content.v1', 'question.single_choice.v2'],
@@ -149,7 +168,7 @@ export const structuredObjectivePromptV2: PromptBundle = {
         '本次生成 {{QUESTION_COUNT}} 道题，评估角色为 {{ASSESSMENT_ROLE}}，难度范围 {{DIFFICULTY_MIN}} 至 {{DIFFICULTY_MAX}}。',
         '讲义应根据目标能力、学生证据和本次教学目的，自主选择最有帮助的章节、例子、方法和提醒，不为凑固定数量重复内容。',
         '每道题都必须评估当前目标能力节点。允许通过材料、难度和干扰项做前置能力或相邻迁移变化，但不得改变本题的目标能力归属。',
-        '题目必须使用单选合同，但题干和选项可使用 GFM Markdown、表格或安全的内联 SVG。',
+        '题目必须使用单选合同，但题干和选项可使用 GFM Markdown、表格或 visual 字段承载安全的 SVG。',
         '资料分析优先把完整数据表保存到 materialGroups；数量关系解析必须给出关键算式；图形推理必须提供单个有 viewBox 的 SVG 画布并保持图形比例。',
         '长材料多问必须使用 materialGroups；普通单题不得为了排版而伪造公共材料组。'
       ].join('\n')
@@ -163,7 +182,9 @@ export const structuredObjectivePromptV2: PromptBundle = {
         'constraints.selectionAuthority 为 user 时，用户明确选择的当前能力节点、题量和难度是最高优先级；学生证据只用于调整讲解方式，不得改题或切换私教计划。',
         'constraints.selectionAuthority 为 tutor_engine 时，按私教计划、复习任务和学生证据完成当前能力节点教学。',
         '学生自报成绩只能作为低可信背景，不得当作已测量掌握度。',
-        '只使用输入中明确给出的事实；缺失事实不得自行编造。'
+        '只使用输入中明确给出的事实；缺失事实不得自行编造。',
+        'trueQuestionReference 不为 null 时，它只包含当前能力点的最小真题参考包。使用其中的题型、难度、结构和干扰项特征校准本次生成，不得把参考题原文直接改写后冒充新题。',
+        'trueQuestionReference 为 null 时，不得声称本次内容已由真题校准。'
       ].join('\n')
     },
     {
@@ -171,15 +192,17 @@ export const structuredObjectivePromptV2: PromptBundle = {
       title: '输出合同',
       order: 40,
       template: [
-        '只输出一个 JSON 对象，根字段固定为 lecture、materialGroups 和 questions。',
+        '只输出一个 JSON 对象，questions 必须存在；lecture 和 materialGroups 按需要提供。',
         'lecture.sections 是可自由组合的教学章节。根据本次教学需要选择 kind、章节数量、顺序和深度；不要求凑齐全部 kind，markdown 保存章节完整内容。',
-        '每道题使用本次响应内唯一的稳定 id；题干、材料、选项、答案和解析各在固定字段中，禁止从正文格式暗示区域。',
+        '题干、材料、选项、答案和解析各在固定字段中，禁止从正文格式暗示区域。章节 id、题目 id 和选项 id 属于确定性渲染元数据，可以省略，由应用按稳定顺序生成。',
+        '每道题必须输出 referenceQuestionId。只有确实基于代表题做变式、难度调整或迁移时，才填写 trueQuestionReference.representativeQuestions 中的 questionId；仅参考整体分布时必须为 null。',
         '不要输出 capabilityCode。该字段属于确定性业务元数据，由应用按照当前 GenerationSpec 统一注入，避免模型误写导致题组归属漂移。',
-        'explanation 使用 knowledgePoint、conclusion、steps、optionAnalysis、pitfalls 作为稳定渲染槽位。steps 和 pitfalls 的条数由题目复杂度决定；optionAnalysis 因与四个可作答选项对应，必须逐项覆盖 A/B/C/D，且只有正确项 verdict 为 correct。',
+        'explanation 使用 knowledgePoint、conclusion、steps、optionAnalysis、pitfalls 作为可组合渲染槽位。解析可以按题目复杂度省略部分槽位；optionAnalysis 如果提供，应覆盖当前实际选项，且只有正确项 verdict 为 correct。',
         '普通单题的 materialGroupId 必须为 null，material 可填写本题独立材料或为 null。',
         '只有一个完整公共材料对应至少两道小题时才使用 materialGroups：公共材料只保存一次，每道小题用相同 materialGroupId 引用，且 material 必须为 null。',
         '多段文字仍是一个完整材料，不得按段落拆成多个 materialGroups；小题问法只写入 prompt，不得混进公共材料。',
-        '每个 option 使用稳定且唯一的 id；correctOptionId 必须精确引用其中一个 option id。',
+        'options 按 A、B、C……顺序输出 2 至 8 项；标准行测通常使用 A、B、C、D，option.id 可以省略并由应用确定性注入；correctOptionId 必须引用实际存在的选项。',
+        '图形推理使用 visual：svg 必须是一个完整 SVG，alt 说明图形含义，viewBox 用于等比例缩放；题干图形放在 question.visual，带图选项放在对应 option.visual，不要把 SVG 拆成多个段落或写入答案解析。',
         '不得输出内部页面 ContentDocument、HTML 或临时字段；应用会把当前作者结构确定性转换为页面内容块。'
       ].join('\n')
     },
@@ -189,9 +212,10 @@ export const structuredObjectivePromptV2: PromptBundle = {
       order: 50,
       template: [
         '每题必须只有一个最优答案，干扰项应体现真实误区，不能靠绝对化措辞送分。',
-        '解析应围绕真实解题需要组织：指出目标能力点、结论和四个选项为何成立或无效；步骤、例子和易错提醒按题目复杂度自主增减，禁止为满足数量重复表达。',
+        '解析应围绕真实解题需要组织：指出目标能力点、结论和实际选项为何成立或无效；步骤、例子和易错提醒按题目复杂度自主增减，禁止为满足数量重复表达。',
         '讲义示例不得复用正式题目的关键关系；retention、transfer、anchor 角色不得泄露答案或提供作答提示。',
-        '题目之间不得只替换人名、数字或场景，考查点、材料结构或干扰项设计要有实质变化。'
+        '题目之间不得只替换人名、数字或场景，考查点、材料结构或干扰项设计要有实质变化。',
+        '参考真题生成变式时必须更换材料事实、设问关系和干扰项构造中的至少两项，避免近似复刻。'
       ].join('\n')
     },
     {
@@ -202,7 +226,8 @@ export const structuredObjectivePromptV2: PromptBundle = {
         '输出前在内部逐项检查：JSON 可解析、渲染必需字段完整、题量准确、答案引用存在、答案唯一、讲义与题目知识点一致。',
         '检查每题是否确实服务于 studentContext.capability.name；扩展情境仍必须考查这个目标能力，不得生成同模块泛题。',
         '检查公共材料引用存在、同组至少两道小题、题量按可作答小题计数，且材料没有混入选项、答案或解析。',
-        '检查不得包含思考过程。完成检查后只输出最终 JSON。'
+        '检查不得包含思考过程。完成检查后只输出最终 JSON。',
+        '如果填写 referenceQuestionId，检查它来自本次最小参考包且新题与参考题存在实质结构差异。'
       ].join('\n')
     }
   ]

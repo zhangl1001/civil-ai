@@ -9,6 +9,11 @@ export { getTutorRuntime, initializeTutorRuntime } from './TutorRuntimeProvider'
 export { createConfiguredProviderGateway } from './ai/createConfiguredProviderGateway';
 export { agentWorkerCoordinator } from './agent/AgentWorkerCoordinator';
 export {
+  importAgentAttachment,
+  importAgentAttachments,
+  type AgentAttachmentImportResult
+} from './files/importAgentAttachment';
+export {
   ConfiguredAIClient,
   configuredAIClient,
   type AITextMessage,
