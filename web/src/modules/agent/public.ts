@@ -18,11 +18,6 @@ export {
   type AgentToolRisk as AgentToolRiskCode
 } from './domain/AgentToolRegistry';
 export {
-  AgentSkillRouter,
-  type AgentSkillRoutingInput,
-  type AgentSkillRoutingRule
-} from './domain/AgentSkillRouter';
-export {
   ToolExposurePlanner,
   type ToolExposureLimits,
   type ToolExposurePlan
@@ -64,6 +59,7 @@ export {
   type CompiledAgentContext
 } from './contracts/AgentRuntimePorts';
 export type { AgentWorkspaceStorage } from './contracts/AgentWorkspaceStorage';
+export type { AgentWorkflowInvocation } from './contracts/AgentWorkflowInvocation';
 export { FileAgentMemoryRepository } from './adapters/FileAgentMemoryRepository';
 export { CreateAgentRun, type CreateAgentRunCommand } from './application/CreateAgentRun';
 export { TransitionAgentRun, type TransitionAgentRunCommand } from './application/TransitionAgentRun';
@@ -75,6 +71,7 @@ export { UpdateAgentRunProgress, type UpdateAgentRunProgressCommand } from './ap
 export { InvokeAgentModel, type InvokeAgentModelCommand, type InvokeAgentModelResult } from './application/InvokeAgentModel';
 export { DefaultAgentToolPolicy } from './application/DefaultAgentToolPolicy';
 export { RegisteredAgentToolExecutor, type AgentToolHandler } from './application/RegisteredAgentToolExecutor';
+export { ActiveAgentToolSet } from './application/ActiveAgentToolSet';
 export { SaveAgentLoopCheckpoint } from './application/SaveAgentLoopCheckpoint';
 export { RunAgentLoop, type AgentLoopResult, type RunAgentLoopCommand } from './application/RunAgentLoop';
 export {

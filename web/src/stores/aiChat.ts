@@ -9,6 +9,7 @@ import {
 } from '@/services/ChatAgentService';
 import { projectRepository } from '@/services/ProjectRepository';
 import type { ModelImageContentPart } from '@/capabilities/ai-runtime/public';
+import type { AgentWorkflowInvocation } from '@/modules/agent/public';
 
 let initializationPromise: Promise<void> | undefined;
 
@@ -59,10 +60,14 @@ export const useAIChatStore = defineStore('aiChat', {
   },
 
   actions: {
-    async open(prompt?: string, attachments?: readonly ModelImageContentPart[]) {
+    async open(
+      prompt?: string,
+      attachments?: readonly ModelImageContentPart[],
+      invocation?: AgentWorkflowInvocation
+    ) {
       this.isOpen = true;
       await this.init();
-      if (prompt) await this.send(prompt, attachments);
+      if (prompt) await this.send(prompt, attachments, invocation);
     },
 
     close() {
@@ -205,7 +210,11 @@ export const useAIChatStore = defineStore('aiChat', {
       return true;
     },
 
-    async send(content: string, attachments?: readonly ModelImageContentPart[]) {
+    async send(
+      content: string,
+      attachments?: readonly ModelImageContentPart[],
+      invocation?: AgentWorkflowInvocation
+    ) {
       const text = content.trim();
       if (!text || this.isSending) return;
       await this.init();
@@ -247,6 +256,7 @@ export const useAIChatStore = defineStore('aiChat', {
         const routed = await chatAgentService.handle(text, activeSession, {
           thinkingEnabled: this.thinkingEnabled,
           attachments,
+          invocation,
           onAssistantStream: (update) => this.applyAssistantStream(update)
         });
         if (!routed.handled) throw new Error('AI Agent 未接管当前消息');

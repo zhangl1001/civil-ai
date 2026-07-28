@@ -1,8 +1,11 @@
 import type { ToolExposurePlan } from './ToolExposurePlanner';
+import type { AgentSkillDefinition } from './AgentToolRegistry';
 
 export interface AgentSystemPromptInput {
   readonly basePrompt: string;
   readonly exposure: ToolExposurePlan;
+  /** Compact catalog only. Concrete function schemas are loaded after selection. */
+  readonly capabilityCatalog?: readonly AgentSkillDefinition[];
 }
 
 const CORE_AGENT_POLICY = [
@@ -19,6 +22,13 @@ const CORE_AGENT_POLICY = [
 export class AgentSystemPromptComposer {
   compose(input: AgentSystemPromptInput): string {
     const sections = [input.basePrompt.trim(), '# Agent 行为边界', ...CORE_AGENT_POLICY.map((item) => `- ${item}`)];
+    if (input.capabilityCatalog?.length) {
+      sections.push(
+        '# 可发现能力摘要',
+        ...input.capabilityCatalog.map((skill) => `- ${skill.code}：${skill.description}`),
+        '当问题需要读取本地业务事实、执行任务或检索外部资料时，先调用 agent.select_skills 选择一到两个最相关能力；系统会在下一轮按需提供具体工具。普通陪伴聊天可直接回答。不要向用户展示能力或工具代码。'
+      );
+    }
     if (input.exposure.skills.length) {
       sections.push(
         '# 当前按需能力',

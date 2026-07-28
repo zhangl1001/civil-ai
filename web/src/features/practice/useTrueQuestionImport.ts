@@ -15,7 +15,7 @@ export function useTrueQuestionImport(reportError: (message: string) => void) {
     reportError('');
     try {
       const prepared = await trueQuestionImportFeature.prepare(files);
-      await chat.open(prepared.prompt, prepared.attachments);
+      await chat.open(prepared.prompt, prepared.attachments, prepared.invocation);
     } catch (cause) {
       reportError(cause instanceof Error ? cause.message : '导入真题失败');
     } finally {
@@ -25,7 +25,8 @@ export function useTrueQuestionImport(reportError: (message: string) => void) {
 
   async function researchTrueQuestions(filterSummary: string) {
     reportError('');
-    await chat.open(trueQuestionImportFeature.researchPrompt(filterSummary));
+    const request = trueQuestionImportFeature.researchRequest(filterSummary);
+    await chat.open(request.prompt, undefined, request.invocation);
   }
 
   return { importingTrueQuestion, importTrueQuestion, researchTrueQuestions };

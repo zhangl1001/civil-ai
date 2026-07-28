@@ -48,6 +48,20 @@ export class AgentToolRegistry {
     nextSkills.forEach((skill, code) => this.skills.set(code, skill));
   }
 
+  listTools(): readonly AgentToolDefinition[] {
+    return [...this.tools.values()];
+  }
+
+  listSkills(): readonly AgentSkillDefinition[] {
+    return [...this.skills.values()];
+  }
+
+  skillCodesForTool(toolCode: string): readonly string[] {
+    return [...this.skills.values()]
+      .filter((skill) => skill.toolCodes.includes(toolCode))
+      .map((skill) => skill.code);
+  }
+
   resolve(skillCodes: readonly string[], audience: string): { readonly skills: readonly AgentSkillDefinition[]; readonly tools: readonly AgentToolDefinition[] } {
     const skills = skillCodes.map((code) => this.skills.get(code) ?? fail(`Unknown agent skill: ${code}`));
     const allowedCodes = new Set(skills.flatMap((skill) => skill.toolCodes));

@@ -18,7 +18,6 @@ try {
   const ai = await server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts');
   const toolActivity = await server.ssrLoadModule('/src/services/AgentToolActivityService.ts');
   const chatCapabilities = await server.ssrLoadModule('/src/services/ChatAgentCapabilities.ts');
-  const chatTurnPolicy = await server.ssrLoadModule('/src/services/ChatAgentTurnPolicy.ts');
   const practiceLibraryTool = agent.tutorToolCatalog.find((tool) => tool.code === 'practice.read_library');
   const practiceQuestionSetTool = agent.tutorToolCatalog.find((tool) => tool.code === 'practice.read_question_set');
   assert.ok(practiceLibraryTool);
@@ -41,40 +40,60 @@ try {
       .toolCodes.includes('learning.review_session'),
     true
   );
-  const companionExposure = chatCapabilities.planChatAgentCapabilities('你好呀');
+  const companionExposure = chatCapabilities.planChatAgentCapabilities();
   assert.equal(companionExposure.skills.length, 0);
-  assert.equal(companionExposure.tools.length, 0, 'ordinary chat must not expose business tools');
-  const dailyExposure = chatCapabilities.planChatAgentCapabilities('今天应该学什么？');
+  assert.deepEqual(
+    companionExposure.tools.map((tool) => tool.code),
+    ['agent.select_skills'],
+    'ordinary chat exposes only the catalog selector, never business tools'
+  );
+  const dailyExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillCodes: ['tutor.daily_coaching']
+  });
   assert.deepEqual(dailyExposure.skillCodes, ['tutor.daily_coaching']);
   assert.deepEqual(dailyExposure.tools.map((tool) => tool.code), [
+    'agent.select_skills',
     'tutor.read_daily_context',
     'planning.propose_daily_plan',
     'teaching.request_practice'
   ]);
-  const libraryExposure = chatCapabilities.planChatAgentCapabilities('题库里现在有几套题组？');
+  const libraryExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillCodes: ['tutor.practice_library']
+  });
   assert.deepEqual(libraryExposure.skillCodes, ['tutor.practice_library']);
   assert.deepEqual(libraryExposure.tools.map((tool) => tool.code), [
+    'agent.select_skills',
     'practice.read_library',
     'practice.read_question_set',
     'learning.review_session'
   ]);
-  const essayExposure = chatCapabilities.planChatAgentCapabilities('帮我生成一套申论练习');
+  const essayExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillCodes: ['tutor.essay_workflow']
+  });
   assert.deepEqual(essayExposure.skillCodes, ['tutor.essay_workflow']);
-  assert.deepEqual(essayExposure.tools.map((tool) => tool.code), ['generate_essay', 'grade_essay']);
-  const hotspotExposure = chatCapabilities.planChatAgentCapabilities('整理一下今天的时政热点');
+  assert.deepEqual(essayExposure.tools.map((tool) => tool.code), ['agent.select_skills', 'generate_essay', 'grade_essay']);
+  const hotspotExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillCodes: ['research.current_affairs']
+  });
   assert.deepEqual(hotspotExposure.skillCodes, ['research.current_affairs']);
-  assert.deepEqual(hotspotExposure.tools.map((tool) => tool.code), ['web.search', 'web.read_page']);
-  const digestExposure = chatCapabilities.planChatAgentCapabilities('生成每日热点');
+  assert.deepEqual(hotspotExposure.tools.map((tool) => tool.code), ['agent.select_skills', 'web.search', 'web.read_page']);
+  const digestExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillCodes: ['research.current_affairs', 'tutor.digest_generation']
+  });
   assert.deepEqual(digestExposure.skillCodes, ['research.current_affairs', 'tutor.digest_generation']);
   assert.deepEqual(digestExposure.tools.map((tool) => tool.code), [
+    'agent.select_skills',
     'web.search',
     'web.read_page',
     'generate_digest',
     'generate_monthly_digest'
   ]);
-  const trueQuestionExposure = chatCapabilities.planChatAgentCapabilities('帮我上网找一下近三年江苏判断推理真题');
+  const trueQuestionExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillCodes: ['research.true_questions']
+  });
   assert.deepEqual(trueQuestionExposure.skillCodes, ['research.true_questions']);
   assert.deepEqual(trueQuestionExposure.tools.map((tool) => tool.code), [
+    'agent.select_skills',
     'web.search',
     'web.read_page',
     'question_bank.scan',
@@ -82,10 +101,12 @@ try {
     'question_bank.confirm',
     'question_bank.publish'
   ]);
-  const syllabusExposure = chatCapabilities.planChatAgentCapabilities('查询最新江苏省考考试大纲官网来源');
+  const syllabusExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillCodes: ['research.exam_syllabus']
+  });
   assert.deepEqual(syllabusExposure.skillCodes, ['research.exam_syllabus']);
-  assert.deepEqual(syllabusExposure.tools.map((tool) => tool.code), ['web.search', 'web.read_page']);
-  const pendingImportExposure = chatCapabilities.planChatAgentCapabilities('', 'question_bank.confirm');
+  assert.deepEqual(syllabusExposure.tools.map((tool) => tool.code), ['agent.select_skills', 'web.search', 'web.read_page']);
+  const pendingImportExposure = chatCapabilities.planChatAgentCapabilities({ pendingToolCode: 'question_bank.confirm' });
   assert.deepEqual(pendingImportExposure.skillCodes, ['tutor.question_bank_ingestion']);
   assert.equal(pendingImportExposure.tools.some((tool) => tool.code === 'question_bank.publish'), true);
   assert.equal(
@@ -93,30 +114,17 @@ try {
     true,
     'publishing a confirmed question-bank draft requires a second explicit confirmation'
   );
-  const importPrompt = '请扫描并导入真题。\n【已导入本地文件：江苏省考.pdf】';
-  const initialImportPolicy = chatTurnPolicy.planChatAgentTurn(importPrompt, [importPrompt]);
-  assert.equal(initialImportPolicy.requiredToolCode, 'question_bank.scan');
-  assert.equal(initialImportPolicy.forceRequiredToolOnFirstTurn, undefined);
-  const imageImportPolicy = chatTurnPolicy.planChatAgentTurn(importPrompt, [importPrompt], [{ type: 'image' }]);
-  assert.equal(imageImportPolicy.forceRequiredToolOnFirstTurn, undefined);
-  const importContinuationPolicy = chatTurnPolicy.planChatAgentTurn('你生了吗', [importPrompt, '你生了吗']);
-  assert.equal(importContinuationPolicy.requiredToolCode, 'question_bank.resume');
-  assert.match(importContinuationPolicy.routingText, /扫描并导入真题/);
-  assert.deepEqual(
-    chatCapabilities.planChatAgentCapabilities(importContinuationPolicy.routingText).skillCodes,
-    ['tutor.question_bank_ingestion']
-  );
-  const retryImportPolicy = chatTurnPolicy.planChatAgentTurn('重新录入吧', [importPrompt, '重新录入吧']);
-  assert.equal(retryImportPolicy.requiredToolCode, 'question_bank.resume');
-  assert.equal(retryImportPolicy.forceRequiredToolOnFirstTurn, true);
   const composedSystem = chatCapabilities.chatAgentSystemPromptComposer.compose({
     basePrompt: '你是个人公考 AI 私教。',
-    exposure: dailyExposure
+    exposure: dailyExposure,
+    capabilityCatalog: dailyExposure.capabilityCatalog
   });
+  assert.match(composedSystem, /可发现能力摘要/);
+  assert.match(composedSystem, /agent\.select_skills/);
   assert.match(composedSystem, /当前按需能力/);
   assert.match(composedSystem, /基于今日计划、能力证据和到期复习安排下一步学习/);
   assert.match(composedSystem, /不得只回复“正在导入”后结束/);
-  assert.doesNotMatch(composedSystem, /tutor\.read_daily_context|planning\.propose_daily_plan/);
+  assert.doesNotMatch(composedSystem, /\"scope\"|\"entryMode\"/);
 
   const extensionRegistry = new agent.AgentToolRegistry();
   extensionRegistry.registerBundle({
@@ -260,10 +268,71 @@ try {
   assert.equal(events.some((event) => event.type === 'tool_call_started'), true);
   assert.equal(events.some((event) => event.type === 'tool_call_succeeded'), true);
 
+  const selectorTool = companionExposure.tools[0];
+  const dynamicRequests = [];
+  const dynamicExecutions = [];
+  const dynamicLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    {
+      async execute(definition) {
+        dynamicExecutions.push(definition.code);
+        if (definition.code === 'agent.select_skills') {
+          return {
+            content: '{"selectedSkills":["tutor.practice_library"]}',
+            activateToolCodes: ['practice.read_library', 'practice.read_question_set', 'learning.review_session']
+          };
+        }
+        assert.equal(definition.code, 'practice.read_library');
+        return { content: '{"sets":[{"questionSetId":"set-1"}]}' };
+      }
+    },
+    { async save() {} }
+  );
+  const dynamicResult = await dynamicLoop.execute({
+    agentRunId: 'agent-run-dynamic-tool-selection',
+    system: 'system with compact skill summaries',
+    messages: [{ role: ai.ModelMessageRole.User, content: '题库里现在有几套题组？' }],
+    tools: [selectorTool],
+    availableTools: companionExposure.availableTools,
+    executionContext: { agentRunId: 'agent-run-dynamic-tool-selection' }
+  }, {
+    provider: ai.ProviderCode.OpenAICompatible,
+    model: 'test-model',
+    async complete(request) {
+      dynamicRequests.push(request);
+      if (dynamicRequests.length === 1) {
+        assert.deepEqual(request.tools.map((tool) => tool.name), ['agent_select_skills']);
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'select-library-skill',
+            name: 'agent_select_skills',
+            arguments: { skillCodes: ['tutor.practice_library'] }
+          }],
+          usage: {}
+        };
+      }
+      if (dynamicRequests.length === 2) {
+        assert.equal(request.tools.some((tool) => tool.name === 'practice_read_library'), true);
+        return {
+          text: '',
+          toolCalls: [{ id: 'read-library', name: 'practice_read_library', arguments: { scope: 'all' } }],
+          usage: {}
+        };
+      }
+      return { text: '当前题库有 1 套题组。', usage: {} };
+    }
+  });
+  assert.equal(dynamicResult.text, '当前题库有 1 套题组。');
+  assert.deepEqual(dynamicExecutions, ['agent.select_skills', 'practice.read_library']);
+  assert.equal(dynamicRequests.length, 3);
+
   const requiredToolRequests = [];
   const requiredToolEvents = [];
   let requiredToolExecutions = 0;
   const scanTool = agent.tutorToolCatalog.find((tool) => tool.code === 'question_bank.scan');
+  const importPrompt = '请扫描并导入真题。';
   const requiredToolLoop = new agent.RunAgentLoop(
     modelInvoker,
     { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.write_allowed' }; } },
