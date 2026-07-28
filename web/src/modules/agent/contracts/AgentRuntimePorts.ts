@@ -105,6 +105,8 @@ export interface AgentToolExecutionResult {
   readonly content: string;
   readonly resultRef?: string;
   readonly isError?: boolean;
+  /** Optional deterministic user response that ends the current Agent run. */
+  readonly terminalText?: string;
 }
 
 export interface AgentToolPolicy {

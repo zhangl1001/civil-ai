@@ -43,6 +43,16 @@ export interface AgentLoopResult {
   readonly checkpoint: AgentLoopCheckpoint;
 }
 
+interface ToolCallOutcome {
+  readonly message: ModelMessage;
+  readonly terminalText?: string;
+}
+
+interface ToolCallBatch {
+  readonly messages: readonly ModelMessage[];
+  readonly terminalText?: string;
+}
+
 /** Provider-neutral, bounded Agent loop. Business writes remain behind typed tool executors. */
 export class RunAgentLoop {
   private observerQueue: Promise<void> = Promise.resolve();
@@ -314,14 +324,19 @@ export class RunAgentLoop {
         }
         executableCalls.push({ definition, call });
       }
-      const toolMessages = await this.executeToolCalls(
+      const toolBatch = await this.executeToolCalls(
         command,
         executableCalls,
         limits.maxParallelReadToolCalls,
         limits.maxToolResultChars,
         signal
       );
-      messages.push(...toolMessages);
+      messages.push(...toolBatch.messages);
+      if (toolBatch.terminalText) {
+        const checkpoint = await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
+        await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: toolBatch.terminalText });
+        return { status: 'completed', text: toolBatch.terminalText, checkpoint };
+      }
       await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
     }
 
@@ -339,15 +354,19 @@ export class RunAgentLoop {
     maxParallelReads: number,
     maxResultChars: number,
     signal?: AbortSignal
-  ): Promise<readonly ModelMessage[]> {
+  ): Promise<ToolCallBatch> {
     const messages: ModelMessage[] = [];
+    let terminalText: string | undefined;
     let cursor = 0;
     while (cursor < calls.length) {
       signal?.throwIfAborted();
       const current = calls[cursor];
       if (current.definition.risk !== AgentToolRisk.Read) {
-        messages.push(await this.executeToolCall(command, current, maxResultChars, signal));
+        const outcome = await this.executeToolCall(command, current, maxResultChars, signal);
+        messages.push(outcome.message);
+        terminalText ||= outcome.terminalText;
         cursor += 1;
+        if (terminalText) break;
         continue;
       }
       const readBatch = [];
@@ -359,12 +378,13 @@ export class RunAgentLoop {
         readBatch.push(calls[cursor]);
         cursor += 1;
       }
-      const batchMessages = await Promise.all(
+      const batchOutcomes = await Promise.all(
         readBatch.map((entry) => this.executeToolCall(command, entry, maxResultChars, signal))
       );
-      messages.push(...batchMessages);
+      messages.push(...batchOutcomes.map((outcome) => outcome.message));
+      terminalText ||= batchOutcomes.find((outcome) => outcome.terminalText)?.terminalText;
     }
-    return messages;
+    return { messages, terminalText };
   }
 
   private async executeToolCall(
@@ -375,7 +395,7 @@ export class RunAgentLoop {
     },
     maxResultChars: number,
     signal?: AbortSignal
-  ): Promise<ModelMessage> {
+  ): Promise<ToolCallOutcome> {
     const { definition, call } = entry;
     await this.emit({ type: 'tool_call_started', agentRunId: command.agentRunId, call });
     try {
@@ -398,7 +418,10 @@ export class RunAgentLoop {
           resultRef: result.resultRef
         });
       }
-      return toolMessage(call, limitToolResult(result.content, maxResultChars));
+      return {
+        message: toolMessage(call, limitToolResult(result.content, maxResultChars)),
+        terminalText: result.terminalText
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.emit({
@@ -407,7 +430,7 @@ export class RunAgentLoop {
         call,
         reasonCode: 'agent.tool_execution_failed'
       });
-      return toolMessage(call, limitToolResult(`工具执行失败：${message}`, maxResultChars));
+      return { message: toolMessage(call, limitToolResult(`工具执行失败：${message}`, maxResultChars)) };
     }
   }
 
