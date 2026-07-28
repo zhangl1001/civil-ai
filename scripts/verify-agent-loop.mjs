@@ -316,6 +316,43 @@ try {
     'unbacked operational narration must never be streamed to the user'
   );
 
+  let terminalModelCalls = 0;
+  const terminalToolLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    {
+      async execute() {
+        return {
+          content: '{"found":false}',
+          terminalText: '没有可继续的导入草稿，请重新上传原文件。'
+        };
+      }
+    },
+    { async save() {} }
+  );
+  const terminalToolResult = await terminalToolLoop.execute({
+    agentRunId: 'agent-run-import-resume-missing',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '重新录入吧' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.code === 'question_bank.resume')],
+    requiredToolCode: 'question_bank.resume',
+    forceRequiredToolOnFirstTurn: true,
+    executionContext: { agentRunId: 'agent-run-import-resume-missing' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete() {
+      terminalModelCalls += 1;
+      return {
+        text: '我会继续处理。',
+        toolCalls: [{ id: 'resume-missing', name: 'question_bank_resume', arguments: {} }],
+        usage: {}
+      };
+    }
+  });
+  assert.equal(terminalToolResult.text, '没有可继续的导入草稿，请重新上传原文件。');
+  assert.equal(terminalModelCalls, 1, 'a terminal tool response must not re-enter the model');
+
   const blankAfterToolRequests = [];
   const blankAfterToolLoop = new agent.RunAgentLoop(
     modelInvoker,

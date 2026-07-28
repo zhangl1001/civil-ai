@@ -666,7 +666,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
   executor.register('question_bank.resume', async () => {
     const aggregate = await runtime.questionImportDraftRepository.findLatestPendingByOwner(sessionId);
     if (!aggregate) {
-      return { content: JSON.stringify({ found: false }) };
+      return { content: JSON.stringify({ found: false }), terminalText: '上一次没有生成可继续的题库草稿，且历史图片已失效。请重新选择原 PDF 或题目图片后再导入。' };
     }
     return {
       content: JSON.stringify({
