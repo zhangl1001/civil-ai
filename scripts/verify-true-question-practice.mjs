@@ -211,8 +211,8 @@ async function verifyRepositoryAndViewContracts() {
   assert.match(libraryActions, /导入真题/);
   assert.match(libraryActions, /AI 联网找题/);
   assert.match(libraryActions, /DOCUMENT_IMPORT_ACCEPT/);
-  assert.match(importFeature, /file\.read_text/);
-  assert.match(importFeature, /web\.search/);
+  assert.match(importFeature, /skillCodes: \['tutor\.question_bank_ingestion'\]/);
+  assert.match(importFeature, /skillCodes: \['research\.true_questions'\]/);
   assert.match(importFeature, /待确认草稿/);
   assert.match(sessionView, /question-source-meta/);
   assert.match(sessionView, /questionOriginLabel\(sourceMetadata\.sourceType\)/);

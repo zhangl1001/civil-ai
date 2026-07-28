@@ -107,6 +107,8 @@ export interface AgentToolExecutionResult {
   readonly isError?: boolean;
   /** Optional deterministic user response that ends the current Agent run. */
   readonly terminalText?: string;
+  /** Tool catalog selection may activate these exact tool schemas for later turns. */
+  readonly activateToolCodes?: readonly string[];
 }
 
 export interface AgentToolPolicy {

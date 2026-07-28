@@ -1,6 +1,5 @@
 import type { JsonObject } from '@/kernel/public';
 import {
-  AgentSkillRouter,
   AgentSystemPromptComposer,
   AgentToolRegistry,
   AgentToolRisk,
@@ -8,7 +7,6 @@ import {
   tutorSkillCatalog,
   tutorToolCatalog,
   type AgentSkillDefinition,
-  type AgentSkillRoutingRule,
   type AgentToolDefinition,
   type ToolExposurePlan
 } from '@/modules/agent/public';
@@ -77,49 +75,78 @@ registry.registerBundle({
   skills: allSkills
 });
 
-const routingRules: readonly AgentSkillRoutingRule[] = [
-  route('research.true_questions', 136, /(?:网上|网络|搜索|查找|找一下|研究).{0,12}(?:真题|历年题|试卷)|(?:真题|历年题).{0,12}(?:来源|官网|公告)/),
-  route('research.exam_syllabus', 134, /(?:搜索|查询|最新|官方).{0,12}(?:考试大纲|招考公告|考试公告|政策原文)|(?:考试大纲|招考公告).{0,12}(?:官网|来源|更新)/),
-  route('tutor.question_bank_ingestion', 130, /(?:导入|录入|上传|扫描|入库|解析).{0,12}(?:真题|题目|试卷|文件|PDF|图片)|(?:重新|再)(?:录入|导入|上传|扫描)|(?:PDF|OCR).{0,12}(?:题目|试卷)/i),
-  route('tutor.goal_management', 125, /(?:修改|调整|设置|查看|当前|我的).{0,8}(?:目标分|目标成绩)|目标分/i),
-  route('tutor.mock_generation', 120, /模考|模拟考试|行测套卷|整套试卷/),
-  route('tutor.essay_workflow', 120, /申论/),
-  route('tutor.interview_review', 120, /面试(?:点评|复盘|模拟|练习)|结构化面试/),
-  route('research.current_affairs', 118, /(?:搜索|查找|整理|分析|看看).{0,12}(?:时政|热点|政策|新闻)|(?:今日|每日|近期|最新).{0,8}(?:时政|热点|政策|新闻)/),
-  route('tutor.digest_generation', 115, /每日积累|每日热点|每日知识|时政积累|月度复盘|时政月报/),
-  route('tutor.wrongbook_training', 112, /错题.{0,8}(?:重做|重练|复习|变式)|重做.{0,6}错题/),
-  route('tutor.practice_library', 108, /题库|题组|练习记录|练习历史|正确率|战绩|做得怎么样|生成.{0,8}(?:了吗|没有|状态)|(?:题目|练习).{0,8}(?:有吗|在哪)/),
-  route('tutor.objective_practice', 104, /生题|出题|刷题|专项练习|针对性练习|生成.{0,8}(?:资料分析|判断推理|言语理解|数量关系|常识判断|行测题|练习题)/),
-  route('tutor.daily_coaching', 100, /今天.{0,8}(?:学|练|做|安排)|今日.{0,8}(?:计划|学习|训练)|下一步|学习计划|复习计划|薄弱点|能力变化/)
-];
-
-const router = new AgentSkillRouter(routingRules, 2);
 const planner = new ToolExposurePlanner(registry);
 export const chatAgentSystemPromptComposer = new AgentSystemPromptComposer();
 
+export const CHAT_AGENT_SKILL_SELECTOR_TOOL = 'agent.select_skills';
+
+export interface ChatAgentCapabilityRequest {
+  /** UI workflows may provide exact business context; free chat leaves this empty. */
+  readonly preselectedSkillCodes?: readonly string[];
+  /** Waiting-user resume activates the skill that owns the pending tool. */
+  readonly pendingToolCode?: string;
+}
+
+export interface ChatAgentCapabilityPlan extends ToolExposurePlan {
+  readonly capabilityCatalog: readonly AgentSkillDefinition[];
+  readonly availableTools: readonly AgentToolDefinition[];
+}
+
+const capabilityCatalog = registry.listSkills();
+const skillSelectorTool: AgentToolDefinition = {
+  code: CHAT_AGENT_SKILL_SELECTOR_TOOL,
+  description: '根据当前用户目标选择一到两个最相关的能力，以加载后续所需的最小工具集合。它不读取数据、不执行学习业务，也不代表操作已经完成。',
+  inputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['skillCodes'],
+    properties: {
+      skillCodes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 2,
+        uniqueItems: true,
+        items: { type: 'string', enum: capabilityCatalog.map((skill) => skill.code) }
+      }
+    }
+  },
+  risk: AgentToolRisk.Read,
+  requiresConfirmation: false,
+  enabledFor: ['tutor_turn']
+};
+
 export function planChatAgentCapabilities(
-  text: string,
-  pendingToolCode?: string
-): ToolExposurePlan {
-  const skillCodes = pendingToolCode
+  request: ChatAgentCapabilityRequest = {}
+): ChatAgentCapabilityPlan {
+  const pendingSkillCodes = request.pendingToolCode
     ? allSkills
-        .filter((skill) => skill.toolCodes.includes(pendingToolCode))
+        .filter((skill) => skill.toolCodes.includes(request.pendingToolCode!))
         .slice()
         .sort((left, right) => left.toolCodes.length - right.toolCodes.length)
         .slice(0, 1)
         .map((skill) => skill.code)
-    : router.route({ text });
-  return planner.plan(skillCodes, 'tutor_turn', {
+    : [];
+  const skillCodes = request.preselectedSkillCodes?.length
+    ? request.preselectedSkillCodes
+    : pendingSkillCodes;
+  const exposure = planner.plan(skillCodes, 'tutor_turn', {
     maxSkills: 2,
     maxTools: 8,
     maxContextBudgetTokens: 2_400
   });
+  return {
+    ...exposure,
+    tools: [skillSelectorTool, ...exposure.tools],
+    capabilityCatalog,
+    availableTools: [skillSelectorTool, ...registry.listTools()]
+  };
 }
 
-function route(skillCode: string, priority: number, pattern: RegExp): AgentSkillRoutingRule {
-  return {
-    skillCode,
-    priority,
-    matches: ({ text }) => pattern.test(text.trim())
-  };
+export function activateChatAgentSkills(skillCodes: readonly string[]): readonly AgentToolDefinition[] {
+  const exposure = planner.plan(skillCodes, 'tutor_turn', {
+    maxSkills: 2,
+    maxTools: 8,
+    maxContextBudgetTokens: 2_400
+  });
+  return exposure.tools;
 }

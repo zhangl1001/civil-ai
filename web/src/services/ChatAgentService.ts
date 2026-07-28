@@ -28,7 +28,8 @@ import {
   TaskCenterStep,
   TaskTargetType,
   type AgentLoopCheckpoint,
-  type AgentRuntimeEvent
+  type AgentRuntimeEvent,
+  type AgentWorkflowInvocation
 } from '@/modules/agent/public';
 import { aiBusinessTools, type AIBusinessToolName } from './AIBusinessTools';
 import { QuestionImportMethod, QuestionOriginType } from '@/modules/content/public';
@@ -43,11 +44,10 @@ import {
   chatAgentBusinessTools,
   chatAgentWebResearchTools,
   chatAgentSystemPromptComposer,
-  planChatAgentCapabilities
+  planChatAgentCapabilities,
 } from './ChatAgentCapabilities';
 import { webResearchService } from './WebResearchService';
-import { planChatAgentTurn } from './ChatAgentTurnPolicy';
-
+import { registerChatAgentSkillSelector } from './ChatAgentSkillSelector';
 export interface ChatAgentResult {
   readonly handled: boolean;
 }
@@ -57,14 +57,14 @@ export interface ChatAssistantStreamUpdate {
   readonly content: string;
   readonly replaceMessageId?: string;
 }
-
 export interface ChatAgentOptions {
   readonly thinkingEnabled: boolean;
   readonly onAssistantStream?: (update: ChatAssistantStreamUpdate) => void | Promise<void>;
   /** Ephemeral image parts for the current user turn; never persisted in chat history. */
   readonly attachments?: readonly ModelImageContentPart[];
+  /** Exact context from a first-party workflow. Free conversation leaves this empty. */
+  readonly invocation?: AgentWorkflowInvocation;
 }
-
 interface ActiveChatRun {
   runId?: AgentRunId;
   readonly controller: AbortController;
@@ -72,7 +72,6 @@ interface ActiveChatRun {
 }
 export class ChatAgentService {
   private readonly activeRuns = new Map<string, ActiveChatRun>();
-
   cancel(sessionId?: string): void {
     if (sessionId) {
       this.activeRuns.get(sessionId)?.controller.abort();
@@ -80,7 +79,6 @@ export class ChatAgentService {
     }
     this.activeRuns.forEach((run) => run.controller.abort());
   }
-
   async steer(text: string, session: AISession): Promise<AIMessage | undefined> {
     const guidance = text.trim();
     const active = this.activeRuns.get(session.id);
@@ -101,7 +99,6 @@ export class ChatAgentService {
       content: guidance
     });
   }
-
   async handle(text: string, session: AISession, options: ChatAgentOptions): Promise<ChatAgentResult> {
     if (!shouldUseAgent(text)) return { handled: false };
     this.activeRuns.get(session.id)?.controller.abort();
@@ -203,7 +200,7 @@ export class ChatAgentService {
     runtime: TutorDatabaseRuntime,
     session: AISession,
     runId: Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0],
-    routingText: string,
+    _routingText: string,
     checkpoint: AgentLoopCheckpoint | undefined,
     confirmationDecision: 'confirm' | 'reject' | undefined,
     options: ChatAgentOptions,
@@ -312,18 +309,21 @@ export class ChatAgentService {
       })),
       { role: ModelMessageRole.User, content: currentUserContent }
     ];
-    const turnPolicy = planChatAgentTurn(routingText, history.filter((item) => item.role === 'user').map((item) => item.content), attachments);
+    const exposure = planChatAgentCapabilities({
+      preselectedSkillCodes: options.invocation?.skillCodes,
+      pendingToolCode: checkpoint?.pendingConfirmation?.name
+    });
     const studentContext = await aiStudentContextService.buildSystemContext();
-    const exposure = planChatAgentCapabilities(turnPolicy.routingText, checkpoint?.pendingConfirmation?.name);
     const system = chatAgentSystemPromptComposer.compose({
       basePrompt: buildCompanionChatPrompt(
         options.thinkingEnabled,
         studentContext,
         session.summary || ''
       ),
-      exposure
+      exposure,
+      capabilityCatalog: exposure.capabilityCatalog
     });
-    const constrainedSystem = [system, turnPolicy.systemConstraint].filter(Boolean).join('\n\n');
+    const constrainedSystem = [system, options.invocation?.systemConstraint].filter(Boolean).join('\n\n');
     const config = await aiConfigService.load();
     const deadline = createProviderExecutionDeadline(
       controller.signal,
@@ -336,6 +336,7 @@ export class ChatAgentService {
         system: constrainedSystem,
         messages,
         tools: exposure.tools,
+        availableTools: exposure.availableTools,
         executionContext: {
           agentRunId: runId,
           sessionId: session.id
@@ -348,8 +349,6 @@ export class ChatAgentService {
         maxParallelReadToolCalls: config.maxConcurrentTasks,
         consumeGuidance: () => this.consumeGuidance(session.id, runId),
         preferStream: config.streamingEnabled !== false,
-        requiredToolCode: turnPolicy.requiredToolCode,
-        forceRequiredToolOnFirstTurn: turnPolicy.forceRequiredToolOnFirstTurn
       }, await createConfiguredProviderGateway(), deadline.signal);
       if (result.status === 'waiting_user') {
         await persistAssistant(streamedText);
@@ -437,6 +436,7 @@ export class ChatAgentService {
 function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): RegisteredAgentToolExecutor {
   const executor = new RegisteredAgentToolExecutor();
   const practiceLibrary = new AIPracticeLibraryService();
+  registerChatAgentSkillSelector(executor);
   chatAgentBusinessTools.forEach((definition) => {
     executor.register(definition.code, async (call) => {
       const result = await aiBusinessTools.execute({

@@ -687,7 +687,7 @@ function buildPromptWithAttachment(text: string): string {
   return [
     clean || '请阅读并分析这个导入文件。',
     '',
-    `【已导入本地文件：${attachment.value.name}】`,
+    `已附加本地文件：${attachment.value.name}`,
     `本地路径：${attachment.value.path}`,
     `输入方式：${attachment.value.method}，共 ${attachment.value.pageCount} 页。`,
     attachment.value.imageParts?.length

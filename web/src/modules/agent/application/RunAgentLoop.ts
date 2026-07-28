@@ -2,8 +2,7 @@ import {
   ModelMessageRole,
   type ModelMessage,
   type ModelToolCall,
-  type ProviderGateway,
-  type ProviderToolDefinition
+  type ProviderGateway
 } from '@/capabilities/ai-runtime/public';
 import type { AgentRunId } from '@/kernel/public';
 import type {
@@ -17,12 +16,15 @@ import type {
 } from '../contracts/AgentRuntimePorts';
 import { AgentToolPolicyDecision } from '../contracts/AgentRuntimePorts';
 import { AgentToolRisk, type AgentToolDefinition } from '../domain/AgentToolRegistry';
+import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
 
 export interface RunAgentLoopCommand {
   readonly agentRunId: AgentRunId;
   readonly system: string;
   readonly messages: readonly ModelMessage[];
   readonly tools: readonly AgentToolDefinition[];
+  /** Superset of tools that may be activated by a catalog-selection tool. */
+  readonly availableTools?: readonly AgentToolDefinition[];
   readonly executionContext: AgentToolExecutionContext;
   readonly checkpoint?: AgentLoopCheckpoint;
   readonly maxTurns?: number;
@@ -46,11 +48,13 @@ export interface AgentLoopResult {
 interface ToolCallOutcome {
   readonly message: ModelMessage;
   readonly terminalText?: string;
+  readonly activateToolCodes?: readonly string[];
 }
 
 interface ToolCallBatch {
   readonly messages: readonly ModelMessage[];
   readonly terminalText?: string;
+  readonly activateToolCodes: readonly string[];
 }
 
 /** Provider-neutral, bounded Agent loop. Business writes remain behind typed tool executors. */
@@ -71,24 +75,16 @@ export class RunAgentLoop {
     signal?: AbortSignal
   ): Promise<AgentLoopResult> {
     const limits = validateLimits(command);
-    const definitions = new Map(command.tools.map((tool) => [tool.code, tool]));
-    const providerTools = command.tools.map(toProviderTool);
-    const definitionsByProviderName = new Map<string, AgentToolDefinition>();
-    providerTools.forEach((tool, index) => {
-      if (definitionsByProviderName.has(tool.name)) {
-        throw new Error(`Agent tools map to the same provider name: ${tool.name}`);
-      }
-      definitionsByProviderName.set(tool.name, command.tools[index]);
-    });
+    const toolSet = new ActiveAgentToolSet(command.tools, command.availableTools);
     const messages = [...(command.checkpoint?.messages ?? command.messages)];
     const signatures = { ...(command.checkpoint?.toolSignatures ?? {}) };
     const requiredTool = command.requiredToolCode
-      ? definitions.get(command.requiredToolCode)
+      ? toolSet.byCode(command.requiredToolCode)
       : undefined;
     if (command.requiredToolCode && !requiredTool) {
       throw new Error(`Required Agent tool is unavailable: ${command.requiredToolCode}`);
     }
-    const attemptedToolCodes = attemptedCodes(signatures, definitions.keys());
+    const attemptedToolCodes = attemptedCodes(signatures, toolSet.codes);
     let turnCount = command.checkpoint?.turnCount ?? 0;
     let toolCallCount = command.checkpoint?.toolCallCount ?? 0;
     let finalizationOnly = false;
@@ -98,7 +94,7 @@ export class RunAgentLoop {
 
     const pendingConfirmation = command.checkpoint?.pendingConfirmation;
     if (pendingConfirmation) {
-      const definition = definitions.get(pendingConfirmation.name);
+      const definition = toolSet.byCode(pendingConfirmation.name);
       if (!definition) throw new Error(`Pending Agent tool is unavailable: ${pendingConfirmation.name}`);
       if (!command.confirmationDecision) {
         throw new Error('Pending Agent tool requires an explicit confirmation decision');
@@ -160,7 +156,7 @@ export class RunAgentLoop {
         messages: [...messages],
         temperature: 0.2,
         maxOutputTokens: 4_096,
-        tools: finalizationOnly ? [] : providerTools,
+        tools: finalizationOnly ? [] : toolSet.providerTools,
         toolChoice: finalizationOnly
           ? 'none'
           : forceRequiredTool && requiredTool
@@ -169,7 +165,7 @@ export class RunAgentLoop {
         toolSchemaVersion: 'tutor-tools@2',
         preferStream: command.preferStream !== false,
         onDelta: async (text) => {
-          if (text && (providerTools.length === 0 || toolCallCount > 0 || finalizationOnly)) {
+          if (text && (toolSet.providerTools.length === 0 || toolCallCount > 0 || finalizationOnly)) {
             await this.emit({ type: 'text_delta', agentRunId: command.agentRunId, text });
           }
         }
@@ -181,7 +177,7 @@ export class RunAgentLoop {
           && !isHonestToolDeferral(response.text)
           ? requiredTool
           : undefined;
-        const unsupportedToolClaim = claimedUnattemptedTool(response.text, definitions.keys(), attemptedToolCodes);
+        const unsupportedToolClaim = claimedUnattemptedTool(response.text, toolSet.codes, attemptedToolCodes);
         if ((missingRequiredTool || unsupportedToolClaim) && !finalizationOnly) {
           requiredToolRepairCount += 1;
           if (requiredToolRepairCount > 2) {
@@ -247,7 +243,7 @@ export class RunAgentLoop {
         const providerCall = calls[callIndex];
         signal?.throwIfAborted();
         toolCallCount += 1;
-        const definition = definitionsByProviderName.get(providerCall.name);
+        const definition = toolSet.byProvider(providerCall.name);
         const call = definition
           ? { ...providerCall, name: definition.code }
           : providerCall;
@@ -285,7 +281,7 @@ export class RunAgentLoop {
           const remainingCalls = calls.slice(callIndex + 1);
           toolCallCount += remainingCalls.length;
           for (const remainingProviderCall of remainingCalls) {
-            const remainingDefinition = definitionsByProviderName.get(remainingProviderCall.name);
+            const remainingDefinition = toolSet.byProvider(remainingProviderCall.name);
             const remainingCall = remainingDefinition
               ? { ...remainingProviderCall, name: remainingDefinition.code }
               : remainingProviderCall;
@@ -332,6 +328,7 @@ export class RunAgentLoop {
         signal
       );
       messages.push(...toolBatch.messages);
+      if (toolBatch.activateToolCodes.length) toolSet.activate(toolBatch.activateToolCodes);
       if (toolBatch.terminalText) {
         const checkpoint = await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
         await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: toolBatch.terminalText });
@@ -357,6 +354,7 @@ export class RunAgentLoop {
   ): Promise<ToolCallBatch> {
     const messages: ModelMessage[] = [];
     let terminalText: string | undefined;
+    const activateToolCodes = new Set<string>();
     let cursor = 0;
     while (cursor < calls.length) {
       signal?.throwIfAborted();
@@ -365,6 +363,7 @@ export class RunAgentLoop {
         const outcome = await this.executeToolCall(command, current, maxResultChars, signal);
         messages.push(outcome.message);
         terminalText ||= outcome.terminalText;
+        outcome.activateToolCodes?.forEach((code) => activateToolCodes.add(code));
         cursor += 1;
         if (terminalText) break;
         continue;
@@ -383,8 +382,9 @@ export class RunAgentLoop {
       );
       messages.push(...batchOutcomes.map((outcome) => outcome.message));
       terminalText ||= batchOutcomes.find((outcome) => outcome.terminalText)?.terminalText;
+      batchOutcomes.forEach((outcome) => outcome.activateToolCodes?.forEach((code) => activateToolCodes.add(code)));
     }
-    return { messages, terminalText };
+    return { messages, terminalText, activateToolCodes: [...activateToolCodes] };
   }
 
   private async executeToolCall(
@@ -420,7 +420,8 @@ export class RunAgentLoop {
       }
       return {
         message: toolMessage(call, limitToolResult(result.content, maxResultChars)),
-        terminalText: result.terminalText
+        terminalText: result.terminalText,
+        activateToolCodes: result.activateToolCodes
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -487,22 +488,6 @@ function sanitizeMessageForCheckpoint(message: ModelMessage): ModelMessage {
     ...message,
     content: text || '【图片附件已从持久化 Agent 上下文移除；如需继续识别，请重新导入原图。】'
   };
-}
-
-function toProviderTool(tool: AgentToolDefinition): ProviderToolDefinition {
-  return {
-    name: providerToolName(tool.code),
-    description: tool.description,
-    inputSchema: tool.inputSchema
-  };
-}
-
-function providerToolName(code: string): string {
-  const normalized = code.trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
-  if (!normalized || !/^[a-zA-Z0-9_-]+$/.test(normalized)) {
-    throw new Error(`Agent tool code cannot be mapped to a provider function name: ${code}`);
-  }
-  return normalized;
 }
 
 function toolMessage(call: ModelToolCall, content: string): ModelMessage {
