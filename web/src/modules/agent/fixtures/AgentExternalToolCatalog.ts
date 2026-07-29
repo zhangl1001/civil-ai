@@ -4,7 +4,7 @@ import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 const webSearchSchema: JsonObject = {
   type: 'object',
   additionalProperties: false,
-  required: ['query', 'purpose'],
+  required: ['query'],
   properties: {
     query: { type: 'string', minLength: 2, maxLength: 300 },
     purpose: { type: 'string', enum: ['current_affairs', 'true_question', 'exam_syllabus', 'general'] },
@@ -25,13 +25,14 @@ const webReadPageSchema: JsonObject = {
 };
 
 /**
- * External network capabilities. These are not device/system facts and not
- * business operations; they read public sources and return bounded evidence.
+ * External system capabilities. They read bounded public evidence and do not
+ * mutate business data. The Agent decides when they are useful; Skills add
+ * domain-specific research guidance without owning the network capability.
  */
 export const agentExternalToolCatalog: readonly AgentToolDefinition[] = [
   {
     name: 'web.search',
-    description: '检索近期公考事实、公告、大纲或真题来源，返回标题、网址和短摘要。',
+    description: '检索公开网页，获取需要实时、外部或可核实的事实（例如天气、时政、公告、大纲或真题来源），返回标题、网址和短摘要。',
     inputSchema: webSearchSchema,
     risk: 'read',
     requiresConfirmation: false,

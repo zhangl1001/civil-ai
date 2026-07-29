@@ -306,11 +306,14 @@ const skillSelectorTool: AgentToolDefinition = {
 };
 
 /**
- * A small read-only grounding surface is always visible to the model.
- * Specialized writes and expensive workflows remain Skill-loaded.
+ * The foundational read-only system surface is always visible to the model.
+ * This includes device facts, local grounding, and bounded public-web access.
+ * Business writes and expensive workflows remain Skill-loaded.
  */
 const baseReadOnlyTools = [
   'system.read_clock',
+  'web.search',
+  'web.read_page',
   'student.read_profile',
   'tutor.read_daily_context',
   'workspace.discover',

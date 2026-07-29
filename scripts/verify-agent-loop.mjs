@@ -49,6 +49,8 @@ try {
   const companionExposure = chatCapabilities.planChatAgentCapabilities();
   const baseToolNames = [
     'system.read_clock',
+    'web.search',
+    'web.read_page',
     'student.read_profile',
     'tutor.read_daily_context',
     'workspace.discover',
@@ -58,7 +60,7 @@ try {
   assert.deepEqual(
     companionExposure.tools.map((tool) => tool.name),
     ['agent.select_skills', ...baseToolNames],
-    'ordinary chat exposes bounded read-only grounding tools and the Skill selector'
+    'ordinary chat exposes foundational read-only system tools and the Skill selector'
   );
   const dailyExposure = chatCapabilities.planChatAgentCapabilities({
     preselectedSkillNames: ['tutor.daily_coaching']
@@ -95,7 +97,7 @@ try {
     preselectedSkillNames: ['research.current_affairs']
   });
   assert.deepEqual(hotspotExposure.skillNames, ['research.current_affairs']);
-  assert.deepEqual(hotspotExposure.tools.map((tool) => tool.name), ['agent.select_skills', ...baseToolNames, 'web.search', 'web.read_page']);
+  assert.deepEqual(hotspotExposure.tools.map((tool) => tool.name), ['agent.select_skills', ...baseToolNames]);
   const digestExposure = chatCapabilities.planChatAgentCapabilities({
     preselectedSkillNames: ['research.current_affairs', 'tutor.digest_generation']
   });
@@ -103,8 +105,6 @@ try {
   assert.deepEqual(digestExposure.tools.map((tool) => tool.name), [
     'agent.select_skills',
     ...baseToolNames,
-    'web.search',
-    'web.read_page',
     'generate_digest',
     'generate_monthly_digest'
   ]);
@@ -119,14 +119,14 @@ try {
   ]);
   assert.equal(
     trueQuestionExposure.tools.some((tool) => tool.name === 'web.search' || tool.name === 'question_bank.scan'),
-    false,
-    'chat only dispatches durable research work; the independent Agent owns research tools'
+    true,
+    'the chat Agent may use foundational web tools while dispatching durable research work'
   );
   const syllabusExposure = chatCapabilities.planChatAgentCapabilities({
     preselectedSkillNames: ['research.exam_syllabus']
   });
   assert.deepEqual(syllabusExposure.skillNames, ['research.exam_syllabus']);
-  assert.deepEqual(syllabusExposure.tools.map((tool) => tool.name), ['agent.select_skills', ...baseToolNames, 'web.search', 'web.read_page']);
+  assert.deepEqual(syllabusExposure.tools.map((tool) => tool.name), ['agent.select_skills', ...baseToolNames]);
   const pendingImportExposure = chatCapabilities.planChatAgentCapabilities({ pendingToolName: 'question_bank.confirm' });
   assert.deepEqual(pendingImportExposure.skillNames, ['tutor.question_bank_ingestion']);
   assert.equal(pendingImportExposure.tools.some((tool) => tool.name === 'question_bank.publish'), true);
@@ -290,6 +290,8 @@ try {
       assert.deepEqual(request.tools.map((tool) => tool.name), [
         'agent_select_skills',
         'system_read_clock',
+        'web_search',
+        'web_read_page',
         'student_read_profile',
         'tutor_read_daily_context',
         'workspace_discover',
