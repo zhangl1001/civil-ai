@@ -38,8 +38,10 @@ function webResearchDevProxy(): Plugin {
       server.middlewares.use('/__web-research/search', async (request, response) => {
         try {
           const incoming = new URL(request.url || '/', 'http://localhost');
-          const target = new URL('https://www.bing.com/search');
-          incoming.searchParams.forEach((value, key) => target.searchParams.append(key, value));
+          const target = new URL(searchEngineTarget(incoming.searchParams.get('engine')));
+          incoming.searchParams.forEach((value, key) => {
+            if (key !== 'engine') target.searchParams.append(key, value);
+          });
           await relayPublicText(target, response);
         } catch (error) {
           respondProxyError(response, error);
@@ -57,6 +59,13 @@ function webResearchDevProxy(): Plugin {
       });
     }
   };
+}
+
+function searchEngineTarget(engine: string | null): string {
+  if (engine === 'duckduckgo') return 'https://html.duckduckgo.com/html/';
+  if (engine === 'duckduckgo-lite') return 'https://lite.duckduckgo.com/lite/';
+  if (engine === 'sogou') return 'https://www.sogou.com/web';
+  return 'https://www.bing.com/search';
 }
 
 async function relayPublicText(target: URL, response: ServerResponse): Promise<void> {
@@ -91,6 +100,7 @@ async function relayPublicText(target: URL, response: ServerResponse): Promise<v
     response.statusCode = upstream.status;
     response.setHeader('content-type', contentType);
     response.setHeader('cache-control', 'no-store');
+    response.setHeader('x-web-research-final-url', current.toString());
     response.end(body);
     return;
   }

@@ -246,12 +246,12 @@
 
 - OpenAI Compatible 与 Anthropic 原生协议已统一到 `ProviderGateway`，协议选择只服从用户配置，不再根据模型名猜测。
 - 两个 Gateway 均支持供应商无关的 `ModelToolCall/ProviderToolDefinition`；结构化生成不再依赖 OpenAI `response_format`，不支持强制工具时可降级为严格 JSON 文本。
-- 已实现受限 `RunAgentLoop`：工具结果回送模型、最多 8 turn/12 tool calls、单 turn 4 次、调用签名去重、确认停点、工具结果截断和每轮检查点 Port。
+- 已实现受限 `RunAgentLoop`：工具结果回送模型、按 Skill 动态预算与进展扩容、32 turn/64 tool calls/15 分钟全局硬上限、单 turn 6 次、成功签名去重、失败/空结果结构化观察、可恢复失败受控重试、连续无进展换策略、确认停点、工具结果截断、长工具链上下文压缩和每轮检查点 Port。
 - 已实现类型化 Agent Runtime Event、Context Budgeter、五层 Memory Port、Skill/Tool Registry 与 Sub-agent Registry。
 - 已写入 [ADR-001](./adr-001-provider-neutral-agent-runtime.md)，固定 Provider、Agent、Tool、Context、Memory、Sub-agent、Workflow 和 Event 的依赖方向。
 - `check:provider-gateway`、`check:agent-loop` 和 TypeScript 类型检查覆盖上述合同。
 
-完成补充：会话、消息、摘要和 Agent 记忆已从 SQLite/IndexedDB 业务库移除，统一进入 `AgentWorkspaceStorage` 文件日志；删除会话同步遗忘会话作用域记忆。Application Tool Executor、Policy Guard、学生上下文编译、对话 Agent Loop、受限 Sub-agent 元数据、统一 Worker、任务消息投影和三并发隔离均已装配。业务长任务与普通聊天内部工具在展示层明确隔离，工具明细仅保留当前 run。
+完成补充：会话、消息、摘要和 Agent 记忆已从 SQLite/IndexedDB 业务库移除，统一进入 `AgentWorkspaceStorage` 文件日志；删除会话同步遗忘会话作用域记忆。对话上下文已接入 token 预算最近窗口、带游标滚动摘要、最小个人记忆召回、`tutor.personal_memory` 动态 Skill 和 24000 token Run 内工具证据压缩；业务事实禁止进入 Memory。Application Tool Executor、Policy Guard、学生上下文编译、对话 Agent Loop、受限 Sub-agent 元数据、统一 Worker、任务消息投影和三并发隔离均已装配。业务长任务与普通聊天内部工具在展示层明确隔离，工具明细仅保留当前 run。
 
 交付：
 

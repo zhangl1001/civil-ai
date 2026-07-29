@@ -10,13 +10,43 @@ import type {
   AgentLoopCheckpoint,
   AgentModelInvoker,
   AgentRuntimeObserver,
+  AgentToolAttemptState,
   AgentToolExecutionContext,
   AgentToolExecutor,
   AgentToolPolicy
 } from '../contracts/AgentRuntimePorts';
 import { AgentToolPolicyDecision } from '../contracts/AgentRuntimePorts';
-import { AgentToolRisk, type AgentToolDefinition } from '../domain/AgentToolRegistry';
+import type { AgentSkillWorkflowState } from '../contracts/AgentRuntimePorts';
+import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
+import { AgentExecutionBudget } from '../domain/AgentExecutionBudget';
+import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
+import {
+  blockedRepeatReason,
+  completionVerifierNames,
+  hasCompletionValidator,
+  hasPendingRequiredWrite,
+  restoreToolAttempts
+} from './AgentLoopStatePolicy';
+import { executeAgentToolCalls } from './AgentToolBatchExecutor';
+import {
+  agentToolSignature,
+  attemptedToolNames,
+  claimedUnattemptedTool,
+  composeActiveSkillSystem,
+  compactAgentLoopMessages,
+  completionVerificationInstruction,
+  consumeAgentGuidance,
+  createToolObservationMessage,
+  createToolResultMessage,
+  decrementToolSignature,
+  isHonestToolDeferral,
+  limitToolResult,
+  repairToolInstruction,
+  sanitizeMessageForCheckpoint,
+  skillContinuationInstruction,
+  validateAgentLoopLimits
+} from './AgentLoopSupport';
 
 export interface RunAgentLoopCommand {
   readonly agentRunId: AgentRunId;
@@ -25,6 +55,8 @@ export interface RunAgentLoopCommand {
   readonly tools: readonly AgentToolDefinition[];
   /** Superset of tools that may be activated by a catalog-selection tool. */
   readonly availableTools?: readonly AgentToolDefinition[];
+  /** Preselected UI workflows. Free chat starts empty and lets the model select. */
+  readonly skills?: readonly AgentSkillActivation[];
   readonly executionContext: AgentToolExecutionContext;
   readonly checkpoint?: AgentLoopCheckpoint;
   readonly maxTurns?: number;
@@ -32,9 +64,11 @@ export interface RunAgentLoopCommand {
   readonly maxToolCallsPerTurn?: number;
   readonly maxParallelReadToolCalls?: number;
   readonly maxToolResultChars?: number;
+  readonly maxWallTimeMs?: number;
+  readonly maxContextTokens?: number;
   readonly confirmationDecision?: 'confirm' | 'reject';
   readonly preferStream?: boolean;
-  readonly requiredToolCode?: string;
+  readonly requiredToolName?: string;
   readonly forceRequiredToolOnFirstTurn?: boolean;
   readonly consumeGuidance?: () => readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
 }
@@ -43,18 +77,6 @@ export interface AgentLoopResult {
   readonly status: 'completed' | 'waiting_user' | 'budget_exhausted';
   readonly text: string;
   readonly checkpoint: AgentLoopCheckpoint;
-}
-
-interface ToolCallOutcome {
-  readonly message: ModelMessage;
-  readonly terminalText?: string;
-  readonly activateToolCodes?: readonly string[];
-}
-
-interface ToolCallBatch {
-  readonly messages: readonly ModelMessage[];
-  readonly terminalText?: string;
-  readonly activateToolCodes: readonly string[];
 }
 
 /** Provider-neutral, bounded Agent loop. Business writes remain behind typed tool executors. */
@@ -74,33 +96,77 @@ export class RunAgentLoop {
     gateway: ProviderGateway,
     signal?: AbortSignal
   ): Promise<AgentLoopResult> {
-    const limits = validateLimits(command);
+    const limits = validateAgentLoopLimits(command);
     const toolSet = new ActiveAgentToolSet(command.tools, command.availableTools);
-    const messages = [...(command.checkpoint?.messages ?? command.messages)];
+    toolSet.activate(command.checkpoint?.activeToolNames ?? []);
+    let messages = [...(command.checkpoint?.messages ?? command.messages)];
     const signatures = { ...(command.checkpoint?.toolSignatures ?? {}) };
-    const requiredTool = command.requiredToolCode
-      ? toolSet.byCode(command.requiredToolCode)
+    const toolAttempts = restoreToolAttempts(signatures, command.checkpoint?.toolAttempts);
+    const activeSkills = new Map<string, AgentSkillActivation>();
+    [...(command.skills ?? []), ...(command.checkpoint?.activeSkills ?? [])]
+      .forEach((skill) => activeSkills.set(skill.name, skill));
+    const budget = new AgentExecutionBudget(limits, [...activeSkills.values()].map((skill) => skill.executionBudget));
+    const priorEvidenceCount = Object.keys(signatures).length;
+    if (priorEvidenceCount) budget.recordProgress(priorEvidenceCount);
+    const requiredTool = command.requiredToolName
+      ? toolSet.byName(command.requiredToolName)
       : undefined;
-    if (command.requiredToolCode && !requiredTool) {
-      throw new Error(`Required Agent tool is unavailable: ${command.requiredToolCode}`);
+    if (command.requiredToolName && !requiredTool) {
+      throw new Error(`Required Agent tool is unavailable: ${command.requiredToolName}`);
     }
-    const attemptedToolCodes = attemptedCodes(signatures, toolSet.codes);
+    const attemptedNames = attemptedToolNames(signatures, toolSet.names);
+    const completedToolNames = new Set(command.checkpoint?.completedToolNames ?? []);
     let turnCount = command.checkpoint?.turnCount ?? 0;
     let toolCallCount = command.checkpoint?.toolCallCount ?? 0;
+    let skillWorkflowState: AgentSkillWorkflowState = command.checkpoint?.skillWorkflowState
+      ?? (activeSkills.size ? 'selected' : 'idle');
+    let awaitingOperationalTool = [...activeSkills.values()].some((skill) => skill.requiresOperationalTool)
+      && (skillWorkflowState === 'selected' || skillWorkflowState === 'executing');
+    let awaitingCompletionVerification = command.checkpoint?.awaitingCompletionVerification ?? false;
     let finalizationOnly = false;
     let requiredToolRepairCount = 0;
+    let skillContinuationRepairCount = 0;
     let forceRequiredTool = Boolean(command.forceRequiredToolOnFirstTurn && requiredTool);
+    const saveCheckpoint = (pendingConfirmation?: ModelToolCall) => this.save(
+      command.agentRunId,
+      turnCount,
+      toolCallCount,
+      messages,
+      signatures,
+      toolAttempts,
+      {
+        pendingConfirmation,
+        activeSkills: [...activeSkills.values()],
+        activeToolNames: [...toolSet.names],
+        completedToolNames: [...completedToolNames],
+        skillWorkflowState,
+        awaitingCompletionVerification
+      }
+    );
     await this.emit({ type: 'run_started', agentRunId: command.agentRunId });
 
     const pendingConfirmation = command.checkpoint?.pendingConfirmation;
     if (pendingConfirmation) {
-      const definition = toolSet.byCode(pendingConfirmation.name);
+      const definition = toolSet.byName(pendingConfirmation.name);
       if (!definition) throw new Error(`Pending Agent tool is unavailable: ${pendingConfirmation.name}`);
       if (!command.confirmationDecision) {
         throw new Error('Pending Agent tool requires an explicit confirmation decision');
       }
       if (command.confirmationDecision === 'reject') {
-        messages.push(toolMessage(pendingConfirmation, '用户已取消本次工具调用。'));
+        messages.push(createToolObservationMessage(pendingConfirmation, {
+          status: 'failed',
+          content: '用户已取消本次工具调用。',
+          retryable: false,
+          failureCode: 'agent.tool_rejected_by_user'
+        }));
+        toolAttempts[agentToolSignature(pendingConfirmation)] = {
+          attempts: signatures[agentToolSignature(pendingConfirmation)] ?? 1,
+          status: 'failed',
+          retryable: false,
+          failureCode: 'agent.tool_rejected_by_user'
+        };
+        skillWorkflowState = 'ready_to_finalize';
+        awaitingOperationalTool = false;
         await this.emit({
           type: 'tool_call_failed',
           agentRunId: command.agentRunId,
@@ -114,7 +180,25 @@ export class RunAgentLoop {
             ...command.executionContext,
             signal
           });
-          messages.push(toolMessage(pendingConfirmation, limitToolResult(result.content, limits.maxToolResultChars)));
+          const signature = agentToolSignature(pendingConfirmation);
+          const madeProgress = !result.isError && (result.madeProgress ?? Boolean(
+            result.content.trim()
+            || result.resultRef
+            || result.activateToolNames?.length
+            || result.activateSkills?.length
+          ));
+          toolAttempts[signature] = {
+            attempts: signatures[signature] ?? 1,
+            status: result.isError ? 'failed' : madeProgress ? 'succeeded' : 'no_progress',
+            retryable: result.isError ? result.retryable !== false : !madeProgress,
+            failureCode: result.failureCode
+          };
+          messages.push(createToolObservationMessage(pendingConfirmation, {
+            status: result.isError ? 'failed' : madeProgress ? 'succeeded' : 'no_progress',
+            content: limitToolResult(result.content, limits.maxToolResultChars),
+            retryable: result.isError ? result.retryable !== false : !madeProgress,
+            failureCode: result.failureCode
+          }));
           if (result.isError) {
             await this.emit({
               type: 'tool_call_failed',
@@ -123,6 +207,10 @@ export class RunAgentLoop {
               reasonCode: 'agent.tool_execution_error'
             });
           } else {
+            budget.recordProgress();
+            if (definition.risk !== 'read') completedToolNames.add(definition.name);
+            skillWorkflowState = 'ready_to_finalize';
+            awaitingOperationalTool = false;
             await this.emit({
               type: 'tool_call_succeeded',
               agentRunId: command.agentRunId,
@@ -132,7 +220,19 @@ export class RunAgentLoop {
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          messages.push(toolMessage(pendingConfirmation, limitToolResult(`工具执行失败：${message}`, limits.maxToolResultChars)));
+          messages.push(createToolObservationMessage(pendingConfirmation, {
+            status: 'failed',
+            content: limitToolResult(`工具执行失败：${message}`, limits.maxToolResultChars),
+            retryable: true,
+            failureCode: 'agent.tool_execution_failed'
+          }));
+          const signature = agentToolSignature(pendingConfirmation);
+          toolAttempts[signature] = {
+            attempts: signatures[signature] ?? 1,
+            status: 'failed',
+            retryable: true,
+            failureCode: 'agent.tool_execution_failed'
+          };
           await this.emit({
             type: 'tool_call_failed',
             agentRunId: command.agentRunId,
@@ -141,18 +241,30 @@ export class RunAgentLoop {
           });
         }
       }
-      await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
+      await saveCheckpoint();
     }
 
-    while (turnCount < limits.maxTurns) {
+    while (true) {
+      const turnBudget = budget.allowNextTurn(turnCount, toolCallCount);
+      if (!turnBudget.allowed) {
+        const checkpoint = await saveCheckpoint();
+        await this.emit({
+          type: 'run_stopped',
+          agentRunId: command.agentRunId,
+          reasonCode: turnBudget.reasonCode ?? 'agent.execution_budget_exhausted'
+        });
+        return { status: 'budget_exhausted', text: '', checkpoint };
+      }
       signal?.throwIfAborted();
-      messages.push(...await consumeGuidance(command.consumeGuidance));
+      messages.push(...await consumeAgentGuidance(command.consumeGuidance));
+      messages = [...compactAgentLoopMessages(messages, limits.maxContextTokens)];
       turnCount += 1;
+      if (skillWorkflowState === 'selected') skillWorkflowState = 'executing';
       await this.emit({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: turnCount });
       const response = await this.modelInvoker.invoke({
         agentRunId: command.agentRunId,
         modelRole: 'agent.tutor_turn',
-        system: command.system,
+        system: composeActiveSkillSystem(command.system, [...activeSkills.values()]),
         messages: [...messages],
         temperature: 0.2,
         maxOutputTokens: 4_096,
@@ -160,7 +272,7 @@ export class RunAgentLoop {
         toolChoice: finalizationOnly
           ? 'none'
           : forceRequiredTool && requiredTool
-            ? { name: providerToolName(requiredTool.code) }
+            ? { name: providerToolName(requiredTool.name) }
             : 'auto',
         toolSchemaVersion: 'tutor-tools@2',
         preferStream: command.preferStream !== false,
@@ -173,11 +285,11 @@ export class RunAgentLoop {
       const calls = response.toolCalls ?? [];
       if (!calls.length) {
         const missingRequiredTool = requiredTool
-          && !attemptedToolCodes.has(requiredTool.code)
+          && !attemptedNames.has(requiredTool.name)
           && !isHonestToolDeferral(response.text)
           ? requiredTool
           : undefined;
-        const unsupportedToolClaim = claimedUnattemptedTool(response.text, toolSet.codes, attemptedToolCodes);
+        const unsupportedToolClaim = claimedUnattemptedTool(response.text, toolSet.names, attemptedNames);
         if ((missingRequiredTool || unsupportedToolClaim) && !finalizationOnly) {
           requiredToolRepairCount += 1;
           if (requiredToolRepairCount > 2) {
@@ -187,47 +299,90 @@ export class RunAgentLoop {
             { role: ModelMessageRole.Assistant, content: response.text },
             {
               role: ModelMessageRole.User,
-              content: repairToolInstruction(missingRequiredTool?.code ?? unsupportedToolClaim!)
+              content: repairToolInstruction(missingRequiredTool?.name ?? unsupportedToolClaim!)
             }
           );
           forceRequiredTool = Boolean(missingRequiredTool);
-          await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
+          await saveCheckpoint();
           continue;
         }
+        if (awaitingCompletionVerification && !finalizationOnly) {
+          const verifierNames = completionVerifierNames(toolSet);
+          messages.push(
+            ...(response.text.trim()
+              ? [{ role: ModelMessageRole.Assistant, content: response.text } as ModelMessage]
+              : []),
+            {
+              role: ModelMessageRole.User,
+              content: completionVerificationInstruction(verifierNames)
+            }
+          );
+          await saveCheckpoint();
+          continue;
+        }
+        if (awaitingOperationalTool && !finalizationOnly) {
+          if (isHonestToolDeferral(response.text)) {
+            skillWorkflowState = 'waiting_user';
+          } else {
+            skillContinuationRepairCount += 1;
+            if (skillContinuationRepairCount > 2) {
+              throw new Error('Skill 工作流已经加载，但模型没有执行具体业务工具。');
+            }
+            messages.push(
+              ...(response.text.trim()
+                ? [{ role: ModelMessageRole.Assistant, content: response.text } as ModelMessage]
+                : []),
+              {
+                role: ModelMessageRole.User,
+                content: skillContinuationInstruction([...activeSkills.values()])
+              }
+            );
+            await saveCheckpoint();
+            continue;
+          }
+        }
         if (!response.text.trim()) {
+          if (awaitingOperationalTool) {
+            throw new Error('Skill 工作流等待执行具体工具，模型却返回了空内容。');
+          }
           if (!finalizationOnly) {
             finalizationOnly = true;
             messages.push({
               role: ModelMessageRole.User,
-              content: '工具结果已经返回。请基于已有结果直接给用户一条简洁、完整的中文答复，不要再次调用工具，也不要输出空内容。'
+              content: '具体工具结果已经返回。请基于已有结果直接给用户一条简洁、完整的中文答复，不要再次调用工具，也不要输出空内容。'
             });
-            await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
+            await saveCheckpoint();
             continue;
           }
-          const checkpoint = await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
-          await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: '工具已执行完成，但模型没有返回补充说明。' });
+          const checkpoint = await saveCheckpoint();
+          await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: '操作已执行，但模型没有返回补充说明。' });
           return {
             status: 'completed',
-            text: '工具已执行完成，但模型没有返回补充说明。',
+            text: '操作已执行，但模型没有返回补充说明。',
             checkpoint
           };
         }
         messages.push({ role: ModelMessageRole.Assistant, content: response.text });
-        if (turnCount < limits.maxTurns) {
-          const guidance = await consumeGuidance(command.consumeGuidance);
-          if (guidance.length) {
-            messages.push(...guidance);
-            await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
-            continue;
-          }
+        const guidance = await consumeAgentGuidance(command.consumeGuidance);
+        if (guidance.length) {
+          messages.push(...guidance);
+          await saveCheckpoint();
+          continue;
         }
-        const checkpoint = await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
+        const checkpoint = await saveCheckpoint();
         await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: response.text });
         return { status: 'completed', text: response.text, checkpoint };
       }
-      if (calls.length > limits.maxToolCallsPerTurn || toolCallCount + calls.length > limits.maxToolCalls) {
-        const checkpoint = await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
-        await this.emit({ type: 'run_stopped', agentRunId: command.agentRunId, reasonCode: 'agent.tool_budget_exhausted' });
+      const toolBudget = budget.allowToolCalls(turnCount, toolCallCount, calls.length);
+      if (calls.length > limits.maxToolCallsPerTurn || !toolBudget.allowed) {
+        const checkpoint = await saveCheckpoint();
+        await this.emit({
+          type: 'run_stopped',
+          agentRunId: command.agentRunId,
+          reasonCode: calls.length > limits.maxToolCallsPerTurn
+            ? 'agent.per_turn_tool_limit'
+            : toolBudget.reasonCode ?? 'agent.tool_budget_exhausted'
+        });
         return { status: 'budget_exhausted', text: response.text, checkpoint };
       }
       messages.push({
@@ -245,28 +400,44 @@ export class RunAgentLoop {
         toolCallCount += 1;
         const definition = toolSet.byProvider(providerCall.name);
         const call = definition
-          ? { ...providerCall, name: definition.code }
+          ? { ...providerCall, name: definition.name }
           : providerCall;
-        if (definition) attemptedToolCodes.add(definition.code);
-        if (requiredTool?.code === definition?.code) forceRequiredTool = false;
+        if (definition) attemptedNames.add(definition.name);
+        if (requiredTool?.name === definition?.name) forceRequiredTool = false;
         await this.emit({ type: 'tool_call_requested', agentRunId: command.agentRunId, call });
         if (!definition) {
-          messages.push(toolMessage(call, `工具不可用：${call.name}`));
+          messages.push(createToolObservationMessage(call, {
+            status: 'failed',
+            content: `工具不可用：${call.name}`,
+            retryable: false,
+            failureCode: 'agent.tool_unknown'
+          }));
           await this.emit({ type: 'tool_call_failed', agentRunId: command.agentRunId, call, reasonCode: 'agent.tool_unknown' });
           continue;
         }
-        const signature = toolSignature(call);
-        signatures[signature] = (signatures[signature] ?? 0) + 1;
-        if (signatures[signature] > 1) {
-          messages.push(toolMessage(call, '相同工具和参数已经执行过，请使用已有结果或调整方案。'));
-          await this.emit({ type: 'tool_call_failed', agentRunId: command.agentRunId, call, reasonCode: 'agent.tool_duplicate' });
+        const signature = agentToolSignature(call);
+        const blockedRepeat = blockedRepeatReason(toolAttempts[signature]);
+        if (blockedRepeat) {
+          messages.push(createToolObservationMessage(call, {
+            status: 'failed',
+            content: blockedRepeat.message,
+            retryable: false,
+            failureCode: blockedRepeat.reasonCode
+          }));
+          await this.emit({
+            type: 'tool_call_failed',
+            agentRunId: command.agentRunId,
+            call,
+            reasonCode: blockedRepeat.reasonCode
+          });
           continue;
         }
+        signatures[signature] = (signatures[signature] ?? 0) + 1;
         const decision = await this.policy.evaluate(definition, call, command.executionContext);
         if (decision.decision === AgentToolPolicyDecision.Confirm) {
           for (const deferred of executableCalls) {
-            decrementSignature(signatures, toolSignature(deferred.call));
-            messages.push(toolMessage(
+            decrementToolSignature(signatures, agentToolSignature(deferred.call));
+            messages.push(createToolResultMessage(
               deferred.call,
               '本轮包含需要用户确认的操作，本次工具调用未执行；确认完成后可按需重新调用。'
             ));
@@ -283,10 +454,10 @@ export class RunAgentLoop {
           for (const remainingProviderCall of remainingCalls) {
             const remainingDefinition = toolSet.byProvider(remainingProviderCall.name);
             const remainingCall = remainingDefinition
-              ? { ...remainingProviderCall, name: remainingDefinition.code }
+              ? { ...remainingProviderCall, name: remainingDefinition.name }
               : remainingProviderCall;
             await this.emit({ type: 'tool_call_requested', agentRunId: command.agentRunId, call: remainingCall });
-            messages.push(toolMessage(
+            messages.push(createToolResultMessage(
               remainingCall,
               '本轮正在等待用户确认，本次工具调用未执行；确认完成后可按需重新调用。'
             ));
@@ -297,14 +468,8 @@ export class RunAgentLoop {
               reasonCode: 'agent.tool_deferred_for_confirmation'
             });
           }
-          const checkpoint = await this.save(
-            command.agentRunId,
-            turnCount,
-            toolCallCount,
-            messages,
-            signatures,
-            call
-          );
+          skillWorkflowState = 'waiting_user';
+          const checkpoint = await saveCheckpoint(call);
           await this.emit({
             type: 'confirmation_required',
             agentRunId: command.agentRunId,
@@ -314,124 +479,80 @@ export class RunAgentLoop {
           return { status: 'waiting_user', text: response.text, checkpoint };
         }
         if (decision.decision === AgentToolPolicyDecision.Reject) {
-          messages.push(toolMessage(call, `工具调用已拒绝：${decision.reasonCode}`));
+          messages.push(createToolObservationMessage(call, {
+            status: 'failed',
+            content: `工具调用已拒绝：${decision.reasonCode}`,
+            retryable: false,
+            failureCode: decision.reasonCode
+          }));
+          toolAttempts[signature] = {
+            attempts: signatures[signature],
+            status: 'failed',
+            retryable: false,
+            failureCode: decision.reasonCode
+          };
           await this.emit({ type: 'tool_call_failed', agentRunId: command.agentRunId, call, reasonCode: decision.reasonCode });
           continue;
         }
         executableCalls.push({ definition, call });
       }
-      const toolBatch = await this.executeToolCalls(
-        command,
+      const toolBatch = await executeAgentToolCalls(
+        this.executor,
+        (event) => this.emit(event),
+        {
+          agentRunId: command.agentRunId,
+          executionContext: command.executionContext
+        },
         executableCalls,
         limits.maxParallelReadToolCalls,
         limits.maxToolResultChars,
         signal
       );
       messages.push(...toolBatch.messages);
-      if (toolBatch.activateToolCodes.length) toolSet.activate(toolBatch.activateToolCodes);
+      toolBatch.observations.forEach((observation) => {
+        const signature = agentToolSignature(observation.call);
+        toolAttempts[signature] = {
+          attempts: signatures[signature] ?? 1,
+          status: observation.status,
+          retryable: observation.retryable,
+          failureCode: observation.failureCode
+        };
+      });
+      budget.recordProgress(toolBatch.progressCount);
+      if (toolBatch.activateToolNames.length) toolSet.activate(toolBatch.activateToolNames);
+      if (toolBatch.activateSkills.length) {
+        toolBatch.activateSkills.forEach((skill) => activeSkills.set(skill.name, skill));
+        budget.activate(toolBatch.activateSkills.map((skill) => skill.executionBudget));
+        skillWorkflowState = 'selected';
+        awaitingOperationalTool = toolBatch.activateSkills.some((skill) => skill.requiresOperationalTool);
+      }
+      toolBatch.completedWriteToolNames.forEach((name) => completedToolNames.add(name));
+      if (
+        toolBatch.completedAsyncWrite
+        && hasCompletionValidator(activeSkills)
+        && completionVerifierNames(toolSet).length
+      ) {
+        awaitingCompletionVerification = true;
+        skillWorkflowState = 'executing';
+      }
+      if (toolBatch.executedCompletionVerifier) {
+        awaitingCompletionVerification = false;
+      }
+      if (toolBatch.executedOperationalTool && !awaitingCompletionVerification) {
+        if (hasPendingRequiredWrite(activeSkills, toolSet, completedToolNames)) {
+          skillWorkflowState = 'executing';
+          awaitingOperationalTool = true;
+        } else {
+          skillWorkflowState = 'ready_to_finalize';
+          awaitingOperationalTool = false;
+        }
+      }
       if (toolBatch.terminalText) {
-        const checkpoint = await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
+        const checkpoint = await saveCheckpoint();
         await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: toolBatch.terminalText });
         return { status: 'completed', text: toolBatch.terminalText, checkpoint };
       }
-      await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
-    }
-
-    const checkpoint = await this.save(command.agentRunId, turnCount, toolCallCount, messages, signatures);
-    await this.emit({ type: 'run_stopped', agentRunId: command.agentRunId, reasonCode: 'agent.turn_budget_exhausted' });
-    return { status: 'budget_exhausted', text: '', checkpoint };
-  }
-
-  private async executeToolCalls(
-    command: RunAgentLoopCommand,
-    calls: readonly {
-      readonly definition: AgentToolDefinition;
-      readonly call: ModelToolCall;
-    }[],
-    maxParallelReads: number,
-    maxResultChars: number,
-    signal?: AbortSignal
-  ): Promise<ToolCallBatch> {
-    const messages: ModelMessage[] = [];
-    let terminalText: string | undefined;
-    const activateToolCodes = new Set<string>();
-    let cursor = 0;
-    while (cursor < calls.length) {
-      signal?.throwIfAborted();
-      const current = calls[cursor];
-      if (current.definition.risk !== AgentToolRisk.Read) {
-        const outcome = await this.executeToolCall(command, current, maxResultChars, signal);
-        messages.push(outcome.message);
-        terminalText ||= outcome.terminalText;
-        outcome.activateToolCodes?.forEach((code) => activateToolCodes.add(code));
-        cursor += 1;
-        if (terminalText) break;
-        continue;
-      }
-      const readBatch = [];
-      while (
-        cursor < calls.length
-        && calls[cursor].definition.risk === AgentToolRisk.Read
-        && readBatch.length < maxParallelReads
-      ) {
-        readBatch.push(calls[cursor]);
-        cursor += 1;
-      }
-      const batchOutcomes = await Promise.all(
-        readBatch.map((entry) => this.executeToolCall(command, entry, maxResultChars, signal))
-      );
-      messages.push(...batchOutcomes.map((outcome) => outcome.message));
-      terminalText ||= batchOutcomes.find((outcome) => outcome.terminalText)?.terminalText;
-      batchOutcomes.forEach((outcome) => outcome.activateToolCodes?.forEach((code) => activateToolCodes.add(code)));
-    }
-    return { messages, terminalText, activateToolCodes: [...activateToolCodes] };
-  }
-
-  private async executeToolCall(
-    command: RunAgentLoopCommand,
-    entry: {
-      readonly definition: AgentToolDefinition;
-      readonly call: ModelToolCall;
-    },
-    maxResultChars: number,
-    signal?: AbortSignal
-  ): Promise<ToolCallOutcome> {
-    const { definition, call } = entry;
-    await this.emit({ type: 'tool_call_started', agentRunId: command.agentRunId, call });
-    try {
-      const result = await this.executor.execute(definition, call, {
-        ...command.executionContext,
-        signal
-      });
-      if (result.isError) {
-        await this.emit({
-          type: 'tool_call_failed',
-          agentRunId: command.agentRunId,
-          call,
-          reasonCode: 'agent.tool_execution_error'
-        });
-      } else {
-        await this.emit({
-          type: 'tool_call_succeeded',
-          agentRunId: command.agentRunId,
-          call,
-          resultRef: result.resultRef
-        });
-      }
-      return {
-        message: toolMessage(call, limitToolResult(result.content, maxResultChars)),
-        terminalText: result.terminalText,
-        activateToolCodes: result.activateToolCodes
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.emit({
-        type: 'tool_call_failed',
-        agentRunId: command.agentRunId,
-        call,
-        reasonCode: 'agent.tool_execution_failed'
-      });
-      return { message: toolMessage(call, limitToolResult(`工具执行失败：${message}`, maxResultChars)) };
+      await saveCheckpoint();
     }
   }
 
@@ -441,7 +562,15 @@ export class RunAgentLoop {
     toolCallCount: number,
     messages: readonly ModelMessage[],
     signatures: Readonly<Record<string, number>>,
-    pendingConfirmation?: ModelToolCall
+    toolAttempts: Readonly<Record<string, AgentToolAttemptState>>,
+    state: {
+      readonly pendingConfirmation?: ModelToolCall;
+      readonly activeSkills: readonly AgentSkillActivation[];
+      readonly activeToolNames: readonly string[];
+      readonly completedToolNames: readonly string[];
+      readonly skillWorkflowState: AgentSkillWorkflowState;
+      readonly awaitingCompletionVerification: boolean;
+    }
   ): Promise<AgentLoopCheckpoint> {
     const checkpoint: AgentLoopCheckpoint = {
       agentRunId,
@@ -449,7 +578,13 @@ export class RunAgentLoop {
       toolCallCount,
       messages: messages.map(sanitizeMessageForCheckpoint),
       toolSignatures: { ...signatures },
-      pendingConfirmation
+      toolAttempts: { ...toolAttempts },
+      pendingConfirmation: state.pendingConfirmation,
+      activeSkills: state.activeSkills,
+      activeToolNames: state.activeToolNames,
+      completedToolNames: state.completedToolNames,
+      skillWorkflowState: state.skillWorkflowState,
+      awaitingCompletionVerification: state.awaitingCompletionVerification
     };
     await this.checkpoints.save(checkpoint);
     await this.emit({ type: 'checkpoint_saved', agentRunId, turn: turnCount });
@@ -461,123 +596,4 @@ export class RunAgentLoop {
     this.observerQueue = Promise.resolve(next).catch(() => undefined);
     return Promise.resolve(next);
   }
-}
-
-async function consumeGuidance(
-  consume: RunAgentLoopCommand['consumeGuidance']
-): Promise<readonly ModelMessage[]> {
-  if (!consume) return [];
-  const guidance = await consume();
-  return guidance.filter((message) => contentText(message.content).trim());
-}
-
-function contentText(content: ModelMessage['content']): string {
-  return typeof content === 'string'
-    ? content
-    : content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
-}
-
-function sanitizeMessageForCheckpoint(message: ModelMessage): ModelMessage {
-  if (typeof message.content === 'string') return message;
-  const text = message.content
-    .filter((part) => part.type === 'text')
-    .map((part) => part.text)
-    .join('\n')
-    .trim();
-  return {
-    ...message,
-    content: text || '【图片附件已从持久化 Agent 上下文移除；如需继续识别，请重新导入原图。】'
-  };
-}
-
-function toolMessage(call: ModelToolCall, content: string): ModelMessage {
-  return {
-    role: ModelMessageRole.Tool,
-    toolCallId: call.id,
-    content
-  };
-}
-
-function toolSignature(call: ModelToolCall): string {
-  return `${call.name}:${stableJson(call.arguments)}`;
-}
-
-function decrementSignature(signatures: Record<string, number>, signature: string): void {
-  const count = signatures[signature] ?? 0;
-  if (count <= 1) {
-    delete signatures[signature];
-    return;
-  }
-  signatures[signature] = count - 1;
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function attemptedCodes(
-  signatures: Readonly<Record<string, number>>,
-  toolCodes: Iterable<string>
-): Set<string> {
-  const attempted = new Set<string>();
-  for (const code of toolCodes) {
-    if (Object.keys(signatures).some((signature) => signature.startsWith(`${code}:`))) attempted.add(code);
-  }
-  return attempted;
-}
-
-function claimedUnattemptedTool(
-  text: string,
-  toolCodes: Iterable<string>,
-  attempted: ReadonlySet<string>
-): string | undefined {
-  if (/(?:尚未|没有|未能|无法|不能|并未).{0,12}(?:调用|执行|扫描|导入|写入)/.test(text)) return undefined;
-  const normalized = text.toLocaleLowerCase();
-  for (const code of toolCodes) {
-    if (attempted.has(code)) continue;
-    const providerName = providerToolName(code).toLocaleLowerCase();
-    if (normalized.includes(code.toLocaleLowerCase()) || normalized.includes(providerName)) return code;
-  }
-  return /(?:正在|现在|开始|正式|已经|已)(?:\s|[，,:：])*?(?:调用|执行|扫描|导入|写入)/.test(text)
-    ? [...toolCodes].find((code) => !attempted.has(code))
-    : undefined;
-}
-
-function repairToolInstruction(toolCode: string): string {
-  return [
-    `你刚才没有发起真实的 ${toolCode} 工具调用。`,
-    '不要再用文字描述“正在调用”或输出工具代码。现在必须实际调用该工具；若当前输入不足以执行，请明确说明缺少什么，不能声称操作已经开始或完成。'
-  ].join('\n');
-}
-
-function isHonestToolDeferral(text: string): boolean {
-  return /(?:缺少|未提供|没有提供|无法识别|不能确定|范围不明确|信息不足|请重新上传|请补充|需要补充)/.test(text);
-}
-
-function limitToolResult(content: string, maxChars: number): string {
-  if (content.length <= maxChars) return content;
-  const head = Math.floor(maxChars * 0.7);
-  const tail = Math.floor(maxChars * 0.2);
-  return `${content.slice(0, head)}\n...[tool result truncated]...\n${content.slice(-tail)}`;
-}
-
-function validateLimits(command: RunAgentLoopCommand) {
-  const limits = {
-    maxTurns: command.maxTurns ?? 8,
-    maxToolCalls: command.maxToolCalls ?? 12,
-    maxToolCallsPerTurn: command.maxToolCallsPerTurn ?? 4,
-    maxParallelReadToolCalls: command.maxParallelReadToolCalls ?? 3,
-    maxToolResultChars: command.maxToolResultChars ?? 6_000
-  };
-  if (!Number.isInteger(limits.maxTurns) || limits.maxTurns < 1 || limits.maxTurns > 12) throw new RangeError('Agent maxTurns must be between 1 and 12');
-  if (!Number.isInteger(limits.maxToolCalls) || limits.maxToolCalls < 0 || limits.maxToolCalls > 24) throw new RangeError('Agent maxToolCalls must be between 0 and 24');
-  if (!Number.isInteger(limits.maxToolCallsPerTurn) || limits.maxToolCallsPerTurn < 1 || limits.maxToolCallsPerTurn > 8) throw new RangeError('Agent maxToolCallsPerTurn must be between 1 and 8');
-  if (!Number.isInteger(limits.maxParallelReadToolCalls) || limits.maxParallelReadToolCalls < 1 || limits.maxParallelReadToolCalls > 6) throw new RangeError('Agent maxParallelReadToolCalls must be between 1 and 6');
-  if (!Number.isInteger(limits.maxToolResultChars) || limits.maxToolResultChars < 256 || limits.maxToolResultChars > 20_000) throw new RangeError('Agent maxToolResultChars must be between 256 and 20000');
-  return limits;
 }

@@ -8,7 +8,7 @@ export class ActiveAgentToolSet {
   private readonly byProviderName = new Map<string, AgentToolDefinition>();
 
   constructor(initial: readonly AgentToolDefinition[], available: readonly AgentToolDefinition[] = initial) {
-    available.forEach((definition) => this.available.set(definition.code, definition));
+    available.forEach((definition) => this.available.set(definition.name, definition));
     initial.forEach((definition) => this.register(definition));
   }
 
@@ -16,45 +16,45 @@ export class ActiveAgentToolSet {
     return [...this.definitions.values()].map(toProviderTool);
   }
 
-  get codes(): Iterable<string> {
+  get names(): Iterable<string> {
     return this.definitions.keys();
   }
 
-  byCode(code: string): AgentToolDefinition | undefined {
-    return this.definitions.get(code);
+  byName(name: string): AgentToolDefinition | undefined {
+    return this.definitions.get(name);
   }
 
   byProvider(name: string): AgentToolDefinition | undefined {
     return this.byProviderName.get(name);
   }
 
-  activate(toolCodes: readonly string[]): void {
-    toolCodes.forEach((code) => {
-      const definition = this.available.get(code);
-      if (!definition) throw new Error(`Agent requested unavailable tool activation: ${code}`);
-      if (!this.definitions.has(code)) this.register(definition);
+  activate(toolNames: readonly string[]): void {
+    toolNames.forEach((name) => {
+      const definition = this.available.get(name);
+      if (!definition) throw new Error(`Agent requested unavailable tool activation: ${name}`);
+      if (!this.definitions.has(name)) this.register(definition);
     });
   }
 
   private register(definition: AgentToolDefinition): void {
-    const providerName = providerToolName(definition.code);
+    const providerName = providerToolName(definition.name);
     const existing = this.byProviderName.get(providerName);
-    if (existing && existing.code !== definition.code) {
+    if (existing && existing.name !== definition.name) {
       throw new Error(`Agent tools map to the same provider name: ${providerName}`);
     }
-    this.definitions.set(definition.code, definition);
+    this.definitions.set(definition.name, definition);
     this.byProviderName.set(providerName, definition);
   }
 }
 
 export function toProviderTool(tool: AgentToolDefinition): ProviderToolDefinition {
-  return { name: providerToolName(tool.code), description: tool.description, inputSchema: tool.inputSchema };
+  return { name: providerToolName(tool.name), description: tool.description, inputSchema: tool.inputSchema };
 }
 
-export function providerToolName(code: string): string {
-  const normalized = code.trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+export function providerToolName(name: string): string {
+  const normalized = name.trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
   if (!normalized || !/^[a-zA-Z0-9_-]+$/.test(normalized)) {
-    throw new Error(`Agent tool code cannot be mapped to a provider function name: ${code}`);
+    throw new Error(`Agent tool name cannot be mapped to a provider function name: ${name}`);
   }
   return normalized;
 }

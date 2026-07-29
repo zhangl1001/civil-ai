@@ -44,7 +44,12 @@ export class ConversationStore {
 
   async updateSession(
     sessionId: string,
-    patch: { readonly title?: string; readonly summary?: string }
+    patch: {
+      readonly title?: string;
+      readonly summary?: string;
+      readonly summaryCursorMessageId?: string;
+      readonly summaryVersion?: number;
+    }
   ): Promise<ConversationSession | undefined> {
     const current = await this.sessionLog.get(sessionId);
     if (!current) return undefined;
@@ -55,6 +60,10 @@ export class ConversationStore {
       ...(patch.summary !== undefined
         ? { summary: patch.summary.trim() || undefined, summaryUpdatedAt: now }
         : {}),
+      ...(patch.summaryCursorMessageId !== undefined
+        ? { summaryCursorMessageId: patch.summaryCursorMessageId || undefined }
+        : {}),
+      ...(patch.summaryVersion !== undefined ? { summaryVersion: patch.summaryVersion } : {}),
       updatedAt: now
     };
     await this.sessionLog.put(next);

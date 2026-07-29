@@ -1,5 +1,7 @@
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import {
+  findQuestionSetEnrichmentNeeds,
+  hasQuestionSetEnrichmentNeeds,
   LearningAssetKind,
   type CommittedQuestionSetBundle,
   type QuestionSetSourceSummary
@@ -52,6 +54,14 @@ export class PracticeSessionFeature {
     const targetSetIds = manifest
       ? manifest.sections.map((section) => section.bundle.questionSet.id)
       : [bundle.questionSet.id];
+    // The committed question stem and options are the critical path for entering
+    // practice. Enrichment may generate lectures and explanations, but it must
+    // never delay the first question render.
+    void Promise.all(targetSetIds.map((questionSetId) => (
+      this.runtime.ensureQuestionSetEnrichment.execute({ questionSetId })
+    ))).catch((error: unknown) => {
+      console.warn('[PracticeSessionFeature] failed to schedule question-set enrichment', error);
+    });
     const previousSessions = manifest?.restorePrevious === false
       ? []
       : (await Promise.all(
@@ -85,6 +95,54 @@ export class PracticeSessionFeature {
       } : undefined,
       assessmentRoleOverride: manifest?.assessmentRoleOverride
     };
+  }
+
+  async waitForCompleteContent(
+    questionSetIds: readonly string[],
+    options: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+      readonly onUpdate?: (bundles: readonly CommittedQuestionSetBundle[]) => void;
+    } = {}
+  ): Promise<readonly CommittedQuestionSetBundle[]> {
+    const ids = [...new Set(questionSetIds.map((id) => id.trim()).filter(Boolean))];
+    if (!ids.length) return [];
+    const timeoutMs = Math.max(10_000, options.timeoutMs ?? 240_000);
+    const deadline = Date.now() + timeoutMs;
+    let poll = 0;
+    let lastContentVersion = '';
+    while (Date.now() < deadline) {
+      options.signal?.throwIfAborted();
+      const bundles = await Promise.all(ids.map((id) => (
+        this.runtime.contentRepository.findQuestionSet(
+          id as Parameters<TutorDatabaseRuntime['contentRepository']['findQuestionSet']>[0]
+        )
+      )));
+      if (bundles.some((item) => !item)) throw new Error('题组在解析补全过程中不可用。');
+      const available = bundles.filter((item): item is CommittedQuestionSetBundle => Boolean(item));
+      const contentVersion = available
+        .map((item) => `${item.questionSet.id}:${item.questionSet.contentVersion}`)
+        .join('|');
+      if (contentVersion !== lastContentVersion) {
+        lastContentVersion = contentVersion;
+        options.onUpdate?.(available);
+      }
+      if (available.every((item) => !hasQuestionSetEnrichmentNeeds(
+        findQuestionSetEnrichmentNeeds(item)
+      ))) {
+        return available;
+      }
+      if (poll % 8 === 0) {
+        await Promise.all(available.map((item) => (
+          this.runtime.ensureQuestionSetEnrichment.execute({
+            questionSetId: item.questionSet.id
+          })
+        )));
+      }
+      poll += 1;
+      await delay(500, options.signal);
+    }
+    throw new Error('答案已保存，但解析补全暂未完成，请点击重试。');
   }
 
   private async loadManifest(manifestId: string): Promise<{
@@ -137,6 +195,22 @@ export class PracticeSessionFeature {
         : undefined
     };
   }
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const complete = () => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    };
+    const timer = globalThis.setTimeout(complete, ms);
+    const abort = () => {
+      globalThis.clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function selectQuestionSubset(

@@ -11,12 +11,21 @@ import {
   TaskTargetType,
   type AgentRunAggregate,
   type InvokeAgentModel,
+  type CreateAgentRun,
   type TransitionAgentRun,
   type TutorAgentHandler,
   type UpdateAgentRunProgress
 } from '@/modules/agent/public';
 import type { CandidateRepository } from '@/modules/candidate/public';
-import { GenerationWorkflowStatus, type LearningAssetStore, type RunStructuredObjectiveGenerationWorkflow } from '@/modules/content/public';
+import {
+  GenerationWorkflowStatus,
+  type ApplyQuestionSetEnrichment,
+  type ContentRepository,
+  type LearningAssetStore,
+  type QuestionImportDraftRepository,
+  type RunStructuredObjectiveGenerationWorkflow,
+  type ScanQuestionImportDraft
+} from '@/modules/content/public';
 import type { CurriculumRepository } from '@/modules/curriculum/public';
 import type {
   ErrorDiagnosisRepository,
@@ -49,6 +58,15 @@ import {
   type BusinessAgentTask,
   type BusinessAgentTaskType
 } from './BusinessAgentExecutors';
+import {
+  runTrueQuestionResearchAgent,
+  type TrueQuestionResearchAgentDependencies
+} from './TrueQuestionResearchAgent';
+import { executeContentEnrichment } from './ContentEnrichmentAgentHandler';
+import { ContentEnrichmentStrategyRegistry } from './ContentEnrichmentStrategy';
+import type { EnsureQuestionSetEnrichment } from './EnsureQuestionSetEnrichment';
+import { executeErrorDiagnosis } from './ErrorDiagnosisAgentHandler';
+import { createQuestionSetContentEnrichmentStrategy } from './QuestionSetContentEnrichmentStrategy';
 
 export interface TutorAgentHandlerDependencies {
   readonly candidates: CandidateRepository;
@@ -68,16 +86,39 @@ export interface TutorAgentHandlerDependencies {
   readonly retryReviewQueueItem: RetryReviewQueueItem;
   readonly failReviewQueueItem: FailReviewQueueItem;
   readonly recordSubjectiveAssessment: RecordSubjectiveAssessment;
+  readonly scanQuestionImportDraft: ScanQuestionImportDraft;
+  readonly questionImportDraftRepository: QuestionImportDraftRepository;
+  readonly createAgentLoop: TrueQuestionResearchAgentDependencies['createAgentLoop'];
+  readonly createAgentRun: CreateAgentRun;
+  readonly contentRepository: ContentRepository;
+  readonly applyQuestionSetEnrichment: ApplyQuestionSetEnrichment;
+  readonly ensureQuestionSetEnrichment: EnsureQuestionSetEnrichment;
 }
 
 export function createTutorAgentHandlers(
   dependencies: TutorAgentHandlerDependencies
 ): readonly TutorAgentHandler[] {
-  const structuredPractice = createStructuredPracticeAgentHandler(structuredDependencies(dependencies));
+  const contentEnrichmentStrategies = new ContentEnrichmentStrategyRegistry([
+    createQuestionSetContentEnrichmentStrategy({
+      contentRepository: dependencies.contentRepository,
+      promptCompiler: dependencies.promptCompiler,
+      invokeAgentModel: dependencies.invokeAgentModel,
+      applyEnrichment: dependencies.applyQuestionSetEnrichment,
+      updateProgress: dependencies.updateAgentRunProgress
+    })
+  ]);
   return [
-    createGenerationHandler(AgentRunType.ContentGeneration, dependencies, structuredPractice),
-    createGenerationHandler(AgentRunType.TeachingPlan, dependencies),
-    createGenerationHandler(AgentRunType.TutorTurn, dependencies),
+    createGenerationHandler(
+      AgentRunType.ContentGeneration,
+      dependencies,
+      contentEnrichmentStrategies,
+      createStructuredPracticeAgentHandler(
+        structuredDependencies(dependencies)
+      )
+    ),
+    createGenerationHandler(AgentRunType.TeachingPlan, dependencies, contentEnrichmentStrategies),
+    createGenerationHandler(AgentRunType.TutorTurn, dependencies, contentEnrichmentStrategies),
+    createGenerationHandler(AgentRunType.Review, dependencies, contentEnrichmentStrategies),
     {
       runType: AgentRunType.ErrorDiagnosis,
       requiresGateway: true,
@@ -106,48 +147,9 @@ function structuredDependencies(
     masteryRepository: dependencies.masteryRepository,
     startReviewQueueItem: dependencies.startReviewQueueItem,
     retryReviewQueueItem: dependencies.retryReviewQueueItem,
-    failReviewQueueItem: dependencies.failReviewQueueItem
+    failReviewQueueItem: dependencies.failReviewQueueItem,
+    ensureQuestionSetEnrichment: dependencies.ensureQuestionSetEnrichment
   };
-}
-
-async function executeErrorDiagnosis(
-  run: AgentRunAggregate,
-  gateway: ProviderGateway | undefined,
-  signal: AbortSignal | undefined,
-  candidates: CandidateRepository,
-  curriculums: CurriculumRepository,
-  diagnoses: ErrorDiagnosisRepository,
-  runner: RunAiErrorDiagnosis
-): Promise<void> {
-  if (!gateway) throw new Error('Error diagnosis requires provider gateway');
-  const inputItems = objectArray(run.run.inputSnapshot.items);
-  if (!inputItems.length) throw new Error('Error diagnosis run is missing diagnosis items');
-  if (!run.run.examCycleId) throw new Error('Error diagnosis run is missing its exam cycle');
-  const cycle = await candidates.findCycle(run.run.examCycleId);
-  if (!cycle) throw new Error(`Exam cycle does not exist: ${run.run.examCycleId}`);
-  const curriculum = await curriculums.findBundle(cycle.examCycle.curriculumVersionId);
-  if (!curriculum) throw new Error(`Curriculum does not exist: ${cycle.examCycle.curriculumVersionId}`);
-  const provisionalDiagnosisIds = inputItems.map((item) => (
-    text(item.provisionalDiagnosisId, 'provisionalDiagnosisId') as Parameters<ErrorDiagnosisRepository['find']>[0]
-  ));
-  const provisionalDiagnoses = await diagnoses.findMany(provisionalDiagnosisIds);
-  const diagnosisById = new Map(provisionalDiagnoses.map((diagnosis) => [diagnosis.id, diagnosis]));
-  const items = inputItems.map((item, index) => {
-    const provisionalDiagnosisId = provisionalDiagnosisIds[index]!;
-    const diagnosis = diagnosisById.get(provisionalDiagnosisId);
-    if (!diagnosis) throw new Error(`Provisional diagnosis does not exist: ${provisionalDiagnosisId}`);
-    const capability = curriculum.capabilityNodes.find((node) => node.id === diagnosis.capabilityNodeId);
-    return {
-      provisionalDiagnosisId: provisionalDiagnosisId as Parameters<RunAiErrorDiagnosis['execute']>[0]['items'][number]['provisionalDiagnosisId'],
-      evidenceContext: object(item.evidence),
-      subject: capability?.subject ?? '行测',
-      capabilityName: capability?.name
-    };
-  });
-  await runner.execute({
-    agentRunId: run.run.id,
-    items
-  }, gateway, signal);
 }
 
 function text(value: unknown, field: string): string {
@@ -160,14 +162,10 @@ function object(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
-function objectArray(value: unknown): JsonObject[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is JsonObject => Boolean(item && typeof item === 'object' && !Array.isArray(item)));
-}
-
 function createGenerationHandler(
   runType: AgentRunType,
   dependencies: TutorAgentHandlerDependencies,
+  contentEnrichmentStrategies: ContentEnrichmentStrategyRegistry,
   structuredPractice?: TutorAgentHandler
 ): TutorAgentHandler {
   return {
@@ -183,6 +181,13 @@ function createGenerationHandler(
       }
       if (run.run.targetResourceType === TaskTargetType.BusinessOperation) {
         await executeBusinessOperation(run, gateway, signal, dependencies);
+        return;
+      }
+      if (run.run.targetResourceType === TaskTargetType.ContentEnrichment) {
+        await executeContentEnrichment(run, gateway, signal, {
+          strategies: contentEnrichmentStrategies,
+          transition: dependencies.transitionAgentRun
+        });
         return;
       }
       throw new Error(`Unsupported agent run target: ${run.run.targetResourceType || 'unknown'}`);
@@ -362,6 +367,12 @@ async function executeBusinessOperation(
       if (!result.questionSetId || !aggregate.spec.learningThreadId) {
         throw new Error('结构化题组生成失败：缺少题组或学习主线');
       }
+      await dependencies.ensureQuestionSetEnrichment.execute({
+        questionSetId: result.questionSetId,
+        parentAgentRunId: run.run.id
+      }).catch((error: unknown) => {
+        console.warn('[TutorAgent] failed to schedule question-set enrichment', error);
+      });
       return {
         questionSetId: result.questionSetId,
         learningThreadId: aggregate.spec.learningThreadId,
@@ -435,8 +446,36 @@ async function executeBusinessOperation(
       });
     }
   };
-  await executorFor(intent)(task, context);
+  if (intent === 'trueQuestionResearch') {
+    const research = await runTrueQuestionResearchAgent(
+      task,
+      run.run,
+      gateway,
+      context,
+      {
+        candidates: dependencies.candidates,
+        curriculums: dependencies.curriculums,
+        scanDraft: dependencies.scanQuestionImportDraft,
+        drafts: dependencies.questionImportDraftRepository,
+        createAgentLoop: dependencies.createAgentLoop
+      }
+    );
+    resultData = {
+      resultRef: research.draftId,
+      result: {
+        draftId: research.draftId,
+        totalCount: research.totalCount,
+        readyCount: research.readyCount,
+        needsConfirmationCount: research.needsConfirmationCount
+      }
+    };
+  } else {
+    await executorFor(intent)(task, context);
+  }
   const navigation = completedNavigation(intent, run.run.inputSnapshot, resultData);
+  const completionMessage = intent === 'trueQuestionResearch'
+    ? `已形成 ${String(objectValue(resultData.result).totalCount || 0)} 道待确认真题`
+    : '已完成';
   await dependencies.transitionAgentRun.execute({
     idempotencyKey: `business:${run.run.id}:completed`,
     agentRunId: run.run.id,
@@ -447,7 +486,7 @@ async function executeBusinessOperation(
       intent,
       progress: 100,
       step: TaskCenterStep.Completed,
-      message: '已完成',
+      message: completionMessage,
       actionRoute: navigation.route,
       actionParams: navigation.params
     },
@@ -465,6 +504,15 @@ function completedNavigation(
   const result = objectValue(resultData.result);
   if (intent !== 'practice' && intent !== 'redo') {
     const assetId = optionalText(result.assetId);
+    if (intent === 'trueQuestionResearch') {
+      return {
+        route: '/vue/practice',
+        params: {
+          mode: 'true',
+          ...(typeof result.draftId === 'string' ? { draftId: result.draftId } : {})
+        }
+      };
+    }
     if (intent === 'study' && assetId) {
       return { route: '/vue/study/lecture', params: { assetId } };
     }
@@ -521,6 +569,7 @@ function executorType(intent: GenerationIntent): BusinessAgentTaskType {
   if (intent === 'mock') return 'mock';
   if (intent === 'daily' || intent === 'digest' || intent === 'monthlyDigest') return 'digest';
   if (intent === 'study') return 'study';
+  if (intent === 'trueQuestionResearch') return 'research';
   return 'interview';
 }
 

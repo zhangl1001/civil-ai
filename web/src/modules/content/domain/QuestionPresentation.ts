@@ -111,7 +111,10 @@ function definition(
   return {
     code,
     regions: [
-      ...(workspace ? [QuestionRegionCode.Material] : []),
+      // Material is a stable content block for every presentation. The
+      // workspace mode changes layout/navigation, not whether the question
+      // can render its supporting stem.
+      QuestionRegionCode.Material,
       QuestionRegionCode.Prompt,
       QuestionRegionCode.Options,
       QuestionRegionCode.Explanation,

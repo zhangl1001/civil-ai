@@ -8,6 +8,7 @@ export type { TutorDatabaseRuntime } from './database/createTutorDatabaseRuntime
 export { getTutorRuntime, initializeTutorRuntime } from './TutorRuntimeProvider';
 export { createConfiguredProviderGateway } from './ai/createConfiguredProviderGateway';
 export { agentWorkerCoordinator } from './agent/AgentWorkerCoordinator';
+export { enqueueBusinessAgentTask } from './agent/enqueueBusinessAgentTask';
 export {
   importAgentAttachment,
   importAgentAttachments,

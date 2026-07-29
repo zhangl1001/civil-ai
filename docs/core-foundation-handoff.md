@@ -1,6 +1,6 @@
 # AI 私教核心底座交接
 
-> 基线日期：2026-07-27
+> 基线日期：2026-07-28
 > 状态：核心底座、结构化真题闭环、主动私教、能力校准、P7 自动化评测、P8 Web Research、PDF 双端输入和 iOS 图片 OCR 核心链路已完成；算法真实样本校准、输入适配深化与候选包真机发布验收仍待完成。
 
 ## 1. 当前结论
@@ -33,6 +33,8 @@ AgentRun 还必须归入四个稳定业务工作池：`content_generation`（生
 
 生成质量门禁只阻断不可渲染、不可作答或答案不一致的结构错误。有效题达到请求量 80% 时先提交有效子集；不足时只修复异常题。章节、题目和选项标识由应用确定性生成，可选教学章节不要求模型凑数。网关首次发现结构化工具模式不可用后会在当前配置实例内记忆并直接使用提示词 JSON 模式，不重复无效探测。
 
+题目内容按块分级：材料、题干、选项和答案属于 `required_to_practice`，必须完整后才能发布；讲义和解析属于 `pending_enrichment`，缺失或不完整时题组仍先发布，系统通过隐藏的 `content_enrichment` 后台任务补齐；错因属于 `post_practice`，只在作答后生成。`EnqueueContentEnrichment` 统一负责幂等入队、后台工作池和隐藏任务生命周期，`ContentEnrichmentStrategyRegistry` 按业务类型选择策略。公共层不包含学科 Prompt、业务 Schema 或落库规则；题组、真题导入草稿、每日积累和其他 LearningAsset 必须各自注册最小输入、解析器和版本化合并策略。已发布真题题组可复用题组补全策略，但原始导入草稿不得伪装成题组。补全采用乐观版本锁，只能填充仍为空的辅助块，不得覆盖材料、题干、选项、答案或作答状态。
+
 ### 作答与能力证据
 
 做题页每次按 `questionSetId` 查询题组和历史会话，不依赖页面缓存。提交后在事务内写作答、客观判分、题目暴露、保守错因、学习证据和 Outbox；随后触发 AI 结构化错因分析。解析、错因、错题本、闪卡和历史读取同一事实链路。
@@ -49,15 +51,16 @@ AgentRun 还必须归入四个稳定业务工作池：`content_generation`（生
 
 申论生成/批改、面试深度点评、每日积累、月报、模考和考点精讲均使用 AgentRun、版本化 Prompt、LearningAsset 和 MessageCenter。主观评价通过 Rubric 维度写入学习证据，不套用客观题正确率。
 
-每日热点不再依赖模型记忆：任务先通过独立 `WebResearchGateway` 检索最多 5 条近期来源，再基于编号证据生成 Markdown，并把查询词、URL、域名、摘录和抓取时间写入 LearningAsset。每日知识点不强制联网。网络研究默认使用无需密钥的内置免费搜索，并保留 Jina Search 与 Brave Search 作为可选增强；搜索配置与模型供应商解耦。
+每日热点不再依赖模型记忆：任务先通过独立 `WebResearchGateway` 检索最多 5 条近期来源，再基于编号证据生成 Markdown，并把查询词、URL、域名、摘录和抓取时间写入 LearningAsset。每日知识点不强制联网。网络研究默认使用无需密钥的内置搜索，并发聚合 Bing RSS、Bing HTML、DuckDuckGo HTML/Lite 与搜狗 HTML；单一来源失效不会终止 Agent。页面读取执行 Jina Reader → 原始 HTML 直读兜底，并保留重定向后的真实来源地址。检索结果只做有限内存短缓存，免费源短时波动时可回用，不写入业务数据库。Jina Search 与 Brave Search 仍作为可选增强，搜索配置与模型供应商解耦。
 
-聊天 Agent 按意图加载 `research.current_affairs`、`research.exam_syllabus` 或 `research.true_questions`。AI 自主判断是否在同一回合发起多个必要且独立的只读调用，Runtime 最多并行 3 个并按原调用顺序回填结果；存在依赖时分回合执行，写入和确认类工具始终串行。网页正文只能读取当前 Run 搜索返回的有界候选 URL，普通聊天不分配搜索工具。工具 UI/SQLite 进度事件保持串行，网络并发不会制造数据库并发写。真题网络来源使用 `web_research` 导入方式并复用 `question_bank.scan → confirm → publish`，未经确认不能污染正式题库。
+聊天 Agent 按意图加载 `research.current_affairs`、`research.exam_syllabus` 或 `research.true_questions`。热点和大纲等短研究可在当前 AgentRun 内自主并行必要的只读调用；联网真题属于长业务流程，聊天 Skill 只暴露 `research_true_questions` 派发工具，实际 `web.search → web.read_page → question_bank.scan` 由独立 `TrueQuestionResearchAgent` 在内容工作池运行，不消耗聊天 turn 和工具预算。该 Agent 使用进展感知长任务预算、检查点、取消和恢复，可根据结果主动调整查询策略。网页正文只能读取当前 Run 搜索返回的有界候选 URL；确认与发布必须由真题页面显式完成，未经确认不能污染正式题库。
 
 ## 3. 关键运行入口
 
 - Web 装配：`web/src/composition-root/database/createWebTutorDatabase.ts`
 - iOS 装配：`web/src/composition-root/database/createNativeTutorDatabase.ts`
 - Agent 装配：`web/src/composition-root/agent/createTutorAgentHandlers.ts`
+- 联网真题 Agent：`web/src/composition-root/agent/TrueQuestionResearchAgent.ts`
 - 全局 Worker：`web/src/composition-root/agent/AgentWorkerCoordinator.ts`
 - 工作池策略：`web/src/modules/agent/domain/AgentWorkPoolPolicy.ts`
 - 交卷恢复：`web/src/composition-root/evidence/ObjectiveSubmissionRecoveryCoordinator.ts`
@@ -68,16 +71,25 @@ AgentRun 还必须归入四个稳定业务工作池：`content_generation`（生
 
 ### Agent 工具与 Skill 分层
 
-Agent 能力使用四层装配，禁止重新把逐工具说明堆进聊天系统提示词：
+Agent 能力使用三段式按需装配，禁止重新把逐工具说明堆进发现层系统提示词：
 
-1. `AgentToolRegistry` 原子注册纯工具元数据和 Skill，不引用页面、数据库或执行器。
-2. `AgentSkillRouter` 根据当前用户意图选择最多两个 Skill；普通陪伴聊天不加载工具。
-3. `ToolExposurePlanner` 按 audience、工具数和上下文预算生成当前轮最小暴露集合。
-4. `AgentSystemPromptComposer` 只组装通用行为边界和当前 Skill 摘要；工具名称、description 和输入 Schema 通过 Provider 原生 `tools` 字段发送。
+1. `AgentToolRegistry` 原子注册不可变 Tool Manifest；Tool 使用 `name + description + inputSchema`，实现和权限策略不进入注册表。
+2. `AgentSkillRegistry` 注册 `name、version、description、dependencies、Workflow、Prompt Chapters、Resources、Allowed Tools、Validators、executionBudget`；`AgentSystemPromptComposer` 在发现阶段只发送 Skill 的 `name + description`。
+3. 模型调用 `agent.select_skills` 后，`AgentSkillBundleCompiler` 才校验依赖、冲突、audience、工具数和 token 预算，并加载完整 Skill 工作流及最小 Tool Schema。
+
+`RunAgentLoop` 把活动 Skill、活动工具、已成功工具名和工作流状态写入检查点。选择 Skill 只是加载控制面，不算业务完成；至少执行一个具体业务工具或明确向用户询问必要信息后才能收束。声明 `agent.requires-write` 的生成/批改/派发 Skill 必须成功执行自身允许的写工具，目录读取不能冒充生成完成；异步写工具返回任务 ID 后还必须通过 `task.read_status` 核验真实状态。模型只说“准备执行”时，Runtime 会要求真实工具调用，避免一次选择后提前返回。
+
+工具执行结果统一形成 `succeeded / no_progress / failed` observation 并进入下一模型 turn。成功的相同调用不会重复执行；可恢复失败允许一次原参数重试；相同调用连续无进展后，Runtime 不替模型写死业务策略，只要求模型依据观察结果调整参数、范围、工具或步骤。隐藏思考不写入检查点，检查点只保存可审计的调用、观察、工作流状态和稳定资源引用。
+
+本地 SQLite 不提供任意文件 `Glob`。Agent 使用 `workspace.discover` 按 `today/recent/all` 最小范围列出题组、每日积累和考点讲义的摘要与资源 ID，再加载对应 Skill 按 ID 下钻；这与桌面端“先发现、再读取”的工作方式一致，同时避免把完整题库或 Markdown 塞进上下文。
+
+执行预算由 `AgentExecutionBudget` 统一治理：Skill 只声明 `compact / standard / research / long_running` 档位，Runtime 根据新证据逐步扩展轮次、工具数和耗时，并受 32 turn、64 次工具调用、15 分钟全局硬上限约束。聊天 Service 不得再传固定 `8/12`；重复调用、空结果和失败不为预算续期。
+
+对话上下文已从“最近消息字符截断”升级为分层编译：最近 14 条有效原文按约 6000 token 预算进入请求，较早消息通过 `summaryCursorMessageId + summaryVersion` 增量压缩，避免反复总结；当前 Run 超过 24000 token 时压缩早期工具证据并保留最近 tool-call/result 原文。`AgentConversationMemoryService` 自动召回最多 6 条明确个人记忆，并通过 `tutor.personal_memory` Skill 按需暴露 `memory.remember/memory.forget`。Memory 只允许回答偏好、学习偏好、个人约束和待继续事项；能力、成绩、题库、任务、计划、错因和思考过程仍必须使用业务 Repository/Tool，不得复制进 Memory。
 
 风险等级、用户确认、幂等、超时、数据范围、事务和具体业务规则全部留在本地 Policy 与 Executor。供应商不支持原生工具时，只允许 Provider Adapter 对当前最小工具集合做兼容转换，业务层不得把完整工具目录拼入 Prompt。
 
-新增工具的固定步骤：增加纯 Catalog 定义、绑定一个或多个 Skill、增加路由规则、注册 Executor、补最小暴露与策略测试。不得修改 `RunAgentLoop`，也不得在 `ChatAgentService` 增加逐工具 Prompt 文案。
+新增工具的固定步骤：注册 Tool Manifest、加入 Skill 的 `allowedTools`、注册 Executor、补最小暴露与策略测试。新增 Skill 必须提供完整 Manifest 和完成标准；不得修改 `RunAgentLoop`，也不得在 `ChatAgentService` 增加逐工具 Prompt 文案。
 
 公开合同只从各模块 `public.ts` 导入。Vue 页面不得直接访问 Repository，Feature 和应用服务不得直接访问 SQLite、IndexedDB 或数据库 Adapter；`check-architecture` 会阻止回退。
 
@@ -103,13 +115,13 @@ Agent 能力使用四层装配，禁止重新把逐工具说明堆进聊天系�
 - 每次模型调用必须进入 Invocation Ledger；模型思考内容不保存。
 - 同一业务 scope 的活动任务只能有一个，查询必须走 AgentRun Repository 精确目标索引。
 - 工具执行明细、流式增量和用户临时引导只保留当前 run 的有界内存快照，不写业务库、不无限累积。
-- 普通聊天不得暴露业务工具；每轮最多选择两个 Skill、暴露八个工具。系统提示词不得包含工具代码、参数 Schema 或执行步骤。
+- 普通聊天的发现层不得暴露业务工具；每轮最多选择两个 Skill、暴露八个工具。发现层系统提示词不得包含工具 Schema 或执行步骤，完整步骤只在 Skill 激活后进入当前 Run。
 - 页面重进必须重新查询 Repository，不以 Pinia 或 localStorage 作为业务事实。
 - 新业务接入任务和消息时必须使用稳定枚举、标准事件和统一跳转参数。
 
 ## 5. 当前验证
 
-2026-07-27 已通过：
+2026-07-28 已通过：
 
 ```text
 npm run check:database-schema
@@ -133,9 +145,10 @@ P7 自动化已经证明前后台事件只启动一条数据库恢复链，数�
 1. iPhone 真机验收：验证内置免费搜索、Jina/Brave 可选搜索、国内网络可达性、并行检索、每日热点来源展示，以及前后台切换、提交中切后台、杀进程恢复、SQLite 升级、限流、取消、键盘、安全区和任务完成跳转。
 2. 输入适配深化：PDF 文本层、iOS 扫描 PDF 和图片 OCR 已接入；精确版面还原、原文件资产引用与 Web 图片 OCR 仍可继续增强。
 3. Web Research 深化：增加官方域名策略、来源核验状态和大纲变更确认界面；不得绕过现有草稿发布管线。
-4. 用真实用户真题/模考样本持续扩充离线质量基准和策略回放数据集。
-5. 为长材料多问、资料图表和多图分组增加截图级视觉回归；结构与渲染合同已经纳入自动化基准。
-6. 申论与面试补充更细 Rubric、评分校准、用户纠正和音频资产生命周期。
-7. 数据库加密密钥轮换、备份恢复完整性和 App Store 发布检查。
+4. Context/Memory 深化：用供应商真实 usage 校准 token estimator；增加 100 轮会话回放、摘要质量评测、记忆纠错界面和 Workspace 日志压缩，不扩大 Memory 业务边界。
+5. 用真实用户真题/模考样本持续扩充离线质量基准和策略回放数据集。
+6. 为长材料多问、资料图表和多图分组增加截图级视觉回归；结构与渲染合同已经纳入自动化基准。
+7. 申论与面试补充更细 Rubric、评分校准、用户纠正和音频资产生命周期。
+8. 数据库加密密钥轮换、备份恢复完整性和 App Store 发布检查。
 
 这些属于产品深化和发布验收，不应重新引入旧文件数据层或第二套任务系统。

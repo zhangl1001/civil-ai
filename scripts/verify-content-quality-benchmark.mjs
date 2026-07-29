@@ -3,7 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
-import { marked } from '../web/node_modules/marked/lib/marked.esm.js';
+import { Marked, marked } from '../web/node_modules/marked/lib/marked.esm.js';
+import markedKatex from '../web/node_modules/marked-katex-extension/src/index.js';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '..');
@@ -40,6 +41,24 @@ try {
       assert(parsed.questions.every((question) => JSON.stringify(question.material) === JSON.stringify(parsed.questions[0].material)));
     }
   }
+
+  const missingContextOutput = parser.parseObject(payload([
+    question(
+      'missing-context',
+      '下列哪项如果为真，最能削弱上述论证？',
+      '削弱论证'
+    )
+  ]), 'aptitude.judgment.weakening');
+  const missingContextReport = quality.validate(
+    missingContextOutput,
+    1,
+    'aptitude.judgment.weakening'
+  );
+  assert.equal(missingContextReport.valid, false, 'A referential prompt without material must be rejected');
+  assert(
+    missingContextReport.blockingIssues.some((issue) => issue.code === 'quality.question_context_missing'),
+    'Missing material must be reported as a blocking core-content defect'
+  );
 
   const validator = new content.ContentSchemaValidator();
   const allBlockTypes = {
@@ -130,6 +149,20 @@ try {
   assert.match(serializedHtml, /<h3>三步识别<\/h3>/);
   assert.match(serializedHtml, /<strong>先看时间跨度<\/strong>/);
 
+  const normalizedFormula = rendering.normalizeMarkdownSource([
+    '独立公式：',
+    '',
+    '$$\\text{比重变化量}=\\frac{A}{B}\\times\\frac{a%-b%}{1+a%}$$',
+    '',
+    '当 $a%>b%$ 时，比重上升。'
+  ].join('\n'));
+  assert(normalizedFormula.includes('a\\%'), 'Legacy unescaped percentages must be normalized inside formulas');
+  const mathMarked = new Marked({ gfm: true });
+  mathMarked.use(markedKatex({ nonStandard: true, throwOnError: false, strict: 'ignore', trust: false }));
+  const formulaHtml = mathMarked.parse(normalizedFormula);
+  assert.match(formulaHtml, /class="katex-display"/);
+  assert.match(formulaHtml, /class="katex"/);
+
   console.log('Content quality benchmark verification passed.');
 } finally {
   await server.close();
@@ -141,7 +174,12 @@ function createBenchmarkCases() {
       name: 'judgment-single',
       capabilityCode: 'aptitude.judgment.argument_structure',
       expectedCount: 1,
-      payload: payload([question('judgment-1', '以下哪项最准确地概括题干中的论证结构？', '论证结构识别')])
+      payload: payload([question(
+        'judgment-1',
+        '以下哪项最准确地概括上述论证的结构？',
+        '论证结构识别',
+        '某研究比较两组学生的阅读时长和能力测试结果，并据此认为增加阅读时间能够提升语言与逻辑能力。'
+      )])
     },
     {
       name: 'verbal-long-material',

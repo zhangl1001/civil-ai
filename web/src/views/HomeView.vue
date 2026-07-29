@@ -484,7 +484,7 @@ function roundChart(value: number): number {
 
 .hero-meter { min-width:0; min-height:78px; border-radius:16px; padding:9px 6px; display:grid; place-items:center; align-content:center; overflow:hidden; background:rgba(var(--color-brand-rgb),.045); }
 
-.hero-meter strong { max-width:100%; color:var(--primary-color); font-size:34px; line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.hero-meter strong { max-width:100%; color:var(--primary-color); font-size:var(--type-size-metric); line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; }
 
 .hero-meter span { max-width:100%; margin-top:3px; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); text-overflow:ellipsis; white-space:nowrap; }
 

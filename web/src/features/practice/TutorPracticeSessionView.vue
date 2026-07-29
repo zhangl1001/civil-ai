@@ -26,6 +26,7 @@
       <button type="button" :disabled="submitting" :class="{ active: activeTab === 'lecture' }" @click="activeTab = 'lecture'">讲义</button>
       <button type="button" :disabled="submitting" :class="{ active: activeTab === 'questions' }" @click="activeTab = 'questions'">题目</button>
     </nav>
+    <p v-if="contentCompleting" class="content-completion-status" role="status"><LoaderCircleIcon />答案已保存，正在整理逐题解析</p>
 
     <main v-if="activeTab === 'lecture' && lectureDocument" class="app-page-scroll session-scroll lecture-scroll">
       <LectureContent :document="lectureDocument.content" />
@@ -51,8 +52,8 @@
         :presentation="questionPresentation"
         :selected-option-id="answers[question.id]"
         :reveal-result="submitted"
-        :readonly-mode="submitted"
-        :disabled="submitting"
+        :readonly-mode="submitted || submissionPersisted"
+        :disabled="submitting || submissionPersisted"
         :show-explanation="submitted"
         @select="selectOption"
       >
@@ -93,13 +94,15 @@
       </QuestionContentTemplate>
       <p v-if="error" class="session-error">{{ error }}</p>
     </main>
-    <main v-else class="session-empty">{{ error || '正在读取题目...' }}</main>
+    <main v-else class="app-page-scroll session-scroll session-loading" aria-busy="true"><div class="session-loading-block" aria-hidden="true"></div><p class="session-loading-label">{{ error || '正在读取题目...' }}</p></main>
 
     <footer v-if="bundle && activeTab === 'questions' && (!isSharedMaterialQuestion || index === bundle.questions.length - 1)" class="session-actions">
       <button v-if="!isSharedMaterialQuestion" :disabled="submitting || index === 0" @click="changeQuestion(index - 1)">上一题</button>
       <button v-if="!isSharedMaterialQuestion && index < bundle.questions.length - 1" :disabled="submitting || (!submitted && !answers[question?.id || ''])" @click="changeQuestion(index + 1)">下一题</button>
       <button v-else-if="submitted" @click="showAnswerCard = true">查看答题卡</button>
-      <button v-else :disabled="submitting" @click="requestSubmit">{{ submitting ? '提交中...' : '交卷' }}</button>
+      <button v-else :disabled="submitting" @click="requestSubmit">
+        {{ submitting ? submissionProgressText : submissionPersisted ? '继续整理解析' : '交卷' }}
+      </button>
     </footer>
 
     <CenterDialog v-model="showAnswerCard" title="答题卡" subtitle="点击题号可直接跳转" variant="content">
@@ -141,7 +144,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { BookOpenIcon, Clock3Icon, ListChecksIcon, MessageCircleMoreIcon } from 'lucide-vue-next';
+import { BookOpenIcon, Clock3Icon, ListChecksIcon, LoaderCircleIcon, MessageCircleMoreIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import CenterDialog from '@/components/layout/CenterDialog.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
@@ -154,29 +157,14 @@ import { agentWorkerCoordinator, initializeTutorRuntime } from '@/composition-ro
 import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evidence/ObjectiveSubmissionRecoveryCoordinator';
 import { practiceModuleLabel } from '@/domain/labels';
 import type { AssessmentRole } from '@/kernel/public';
-import {
-  contentDocumentText,
-  resolveQuestionPresentation,
-  questionOriginLabel,
-  questionSourceTitle,
-  type CommittedQuestionSetBundle,
-  type QuestionSetSourceSummary
-} from '@/modules/content/public';
-import {
-  ErrorCauseCode,
-  ErrorDiagnosisConfirmationAction,
-  errorCauseLabel,
-  type ErrorDiagnosisCurrentProjection,
-  type ErrorDiagnosisRecord,
-  type ObjectiveSessionReview
-} from '@/modules/evidence/public';
+import { contentDocumentText, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
+import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
 import { useAIChatStore } from '@/stores/aiChat';
 import { PracticeSessionFeature } from './PracticeSessionFeature';
-import {
-  PracticeSessionDraftService,
-  type PracticeSessionDraftIdentity
-} from './PracticeSessionDraftService';
+import { PracticeSessionDraftService, type PracticeSessionDraftIdentity } from './PracticeSessionDraftService';
 import { resolveQuestionSwipe } from './QuestionSwipeNavigation';
+import { submitPracticeBundle } from './SubmitPracticeBundle';
+import { usePracticeContentCompletion } from './usePracticeContentCompletion';
 
 const route = useRoute();
 const chat = useAIChatStore();
@@ -213,6 +201,17 @@ let touchCurrentX = 0;
 let touchCurrentY = 0;
 let touchStartedAt = 0;
 let horizontalTouch = false;
+const { contentCompleting, submissionPersisted, needsCompletion: loadedContentNeedsCompletion,
+  completeBeforeReview, refreshInBackground: refreshContentInBackground } = usePracticeContentCompletion({
+  sessionFeature,
+  applyCompletedContent: (completed) => {
+    const byId = new Map(completed.map((item) => [item.questionSet.id, item]));
+    if (bundle.value) bundle.value = byId.get(bundle.value.questionSet.id) || bundle.value;
+    manifestSections.value = manifestSections.value.map((item) => ({
+      ...item, bundle: byId.get(item.bundle.questionSet.id) || item.bundle
+    }));
+  }
+});
 const question = computed(() => bundle.value?.questions[index.value]);
 const questionPresentation = computed(() => question.value
   ? resolveQuestionPresentation(question.value.content)
@@ -262,6 +261,7 @@ const cardQuestions = computed<AnswerCardQuestionItem[]>(() =>
     correctOptionId: item.content.correctOptionId
   }))
 );
+const submissionProgressText = computed(() => contentCompleting.value ? '正在整理解析...' : '提交中...');
 
 onMounted(() => {
   void load();
@@ -288,6 +288,7 @@ async function load() {
     const id = String(route.query.questionSetId || '');
     const loaded = await (await sessionFeature()).load({ questionSetId: id || undefined, manifestId: manifestId || undefined });
     const value = loaded.bundle;
+    const needsContentCompletion = loadedContentNeedsCompletion(loaded);
     manifestSections.value = [...loaded.manifestSections];
     bundle.value = value;
     capabilityName.value = loaded.capabilityName;
@@ -309,7 +310,8 @@ async function load() {
       answerChanges.value = Object.fromEntries(previousAttempts.map((attempt) => [attempt.questionId, attempt.answerChangeCount]));
       reviewSessionIds.value = loaded.previousReviews.map((previous) => previous.session.id);
       review.value = mergeReviews(loaded.previousReviews);
-      submitted.value = loaded.previousReviews.length === targetSetIds.size;
+      submissionPersisted.value = loaded.previousReviews.length === targetSetIds.size;
+      submitted.value = submissionPersisted.value;
       if (submitted.value) remainingSeconds.value = 0;
     }
     const runtime = await initializeTutorRuntime();
@@ -328,12 +330,22 @@ async function load() {
         remainingSeconds.value = draft.remainingSeconds;
       }
     }
+    agentWorkerCoordinator.start(runtime);
+    if (needsContentCompletion) {
+      if (submissionPersisted.value) {
+        void completeBeforeReview([...targetSetIds]).catch((cause: unknown) => {
+          error.value = cause instanceof Error ? cause.message : '逐题解析暂未补全';
+        });
+      } else {
+        void refreshContentInBackground([...targetSetIds]);
+      }
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '读取题组失败';
   }
 }
 function selectOption(optionId: string) {
-  if (!question.value || submitted.value || submitting.value) return;
+  if (!question.value || submitted.value || submitting.value || submissionPersisted.value) return;
   const questionId = question.value.id;
   const previous = answers.value[questionId];
   if (previous && previous !== optionId) answerChanges.value[questionId] = (answerChanges.value[questionId] || 0) + 1;
@@ -404,7 +416,12 @@ function resetQuestionTouch() {
   horizontalTouch = false;
 }
 function requestSubmit() {
-  if (!submitting.value && !submitted.value) showSubmitConfirm.value = true;
+  if (submitting.value || submitted.value) return;
+  if (submissionPersisted.value) {
+    void submit();
+    return;
+  }
+  showSubmitConfirm.value = true;
 }
 async function submit() {
   if (!bundle.value || submitting.value) return;
@@ -425,18 +442,20 @@ async function submit() {
     if (!targets.length) throw new Error('学习主线参数缺失。');
     const results = [];
     const submissionScope = String(route.query.manifestId || route.query.questionSetId || bundle.value.questionSet.id);
-    for (const target of targets) {
-      results.push(await submitBundle(
-        runtime,
-        target.bundle,
-        target.learningThreadId,
-        submissionScope,
-        assessmentRoleOverride.value,
-        manifestSections.value.length ? undefined : reviewQueueItemId,
-        manifestSections.value.length ? undefined : dailyPlanItemId
-      ));
+    if (!submissionPersisted.value) {
+      for (const target of targets) {
+        results.push(await submitPracticeBundle({
+          runtime, bundle: target.bundle, learningThreadId: target.learningThreadId, submissionScope,
+          startedAt, answers: answers.value, elapsedByQuestion: elapsedByQuestion.value,
+          answerChanges: answerChanges.value, assessmentRoleOverride: assessmentRoleOverride.value,
+          reviewQueueItemId: manifestSections.value.length ? undefined : reviewQueueItemId,
+          dailyPlanItemId: manifestSections.value.length ? undefined : dailyPlanItemId
+        }));
+      }
+      reviewSessionIds.value = results.map((result) => result.sessionId);
+      submissionPersisted.value = true;
     }
-    reviewSessionIds.value = results.map((result) => result.sessionId);
+    agentWorkerCoordinator.start(runtime);
     review.value = mergeReviews(await Promise.all(
       reviewSessionIds.value.map((sessionId) => runtime.getObjectiveSessionReview.execute(
         sessionId as Parameters<typeof runtime.getObjectiveSessionReview.execute>[0]
@@ -445,6 +464,10 @@ async function submit() {
     submitted.value = true;
     index.value = 0;
     error.value = '';
+    void completeBeforeReview(targets.map((target) => target.bundle.questionSet.id))
+      .catch((cause: unknown) => {
+        error.value = cause instanceof Error ? cause.message : '逐题解析暂未补全';
+      });
     void draftService.clear(runtime, draftIdentity()).catch(() => undefined);
     objectiveSubmissionRecoveryCoordinator.start();
     if (review.value?.items.some((item) => item.grading.result === 'incorrect')) {
@@ -493,34 +516,6 @@ function handleVisibilityChange() {
 }
 function handlePageHide() {
   void persistDraft();
-}
-async function submitBundle(
-  runtime: Awaited<ReturnType<typeof initializeTutorRuntime>>,
-  targetBundle: CommittedQuestionSetBundle,
-  learningThreadId: string,
-  submissionScope: string,
-  assessmentRoleOverride?: AssessmentRole,
-  reviewQueueItemId?: string,
-  dailyPlanItemId?: string
-) {
-  const completedAt = Date.now();
-  return runtime.submitObjectiveSession.execute({
-    idempotencyKey: `practice:submit:${submissionScope}:${targetBundle.questionSet.id}:${learningThreadId}`,
-    learningThreadId: learningThreadId as Parameters<typeof runtime.submitObjectiveSession.execute>[0]['learningThreadId'],
-    questionSetId: targetBundle.questionSet.id,
-    questionIds: targetBundle.questions.map((item) => item.id),
-    assessmentRole: assessmentRoleOverride,
-    reviewQueueItemId: reviewQueueItemId as Parameters<typeof runtime.submitObjectiveSession.execute>[0]['reviewQueueItemId'],
-    dailyPlanItemId,
-    startedAt: startedAt as Parameters<typeof runtime.submitObjectiveSession.execute>[0]['startedAt'],
-    elapsedMs: completedAt - startedAt,
-    answers: targetBundle.questions.map((item) => ({
-      questionId: item.id,
-      optionId: answers.value[item.id],
-      elapsedMs: elapsedByQuestion.value[item.id],
-      answerChangeCount: answerChanges.value[item.id] || 0
-    }))
-  });
 }
 async function watchDiagnoses(sessionIds: readonly string[]) {
   diagnosing.value = true;
@@ -717,8 +712,11 @@ function sessionFeature(): Promise<PracticeSessionFeature> {
 </script>
 
 <style scoped>
-.session-tabs { display:flex; align-self:center; gap:3px; margin:6px auto 0; padding:3px; border-radius:999px; background:rgba(var(--color-ink-rgb),.055); }.session-tabs button { min-width:74px; height:30px; border:0; border-radius:999px; color:var(--text-secondary-color); background:transparent; font:inherit; font-size:var(--type-size-caption); }.session-tabs button.active { color:var(--text-color); background:rgba(255,255,255,.78); box-shadow:0 1px 5px rgba(var(--color-ink-rgb),.08); }.session-scroll { display:flex; flex-direction:column; gap:16px; padding-top:12px; padding-bottom:76px; touch-action:pan-y; }.lecture-scroll { padding-bottom:24px; }.material-group-meta { margin:0; color:var(--primary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.session-header-meta { min-width:0; display:flex; align-items:center; gap:6px; color:var(--text-secondary-color); font-size:var(--type-size-micro); }.session-header-meta>span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.session-timer { flex:0 0 auto; height:19px; display:inline-flex; align-items:center; gap:3px; padding:0 6px; border-radius:999px; color:var(--text-secondary-color); background:rgba(var(--color-ink-rgb),.045); font-size:var(--type-size-micro); font-variant-numeric:tabular-nums; }.session-timer.warning { color:var(--red-color); background:rgba(255,59,48,.09); }.session-timer svg { width:12px; height:12px; }.answer-card-button { width:36px; height:36px; display:grid; place-items:center; border:0; border-radius:50%; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); }.answer-card-button svg { width:17px; height:17px; }.options { display:flex; flex-direction:column; gap:7px; }.options button { display:flex; align-items:flex-start; gap:9px; padding:10px; border:0; border-radius:8px; background:rgba(var(--color-ink-rgb),.035); color:inherit; text-align:left; }.options button.selected { background:rgba(var(--color-brand-rgb),.11); }.options button.correct { background:rgba(52,199,89,.14); }.options button.wrong { background:rgba(255,59,48,.12); }.options b { width:22px; height:22px; display:grid; place-items:center; border-radius:50%; background:rgba(var(--color-ink-rgb),.08); font-size:var(--type-size-caption); flex:0 0 auto; }.diagnosis { padding:12px; border-radius:8px; background:rgba(255,149,0,.075); }.diagnosis-heading { min-height:30px; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }.diagnosis-heading strong { margin:0; }.ask-ai-button { min-height:30px; display:flex; align-items:center; gap:5px; padding:0 9px; border:0; border-radius:999px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.ask-ai-button svg { width:14px; height:14px; }.ask-ai-button:disabled { opacity:.5; }.diagnosis.pending { animation:diagnosis-pulse 1.2s ease-in-out infinite; }.diagnosis b { display:block; font-size:var(--type-size-secondary); }.diagnosis p { margin:4px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-secondary); line-height:1.5; }.diagnosis small { display:block; margin-top:8px; color:var(--green-color); font-size:var(--type-size-micro); }.diagnosis-actions { display:flex; gap:8px; margin-top:10px; }.diagnosis-actions button { min-height:32px; padding:0 10px; border:0; border-radius:8px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-caption); }.diagnosis-actions button:disabled { opacity:.5; }@keyframes diagnosis-pulse { 50% { opacity:.62; } }.session-error { margin:0; color:var(--red-color); font-size:var(--type-size-caption); }.session-actions { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:8px max(12px,env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)); background:rgba(250,251,253,.9); backdrop-filter:blur(14px); }.session-actions button { flex:1; height:40px; border:0; border-radius:10px; background:rgba(var(--color-ink-rgb),.08); color:var(--text-color); font:inherit; }.session-actions button:last-child { background:var(--primary-color); color:#fff; }.session-actions button:disabled { opacity:.45; }.session-empty { display:grid; place-items:center; min-height:50vh; color:var(--text-secondary-color); padding:20px; text-align:center; }.answer-card-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }.answer-card-grid button { height:36px; border:0; border-radius:9px; color:var(--text-secondary-color); background:rgba(var(--color-ink-rgb),.06); font:inherit; }.answer-card-grid button.answered { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.12); }.answer-card-grid button.active { outline:2px solid var(--primary-color); outline-offset:1px; }.answer-card-grid button.wrong { color:var(--red-color); background:rgba(255,59,48,.12); }.correction-form { display:flex; flex-direction:column; gap:12px; }.correction-form>span,.correction-form label>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.cause-options { display:flex; flex-wrap:wrap; gap:7px; }.cause-options button { min-height:32px; padding:0 10px; border:0; border-radius:999px; color:var(--text-secondary-color); background:var(--surface-control); font:inherit; font-size:var(--type-size-caption); }.cause-options button.active { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.12); }.correction-form label { display:flex; flex-direction:column; gap:6px; }.correction-form textarea { width:100%; resize:none; border:0; border-radius:8px; padding:10px; color:var(--text-color); background:var(--surface-control); font:inherit; line-height:1.5; }.correction-submit { min-height:40px; border:0; border-radius:10px; color:#fff; background:var(--primary-color); font:inherit; }.correction-submit:disabled { opacity:.45; }
+.session-tabs { display:flex; align-self:center; gap:3px; margin:6px auto 0; padding:3px; border-radius:999px; background:rgba(var(--color-ink-rgb),.055); }.session-tabs button { min-width:74px; height:30px; border:0; border-radius:999px; color:var(--text-secondary-color); background:transparent; font:inherit; font-size:var(--type-size-caption); }.session-tabs button.active { color:var(--text-color); background:rgba(255,255,255,.78); box-shadow:0 1px 5px rgba(var(--color-ink-rgb),.08); }.session-scroll { display:flex; flex-direction:column; gap:16px; padding-top:12px; padding-bottom:76px; touch-action:pan-y; }.lecture-scroll { padding-bottom:24px; }.material-group-meta { margin:0; color:var(--primary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.session-header-meta { min-width:0; display:flex; align-items:center; gap:6px; color:var(--text-secondary-color); font-size:var(--type-size-micro); }.session-header-meta>span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.session-timer { flex:0 0 auto; height:19px; display:inline-flex; align-items:center; gap:3px; padding:0 6px; border-radius:999px; color:var(--text-secondary-color); background:rgba(var(--color-ink-rgb),.045); font-size:var(--type-size-micro); font-variant-numeric:tabular-nums; }.session-timer.warning { color:var(--red-color); background:rgba(255,59,48,.09); }.session-timer svg { width:12px; height:12px; }.answer-card-button { width:36px; height:36px; display:grid; place-items:center; border:0; border-radius:50%; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); }.answer-card-button svg { width:17px; height:17px; }.options { display:flex; flex-direction:column; gap:7px; }.options button { display:flex; align-items:flex-start; gap:9px; padding:10px; border:0; border-radius:8px; background:rgba(var(--color-ink-rgb),.035); color:inherit; text-align:left; }.options button.selected { background:rgba(var(--color-brand-rgb),.11); }.options button.correct { background:rgba(52,199,89,.14); }.options button.wrong { background:rgba(255,59,48,.12); }.options b { width:22px; height:22px; display:grid; place-items:center; border-radius:50%; background:rgba(var(--color-ink-rgb),.08); font-size:var(--type-size-caption); flex:0 0 auto; }.diagnosis { padding:12px; border-radius:8px; background:rgba(255,149,0,.075); }.diagnosis-heading { min-height:30px; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }.diagnosis-heading strong { margin:0; }.ask-ai-button { min-height:30px; display:flex; align-items:center; gap:5px; padding:0 9px; border:0; border-radius:999px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }.ask-ai-button svg { width:14px; height:14px; }.ask-ai-button:disabled { opacity:.5; }.diagnosis.pending { animation:diagnosis-pulse 1.2s ease-in-out infinite; }.diagnosis b { display:block; font-size:var(--type-size-secondary); }.diagnosis p { margin:4px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-secondary); line-height:1.5; }.diagnosis small { display:block; margin-top:8px; color:var(--green-color); font-size:var(--type-size-micro); }.diagnosis-actions { display:flex; gap:8px; margin-top:10px; }.diagnosis-actions button { min-height:32px; padding:0 10px; border:0; border-radius:8px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font:inherit; font-size:var(--type-size-caption); }.diagnosis-actions button:disabled { opacity:.5; }@keyframes diagnosis-pulse { 50% { opacity:.62; } }.session-error { margin:0; color:var(--red-color); font-size:var(--type-size-caption); }.session-actions { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:8px max(12px,env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)); background:rgba(250,251,253,.9); backdrop-filter:blur(14px); }.session-actions button { flex:1; height:40px; border:0; border-radius:10px; background:rgba(var(--color-ink-rgb),.08); color:var(--text-color); font:inherit; }.session-actions button:last-child { background:var(--primary-color); color:#fff; }.session-actions button:disabled { opacity:.45; }.session-loading { min-height:50vh; align-items:stretch; }.session-loading-block { min-height:260px; border-radius:14px; background:linear-gradient(rgba(var(--color-ink-rgb),.09) 0 18px,transparent 18px 30px,rgba(var(--color-ink-rgb),.07) 30px 48px,transparent 48px 64px,rgba(var(--color-ink-rgb),.055) 64px 110px,transparent 110px 126px,rgba(var(--color-ink-rgb),.055) 126px 172px,transparent 172px 188px,rgba(var(--color-ink-rgb),.055) 188px 234px,transparent 234px); animation:session-loading-pulse 1.25s ease-in-out infinite; }.session-loading-label { margin:0; color:var(--text-secondary-color); font-size:var(--type-size-caption); text-align:center; }@keyframes session-loading-pulse { 50% { opacity:.48; } }.answer-card-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }.answer-card-grid button { height:36px; border:0; border-radius:9px; color:var(--text-secondary-color); background:rgba(var(--color-ink-rgb),.06); font:inherit; }.answer-card-grid button.answered { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.12); }.answer-card-grid button.active { outline:2px solid var(--primary-color); outline-offset:1px; }.answer-card-grid button.wrong { color:var(--red-color); background:rgba(255,59,48,.12); }.correction-form { display:flex; flex-direction:column; gap:12px; }.correction-form>span,.correction-form label>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.cause-options { display:flex; flex-wrap:wrap; gap:7px; }.cause-options button { min-height:32px; padding:0 10px; border:0; border-radius:999px; color:var(--text-secondary-color); background:var(--surface-control); font:inherit; font-size:var(--type-size-caption); }.cause-options button.active { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.12); }.correction-form label { display:flex; flex-direction:column; gap:6px; }.correction-form textarea { width:100%; resize:none; border:0; border-radius:8px; padding:10px; color:var(--text-color); background:var(--surface-control); font:inherit; line-height:1.5; }.correction-submit { min-height:40px; border:0; border-radius:10px; color:#fff; background:var(--primary-color); font:inherit; }.correction-submit:disabled { opacity:.45; }
 .question-source-meta { margin:0; display:flex; align-items:center; gap:7px; color:var(--text-secondary-color); font-size:var(--type-size-caption); line-height:1.4; }
 .question-source-meta span { flex:0 0 auto; padding:3px 7px; border-radius:999px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); }
 .question-material-region,.question-answer-region { display:flex; flex-direction:column; gap:14px; min-width:0; }.question-presentation-data_material_choice .question-material-region,.question-presentation-shared_material_choice .question-material-region,.question-presentation-long_reading_choice .question-material-region { padding-bottom:4px; border-bottom:1px solid rgba(var(--color-ink-rgb),.06); }
+.content-completion-status { align-self:center; display:flex; align-items:center; gap:6px; margin:7px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-micro); }
+.content-completion-status svg { width:13px; height:13px; color:var(--primary-color); animation:content-completion-spin .9s linear infinite; }
+@keyframes content-completion-spin { to { transform:rotate(360deg); } }
 </style>

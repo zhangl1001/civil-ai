@@ -19,7 +19,7 @@ try {
     server.ssrLoadModule('/src/composition-root/ai/PlatformHttpTransport.ts')
   ]);
   assert.equal(ai.AI_EXECUTION_BUDGET.modelTurnMs, 180_000);
-  assert.equal(ai.AI_EXECUTION_BUDGET.chatRunMs, 360_000);
+  assert.equal(ai.AI_EXECUTION_BUDGET.chatRunMs, 900_000);
   assert.equal(ai.generationExecutionBudgetMs(1), 128_000);
   assert.equal(ai.generationExecutionBudgetMs(5), 160_000);
   assert.equal(ai.generationExecutionBudgetMs(10), 200_000);
@@ -330,6 +330,70 @@ try {
   assert.equal(anthropicFallbackBodies.length, 3);
   assert.equal('tools' in anthropicFallbackBodies[2], false, 'unsupported structured tool mode must stay disabled');
 
+  const malformedToolBodies = [];
+  const malformedToolGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://anthropic-compatible.test/v1',
+    model: 'compatible-model'
+  }, {
+    async send(request) {
+      const body = JSON.parse(request.body);
+      malformedToolBodies.push(body);
+      if (malformedToolBodies.length === 1) {
+        return new Response(JSON.stringify({
+          id: 'request-empty-tool-input',
+          content: [{
+            type: 'tool_use',
+            name: 'submit_structured_result',
+            input: {}
+          }],
+          stop_reason: 'tool_use'
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'request-prompt-after-empty-tool-input',
+        content: [{ type: 'text', text: '{"ok":true}' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const malformedToolResult = await malformedToolGateway.complete({
+    system: 'system',
+    messages: [{ role: 'user', content: 'generate' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: 'malformed-tool-request-id'
+  });
+  assert.equal(malformedToolResult.text, '{"ok":true}');
+  assert.equal(malformedToolBodies.length, 2);
+  assert.equal(malformedToolBodies[0].tools[0].name, 'submit_structured_result');
+  assert.equal('tools' in malformedToolBodies[1], false);
+  await malformedToolGateway.complete({
+    system: 'system',
+    messages: [{ role: 'user', content: 'generate again' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: 'malformed-tool-request-id-2'
+  });
+  assert.equal(malformedToolBodies.length, 3);
+  assert.equal(
+    'tools' in malformedToolBodies[2],
+    false,
+    'malformed structured tool output must disable tool mode for the gateway lifetime'
+  );
+
   let deepSeekRequest;
   const deepSeekGateway = new ai.AnthropicGateway({
     apiKey: 'test-key',
@@ -381,6 +445,54 @@ try {
   });
   assert.equal('$ref' in deepSeekSchema.properties.lecture, false);
   assert.equal(deepSeekSchema.properties.lecture.properties.schemaVersion.const, 'content.v1');
+
+  let deepSeekAgentRequest;
+  const deepSeekAgentGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      deepSeekAgentRequest = request;
+      return new Response(JSON.stringify({
+        id: 'request-deepseek-agent-tool',
+        content: [{ type: 'text', text: '完成' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  await deepSeekAgentGateway.complete({
+    system: 'system',
+    messages: [
+      { role: ai.ModelMessageRole.User, content: '搜索真题' },
+      {
+        role: ai.ModelMessageRole.Assistant,
+        content: '',
+        toolCalls: [{ id: 'search-1', name: 'web.search', arguments: { query: '江苏省考真题' } }]
+      },
+      { role: ai.ModelMessageRole.Tool, toolCallId: 'search-1', content: '{"results":[]}' }
+    ],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    tools: [{
+      name: 'web.search',
+      description: '搜索公开资料。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['query'],
+        properties: { query: { $ref: '#/$defs/query' } },
+        $defs: { query: { type: 'string', minLength: 2 } }
+      }
+    }],
+    toolChoice: 'auto',
+    requestId: 'deepseek-agent-request-id'
+  });
+  const deepSeekAgentBody = JSON.parse(deepSeekAgentRequest.body);
+  assert.equal(deepSeekAgentBody.thinking.type, 'disabled');
+  assert.equal('$ref' in deepSeekAgentBody.tools[0].input_schema.properties.query, false);
+  assert.equal(deepSeekAgentBody.messages[1].content[0].type, 'tool_use');
+  assert.equal(deepSeekAgentBody.messages[2].content[0].type, 'tool_result');
 
   let openAIRequest;
   const openAIGateway = new ai.OpenAICompatibleGateway({

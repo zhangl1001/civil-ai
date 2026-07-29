@@ -13,7 +13,17 @@ const server = await createServer({
 });
 
 try {
-  const { buildChatContext, buildConversationSummary, sanitizeContextMessage } = await server.ssrLoadModule('/src/ai/ChatContextBuilder.ts');
+  const {
+    advanceConversationSummary,
+    buildChatContext,
+    buildConversationSummary,
+    estimateChatTokens,
+    sanitizeContextMessage
+  } = await server.ssrLoadModule('/src/ai/ChatContextBuilder.ts');
+  const { compactAgentLoopMessages } = await server.ssrLoadModule('/src/modules/agent/application/AgentLoopSupport.ts');
+  const agent = await server.ssrLoadModule('/src/modules/agent/public.ts');
+  const conversation = await server.ssrLoadModule('/src/modules/conversation/public.ts');
+  const { AgentConversationMemoryService } = await server.ssrLoadModule('/src/services/AgentConversationMemoryService.ts');
   const { paginateAIChatMessages } = await server.ssrLoadModule('/src/ai/ChatMessagePagination.ts');
   assert.equal(sanitizeContextMessage('回复失败：network'), '');
   assert.equal(sanitizeContextMessage('先回答\n\n[[ZH_AI_STOPPED]]'), '先回答');
@@ -40,9 +50,100 @@ try {
   assert.equal(clipped.length < long.length, true);
 
   const summary = buildConversationSummary(history);
-  assert.equal(summary.includes('用户近期关注'), true);
+  assert.equal(summary.includes('用户：今天怎么安排'), true);
+  assert.equal(summary.includes('助手：上一轮有效建议'), true);
   assert.equal(summary.includes('工具执行中'), false);
   assert.equal(summary.includes('回复失败'), false);
+  assert(estimateChatTokens('中文上下文') >= 3);
+
+  const rollingHistory = Array.from({ length: 20 }, (_, index) => (
+    message(`rolling-${index + 1}`, index % 2 ? 'assistant' : 'user', `第 ${index + 1} 条有效内容`)
+  ));
+  const firstRolling = advanceConversationSummary(rollingHistory, {}, 6);
+  assert.equal(firstRolling.changed, true);
+  assert.equal(firstRolling.cursorMessageId, 'rolling-14');
+  assert(firstRolling.summary.includes('第 14 条有效内容'));
+  const unchangedRolling = advanceConversationSummary(rollingHistory, {
+    summary: firstRolling.summary,
+    cursorMessageId: firstRolling.cursorMessageId,
+    version: firstRolling.version
+  }, 6);
+  assert.equal(unchangedRolling.changed, false);
+  const nextRolling = advanceConversationSummary([
+    ...rollingHistory,
+    message('rolling-21', 'user', '第 21 条有效内容'),
+    message('rolling-22', 'assistant', '第 22 条有效内容')
+  ], {
+    summary: firstRolling.summary,
+    cursorMessageId: firstRolling.cursorMessageId,
+    version: firstRolling.version
+  }, 6);
+  assert.equal(nextRolling.cursorMessageId, 'rolling-16');
+  assert.equal(nextRolling.summary.includes('第 15 条有效内容'), true);
+
+  const longLoop = Array.from({ length: 32 }, (_, index) => ({
+    role: index % 2 ? 'tool' : 'assistant',
+    content: `执行证据 ${index} ${'x'.repeat(1_500)}`,
+    ...(index % 2
+      ? { toolCallId: `call-${Math.floor(index / 2)}` }
+      : { toolCalls: [{ id: `call-${Math.floor(index / 2)}`, name: 'web.search', arguments: { query: `query-${index}` } }] })
+  }));
+  const compactedLoop = compactAgentLoopMessages(longLoop, 8_000);
+  assert(compactedLoop.length < longLoop.length);
+  assert(String(compactedLoop[0].content).includes('系统压缩的早期 Agent 执行上下文'));
+  assert.deepEqual(compactedLoop.slice(-10), longLoop.slice(-10));
+
+  const workspaceLogs = new Map();
+  const workspaceStorage = {
+    async append(logKey, line) {
+      workspaceLogs.set(logKey, `${workspaceLogs.get(logKey) || ''}${line}\n`);
+    },
+    async read(logKey) {
+      return workspaceLogs.get(logKey) || '';
+    },
+    async delete(logKey) {
+      workspaceLogs.delete(logKey);
+    }
+  };
+  let nextId = 0;
+  let now = 10_000;
+  const memories = new agent.FileAgentMemoryRepository(workspaceStorage);
+  const store = new conversation.ConversationStore(
+    new conversation.ConversationSessionLog(workspaceStorage),
+    new conversation.ConversationMessageLog(workspaceStorage),
+    { now: () => ++now, monotonicNowMs: () => now },
+    { next: (namespace) => `${namespace}:${++nextId}` },
+    memories
+  );
+  const session = await store.createSession('project:1', '长会话');
+  for (let index = 0; index < 22; index += 1) {
+    await store.addMessage({
+      sessionId: session.id,
+      role: index % 2 ? 'assistant' : 'user',
+      content: `集成消息 ${index + 1}`
+    });
+  }
+  const memoryService = new AgentConversationMemoryService();
+  const runtime = {
+    conversationStore: store,
+    agentMemoryRepository: memories,
+    candidateRepository: {
+      async findCurrentCycle() {
+        return { examCycle: { id: 'cycle:1' } };
+      }
+    }
+  };
+  await memoryService.refreshSessionSummary(runtime, session.id);
+  await memoryService.remember(runtime, session.id, {
+    memoryCode: 'user.response_preference',
+    statement: '回答尽量先给结论，再给步骤。',
+    scope: 'global'
+  });
+  const prepared = await memoryService.prepare(runtime, session.id, '继续', '继续');
+  assert(prepared.sessionSummary.includes('集成消息 8'));
+  assert(prepared.memoryContext.includes('回答尽量先给结论'));
+  assert(prepared.messages.length <= 15);
+  assert(prepared.contextCodes.includes('memory:user.response_preference'));
 
   const pagedHistory = Array.from({ length: 55 }, (_, index) => message(`page-${index + 1}`, 'user', `消息 ${index + 1}`));
   const latestPage = paginateAIChatMessages(pagedHistory, undefined, 24);

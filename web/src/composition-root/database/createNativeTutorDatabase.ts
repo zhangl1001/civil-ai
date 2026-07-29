@@ -35,6 +35,7 @@ import {
   PromptCompiler,
   PromptRegistry,
   questionImportPolicyV1,
+  questionSetEnrichmentPromptV1,
   structuredObjectivePromptV2
 } from '@/capabilities/ai-runtime/public';
 import { SqliteContentRepository } from '@/modules/content/adapters/SqliteContentRepository';
@@ -45,6 +46,7 @@ import { SqliteQuestionImportDraftRepository } from '@/modules/content/adapters/
 import { SqliteQuestionReferencePackRepository } from '@/modules/content/adapters/SqliteQuestionReferencePackRepository';
 import {
   ArchiveQuestionSource,
+  ApplyQuestionSetEnrichment,
   BuildTrueQuestionReferencePack,
   ConfirmQuestionImportDraft,
   createBundledContentMetadata,
@@ -112,6 +114,8 @@ import {
   SubmitObjectiveSession
 } from '@/modules/evidence/public';
 import { createTutorAgentHandlers } from '../agent/createTutorAgentHandlers';
+import { EnqueueContentEnrichment } from '../agent/EnqueueContentEnrichment';
+import { EnsureQuestionSetEnrichment } from '../agent/EnsureQuestionSetEnrichment';
 import { TaskMessageProjector } from '../agent/TaskMessageProjector';
 import { SqliteTutorCycleRepository } from '@/modules/tutoring/adapters/SqliteTutorCycleRepository';
 import { SqliteAbilityCalibrationRepository } from '@/modules/calibration/adapters/SqliteAbilityCalibrationRepository';
@@ -214,6 +218,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
   const promptRegistry = new PromptRegistry();
   promptRegistry.register(structuredObjectivePromptV2);
+  promptRegistry.register(questionSetEnrichmentPromptV1);
   promptRegistry.register(questionImportPolicyV1);
   promptRegistry.register(errorDiagnosisPromptV1);
   promptRegistry.register(errorDiagnosisBatchPromptV1);
@@ -255,6 +260,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     clock,
     new UuidV7IdGenerator(clock)
   );
+  const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
   const getGenerationStatus = new GetGenerationStatus(generationRepository, contentRepository);
   const createLearningThread = new CreateLearningThread(
     unitOfWork,
@@ -310,6 +316,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     contentRepository
   );
   const createAgentRun = new CreateAgentRun(unitOfWork, agentRunRepository, outboxRepository, clock, new UuidV7IdGenerator(clock));
+  const ensureQuestionSetEnrichment = new EnsureQuestionSetEnrichment(contentRepository, agentRunRepository, new EnqueueContentEnrichment(createAgentRun));
   const transitionAgentRun = new TransitionAgentRun(unitOfWork, agentRunRepository, outboxRepository, clock, new UuidV7IdGenerator(clock));
   const agentRunExecutions = new AgentRunExecutionRegistry();
   const taskMessageProjector = new TaskMessageProjector(messageCenter, agentRunRepository);
@@ -383,7 +390,14 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
       startReviewQueueItem,
       retryReviewQueueItem,
       failReviewQueueItem,
-      recordSubjectiveAssessment
+      recordSubjectiveAssessment,
+      scanQuestionImportDraft,
+      questionImportDraftRepository,
+      createAgentLoop,
+      createAgentRun,
+      contentRepository,
+      applyQuestionSetEnrichment,
+      ensureQuestionSetEnrichment
     }),
     agentRunExecutions,
     taskMessageProjector
@@ -520,6 +534,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     updateDailyPlanItemStatus,
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
+    applyQuestionSetEnrichment,
+    ensureQuestionSetEnrichment,
     getGenerationStatus,
     createLearningThread,
     transitionLearningThread,
@@ -560,6 +576,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
       await alignCandidateCurriculum.execute(bundledCurriculum);
       await ensureContentMetadata.execute(bundledContentMetadata);
       await ensurePromptBundle.execute(structuredObjectivePromptV2);
+      await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
       await ensurePromptBundle.execute(questionImportPolicyV1);
       await ensurePromptBundle.execute(errorDiagnosisPromptV1);
       await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);

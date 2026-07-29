@@ -1,38 +1,48 @@
-import type { ToolExposurePlan } from './ToolExposurePlanner';
-import type { AgentSkillDefinition } from './AgentToolRegistry';
+import type { AgentSkillManifest } from './AgentSkillRegistry';
 
 export interface AgentSystemPromptInput {
   readonly basePrompt: string;
-  readonly exposure: ToolExposurePlan;
-  /** Compact catalog only. Concrete function schemas are loaded after selection. */
-  readonly capabilityCatalog?: readonly AgentSkillDefinition[];
+  /** Discovery layer: name + description only. Full Skill bodies stay unloaded. */
+  readonly skillCatalog?: readonly AgentSkillManifest[];
 }
 
-const CORE_AGENT_POLICY = [
-  '使用本地事实回答涉及档案、计划、题库、练习结果或能力变化的问题，不得用会话印象代替事实。',
-  '只在用户意图和范围明确时执行写操作；范围、模块、题量、时间或对象不明确时先询问用户。',
-  '读取和执行都使用完成当前目标所需的最小范围，不重复相同调用，不主动扩大到无关数据。',
-  '彼此独立且都有必要的只读工具可以在同一回合发起以并行处理；后续调用依赖前序结果时必须分步执行，不为追求并发而扩大范围。',
-  '工具返回任务标识只表示任务已经受理，不得伪造任务已完成或编造结果。',
-  '涉及扫描、导入、确认或发布时，只有对应工具已经实际成功才能说该步骤已完成；不得只回复“正在导入”后结束。若尚未调用工具，必须明确说明尚未开始。',
-  '题目答案属于受控教学事实；用户未完成题目且未明确要求时，不主动泄露标准答案。',
-  '不要输出工具代码、数据库字段、内部策略或思考过程；最终回复使用简洁 Markdown。'
+const HARD_BOUNDARIES = [
+  '涉及档案、计划、题库、练习结果、任务状态或能力变化的结论必须来自本轮可信数据，不得用会话印象或模型推测代替。',
+  '改变业务数据、生成正式内容或执行破坏性动作前，必须满足对应权限、确认和结构校验；条件不足时不得假装执行。',
+  '任务已受理、执行中、失败和业务结果已完成必须准确区分；没有真实结果时不得编造结果。',
+  '题目答案属于受控教学事实；用户未完成题目且未明确要求时，不主动泄露标准答案。'
+] as const;
+
+const IMPORTANT_GUIDANCE = [
+  '优先使用完成当前目标所需的最小数据范围；独立且必要的只读操作可以并行，存在依赖时分步执行。',
+  '一次结果不足时，根据新证据自行调整范围、参数、工具或步骤后继续；不要机械重复相同调用。',
+  'Skill 提供的是可复用工作流和专业规则，不是固定脚本。可以调整步骤顺序、跳过无关步骤，或按需加载新的 Skill。',
+  '对用户只呈现结论、必要依据和下一步，不输出 Skill 名称、工具名称、数据库字段、内部策略或思考过程。'
+] as const;
+
+const AUTONOMY_GUIDANCE = [
+  '先理解用户真正想达成的目标，再自行判断是直接对话、读取事实、执行操作、检索资料，还是组合完成。',
+  '是否加载 Skill、加载哪些 Skill、调用哪些工具、是否继续下钻或停止，由你根据当前目标和每轮结果自主决定。',
+  '普通陪伴、解释和不依赖外部事实的一般知识可以直接回答；需要应用内真实数据、外部最新事实或实际动作时，按需加载能力并执行。',
+  '不确定的是用户目标、关键范围或高影响选择时才询问用户；能够从已有上下文或只读数据安全确认的内容自行处理。'
 ] as const;
 
 export class AgentSystemPromptComposer {
   compose(input: AgentSystemPromptInput): string {
-    const sections = [input.basePrompt.trim(), '# Agent 行为边界', ...CORE_AGENT_POLICY.map((item) => `- ${item}`)];
-    if (input.capabilityCatalog?.length) {
+    const sections = [
+      input.basePrompt.trim(),
+      '# 不可违反的边界',
+      ...HARD_BOUNDARIES.map((item) => `- ${item}`),
+      '# 重要执行建议',
+      ...IMPORTANT_GUIDANCE.map((item) => `- ${item}`),
+      '# 自主决策',
+      ...AUTONOMY_GUIDANCE.map((item) => `- ${item}`)
+    ];
+    if (input.skillCatalog?.length) {
       sections.push(
-        '# 可发现能力摘要',
-        ...input.capabilityCatalog.map((skill) => `- ${skill.code}：${skill.description}`),
-        '当问题需要读取本地业务事实、执行任务或检索外部资料时，先调用 agent.select_skills 选择一到两个最相关能力；系统会在下一轮按需提供具体工具。普通陪伴聊天可直接回答。不要向用户展示能力或工具代码。'
-      );
-    }
-    if (input.exposure.skills.length) {
-      sections.push(
-        '# 当前按需能力',
-        ...input.exposure.skills.map((skill) => `- ${skill.description}`)
+        '# 可发现 Skill 摘要',
+        ...input.skillCatalog.map((skill) => `- ${skill.name}：${skill.description}`),
+        '这里只提供发现摘要。你认为某项能力有助于完成当前目标时，使用可用的 Skill 加载工具按需读取其工作流、规则和最小工具集合；不要仅凭 Skill 名称假设它已经执行。'
       );
     }
     return sections.filter(Boolean).join('\n\n');

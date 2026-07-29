@@ -31,6 +31,7 @@ export {
 } from './prompt/GenerationBoundaryPolicy';
 export { PromptRegistry } from './prompt/PromptRegistry';
 export { structuredObjectivePromptV2 } from './fixtures/structuredObjectivePromptV2';
+export { questionSetEnrichmentPromptV1 } from './fixtures/questionSetEnrichmentPromptV1';
 export { questionImportPolicyV1 } from './fixtures/questionImportPolicyV1';
 export { errorDiagnosisPromptV1 } from './fixtures/errorDiagnosisPromptV1';
 export { errorDiagnosisBatchPromptV1 } from './fixtures/errorDiagnosisBatchPromptV1';

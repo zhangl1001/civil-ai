@@ -22,7 +22,7 @@ export function anthropicMessagesEndpoint(baseUrl: string): string {
   return `${normalized}/v1/messages`;
 }
 
-export function requiresDisabledThinkingForForcedTools(baseUrl: string): boolean {
+export function requiresDisabledThinkingForToolUse(baseUrl: string): boolean {
   return isDeepSeekAnthropicBaseUrl(baseUrl);
 }
 

@@ -31,6 +31,7 @@ tutor_cycle_conclusions_schema_file="$project_root/web/src/capabilities/database
 ability_calibration_snapshots_schema_file="$project_root/web/src/capabilities/database/migrations/026_ability_calibration_snapshots.sql"
 web_research_import_method_schema_file="$project_root/web/src/capabilities/database/migrations/027_web_research_import_method.sql"
 reference_pack_comparison_questions_schema_file="$project_root/web/src/capabilities/database/migrations/028_reference_pack_comparison_questions.sql"
+question_set_library_pagination_schema_file="$project_root/web/src/capabilities/database/migrations/029_question_set_library_pagination.sql"
 database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.XXXXXX.sqlite")"
 
 cleanup() {
@@ -360,6 +361,7 @@ INSERT INTO question_reference_packs(
 
 .read $web_research_import_method_schema_file
 .read $reference_pack_comparison_questions_schema_file
+.read $question_set_library_pagination_schema_file
 
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
@@ -398,6 +400,9 @@ expect_count "SELECT COUNT(*) FROM question_import_drafts WHERE id = 'import-dra
 expect_count "SELECT COUNT(*) FROM question_import_candidates WHERE id = 'import-candidate-1' AND status = 'published';" "1" "published import candidate retained after enum migration"
 expect_count "SELECT COUNT(*) FROM question_import_publish_receipts WHERE id = 'publish-receipt-1';" "1" "publish receipt retained after enum migration"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('question_reference_packs') WHERE name = 'comparison_questions_json';" "1" "reference pack comparison column"
+expect_count "SELECT COUNT(*) FROM pragma_table_info('question_sets') WHERE name = 'entry_mode';" "1" "question set entry mode column"
+expect_count "SELECT COUNT(*) FROM question_sets WHERE id = 'question-set-1' AND entry_mode = 'tutor';" "1" "question set entry mode backfill"
+expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'question_sets_library_page_idx';" "1" "question set library pagination index"
 
 expect_constraint_failure() {
   local statement="$1"

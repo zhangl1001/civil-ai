@@ -40,6 +40,19 @@ export {
   resolveQuestionPresentation,
   type QuestionPresentationDefinition
 } from './domain/QuestionPresentation';
+export {
+  GeneratedContentBlockCode,
+  GeneratedContentValidationTier,
+  generatedContentBlockPolicy,
+  type GeneratedContentBlockCode as GeneratedContentBlockCodeValue,
+  type GeneratedContentBlockPolicy,
+  type GeneratedContentValidationTier as GeneratedContentValidationTierValue
+} from './domain/GeneratedContentBlockPolicy';
+export { resolveQuestionSetEntryMode } from './domain/QuestionSetEntryModePolicy';
+export {
+  ContentEnrichmentKind,
+  type ContentEnrichmentKind as ContentEnrichmentKindCode
+} from './domain/ContentEnrichmentCodes';
 export type {
   CommittedQuestionSetBundle,
   ContentDocumentRecord,
@@ -51,10 +64,12 @@ export type {
   LectureRecord,
   QuestionCapabilityLink,
   QuestionRecord,
+  QuestionSetLibraryCursor,
   QuestionSetLibraryEntry,
   QuestionSetLibraryQuery,
   QuestionSetSourceSummary,
   QuestionSetRecord,
+  QuestionSetEnrichmentPatch,
   QuestionTemplateVersion
 } from './contracts/ContentRepository';
 export type { GenerationAggregate, GenerationRepository } from './contracts/GenerationRepository';
@@ -95,6 +110,20 @@ export type {
   SvgDiagramBlock
 } from './contracts/ContentDocument';
 export { contentBlockText, contentDocumentText } from './domain/ContentDocumentText';
+export {
+  findQuestionSetEnrichmentNeeds,
+  hasCompleteExplanation,
+  hasQuestionSetEnrichmentNeeds,
+  hasRenderableContent,
+  parseQuestionSetEnrichment,
+  QuestionSetEnrichmentParseError,
+  type ParsedQuestionSetEnrichment,
+  type QuestionSetEnrichmentNeeds
+} from './application/QuestionSetEnrichment';
+export {
+  ApplyQuestionSetEnrichment,
+  type ApplyQuestionSetEnrichmentResult
+} from './application/ApplyQuestionSetEnrichment';
 export { questionSetPracticeStatusLabel } from './domain/QuestionSetPracticePresentation';
 export type {
   QuestionContent,

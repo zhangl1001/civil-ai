@@ -1,4 +1,5 @@
 import { Marked, Renderer, type Tokens } from 'marked';
+import markedKatex from 'marked-katex-extension';
 import { HtmlPolicy } from '../security/HtmlPolicy';
 import { LinkKind, resolveLink } from '../security/UrlPolicy';
 
@@ -14,7 +15,7 @@ export interface MarkdownRenderWarning {
   readonly message: string;
 }
 
-export const MARKDOWN_RENDERER_VERSION = 'markdown-v2';
+export const MARKDOWN_RENDERER_VERSION = 'markdown-v3-katex';
 
 export class MarkdownEngine {
   private readonly marked: Marked;
@@ -36,13 +37,16 @@ export class MarkdownEngine {
         : '';
       return `<a href="${escapeAttribute(resolved.href)}"${title}${external}>${label}</a>`;
     };
+    renderer.html = (token: Tokens.HTML): string => escapeHtml(token.text);
     this.marked = new Marked({
       async: false,
       breaks: true,
       gfm: true,
       renderer
     });
+    this.marked.use(mathExtension());
     this.fallbackMarked = new Marked({ async: false, breaks: true, gfm: true });
+    this.fallbackMarked.use(mathExtension());
   }
 
   render(source: string): RenderedMarkdown {
@@ -78,8 +82,10 @@ export class MarkdownEngine {
  * fenced code blocks remain untouched.
  */
 export function normalizeMarkdownSource(source: string): string {
-  const document = unwrapMarkdownDocumentFence(
-    decodeMarkdownTransportEscapes(unwrapSerializedMarkdown(source).replace(/\r\n?/g, '\n'))
+  const document = normalizeMathSyntax(
+    unwrapMarkdownDocumentFence(
+      decodeMarkdownTransportEscapes(unwrapSerializedMarkdown(source).replace(/\r\n?/g, '\n'))
+    )
   );
   const lines = document.split('\n');
   const normalized: string[] = [];
@@ -113,6 +119,51 @@ export function normalizeMarkdownSource(source: string): string {
     }
   }
   return normalizeTolerantPipeTables(normalized).join('\n');
+}
+
+function mathExtension() {
+  return markedKatex({
+    nonStandard: true,
+    throwOnError: false,
+    strict: 'ignore',
+    trust: false
+  });
+}
+
+function normalizeMathSyntax(source: string): string {
+  const lines = source.split('\n');
+  const output: string[] = [];
+  const prose: string[] = [];
+  let inFence = false;
+  const flushProse = () => {
+    if (!prose.length) return;
+    output.push(...normalizeMathSegment(prose.join('\n')).split('\n'));
+    prose.length = 0;
+  };
+  lines.forEach((line) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      flushProse();
+      output.push(line);
+      inFence = !inFence;
+      return;
+    }
+    if (inFence) output.push(line);
+    else prose.push(line);
+  });
+  flushProse();
+  return output.join('\n');
+}
+
+function normalizeMathSegment(source: string): string {
+  const normalizedDelimiters = source
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, formula: string) => `$$\n${formula.trim()}\n$$`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, formula: string) => `$${formula.trim()}$`);
+  return normalizedDelimiters.replace(
+    /(\${1,2})([\s\S]*?)\1/g,
+    (_, delimiter: string, formula: string) => (
+      `${delimiter}${formula.replace(/(^|[^\\])%/g, '$1\\%')}${delimiter}`
+    )
+  );
 }
 
 function normalizeTolerantPipeTables(lines: string[]): string[] {

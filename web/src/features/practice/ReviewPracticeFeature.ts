@@ -42,6 +42,11 @@ export class ReviewPracticeFeature {
       });
       const result = await this.runtime.runStructuredObjectiveGenerationWorkflow.execute(aggregate.workflow.id, gateway, signal);
       if (!result.questionSetId) throw new Error('复习题组未能发布。');
+      await this.runtime.ensureQuestionSetEnrichment.execute({
+        questionSetId: result.questionSetId
+      }).catch((error: unknown) => {
+        console.warn('[ReviewPracticeFeature] failed to schedule question-set enrichment', error);
+      });
       return { review, thread: thread.thread, questionSetId: result.questionSetId };
     } catch (cause) {
       await this.runtime.failReviewQueueItem.execute({ reviewQueueItemId: review.id, failureCode: failureCode(cause) });

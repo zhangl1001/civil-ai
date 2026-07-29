@@ -1,6 +1,6 @@
 {
   "name": "zhangl-agent",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "index.js",
   "scripts": {
     "web:build": "cd web && npm run build",
@@ -19,8 +19,10 @@
     "check:content-metadata": "node scripts/verify-content-metadata.mjs",
     "check:prompt-compiler": "node scripts/verify-prompt-compiler.mjs",
     "check:provider-gateway": "node scripts/verify-provider-gateway.mjs",
+    "check:web-research": "node scripts/verify-web-research.mjs",
     "check:generation-workflow": "node scripts/verify-generation-workflow.mjs",
     "check:generation-foundation": "node scripts/verify-generation-foundation.mjs",
+    "check:content-enrichment": "node scripts/verify-question-set-enrichment.mjs",
     "check:learning-evidence": "node scripts/verify-learning-evidence.mjs",
     "check:learning-reliability": "node scripts/verify-learning-reliability.mjs",
     "check:agent-runtime": "node scripts/verify-agent-runtime.mjs",

@@ -1,4 +1,3 @@
-import { buildChatContext } from '@/ai/ChatContextBuilder';
 import { buildCompanionChatPrompt } from '@/ai/prompts';
 import {
   AI_EXECUTION_BUDGET,
@@ -24,6 +23,7 @@ import type {
 import {
   AgentRunAction,
   AgentRunType,
+  agentExternalToolCatalog,
   RegisteredAgentToolExecutor,
   TaskCenterStep,
   TaskTargetType,
@@ -32,22 +32,29 @@ import {
   type AgentWorkflowInvocation
 } from '@/modules/agent/public';
 import { aiBusinessTools, type AIBusinessToolName } from './AIBusinessTools';
-import { QuestionImportMethod, QuestionOriginType } from '@/modules/content/public';
 import { aiChatRepository } from './AIChatRepository';
 import { aiConfigService } from './AIConfigService';
 import { AIPracticeLibraryService } from './AIPracticeLibraryService';
 import { aiStudentContextService } from './AIStudentContextService';
 import { agentToolActivityService, type AgentToolActivityStatus } from './AgentToolActivityService';
 import { agentFileReader } from './AgentFileReader';
+import { hasVisibleAssistantContent, visibleAssistantText } from './AgentResponsePresentation';
 import { chatTaskPresentation, publishChatTaskMessage } from './ChatAgentTaskPresentation';
 import {
   chatAgentBusinessTools,
-  chatAgentWebResearchTools,
+  chatAgentMemoryTools,
   chatAgentSystemPromptComposer,
   planChatAgentCapabilities,
 } from './ChatAgentCapabilities';
 import { webResearchService } from './WebResearchService';
 import { registerChatAgentSkillSelector } from './ChatAgentSkillSelector';
+import { QuestionImportAgentService } from './QuestionImportAgentService';
+import { agentWorkspaceQueryService } from './AgentWorkspaceQueryService';
+import { readDeviceClock } from './AgentSystemTools';
+import {
+  agentConversationMemoryService,
+  type RememberAgentPreferenceInput
+} from './AgentConversationMemoryService';
 export interface ChatAgentResult {
   readonly handled: boolean;
 }
@@ -302,26 +309,27 @@ export class ChatAgentService {
     const currentUserContent: ModelMessage['content'] = attachments?.length
       ? [{ type: 'text', text: currentPrompt }, ...attachments]
       : currentPrompt;
-    const messages: ModelMessage[] = [
-      ...buildChatContext(history, { currentPrompt: history.at(-1)?.content || '' }).map((item) => ({
-        role: item.role === 'assistant' ? ModelMessageRole.Assistant : ModelMessageRole.User,
-        content: item.content
-      })),
-      { role: ModelMessageRole.User, content: currentUserContent }
-    ];
+    const preparedContext = await agentConversationMemoryService.prepare(
+      runtime,
+      session.id,
+      currentPrompt,
+      currentUserContent
+    );
+    const messages = preparedContext.messages;
     const exposure = planChatAgentCapabilities({
-      preselectedSkillCodes: options.invocation?.skillCodes,
-      pendingToolCode: checkpoint?.pendingConfirmation?.name
+      preselectedSkillNames: options.invocation?.skillNames,
+      pendingToolName: checkpoint?.pendingConfirmation?.name
     });
     const studentContext = await aiStudentContextService.buildSystemContext();
+    const latestSession = await runtime.conversationStore.getSession(session.id);
     const system = chatAgentSystemPromptComposer.compose({
       basePrompt: buildCompanionChatPrompt(
         options.thinkingEnabled,
         studentContext,
-        session.summary || ''
+        preparedContext.sessionSummary || latestSession?.summary || '',
+        preparedContext.memoryContext
       ),
-      exposure,
-      capabilityCatalog: exposure.capabilityCatalog
+      skillCatalog: exposure.skillCatalog
     });
     const constrainedSystem = [system, options.invocation?.systemConstraint].filter(Boolean).join('\n\n');
     const config = await aiConfigService.load();
@@ -337,15 +345,13 @@ export class ChatAgentService {
         messages,
         tools: exposure.tools,
         availableTools: exposure.availableTools,
+        skills: exposure.activations,
         executionContext: {
           agentRunId: runId,
           sessionId: session.id
         },
         checkpoint,
         confirmationDecision,
-        maxTurns: 6,
-        maxToolCalls: 8,
-        maxToolCallsPerTurn: 4,
         maxParallelReadToolCalls: config.maxConcurrentTasks,
         consumeGuidance: () => this.consumeGuidance(session.id, runId),
         preferStream: config.streamingEnabled !== false,
@@ -358,6 +364,7 @@ export class ChatAgentService {
           role: 'assistant',
           content: confirmationText(call)
         });
+        await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
         await runtime.transitionAgentRun.execute({
           idempotencyKey: `chat-agent:${runId}:waiting:${result.checkpoint.turnCount}`,
           agentRunId: runId,
@@ -366,7 +373,9 @@ export class ChatAgentService {
         });
         return;
       }
-      if (result.status === 'budget_exhausted') throw new Error('Agent 执行达到安全上限，请缩小任务范围后重试。');
+      if (result.status === 'budget_exhausted') {
+        throw new Error('本次 Agent 已达到安全执行边界，当前进度已保留。你可以继续当前任务，或缩小范围后重试。');
+      }
       const latest = await runtime.agentRunRepository.findById(runId);
       if (latest?.run.status === 'cancelled') {
         return;
@@ -378,6 +387,7 @@ export class ChatAgentService {
         : visibleStreamedText || finalText;
       controller.signal.throwIfAborted();
       await persistAssistant(finalContent);
+      await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
       const current = latest ?? await runtime.agentRunRepository.findById(runId);
       const completed = await runtime.transitionAgentRun.execute({
         idempotencyKey: `chat-agent:${runId}:completed`,
@@ -404,6 +414,9 @@ export class ChatAgentService {
               : chatExecutionFailureText(error)
           ].filter(Boolean).join('\n\n');
       if (interruptedContent) await persistAssistant(interruptedContent);
+      if (interruptedContent) {
+        await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
+      }
       const current = await runtime.agentRunRepository.findById(runId);
       if (current?.run.status === 'running') {
         const failed = await runtime.transitionAgentRun.execute({
@@ -436,9 +449,14 @@ export class ChatAgentService {
 function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): RegisteredAgentToolExecutor {
   const executor = new RegisteredAgentToolExecutor();
   const practiceLibrary = new AIPracticeLibraryService();
+  const questionImport = new QuestionImportAgentService({
+    candidates: runtime.candidateRepository,
+    curriculums: runtime.curriculumRepository,
+    scanDraft: runtime.scanQuestionImportDraft
+  });
   registerChatAgentSkillSelector(executor);
   chatAgentBusinessTools.forEach((definition) => {
-    executor.register(definition.code, async (call) => {
+    executor.register(definition.name, async (call) => {
       const result = await aiBusinessTools.execute({
         name: call.name as AIBusinessToolName,
         arguments: call.arguments
@@ -449,9 +467,9 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
       };
     });
   });
-  chatAgentWebResearchTools.forEach((definition) => {
-    if (definition.code === 'web.search') {
-      executor.register(definition.code, async (call, context) => {
+  agentExternalToolCatalog.forEach((definition) => {
+    if (definition.name === 'web.search') {
+      executor.register(definition.name, async (call, context) => {
         const result = await webResearchService.searchForAgentRun({
           agentRunId: context.agentRunId,
           query: String(call.arguments.query || ''),
@@ -471,15 +489,18 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
               publishedAt: hit.publishedAt ?? null
             }))
           }),
-          resultRef: result.hits[0]?.url
+          resultRef: result.hits[0]?.url,
+          madeProgress: result.hits.length > 0
         };
       });
       return;
     }
-    executor.register(definition.code, async (call, context) => {
+    executor.register(definition.name, async (call, context) => {
       const page = await webResearchService.readPageForAgentRun({
         agentRunId: context.agentRunId,
         url: String(call.arguments.url || ''),
+        focus: optionalString(call.arguments.focus),
+        offset: optionalNumber(call.arguments.offset),
         signal: context.signal
       });
       return {
@@ -488,6 +509,37 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
       };
     });
   });
+  chatAgentMemoryTools.forEach((definition) => {
+    if (definition.name === 'memory.remember') {
+      executor.register(definition.name, async (call) => {
+        const record = await agentConversationMemoryService.remember(runtime, sessionId, {
+          memoryCode: String(call.arguments.memoryCode || '') as RememberAgentPreferenceInput['memoryCode'],
+          statement: String(call.arguments.statement || ''),
+          scope: String(call.arguments.scope || '') as RememberAgentPreferenceInput['scope'],
+          confidence: optionalNumber(call.arguments.confidence)
+        });
+        return {
+          content: JSON.stringify({ remembered: true, memoryCode: record.memoryCode }),
+          resultRef: record.id,
+          madeProgress: true
+        };
+      });
+      return;
+    }
+    executor.register(definition.name, async (call) => {
+      const forgotten = await agentConversationMemoryService.forget(
+        runtime,
+        sessionId,
+        String(call.arguments.memoryCode || '') as RememberAgentPreferenceInput['memoryCode'],
+        String(call.arguments.scope || '') as RememberAgentPreferenceInput['scope']
+      );
+      return {
+        content: JSON.stringify({ forgotten }),
+        madeProgress: true
+      };
+    });
+  });
+  executor.register('system.read_clock', async () => readDeviceClock());
   executor.register('tutor.read_daily_context', async () => {
     const context = await runtime.buildTutorDailyContext.execute();
     if (!context) throw new Error('请先建立备考档案。');
@@ -515,6 +567,30 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
         }))
       }),
       resultRef: home?.examCycleId
+    };
+  });
+  executor.register('workspace.discover', async (call) => ({
+    content: JSON.stringify(await agentWorkspaceQueryService.discover(runtime, {
+      resourceType: String(call.arguments.resourceType || '') as Parameters<typeof agentWorkspaceQueryService.discover>[1]['resourceType'],
+      scope: String(call.arguments.scope || '') as Parameters<typeof agentWorkspaceQueryService.discover>[1]['scope'],
+      keyword: optionalString(call.arguments.keyword),
+      limit: optionalNumber(call.arguments.limit)
+    }))
+  }));
+  executor.register('task.read_status', async (call) => {
+    const result = await agentWorkspaceQueryService.readTaskStatus(runtime, {
+      taskId: optionalString(call.arguments.taskId),
+      scope: optionalString(call.arguments.scope) as Parameters<typeof agentWorkspaceQueryService.readTaskStatus>[1]['scope'],
+      intent: optionalString(call.arguments.intent),
+      limit: optionalNumber(call.arguments.limit)
+    });
+    const task = result.task && typeof result.task === 'object' && !Array.isArray(result.task)
+      ? result.task as Record<string, unknown>
+      : undefined;
+    return {
+      content: JSON.stringify(result),
+      resultRef: typeof task?.taskId === 'string' ? task.taskId : undefined,
+      madeProgress: true
     };
   });
   executor.register('practice.read_library', async (call) => {
@@ -597,69 +673,11 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
   executor.register('file.read_text', (call) => agentFileReader.read(call.arguments));
   executor.register('question_bank.scan', async (call, context) => {
     context.signal?.throwIfAborted();
-    const cycle = await runtime.candidateRepository.findCurrentCycle();
-    if (!cycle) throw new Error('请先建立备考档案，再导入题目。');
-    const curriculum = await runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId);
-    if (!curriculum) throw new Error('当前备考大纲暂时无法读取。');
-    const capabilityText = String(call.arguments.capability || '').trim();
-    const exact = curriculum.capabilityNodes.filter((node) => (
-      node.status === 'active'
-      && (node.code.toLocaleLowerCase() === capabilityText.toLocaleLowerCase() || node.name === capabilityText)
-    ));
-    if (exact.length !== 1) {
-      const possible = curriculum.capabilityNodes
-        .filter((node) => node.status === 'active' && (
-          node.code.toLocaleLowerCase().includes(capabilityText.toLocaleLowerCase())
-          || node.name.includes(capabilityText)
-        ))
-        .slice(0, 5)
-        .map((node) => ({ code: node.code, name: node.name, module: node.module }));
-      throw new Error(`无法唯一确定能力节点，请让用户确认。候选：${JSON.stringify(possible)}`);
-    }
-    const sourceMetadata = asJsonRecord(call.arguments.sourceMetadata);
-    const questions = asJsonRecordArray(call.arguments.questions, 'questions');
-    const materialGroups = Array.isArray(call.arguments.materialGroups)
-      ? asJsonRecordArray(call.arguments.materialGroups, 'materialGroups').map((group) => ({
-          id: String(group.id || ''),
-          markdown: String(group.markdown || '')
-        }))
-      : [];
-    const view = await runtime.scanQuestionImportDraft.execute({
-      idempotencyKey: `chat-agent:${context.agentRunId}:${call.id}:question-scan`,
-      examCycleId: cycle.examCycle.id,
-      capabilityNodeId: exact[0]!.id,
-      capabilityCode: exact[0]!.code,
-      module: String(call.arguments.module || exact[0]!.module),
+    const view = await questionImport.scan(call.arguments, {
+      agentRunId: context.agentRunId,
+      callId: call.id,
       ownerSessionId: sessionId,
-      sourceType: String(call.arguments.sourceType || '') as QuestionOriginType,
-      importMethod: String(call.arguments.importMethod || '') as QuestionImportMethod,
-      sourceMetadata: {
-        provider: optionalString(sourceMetadata.provider),
-        examType: optionalString(sourceMetadata.examType),
-        examYear: optionalNumber(sourceMetadata.examYear),
-        province: optionalString(sourceMetadata.province),
-        examBatch: optionalString(sourceMetadata.examBatch),
-        paperName: optionalString(sourceMetadata.paperName),
-        sectionName: optionalString(sourceMetadata.sectionName),
-        sourceVersion: optionalString(sourceMetadata.sourceVersion),
-        provenance: {
-          importedBy: 'chat_agent',
-          chatSessionId: sessionId,
-          agentRunId: context.agentRunId,
-          acquisitionChannel: String(call.arguments.importMethod || '') === QuestionImportMethod.WebResearch
-            ? 'agent_web_search'
-            : 'user_import',
-          sourceUrl: optionalString(sourceMetadata.sourceUrl) ?? null,
-          sourceDomain: optionalString(sourceMetadata.sourceDomain) ?? null,
-          searchQuery: optionalString(sourceMetadata.searchQuery) ?? null,
-          fetchedAt: optionalNumber(sourceMetadata.fetchedAt) ?? null
-        }
-      },
-      materialGroups,
-      candidates: questions.map((question) => ({
-        raw: question,
-        difficulty: optionalNumber(question.difficulty)
-      }))
+      importedBy: 'chat_agent'
     });
     return { content: JSON.stringify(view), resultRef: view.draftId };
   });
@@ -757,7 +775,6 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
   });
   return executor;
 }
-
 function eventStatus(event: AgentRuntimeEvent): {
   readonly message: string;
   readonly toolName?: string;
@@ -782,7 +799,6 @@ function eventStatus(event: AgentRuntimeEvent): {
   }
   return undefined;
 }
-
 function parseCheckpoint(value: unknown): AgentLoopCheckpoint | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const checkpoint = value as Partial<AgentLoopCheckpoint>;
@@ -790,12 +806,10 @@ function parseCheckpoint(value: unknown): AgentLoopCheckpoint | undefined {
     ? checkpoint as AgentLoopCheckpoint
     : undefined;
 }
-
 async function findWaitingRun(runtime: TutorDatabaseRuntime, sessionId: string) {
   return (await runtime.getAgentRunViews.execute({ limit: 50 }))
     .find((run) => run.chatSessionId === sessionId && run.status === 'waiting_user');
 }
-
 function confirmationText(call?: ModelToolCall): string {
   if (!call) return '这项操作需要你确认。回复“确认”继续，回复“取消”终止。';
   if (call.name === 'candidate.change_target') {
@@ -809,7 +823,6 @@ function confirmationText(call?: ModelToolCall): string {
   }
   return `准备执行“${toolLabel(call.name)}”。回复“确认”继续，回复“取消”终止。`;
 }
-
 function shouldUseAgent(text: string): boolean {
   return Boolean(text.trim());
 }
@@ -824,9 +837,12 @@ function isCancel(text: string): boolean {
 
 function toolLabel(code: string): string {
   return ({
+    'system.read_clock': '读取设备时间',
     student_read_profile: '读取学习档案',
     'student.read_profile': '读取学习档案',
     'tutor.read_daily_context': '读取今日教学状态',
+    'workspace.discover': '检索本地学习资源',
+    'task.read_status': '核验任务状态',
     practice_read_library: '读取题库状态',
     'practice.read_library': '读取题库状态',
     'practice.read_question_set': '读取题组内容',
@@ -841,12 +857,15 @@ function toolLabel(code: string): string {
     'candidate.change_target': '修改目标分',
     'web.search': '搜索公开资料',
     'web.read_page': '读取网页证据',
+    'memory.remember': '记住个人偏好',
+    'memory.forget': '遗忘个人偏好',
     generate_practice: '生成专项练习',
     generate_mock: '生成模拟考试',
     generate_essay: '生成申论练习',
     redo_wrongbook: '生成错题重练',
     generate_digest: '生成每日积累',
     generate_monthly_digest: '生成月度复盘',
+    research_true_questions: '创建联网真题研究任务',
     grade_essay: '申论批改',
     review_interview: '面试点评'
   } as Record<string, string>)[code] || code;
@@ -899,17 +918,12 @@ function asJsonRecord(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
-function asJsonRecordArray(value: unknown, field: string): readonly JsonObject[] {
-  if (!Array.isArray(value)) throw new TypeError(`${field} 必须是数组。`);
-  return value.map(asJsonRecord);
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function chatExecutionFailureText(error: unknown): string {
@@ -924,22 +938,6 @@ function chatExecutionFailureText(error: unknown): string {
     return '本地数据正在忙，请稍后重试。刚才的工具执行状态已保留。';
   }
   return '后续回复没有正常返回，请重试。刚才的工具执行状态已保留。';
-}
-
-function visibleAssistantText(value: string): string {
-  let visible = value.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  const openThinking = visible.search(/<think>/i);
-  if (openThinking >= 0) visible = visible.slice(0, openThinking);
-  return visible
-    .replace(/<\/?thinking>/gi, '')
-    .trim();
-}
-
-function hasVisibleAssistantContent(value: string): boolean {
-  const readable = value
-    .replace(/<[^>]*(?:>|$)/g, '')
-    .replace(/[\s`*_#[\]()>~|\\-]+/g, '');
-  return /[\p{L}\p{N}\p{Extended_Pictographic}]/u.test(readable);
 }
 
 function isWeekend(): boolean {

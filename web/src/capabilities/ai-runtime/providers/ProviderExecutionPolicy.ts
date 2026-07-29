@@ -2,7 +2,7 @@ import { ProviderErrorKind, ProviderGatewayError } from '../contracts/ProviderGa
 
 export const AI_EXECUTION_BUDGET = {
   modelTurnMs: 180_000,
-  chatRunMs: 360_000,
+  chatRunMs: 900_000,
   generationBaseMs: 120_000,
   generationPerQuestionMs: 8_000,
   generationMaxMs: 300_000

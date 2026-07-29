@@ -30,6 +30,7 @@ import {
 } from '@/modules/mastery/public';
 import type { UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import type { RequestStructuredPractice } from '@/modules/teaching/public';
+import type { EnsureQuestionSetEnrichment } from './EnsureQuestionSetEnrichment';
 
 export interface StructuredPracticeAgentDependencies {
   readonly requestPractice: RequestStructuredPractice;
@@ -41,6 +42,7 @@ export interface StructuredPracticeAgentDependencies {
   readonly startReviewQueueItem: StartReviewQueueItem;
   readonly retryReviewQueueItem: RetryReviewQueueItem;
   readonly failReviewQueueItem: FailReviewQueueItem;
+  readonly ensureQuestionSetEnrichment: EnsureQuestionSetEnrichment;
 }
 
 export function createStructuredPracticeAgentHandler(
@@ -121,7 +123,7 @@ async function executeStructuredPractice(
         ...run.run.checkpoint,
         step: TaskCenterStep.Completed,
         progress: 100,
-        message: '讲义和题组已生成，可以开始练习',
+        message: '题组已生成，可以开始练习',
         workflowId: aggregate.workflow.id,
         questionSetId: result.questionSetId,
         learningThreadId: aggregate.spec.learningThreadId,
@@ -142,6 +144,14 @@ async function executeStructuredPractice(
         workflowId: aggregate.workflow.id
       }
     });
+    await dependencies.ensureQuestionSetEnrichment.execute({
+        questionSetId: result.questionSetId,
+        parentAgentRunId: run.run.id,
+        title: '补全逐题解析',
+        detail: '题组已经可以作答，系统正在后台补齐逐题解析'
+      }).catch((error: unknown) => {
+        console.warn('[StructuredPractice] failed to schedule question-set enrichment', error);
+      });
   } catch (error) {
     if (dailyPlanItemId) {
       await dependencies.updateDailyPlanItemStatus.execute({

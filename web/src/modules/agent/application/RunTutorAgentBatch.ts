@@ -175,7 +175,10 @@ export class RunTutorAgentBatch {
           ...run.run.checkpoint,
           errorCode: code,
           errorMessage: message,
-          message
+          message,
+          ...(run.run.inputSnapshot.notifyOnTerminal === true
+            ? { taskCenterVisible: true }
+            : {})
         },
         payload: diagnostics
       });
@@ -203,6 +206,9 @@ export class RunTutorAgentBatch {
 
 function retryDelay(error: unknown, attemptCount: number): number | undefined {
   const code = codedError(error);
+  if (code === 'content.enrichment_incomplete' || code === 'content.enrichment_invalid') {
+    return Math.min(60_000, 2_000 * 2 ** Math.max(0, attemptCount - 1));
+  }
   if (code === 'generation.process_interrupted') {
     return attemptCount < 2 ? 500 : undefined;
   }

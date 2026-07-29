@@ -8,6 +8,8 @@ export interface ConversationSession {
   readonly title: string;
   readonly summary?: string;
   readonly summaryUpdatedAt?: InstantMs;
+  readonly summaryCursorMessageId?: string;
+  readonly summaryVersion?: number;
   readonly createdAt: InstantMs;
   readonly updatedAt: InstantMs;
 }

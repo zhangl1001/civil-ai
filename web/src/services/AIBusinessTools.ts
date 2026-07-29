@@ -10,7 +10,7 @@ import type { CapabilityNode } from '@/modules/curriculum/public';
 import type { MasteryTrack } from '@/modules/mastery/public';
 import { StructuredPracticeTaskCenter } from '@/features/practice/StructuredPracticeTaskCenter';
 import { selectPriorityOrCoverageCapability } from '@/features/practice/CapabilitySelection';
-import type { AgentTaskEnqueueResult } from './GenerationTaskService';
+import { generationTaskService, type AgentTaskEnqueueResult } from './GenerationTaskService';
 import {
   AI_BUSINESS_TOOLS,
   type AIBusinessToolCall,
@@ -134,6 +134,23 @@ export class AIBusinessTools {
       const { year, month } = monthlyDigestService.currentMonth();
       const result = await monthlyDigestService.enqueueReport(year, month);
       return { taskId: result.task.id, reply: taskReply(result, '时政月报') };
+    }
+
+    if (call.name === 'research_true_questions') {
+      const scope = asString(args.scope).trim();
+      if (!scope) throw new Error('请先明确真题的年份、地区、考试类型或模块范围。');
+      const maxQuestions = Math.min(10, Math.max(1, Math.round(asNumber(args.maxQuestions, 5))));
+      const result = await generationTaskService.enqueue({
+        intent: 'trueQuestionResearch',
+        title: '联网真题研究',
+        detail: scope,
+        sourceId: scope,
+        payload: { scope, maxQuestions, chatSessionId: meta.sessionId ?? null }
+      });
+      return {
+        taskId: result.task.id,
+        reply: taskReply(result, '联网真题研究')
+      };
     }
 
     if (call.name === 'grade_essay') {

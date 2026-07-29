@@ -12,6 +12,7 @@ const props = withDefaults(defineProps<{
   hasItems: boolean;
   loading?: boolean;
   onLoadMore: () => Promise<void> | void;
+  scrollRoot?: Element | null;
   showEnd?: boolean;
   rootMargin?: string;
   endText?: string;
@@ -27,7 +28,7 @@ let observer: IntersectionObserver | undefined;
 
 onMounted(() => void observe());
 onBeforeUnmount(() => observer?.disconnect());
-watch(() => [props.hasMore, props.loading, props.hasItems], () => void observe());
+watch(() => [props.hasMore, props.loading, props.hasItems, props.scrollRoot], () => void observe());
 
 async function observe(): Promise<void> {
   await nextTick();
@@ -35,7 +36,7 @@ async function observe(): Promise<void> {
   if (!props.hasMore || props.loading || !sentinel.value || typeof IntersectionObserver === 'undefined') return;
   observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) void props.onLoadMore();
-  }, { rootMargin: props.rootMargin });
+  }, { root: props.scrollRoot ?? null, rootMargin: props.rootMargin });
   observer.observe(sentinel.value);
 }
 </script>

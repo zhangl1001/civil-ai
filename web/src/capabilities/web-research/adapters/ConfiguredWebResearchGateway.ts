@@ -4,13 +4,25 @@ import { WebSearchProvider } from '../domain/WebResearchConfig';
 import { requirePublicWebUrl } from '../domain/WebUrlPolicy';
 import type {
   WebPageResponse,
+  WebPageReadOptions,
   WebResearchGateway,
   WebSearchHit,
   WebSearchRequest,
   WebSearchResponse
 } from '../contracts/WebResearchGateway';
+import {
+  mergeSearchHits,
+  parseBingHtmlHits,
+  parseBraveHits,
+  parseDuckDuckGoHits,
+  parseJinaHits,
+  parseRssHits,
+  parseSogouHtmlHits,
+  relevantSearchHits
+} from './WebSearchResultParsing';
 
 const MAX_PAGE_CHARS = 24_000;
+const MAX_PAGE_SOURCE_CHARS = 160_000;
 
 export class ConfiguredWebResearchGateway implements WebResearchGateway {
   constructor(
@@ -25,6 +37,41 @@ export class ConfiguredWebResearchGateway implements WebResearchGateway {
   }
 
   private async searchBuiltIn(request: WebSearchRequest): Promise<WebSearchResponse> {
+    // These public discovery paths fail independently in mobile networks.
+    // Merge all usable results so an RSS/index outage does not stop the Agent.
+    const [rss, bingHtml, duckDuckGo, sogouHtml] = await Promise.allSettled([
+      this.searchBingRss(request),
+      this.searchBingHtml(request),
+      this.searchDuckDuckGo(request),
+      this.searchSogouHtml(request)
+    ]);
+    request.signal?.throwIfAborted();
+    const merged = mergeSearchHits(
+      rss.status === 'fulfilled' ? rss.value : [],
+      bingHtml.status === 'fulfilled' ? bingHtml.value : [],
+      duckDuckGo.status === 'fulfilled' ? duckDuckGo.value : [],
+      sogouHtml.status === 'fulfilled' ? sogouHtml.value : []
+    );
+    const relevant = relevantSearchHits(request.query, merged);
+    if (relevant.length) {
+      return { query: request.query, hits: relevant.slice(0, request.limit), fetchedAt: Date.now() };
+    }
+    const rssError = rss.status === 'rejected'
+      ? rss.reason
+      : new Error('内置 RSS 搜索返回了与关键词不相关的结果。');
+    const bingHtmlError = bingHtml.status === 'rejected'
+      ? bingHtml.reason
+      : new Error('Bing HTML 搜索没有返回相关结果。');
+    const duckError = duckDuckGo.status === 'rejected'
+      ? duckDuckGo.reason
+      : new Error('DuckDuckGo HTML 搜索没有返回相关结果。');
+    const sogouError = sogouHtml.status === 'rejected'
+      ? sogouHtml.reason
+      : new Error('搜狗 HTML 搜索没有返回相关结果。');
+    throw new Error(`联网搜索暂时不可用：${compactSearchFailure(rssError, bingHtmlError, duckError, sogouError)}`);
+  }
+
+  private async searchBingRss(request: WebSearchRequest): Promise<WebSearchHit[]> {
     const origin = devProxyOrigin();
     const url = new URL(origin
       ? `${origin}/__web-research/search`
@@ -43,16 +90,131 @@ export class ConfiguredWebResearchGateway implements WebResearchGateway {
       },
       signal: request.signal
     });
-    const raw = await requireOk(response, '内置网络搜索');
-    const hits = parseRssHits(raw).slice(0, request.limit);
-    if (!hits.length) throw new Error('内置网络搜索没有返回可用结果，请调整关键词或改用其他搜索服务。');
-    return { query: request.query, hits, fetchedAt: Date.now() };
+    return parseRssHits(await requireOk(response, '内置网络搜索')).slice(0, request.limit);
   }
 
-  async readPage(value: string, signal?: AbortSignal): Promise<WebPageResponse> {
+  private async searchBingHtml(request: WebSearchRequest): Promise<WebSearchHit[]> {
+    const origin = devProxyOrigin();
+    const url = new URL(origin
+      ? `${origin}/__web-research/search`
+      : 'https://www.bing.com/search');
+    if (origin) url.searchParams.set('engine', 'bing-html');
+    url.searchParams.set('q', request.query);
+    url.searchParams.set('setlang', 'zh-cn');
+    url.searchParams.set('count', String(Math.max(request.limit, 10)));
+    const freshness = builtInFreshness(request.freshness);
+    if (freshness) url.searchParams.set('filters', freshness);
+    const response = await this.transport.send({
+      url: url.toString(),
+      method: 'GET',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
+      },
+      signal: request.signal
+    });
+    const hits = parseBingHtmlHits(await requireOk(response, 'Bing HTML 搜索'));
+    if (!hits.length) throw new Error('Bing HTML 搜索没有返回可解析的结果。');
+    return hits.slice(0, request.limit);
+  }
+
+  private async searchDuckDuckGo(request: WebSearchRequest): Promise<WebSearchHit[]> {
+    let primaryError: unknown;
+    try {
+      const hits = await this.requestDuckDuckGo(request, 'html');
+      if (hits.length) return hits;
+      primaryError = new Error('DuckDuckGo HTML 搜索没有返回可解析的结果。');
+    } catch (error) {
+      primaryError = error;
+    }
+    request.signal?.throwIfAborted();
+    try {
+      const hits = await this.requestDuckDuckGo(request, 'lite');
+      if (hits.length) return hits;
+      throw new Error('DuckDuckGo Lite 返回了验证页或空结果。');
+    } catch (liteError) {
+      request.signal?.throwIfAborted();
+      throw new Error(compactSearchFailure(primaryError, liteError));
+    }
+  }
+
+  private async requestDuckDuckGo(
+    request: WebSearchRequest,
+    variant: 'html' | 'lite'
+  ): Promise<WebSearchHit[]> {
+    const origin = devProxyOrigin();
+    const url = new URL(origin
+      ? `${origin}/__web-research/search`
+      : variant === 'lite'
+        ? 'https://lite.duckduckgo.com/lite/'
+        : 'https://html.duckduckgo.com/html/');
+    if (origin) url.searchParams.set('engine', variant === 'lite' ? 'duckduckgo-lite' : 'duckduckgo');
+    url.searchParams.set('q', request.query);
+    url.searchParams.set('kl', 'cn-zh');
+    const freshness = duckDuckGoFreshness(request.freshness);
+    if (freshness) url.searchParams.set('df', freshness);
+    const response = await this.transport.send({
+      url: url.toString(),
+      method: 'GET',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
+      },
+      signal: request.signal
+    });
+    return parseDuckDuckGoHits(await requireOk(response, `DuckDuckGo ${variant === 'lite' ? 'Lite' : 'HTML'} 搜索`))
+      .slice(0, request.limit);
+  }
+
+  private async searchSogouHtml(request: WebSearchRequest): Promise<WebSearchHit[]> {
+    const origin = devProxyOrigin();
+    const url = new URL(origin
+      ? `${origin}/__web-research/search`
+      : 'https://www.sogou.com/web');
+    if (origin) url.searchParams.set('engine', 'sogou');
+    url.searchParams.set('query', request.query);
+    url.searchParams.set('ie', 'utf8');
+    const response = await this.transport.send({
+      url: url.toString(),
+      method: 'GET',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
+      },
+      signal: request.signal
+    });
+    const hits = parseSogouHtmlHits(await requireOk(response, '搜狗 HTML 搜索'));
+    if (!hits.length) throw new Error('搜狗 HTML 搜索没有返回可解析的结果。');
+    return hits.slice(0, request.limit);
+  }
+
+  async readPage(value: string, signal?: AbortSignal, options?: WebPageReadOptions): Promise<WebPageResponse> {
     const target = requirePublicWebUrl(value);
-    // All arbitrary pages are read through the bounded reader service so a model-selected
-    // URL can never make the iOS device connect directly to a LAN or loopback target.
+    let readerResult: WebPageResponse | undefined;
+    let readerError: unknown;
+    try {
+      readerResult = await this.readPageWithJina(target, signal, options);
+      if (!isInsufficientPage(readerResult) || target.pathname.toLowerCase().endsWith('.pdf')) {
+        return readerResult;
+      }
+    } catch (error) {
+      readerError = error;
+    }
+    signal?.throwIfAborted();
+    try {
+      const directResult = await this.readPageDirect(target, signal, options);
+      return !readerResult || directResult.content.length > readerResult.content.length
+        ? directResult
+        : readerResult;
+    } catch (directError) {
+      signal?.throwIfAborted();
+      if (readerResult) return readerResult;
+      throw new Error(`网页读取暂时不可用：${compactSearchFailure(readerError, directError)}`);
+    }
+  }
+
+  private async readPageWithJina(target: URL, signal?: AbortSignal, options?: WebPageReadOptions): Promise<WebPageResponse> {
+    // The bounded reader handles HTML and PDF consistently before a direct HTML fallback.
     const readerUrl = `https://r.jina.ai/${target.toString()}`;
     const response = await this.transport.send({
       url: readerUrl,
@@ -71,7 +233,34 @@ export class ConfiguredWebResearchGateway implements WebResearchGateway {
       title: extractTitle(raw) || target.hostname,
       url: target.toString(),
       domain: target.hostname,
-      content: compact(content, MAX_PAGE_CHARS),
+      content: selectPageContent(content, options),
+      fetchedAt: Date.now()
+    };
+  }
+
+  private async readPageDirect(target: URL, signal?: AbortSignal, options?: WebPageReadOptions): Promise<WebPageResponse> {
+    const origin = devProxyOrigin();
+    const url = origin ? new URL(`${origin}/__web-research/read`) : target;
+    if (origin) url.searchParams.set('url', target.toString());
+    const response = await this.transport.send({
+      url: url.toString(),
+      method: 'GET',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
+      },
+      signal
+    });
+    const raw = await requireOk(response, '网页直读');
+    const contentType = response.headers.get('content-type') || '';
+    const content = contentType.includes('html') ? htmlToText(raw) : raw;
+    if (!content.trim()) throw new Error('网页直读没有返回正文。');
+    const resolvedTarget = publicResponseUrl(response, target);
+    return {
+      title: extractTitle(raw) || resolvedTarget.hostname,
+      url: resolvedTarget.toString(),
+      domain: resolvedTarget.hostname,
+      content: selectPageContent(content, options),
       fetchedAt: Date.now()
     };
   }
@@ -97,28 +286,34 @@ export class ConfiguredWebResearchGateway implements WebResearchGateway {
       signal: request.signal
     });
     const raw = await requireOk(response, '网络搜索');
-    const body = parseJson(raw);
-    const rows = asArray(asRecord(body.web).results);
     return {
       query: request.query,
-      hits: rows.map(parseBraveHit).filter(isHit).slice(0, request.limit),
+      hits: parseBraveHits(raw).slice(0, request.limit),
       fetchedAt: Date.now()
     };
   }
 
-  private async searchJina(request: WebSearchRequest): Promise<WebSearchResponse> {
+  private async searchJina(request: WebSearchRequest, apiKey = this.config.apiKey): Promise<WebSearchResponse> {
     const url = new URL(`https://s.jina.ai/${encodeURIComponent(request.query)}`);
     url.searchParams.set('count', String(request.limit));
     const response = await this.transport.send({
       url: url.toString(),
       method: 'GET',
-      headers: jinaHeaders(this.config.apiKey, 'application/json'),
+      headers: jinaHeaders(apiKey, 'application/json'),
       signal: request.signal
     });
     const raw = await requireOk(response, '网络搜索');
     const hits = parseJinaHits(raw).slice(0, request.limit);
     return { query: request.query, hits, fetchedAt: Date.now() };
   }
+}
+
+function compactSearchFailure(...failures: unknown[]): string {
+  const messages = failures
+    .map((error) => error instanceof Error ? error.message : '')
+    .filter(Boolean)
+    .map((message) => message.replace(/AI 网络请求失败：/g, '').slice(0, 120));
+  return [...new Set(messages)].join('；') || '当前网络没有返回有效结果，请稍后重试。';
 }
 
 function devProxyOrigin(): string | undefined {
@@ -146,6 +341,10 @@ function builtInFreshness(value: WebSearchRequest['freshness']): string | undefi
   } as Record<string, string>)[value];
 }
 
+function duckDuckGoFreshness(value: WebSearchRequest['freshness']): string | undefined {
+  return ({ day: 'd', week: 'w', month: 'm', year: 'y' } as Record<string, string>)[value];
+}
+
 async function requireOk(response: Response, operation: string): Promise<string> {
   const text = await response.text();
   if (response.ok) return text;
@@ -163,115 +362,29 @@ async function requireOk(response: Response, operation: string): Promise<string>
   throw new Error(`${operation}失败（${response.status}）：${message}`);
 }
 
-function parseBraveHit(value: unknown): WebSearchHit | undefined {
-  const row = asRecord(value);
-  const url = safeResultUrl(row.url);
-  if (!url) return undefined;
-  const snippets = asArray(row.extra_snippets).map(String).filter(Boolean);
-  return {
-    title: String(row.title || url.hostname),
-    url: url.toString(),
-    domain: url.hostname,
-    snippet: compact([row.description, ...snippets].filter(Boolean).join('\n'), 3_000),
-    publishedAt: optionalString(row.page_age)
-  };
-}
-
-function parseJinaHits(raw: string): WebSearchHit[] {
-  const body = parseJson(raw);
-  const data = body.data;
-  const rows = Array.isArray(data)
-    ? data
-    : Array.isArray(asRecord(data).results)
-      ? asRecord(data).results as unknown[]
-      : [];
-  const structured = rows.flatMap((value): WebSearchHit[] => {
-    const row = asRecord(value);
-    const url = safeResultUrl(row.url);
-    if (!url) return [];
-    const content = optionalString(row.content || row.raw_content);
-    const publishedAt = optionalString(row.publishedTime || row.published_at);
-    return [{
-      title: String(row.title || url.hostname),
-      url: url.toString(),
-      domain: url.hostname,
-      snippet: compact(String(row.description || row.snippet || ''), 3_000),
-      ...(content ? { content: content.slice(0, 8_000) } : {}),
-      ...(publishedAt ? { publishedAt } : {})
-    }];
-  });
-  if (structured.length) return structured;
-
-  const content = String(asRecord(data).content || body.content || raw);
-  const links = [...content.matchAll(/\[([^\]]{2,240})\]\((https?:\/\/[^)\s]+)\)/g)];
-  const seen = new Set<string>();
-  return links.flatMap((match) => {
-    const url = safeResultUrl(match[2]);
-    if (!url || seen.has(url.toString())) return [];
-    seen.add(url.toString());
-    const start = Math.max(0, (match.index || 0) - 120);
-    const end = Math.min(content.length, (match.index || 0) + match[0].length + 600);
-    return [{
-      title: match[1].trim(),
-      url: url.toString(),
-      domain: url.hostname,
-      snippet: compact(content.slice(start, end), 1_200)
-    }];
-  });
-}
-
-function parseRssHits(raw: string): WebSearchHit[] {
-  const items = [...raw.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
-  return items.flatMap((match): WebSearchHit[] => {
-    const item = match[1];
-    const url = safeResultUrl(xmlValue(item, 'link'));
-    if (!url) return [];
-    const title = compact(decodeMarkup(xmlValue(item, 'title')), 240) || url.hostname;
-    const snippet = compact(decodeMarkup(xmlValue(item, 'description')), 3_000);
-    const publishedAt = optionalString(decodeMarkup(xmlValue(item, 'pubDate')));
-    return [{
-      title,
-      url: url.toString(),
-      domain: url.hostname,
-      snippet,
-      ...(publishedAt ? { publishedAt } : {})
-    }];
-  });
-}
-
-function xmlValue(block: string, tag: string): string {
-  return block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1]?.trim() || '';
-}
-
-function decodeMarkup(value: string): string {
-  const withoutCdata = value.replace(/^<!\[CDATA\[|\]\]>$/g, '');
-  if (typeof DOMParser !== 'undefined') {
-    const parser = new DOMParser();
-    const decoded = parser
-      .parseFromString(`<body>${withoutCdata}</body>`, 'text/html')
-      .body.textContent || '';
-    return (decoded.includes('<')
-      ? parser.parseFromString(`<body>${decoded}</body>`, 'text/html').body.textContent || ''
-      : decoded
-    ).replace(/\s+/g, ' ').trim();
+function publicResponseUrl(response: Response, fallback: URL): URL {
+  const values = [
+    response.headers.get('x-web-research-final-url'),
+    response.headers.get('x-platform-final-url'),
+    response.url
+  ];
+  for (const value of values) {
+    try {
+      if (value) return requirePublicWebUrl(value);
+    } catch {
+      // Development proxies and malformed redirect metadata are ignored.
+    }
   }
-  return withoutCdata
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCodePoint(Number(code)))
-    .replace(/<[^>]+>/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return fallback;
 }
 
 function extractJinaContent(raw: string): string {
   try {
     const body = JSON.parse(raw) as Record<string, unknown>;
-    return String(asRecord(body.data).content || body.content || raw);
+    const data = body.data && typeof body.data === 'object' && !Array.isArray(body.data)
+      ? body.data as Record<string, unknown>
+      : {};
+    return String(data.content || body.content || raw);
   } catch {
     return raw;
   }
@@ -297,39 +410,56 @@ function extractTitle(raw: string): string {
   return markdown || html || '';
 }
 
-function safeResultUrl(value: unknown): URL | undefined {
-  if (typeof value !== 'string') return undefined;
-  try {
-    return requirePublicWebUrl(value);
-  } catch {
-    return undefined;
-  }
+function isInsufficientPage(page: WebPageResponse): boolean {
+  const content = page.content.trim();
+  if (content.length < 500) return true;
+  return /^(?:Title|URL Source|Published Time|Markdown Content):/m.test(content)
+    && content.replace(/^(?:Title|URL Source|Published Time|Markdown Content):.*$/gmi, '').trim().length < 320;
 }
 
-function parseJson(raw: string): Record<string, unknown> {
-  try {
-    return asRecord(JSON.parse(raw));
-  } catch {
-    return { content: raw };
-  }
+function selectPageContent(value: string, options?: WebPageReadOptions): string {
+  const source = compact(value, MAX_PAGE_SOURCE_CHARS);
+  const maxStart = Math.max(0, source.length - MAX_PAGE_CHARS);
+  const requestedOffset = Number(options?.offset);
+  // Tool schemas commonly materialize an omitted numeric field as 0. A real
+  // positive offset requests a chunk; zero must still allow semantic focus.
+  const start = Number.isFinite(requestedOffset) && requestedOffset > 0
+    ? Math.min(maxStart, Math.round(requestedOffset))
+    : bestFocusOffset(source, options?.focus, maxStart);
+  const content = source.slice(start, start + MAX_PAGE_CHARS).trim();
+  if (start === 0 && source.length <= MAX_PAGE_CHARS) return content;
+  return `[正文片段 ${start}-${Math.min(source.length, start + MAX_PAGE_CHARS)} / ${source.length}]\n${content}`;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function isHit(value: WebSearchHit | undefined): value is WebSearchHit {
-  return Boolean(value);
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+function bestFocusOffset(source: string, focus: string | undefined, maxStart: number): number {
+  const terms = [...new Set((focus || '')
+    .normalize('NFKC')
+    .split(/[\s,，、;；:：|/]+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2))];
+  if (!terms.length) return 0;
+  const candidates = new Set<number>();
+  const lowered = source.toLocaleLowerCase();
+  terms.forEach((term) => {
+    const needle = term.toLocaleLowerCase();
+    let from = 0;
+    for (let count = 0; count < 20; count += 1) {
+      const index = lowered.indexOf(needle, from);
+      if (index < 0) break;
+      candidates.add(Math.min(maxStart, Math.max(0, index - 1_200)));
+      from = index + needle.length;
+    }
+  });
+  let best = { start: 0, score: 0 };
+  candidates.forEach((start) => {
+    const window = source.slice(start, start + MAX_PAGE_CHARS);
+    const termScore = terms.filter((term) => window.toLocaleLowerCase().includes(term.toLocaleLowerCase())).length * 12;
+    const questionScore = Math.min(30, (window.match(/(?:^|\n)\s*\d{1,3}[.、．]/gm) || []).length);
+    const optionScore = Math.min(20, (window.match(/(?:^|\n)\s*[A-DＡ-Ｄ][.、．]/gm) || []).length);
+    const score = termScore + questionScore + optionScore;
+    if (score > best.score) best = { start, score };
+  });
+  return best.start;
 }
 
 function compact(value: string, max: number): string {

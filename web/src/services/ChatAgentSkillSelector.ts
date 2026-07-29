@@ -1,16 +1,21 @@
 import { RegisteredAgentToolExecutor } from '@/modules/agent/public';
-import { activateChatAgentSkills, CHAT_AGENT_SKILL_SELECTOR_TOOL } from './ChatAgentCapabilities';
+import { compileChatAgentSkills, CHAT_AGENT_SKILL_SELECTOR_TOOL } from './ChatAgentCapabilities';
 
 /** Registers the catalog-only selector; selected skills expose concrete tools next turn. */
 export function registerChatAgentSkillSelector(executor: RegisteredAgentToolExecutor): void {
   executor.register(CHAT_AGENT_SKILL_SELECTOR_TOOL, async (call) => {
-    const skillCodes = Array.isArray(call.arguments.skillCodes)
-      ? call.arguments.skillCodes.map((value) => String(value))
+    const skillNames = Array.isArray(call.arguments.skillNames)
+      ? call.arguments.skillNames.map((value) => String(value))
       : [];
-    const tools = activateChatAgentSkills(skillCodes);
+    const bundle = compileChatAgentSkills(skillNames);
     return {
-      content: JSON.stringify({ selectedSkills: skillCodes, activatedToolCount: tools.length }),
-      activateToolCodes: tools.map((tool) => tool.code)
+      content: JSON.stringify({
+        loadedSkills: bundle.skillNames,
+        availableToolCount: bundle.tools.length,
+        nextAction: 'continue_with_operational_tool_or_request_missing_input'
+      }),
+      activateToolNames: bundle.tools.map((tool) => tool.name),
+      activateSkills: bundle.activations
     };
   });
 }

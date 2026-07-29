@@ -29,8 +29,13 @@ const PLAIN_TEXT_EXTENSIONS = new Set(['txt', 'md', 'markdown', 'json', 'csv']);
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'tif', 'tiff', 'bmp']);
 
 export const DOCUMENT_IMPORT_ACCEPT = '.txt,.md,.markdown,.json,.csv,.pdf,text/*,application/json,application/pdf,image/*';
+export const DOCUMENT_FILE_IMPORT_ACCEPT = '.txt,.md,.markdown,.json,.csv,.pdf,text/*,application/json,application/pdf';
 
 export class DocumentTextExtractionService {
+  canExtractImageLocally(): boolean {
+    return Capacitor.isNativePlatform();
+  }
+
   async extract(file: File): Promise<DocumentExtractionResult> {
     assertSupportedSize(file);
     const kind = documentKind(file);

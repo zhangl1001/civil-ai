@@ -12,7 +12,11 @@ import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTranspo
 import { assertNonEmptyProviderResult, assertProviderResponse } from './ProviderHttpSupport';
 import { OpenAIStreamAccumulator, parseOpenAIResponse } from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
-import { StructuredOutputCapability, type StructuredOutputMode } from './StructuredOutputCapability';
+import {
+  hasRequiredStructuredRoot,
+  StructuredOutputCapability,
+  type StructuredOutputMode
+} from './StructuredOutputCapability';
 
 export interface OpenAICompatibleGatewayConfig {
   readonly apiKey: string;
@@ -38,7 +42,16 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
     const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
     try {
-      return await this.sendCompletion(request, mode, signal);
+      const result = await this.sendCompletion(request, mode, signal);
+      if (
+        mode === 'tool'
+        && request.responseSchema
+        && !hasRequiredStructuredRoot(result.text, request.responseSchema)
+      ) {
+        this.structuredOutput.markToolModeUnsupported();
+        return this.sendCompletion(request, 'prompt', signal);
+      }
+      return result;
     } catch (error) {
       if (mode !== 'tool' || !request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
       this.structuredOutput.markToolModeUnsupported();

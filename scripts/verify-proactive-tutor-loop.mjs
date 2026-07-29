@@ -13,11 +13,21 @@ const server = await createServer({
 });
 
 try {
-  const [tutoring, agent] = await Promise.all([
+  const [tutoring, agent, planNavigation] = await Promise.all([
     server.ssrLoadModule('/src/modules/tutoring/public.ts'),
-    server.ssrLoadModule('/src/modules/agent/public.ts')
+    server.ssrLoadModule('/src/modules/agent/public.ts'),
+    server.ssrLoadModule('/src/features/planning/DailyPlanNavigation.ts')
   ]);
-  assert(agent.tutorToolCatalog.some((tool) => tool.code === 'tutor.read_daily_context'));
+  assert(agent.tutorToolCatalog.some((tool) => tool.name === 'tutor.read_daily_context'));
+  assert.equal(planNavigation.dailyPlanItemLocation(planItem('lecture')).path, '/vue/study/lecture');
+  assert.equal(planNavigation.dailyPlanItemLocation(planItem('diagnosis')).path, '/vue/diagnosis');
+  assert.equal(planNavigation.dailyPlanItemLocation(planItem('essay')).path, '/vue/essay');
+  assert.equal(planNavigation.dailyPlanItemLocation(planItem('mock')).path, '/vue/exam');
+  assert.equal(planNavigation.dailyPlanItemLocation(planItem('digest')).path, '/vue/digest');
+  const practiceLocation = planNavigation.dailyPlanItemLocation(planItem('review'));
+  assert.equal(practiceLocation.path, '/vue/practice');
+  assert.equal(practiceLocation.query.dailyPlanItemId, 'DailyPlanItemId:navigation');
+  assert.equal(practiceLocation.query.start, '1');
 
   const now = 1_785_100_000_000;
   const clock = { now: () => now, monotonicNowMs: () => 1 };
@@ -161,6 +171,21 @@ function candidateCycle() {
     studyConstraints: { weekdayMinutes: 60, weekendMinutes: 120 },
     learningPreferences: {},
     policyBindings: []
+  };
+}
+
+function planItem(itemType) {
+  return {
+    id: 'DailyPlanItemId:navigation',
+    dailyPlanId: 'DailyPlanId:navigation',
+    capabilityNodeId: 'CapabilityNodeId:1',
+    itemType,
+    sequence: 1,
+    targetMinutes: 10,
+    exitCriteria: {},
+    reason: 'test',
+    status: 'pending',
+    actualMinutes: 0
   };
 }
 

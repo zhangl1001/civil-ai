@@ -4,6 +4,8 @@ export interface AISession {
   title: string;
   summary?: string;
   summaryUpdatedAt?: number;
+  summaryCursorMessageId?: string;
+  summaryVersion?: number;
   createdAt: number;
   updatedAt: number;
 }

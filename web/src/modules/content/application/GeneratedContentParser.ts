@@ -42,14 +42,6 @@ export class GeneratedContentParser {
     const authoringRoot = asRecord(input);
     const referenceQuestionIds = authoringReferenceQuestionIds(authoringRoot.questions);
     const root = normalizeAuthoringRoot(authoringRoot, expectedCapabilityCode);
-    const extraKeys = Object.keys(root).filter((key) => key !== 'lecture' && key !== 'questions');
-    if (extraKeys.length) {
-      throw new GeneratedContentParseError('generation.root_fields_invalid', extraKeys.map((key) => ({
-        code: 'generation.root_field_unknown',
-        path: `$.${key}`,
-        message: 'Generated root only permits lecture and questions'
-      })));
-    }
     const lectureInput = root.lecture === undefined
       ? emptyDocument('lecture:empty')
       : decodeEmbeddedJson(root.lecture);
@@ -138,11 +130,14 @@ function normalizeAuthoringRoot(
   if (lecture && !Array.isArray(lecture.sections)) {
     return injectCapabilityCode(root, expectedCapabilityCode);
   }
-  const issues: ContentValidationIssue[] = [];
-  const materialGroups = authoringMaterialGroups(root.materialGroups, issues);
+  const blockingIssues: ContentValidationIssue[] = [];
+  const materialGroups = authoringMaterialGroups(root.materialGroups);
   const materialGroupUseCounts = countMaterialGroupUses(root.questions);
   const lectureSections: unknown[] = lecture && Array.isArray(lecture.sections) ? lecture.sections : [];
-  const blocks = lectureSections.map((section, index) => authoringSection(section, index, issues));
+  const blocks = lectureSections.flatMap((section, index) => {
+    const block = authoringSection(section, index);
+    return block ? [block] : [];
+  });
   const decodedQuestions = decodeEmbeddedJson(root.questions);
   const questions = Array.isArray(decodedQuestions)
     ? decodedQuestions.map((question, index) => authoringQuestion(
@@ -151,11 +146,11 @@ function normalizeAuthoringRoot(
       materialGroups,
       materialGroupUseCounts,
       expectedCapabilityCode,
-      issues
+      blockingIssues
     ))
     : decodedQuestions;
-  if (issues.length || blocks.some((block) => !block) || !Array.isArray(questions) || questions.some((question) => !question)) {
-    throw new GeneratedContentParseError('generation.author_schema_invalid', issues.length ? issues : [{
+  if (blockingIssues.length || !Array.isArray(questions) || questions.some((question) => !question)) {
+    throw new GeneratedContentParseError('generation.author_schema_invalid', blockingIssues.length ? blockingIssues : [{
       code: 'generation.questions_invalid',
       path: '$.questions',
       message: 'Questions must be an array'
@@ -169,20 +164,15 @@ function normalizeAuthoringRoot(
 
 function authoringSection(
   input: unknown,
-  index: number,
-  issues: ContentValidationIssue[]
+  index: number
 ): Record<string, unknown> | undefined {
-  const path = `$.lecture.sections[${index}]`;
   const section = asOptionalRecord(input);
-  if (!section) {
-    issues.push({ code: 'generation.section_invalid', path, message: 'Lecture section must be an object' });
-    return undefined;
-  }
+  if (!section) return undefined;
   const id = `lecture-section-${index + 1}`;
-  const kind = requiredAuthorText(section.kind, `${path}.kind`, issues);
-  const title = requiredAuthorText(section.title, `${path}.title`, issues);
-  const markdown = requiredAuthorText(section.markdown, `${path}.markdown`, issues);
-  if (!id || !kind || !title || !markdown) return undefined;
+  const kind = optionalAuthorTextValue(section.kind) ?? 'concept';
+  const title = optionalAuthorTextValue(section.title) ?? '知识讲解';
+  const markdown = optionalAuthorTextValue(section.markdown);
+  if (!markdown) return undefined;
   const source = `## ${title}\n\n${markdown}`;
   if (kind === 'method' || kind === 'trap' || kind === 'summary' || kind === 'example' || kind === 'boundary') {
     return {
@@ -246,10 +236,10 @@ function authoringQuestion(
   });
   const optionIds = options.flatMap((option) => option ? [option.id] : []);
   const explanation = id && correctOptionId
-    ? authoringExplanation(question.explanation, id, correctOptionId, optionIds, `${path}.explanation`, issues)
+    ? authoringExplanation(question.explanation, id, correctOptionId, optionIds)
     : undefined;
   if (!id || !capabilityCode || !prompt || !explanation || !correctOptionId || options.some((option) => !option)) return undefined;
-  const requestedMaterialGroupId = optionalAuthorText(question.materialGroupId, `${path}.materialGroupId`, issues);
+  const requestedMaterialGroupId = optionalAuthorTextValue(question.materialGroupId);
   const groupedMaterial = requestedMaterialGroupId ? materialGroups.get(requestedMaterialGroupId) : undefined;
   if (requestedMaterialGroupId && !groupedMaterial) {
     issues.push({
@@ -314,18 +304,15 @@ function authoringExplanation(
   input: unknown,
   questionId: string,
   correctOptionId: string,
-  optionIds: readonly string[],
-  path: string,
-  issues: ContentValidationIssue[]
+  optionIds: readonly string[]
 ): Record<string, unknown> | undefined {
   const explanation = asOptionalRecord(decodeEmbeddedJson(input));
   if (!explanation) return { schemaVersion: 'content.v1', blocks: [] };
   const knowledgePoint = optionalAuthorTextValue(explanation.knowledgePoint);
   const conclusion = optionalAuthorTextValue(explanation.conclusion);
-  const steps = flexibleAuthorTextArray(explanation.steps, `${path}.steps`, issues);
-  const pitfalls = flexibleAuthorTextArray(explanation.pitfalls, `${path}.pitfalls`, issues);
+  const steps = flexibleAuthorTextArray(explanation.steps);
+  const pitfalls = flexibleAuthorTextArray(explanation.pitfalls);
   const optionAnalysis = authorOptionAnalysis(explanation.optionAnalysis, optionIds);
-  if (!steps || !pitfalls) return { schemaVersion: 'content.v1', blocks: [] };
   const correctAnalyses = optionAnalysis.filter((item) => item.verdict === 'correct');
   const safeOptionAnalysis = correctAnalyses.length === 1 && correctAnalyses[0]?.optionId === correctOptionId
     ? optionAnalysis
@@ -361,19 +348,39 @@ function authoringExplanation(
   return { schemaVersion: 'content.v1', blocks };
 }
 
-function flexibleAuthorTextArray(
+export function authoringLectureDocument(input: unknown): ContentDocument {
+  const lecture = asOptionalRecord(decodeEmbeddedJson(input));
+  const sections = lecture && Array.isArray(lecture.sections) ? lecture.sections : [];
+  return {
+    schemaVersion: 'content.v1',
+    blocks: sections.flatMap((section, index) => {
+      const block = authoringSection(section, index);
+      return block ? [block] : [];
+    }) as unknown as ContentDocument['blocks']
+  };
+}
+
+export function authoringExplanationDocument(
   input: unknown,
-  path: string,
-  issues: ContentValidationIssue[]
-): readonly string[] | undefined {
+  questionId: string,
+  correctOptionId: string,
+  optionIds: readonly string[]
+): ContentDocument {
+  return (
+    authoringExplanation(input, questionId, correctOptionId, optionIds)
+    ?? { schemaVersion: 'content.v1', blocks: [] }
+  ) as unknown as ContentDocument;
+}
+
+function flexibleAuthorTextArray(
+  input: unknown
+): readonly string[] {
   if (input === undefined || input === null) return [];
   if (typeof input === 'string') return input.trim() ? [input.trim()] : [];
-  if (!Array.isArray(input)) {
-    issues.push({ code: 'generation.explanation_list_invalid', path, message: 'Expected a text list' });
-    return undefined;
-  }
-  const values = input.map((item, index) => requiredAuthorText(item, `${path}[${index}]`, issues));
-  return values.some((item) => !item) ? undefined : values as string[];
+  if (!Array.isArray(input)) return [];
+  return input.flatMap((item) => (
+    typeof item === 'string' && item.trim() ? [item.trim()] : []
+  ));
 }
 
 function normalizedOptionId(
@@ -425,34 +432,18 @@ function calloutBlock(id: string, kind: string, title: string, source: string): 
 }
 
 function authoringMaterialGroups(
-  input: unknown,
-  issues: ContentValidationIssue[]
+  input: unknown
 ): ReadonlyMap<string, string> {
   if (input === undefined) return new Map();
-  if (!Array.isArray(input)) {
-    issues.push({
-      code: 'generation.material_groups_invalid',
-      path: '$.materialGroups',
-      message: 'Material groups must be an array'
-    });
-    return new Map();
-  }
+  if (!Array.isArray(input)) return new Map();
   const groups = new Map<string, string>();
-  input.forEach((item, index) => {
-    const path = `$.materialGroups[${index}]`;
+  input.forEach((item) => {
     const group = asOptionalRecord(decodeEmbeddedJson(item));
-    if (!group) {
-      issues.push({ code: 'generation.material_group_invalid', path, message: 'Material group must be an object' });
-      return;
-    }
-    const id = requiredAuthorText(group.id, `${path}.id`, issues);
-    const markdown = requiredAuthorText(group.markdown, `${path}.markdown`, issues);
+    if (!group) return;
+    const id = optionalAuthorTextValue(group.id);
+    const markdown = optionalAuthorTextValue(group.markdown);
     if (!id || !markdown) return;
-    if (groups.has(id)) {
-      issues.push({ code: 'generation.material_group_duplicate', path: `${path}.id`, message: `Duplicate material group ${id}` });
-      return;
-    }
-    groups.set(id, markdown);
+    if (!groups.has(id)) groups.set(id, markdown);
   });
   return groups;
 }
@@ -535,15 +526,6 @@ function requiredAuthorText(
 
 function optionalAuthorTextValue(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined;
-}
-
-function optionalAuthorText(
-  input: unknown,
-  path: string,
-  issues: ContentValidationIssue[]
-): string | undefined {
-  if (input === undefined || input === null || input === '') return undefined;
-  return requiredAuthorText(input, path, issues);
 }
 
 function asOptionalRecord(input: unknown): Record<string, unknown> | undefined {

@@ -10,6 +10,7 @@ import { installDatabaseStallRecovery } from './platform/DatabaseStallRecovery';
 // Global styles
 import './assets/styles/design-tokens.css';
 import './assets/styles/main.css';
+import 'katex/dist/katex.min.css';
 
 installNativePlatformClass();
 installDatabaseStallRecovery();

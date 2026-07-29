@@ -19,7 +19,7 @@ const responseSchema: JsonObject = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['kind', 'title', 'markdown'],
+            required: ['markdown'],
             properties: {
               id: { type: 'string', minLength: 1 },
               kind: {
@@ -53,7 +53,13 @@ const responseSchema: JsonObject = {
       items: {
         type: 'object',
         additionalProperties: false,
-            required: ['prompt', 'options', 'correctOptionId'],
+            required: [
+              'materialGroupId',
+              'material',
+              'prompt',
+              'options',
+              'correctOptionId'
+            ],
         properties: {
           id: { type: 'string', minLength: 1 },
           referenceQuestionId: { type: ['string', 'null'] },
@@ -97,7 +103,6 @@ const responseSchema: JsonObject = {
           explanation: {
             type: 'object',
             additionalProperties: false,
-            required: ['knowledgePoint', 'conclusion'],
             properties: {
               knowledgePoint: { type: 'string', minLength: 2 },
               conclusion: { type: 'string', minLength: 1 },
@@ -138,12 +143,12 @@ const responseSchema: JsonObject = {
 
 export const structuredObjectivePromptV2: PromptBundle = {
   definitionId: 'prompt-definition:content-generate-structured-objective',
-  versionId: 'prompt-version:content-generate-structured-objective:v11' as PromptVersionId,
+  versionId: 'prompt-version:content-generate-structured-objective:v14' as PromptVersionId,
   promptCode: 'content.generate.aptitude.structured_objective',
   taskType: 'lecture_with_questions',
   description: '围绕指定能力节点生成结构化讲义与单选训练题',
-  version: '2.2.0',
-  contentHash: 'sha256:678c637f664d167e1e5b3e2232bf82070dbd25fa59beaa9c589a8e919e724393',
+  version: '2.4.1',
+  contentHash: 'sha256:e07e88d5cbf980e243e04bad14b5954c936857cdc8a893b1ab517084a3484287',
   createdAt: 1784016000000 as InstantMs,
   requiredVariables: ['QUESTION_COUNT', 'ASSESSMENT_ROLE', 'DIFFICULTY_MIN', 'DIFFICULTY_MAX'],
   compatibleSchemaVersions: ['content.v1', 'question.single_choice.v2'],
@@ -199,9 +204,12 @@ export const structuredObjectivePromptV2: PromptBundle = {
         '不要输出 capabilityCode。该字段属于确定性业务元数据，由应用按照当前 GenerationSpec 统一注入，避免模型误写导致题组归属漂移。',
         'explanation 使用 knowledgePoint、conclusion、steps、optionAnalysis、pitfalls 作为可组合渲染槽位。解析可以按题目复杂度省略部分槽位；optionAnalysis 如果提供，应覆盖当前实际选项，且只有正确项 verdict 为 correct。',
         '普通单题的 materialGroupId 必须为 null，material 可填写本题独立材料或为 null。',
+        '论证、文段、实验、调查、案例和数据等作答依据必须完整放入 material，prompt 只写设问。prompt 如果指代“上述、以上、前述、题干、材料中、文中、该论证”等内容，对应 material 不得为 null。',
+        '只有 prompt 自身已经包含全部事实、条件和关系、无需读取任何前文时，独立题的 material 才能为 null；禁止输出缺少前置材料的空设问。',
         '只有一个完整公共材料对应至少两道小题时才使用 materialGroups：公共材料只保存一次，每道小题用相同 materialGroupId 引用，且 material 必须为 null。',
         '多段文字仍是一个完整材料，不得按段落拆成多个 materialGroups；小题问法只写入 prompt，不得混进公共材料。',
         'options 按 A、B、C……顺序输出 2 至 8 项；标准行测通常使用 A、B、C、D，option.id 可以省略并由应用确定性注入；correctOptionId 必须引用实际存在的选项。',
+        '数学公式仅在有助于理解或作答时使用 KaTeX 兼容 LaTeX：行内公式使用 $...$，独立公式使用 $$...$$，百分号写成 \\%。由于公式位于 JSON 字符串内，LaTeX 反斜杠必须按 JSON 规则转义，例如源内容 \\frac 在 JSON 中写成 \\\\frac；不得用代码块或反引号包裹公式。',
         '图形推理使用 visual：svg 必须是一个完整 SVG，alt 说明图形含义，viewBox 用于等比例缩放；题干图形放在 question.visual，带图选项放在对应 option.visual，不要把 SVG 拆成多个段落或写入答案解析。',
         '不得输出内部页面 ContentDocument、HTML 或临时字段；应用会把当前作者结构确定性转换为页面内容块。'
       ].join('\n')
@@ -223,7 +231,9 @@ export const structuredObjectivePromptV2: PromptBundle = {
       title: '提交前质检',
       order: 60,
       template: [
-        '输出前在内部逐项检查：JSON 可解析、渲染必需字段完整、题量准确、答案引用存在、答案唯一、讲义与题目知识点一致。',
+        '输出前在内部优先检查作答核心块：JSON 可解析、题干存在、选项可展示、答案引用实际选项、题量准确。',
+        '逐题检查设问中的指代是否有对应材料；看到“上述、以上、前述、题干、材料中、文中、该论证”等词时，必须确认 material 或 materialGroupId 中存在完整作答依据。',
+        '讲义和解析属于可后续补充块，不得因为章节数量、解析篇幅或可选栏目缺失而牺牲题干、选项和答案的完整性。',
         '检查每题是否确实服务于 studentContext.capability.name；扩展情境仍必须考查这个目标能力，不得生成同模块泛题。',
         '检查公共材料引用存在、同组至少两道小题、题量按可作答小题计数，且材料没有混入选项、答案或解析。',
         '检查不得包含思考过程。完成检查后只输出最终 JSON。',

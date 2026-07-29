@@ -14,6 +14,7 @@ export type TaskCenterStep = typeof TaskCenterStep[keyof typeof TaskCenterStep];
 
 export const TaskTargetType = {
   StructuredPractice: 'structured_practice',
+  ContentEnrichment: 'content_enrichment',
   ChatTool: 'chat_tool',
   BusinessOperation: 'business_operation',
   ErrorDiagnosisBatch: 'error_diagnosis_batch'

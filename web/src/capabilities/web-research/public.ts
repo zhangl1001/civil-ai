@@ -1,5 +1,6 @@
 export {
   WebSearchFreshness,
+  type WebPageReadOptions,
   type WebPageResponse,
   type WebResearchGateway,
   type WebSearchFreshness as WebSearchFreshnessCode,

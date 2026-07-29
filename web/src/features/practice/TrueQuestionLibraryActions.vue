@@ -6,13 +6,17 @@
     </button>
     <button type="button" class="library-tool" :disabled="importing" @click="fileInput?.click()">
       <i><LoaderCircleIcon v-if="importing" class="spinning" /><UploadIcon v-else /></i>
-      <span><strong>{{ importing ? '正在读取' : '导入真题' }}</strong><em>PDF、图片或文本</em></span>
+      <span><strong>{{ importing ? '正在读取' : '文件导入' }}</strong><em>PDF、文本或题库文件</em></span>
     </button>
-    <button type="button" class="library-tool research-tool" @click="$emit('research')">
-      <i><SearchIcon /></i>
-      <span><strong>AI 联网找题</strong><em>检索公开来源，核验后进入题库</em></span>
+    <button v-if="nativeCameraAvailable" type="button" class="library-tool" :disabled="importing || takingPhoto" @click="takePhoto">
+      <i><LoaderCircleIcon v-if="takingPhoto" class="spinning" /><CameraIcon v-else /></i>
+      <span><strong>{{ takingPhoto ? '正在打开' : '拍照导入' }}</strong><em>拍摄试卷或题目</em></span>
     </button>
-    <input ref="fileInput" hidden type="file" multiple :accept="DOCUMENT_IMPORT_ACCEPT" @change="selectFiles" />
+    <button type="button" :class="['library-tool', { 'research-tool': !nativeCameraAvailable }]" :disabled="researching" @click="$emit('research')">
+      <i><LoaderCircleIcon v-if="researching" class="spinning" /><SearchIcon v-else /></i>
+      <span><strong>{{ researching ? '任务已受理' : 'AI 联网找题' }}</strong><em>{{ researching ? '可在任务中心查看进度' : '检索公开来源，核验后进入题库' }}</em></span>
+    </button>
+    <input ref="fileInput" hidden type="file" multiple :accept="DOCUMENT_FILE_IMPORT_ACCEPT" @change="selectFiles" />
     <button type="button" class="practice-action" :disabled="launching || !setCount" @click="$emit('special')">
       <TargetIcon />
       <span><strong>专项练习</strong><em>从当前范围抽取 {{ practiceCount }} 题</em></span>
@@ -21,21 +25,31 @@
       <Repeat2Icon />
       <span><strong>真题复测</strong><em>{{ completedCount ? `${completedCount}套可复测` : '完成后可复测' }}</em></span>
     </button>
+    <ConfirmDialog
+      v-model="showCameraPermissionDialog"
+      title="需要相机权限"
+      :description="cameraPermissionDescription"
+      confirm-text="去设置"
+      @confirm="openCameraSettings"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { ListFilterIcon, LoaderCircleIcon, Repeat2Icon, SearchIcon, TargetIcon, UploadIcon } from 'lucide-vue-next';
-import { DOCUMENT_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
+import { CameraIcon, ListFilterIcon, LoaderCircleIcon, Repeat2Icon, SearchIcon, TargetIcon, UploadIcon } from 'lucide-vue-next';
+import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
+import { CameraPermissionError, cameraCaptureService } from '@/platform/CameraCaptureService';
+import { DOCUMENT_FILE_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
 
-defineProps<{
+const props = defineProps<{
   filterSummary: string;
   practiceCount: number;
   setCount: number;
   completedCount: number;
   launching: boolean;
   importing: boolean;
+  researching: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -44,14 +58,48 @@ const emit = defineEmits<{
   special: [];
   retest: [];
   importFile: [files: readonly File[]];
+  captureError: [message: string];
 }>();
 const fileInput = ref<HTMLInputElement | null>(null);
+const takingPhoto = ref(false);
+const showCameraPermissionDialog = ref(false);
+const cameraPermissionDescription = ref('请在系统设置中允许访问相机，然后返回继续拍摄真题。');
+const nativeCameraAvailable = cameraCaptureService.isNativeCameraAvailable();
 
 function selectFiles(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = input.files ? [...input.files] : [];
   input.value = '';
   if (files.length) emit('importFile', files);
+}
+
+async function takePhoto() {
+  if (takingPhoto.value || props.importing) return;
+  takingPhoto.value = true;
+  try {
+    const file = await cameraCaptureService.capturePhoto();
+    if (file) emit('importFile', [file]);
+  } catch (cause) {
+    if (cause instanceof CameraPermissionError) {
+      cameraPermissionDescription.value = cause.permissionStatus === 'restricted'
+        ? '相机权限受到系统或家长控制限制，请检查系统设置后再试。'
+        : '请在系统设置中允许访问相机，然后返回继续拍摄真题。';
+      showCameraPermissionDialog.value = true;
+    } else {
+      emit('captureError', cause instanceof Error ? cause.message : '打开相机失败，请稍后重试。');
+    }
+  } finally {
+    takingPhoto.value = false;
+  }
+}
+
+async function openCameraSettings() {
+  showCameraPermissionDialog.value = false;
+  try {
+    await cameraCaptureService.openAppSettings();
+  } catch (cause) {
+    emit('captureError', cause instanceof Error ? cause.message : '无法打开系统设置。');
+  }
 }
 </script>
 

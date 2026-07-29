@@ -1,5 +1,6 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
+import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
 import { generationTaskService } from './GenerationTaskService';
 
 export interface StudyPoint {
@@ -21,6 +22,14 @@ export interface StudyModule {
 export interface StudyDashboard {
   modules: StudyModule[];
   weakPoints: StudyPoint[];
+}
+
+export interface StudyLectureSummary {
+  id: string;
+  title: string;
+  module: string;
+  topic: string;
+  updatedAt: number;
 }
 
 function score(value: number | undefined, fallback = 0): number {
@@ -127,6 +136,35 @@ export class StudyService {
     });
   }
 
+  async listLectures(limit = 20): Promise<StudyLectureSummary[]> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return [];
+    const boundedLimit = Math.min(40, Math.max(1, Math.round(limit)));
+    const assets = await runtime.learningAssetStore.list({
+      examCycleId: cycle.examCycle.id,
+      kinds: [LearningAssetKind.StudyLecture],
+      status: LearningAssetStatus.Ready,
+      limit: Math.min(100, boundedLimit * 3)
+    });
+    const seen = new Set<string>();
+    return assets.flatMap((asset): StudyLectureSummary[] => {
+      if (seen.has(asset.businessKey)) return [];
+      seen.add(asset.businessKey);
+      return [{
+        id: asset.id,
+        title: asset.title,
+        module: payloadString(asset.payload.module) || '公考',
+        topic: payloadString(asset.payload.topic) || asset.title,
+        updatedAt: asset.updatedAt
+      }];
+    }).slice(0, boundedLimit);
+  }
+
+}
+
+function payloadString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 export const studyService = new StudyService();

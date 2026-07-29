@@ -195,11 +195,18 @@ export interface QuestionSetLibraryQuery {
   readonly examCycleId: ExamCycleId;
   readonly capabilityNodeIds?: readonly CapabilityNodeId[];
   readonly originTypes?: readonly QuestionOriginType[];
+  readonly entryModes?: readonly QuestionSetEntryMode[];
   readonly modules?: readonly string[];
   readonly practiceStatuses?: readonly QuestionSetPracticeStatus[];
   readonly examYears?: readonly number[];
   readonly provinces?: readonly string[];
+  readonly cursor?: QuestionSetLibraryCursor;
   readonly limit: number;
+}
+
+export interface QuestionSetLibraryCursor {
+  readonly createdAt: InstantMs;
+  readonly id: QuestionSetId;
 }
 
 export interface QuestionRecord {
@@ -252,6 +259,17 @@ export interface CommittedQuestionSetBundle {
   readonly capabilityLinks: readonly QuestionCapabilityLink[];
 }
 
+export interface QuestionSetEnrichmentPatch {
+  readonly questionSetId: QuestionSetId;
+  readonly expectedContentVersion: number;
+  readonly nextContentHash: string;
+  readonly lecture?: {
+    readonly lectureId: LectureId;
+    readonly document: ContentDocumentRecord;
+  };
+  readonly questions: readonly QuestionRecord[];
+}
+
 export interface ContentRepository {
   installMetadata(bundle: ContentMetadataBundle, context: TransactionContext): Promise<void>;
   findMetadata(releaseId: string): Promise<ContentMetadataBundle | undefined>;
@@ -274,4 +292,8 @@ export interface ContentRepository {
     status: QuestionSetPracticeStatus,
     context: TransactionContext
   ): Promise<void>;
+  applyQuestionSetEnrichment(
+    patch: QuestionSetEnrichmentPatch,
+    context: TransactionContext
+  ): Promise<boolean>;
 }
