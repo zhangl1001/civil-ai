@@ -8,6 +8,7 @@ const INTERNAL_AGENT_LABELS: Readonly<Record<string, string>> = {
   'web.read_page': '网页内容读取',
   web_read_page: '网页内容读取',
   'question_bank.scan': '题目扫描',
+  'question_bank.repair': '题目结构修正',
   research_true_questions: '联网真题研究',
   'question_bank.resume': '导入恢复',
   'question_bank.confirm': '导入确认',

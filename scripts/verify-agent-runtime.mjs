@@ -11,6 +11,7 @@ try {
   const conversation = await server.ssrLoadModule('/src/modules/conversation/public.ts');
   const ai = await server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts');
   const aiConfig = await server.ssrLoadModule('/src/services/AIConfigService.ts');
+  const systemTools = await server.ssrLoadModule('/src/services/AgentSystemTools.ts');
   const taskToast = await server.ssrLoadModule('/src/components/TaskToastLifecycle.ts');
   const clock = { value: 1000, now() { return ++this.value; } };
   const machine = new agent.AgentRunMachine();
@@ -33,6 +34,19 @@ try {
     root,
     'src/composition-root/agent/AgentWorkerCoordinator.ts'
   ), 'utf8');
+  const sqliteAgentRunRepositorySource = await readFile(path.join(
+    root,
+    'src/modules/agent/adapters/SqliteAgentRunRepository.ts'
+  ), 'utf8');
+  const agentRunInsert = sqliteAgentRunRepositorySource.match(
+    /INSERT INTO tutor_agent_runs[\s\S]*?VALUES\s*\(([^)]*)\)/
+  );
+  assert.ok(agentRunInsert, 'SQLite Agent run INSERT must be present');
+  assert.equal(
+    (agentRunInsert[1].match(/\?/g) || []).length,
+    22,
+    'SQLite Agent run INSERT must bind exactly the 22 tutor_agent_runs columns'
+  );
   assert.doesNotMatch(
     workerCoordinatorSource,
     /nextWorkAt\s*===\s*undefined\)\s*return/,
@@ -96,6 +110,35 @@ try {
     agent.resolveAgentWorkPool(agent.AgentRunType.TutorTurn, agent.TaskTargetType.ChatTool),
     agent.AgentWorkPool.Interactive
   );
+  assert.equal(
+    agent.resolveAgentExecutionClass(
+      agent.AgentRunType.ContentGeneration,
+      agent.TaskTargetType.BusinessOperation,
+      { intent: 'trueQuestionResearch' }
+    ),
+    agent.AgentExecutionClass.ExternalResearch
+  );
+  assert.equal(
+    agent.resolveAgentExecutionClass(
+      agent.AgentRunType.ContentGeneration,
+      agent.TaskTargetType.BusinessOperation,
+      { intent: 'practice' }
+    ),
+    agent.AgentExecutionClass.General
+  );
+  assert.deepEqual(agent.agentExecutionClassesForLane(0, 3), [
+    agent.AgentExecutionClass.General
+  ]);
+  assert.deepEqual(agent.agentExecutionClassesForLane(2, 3), [
+    agent.AgentExecutionClass.ExternalResearch,
+    agent.AgentExecutionClass.General
+  ]);
+  assert.deepEqual(agent.agentExecutionClassesForLane(1, 2), [
+    agent.AgentExecutionClass.ExternalResearch,
+    agent.AgentExecutionClass.General
+  ]);
+  assert.equal(systemTools.readDeviceClock().madeProgress, true);
+  assert.match(systemTools.readDeviceClock().content, /device_clock/);
   assert.deepEqual(agent.agentWorkPoolsForLane(0, 3), [
     agent.AgentWorkPool.Interactive,
     agent.AgentWorkPool.Assessment,

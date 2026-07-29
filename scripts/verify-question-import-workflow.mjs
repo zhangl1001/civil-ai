@@ -111,14 +111,27 @@ async function verifyWorkflow(content, aiRuntime) {
 
   const invalidCandidate = scanned.candidates.find((candidate) => candidate.status === 'needs_confirmation');
   assert.ok(invalidCandidate);
-  const confirmed = await confirm.execute({
+  const repaired = await confirm.execute({
     draftId: scanned.draftId,
     expectedVersion: scanned.version,
-    rejectedCandidateIds: [invalidCandidate.candidateId]
+    repairOnly: true,
+    replacements: [{
+      candidateId: invalidCandidate.candidateId,
+      raw: validQuestion('q2-repaired')
+    }]
+  });
+  assert.equal(repaired.status, content.QuestionImportDraftStatus.NeedsConfirmation, 'automatic repair must not imply user confirmation');
+  assert.equal(repaired.readyCount, 2, 'automatic repair should re-scan only the replaced candidate');
+  assert.equal(repaired.needsConfirmationCount, 0);
+  const repairedAggregate = await drafts.find(scanned.draftId);
+  assert.equal(repairedAggregate.candidates.find((candidate) => candidate.id === invalidCandidate.candidateId).status, 'ready');
+  const confirmed = await confirm.execute({
+    draftId: scanned.draftId,
+    expectedVersion: repaired.version
   });
   assert.equal(confirmed.status, content.QuestionImportDraftStatus.Confirmed);
-  assert.equal(confirmed.readyCount, 1);
-  assert.equal(confirmed.rejectedCount, 1);
+  assert.equal(confirmed.readyCount, 2);
+  assert.equal(confirmed.rejectedCount, 0);
   assert.equal(contentRepository.bundles.length, 0, 'confirm must not publish formal content');
 
   const published = await publish.execute({
@@ -127,11 +140,11 @@ async function verifyWorkflow(content, aiRuntime) {
     idempotencyKey: 'publish:official:2025-js'
   });
   assert.equal(published.disposition, 'published');
-  assert.equal(published.publishedQuestionCount, 1);
+  assert.equal(published.publishedQuestionCount, 2);
   assert.equal(contentRepository.bundles.length, 1);
-  assert.equal(contentRepository.bundles[0].questionSet.questionCount, 1);
+  assert.equal(contentRepository.bundles[0].questionSet.questionCount, 2);
   assert.equal(contentRepository.bundles[0].questionSet.originType, content.QuestionOriginType.Official);
-  assert.equal(sources.links.length, 1);
+  assert.equal(sources.links.length, 2);
   assert.equal(generations.aggregates.length, 1);
   assert.equal(
     generations.aggregates[0].spec.promptVersionId,

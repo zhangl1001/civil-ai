@@ -50,7 +50,8 @@ import { webResearchService } from './WebResearchService';
 import { registerChatAgentSkillSelector } from './ChatAgentSkillSelector';
 import { QuestionImportAgentService } from './QuestionImportAgentService';
 import { agentWorkspaceQueryService } from './AgentWorkspaceQueryService';
-import { readDeviceClock } from './AgentSystemTools';
+import { composeGroundedAgentSystem, readDeviceClock } from './AgentSystemTools';
+import { registerQuestionImportRepairTool } from './RegisterQuestionImportRepairTool';
 import {
   agentConversationMemoryService,
   type RememberAgentPreferenceInput
@@ -331,7 +332,7 @@ export class ChatAgentService {
       ),
       skillCatalog: exposure.skillCatalog
     });
-    const constrainedSystem = [system, options.invocation?.systemConstraint].filter(Boolean).join('\n\n');
+    const groundedSystem = composeGroundedAgentSystem([system, options.invocation?.systemConstraint].filter(Boolean).join('\n\n'));
     const config = await aiConfigService.load();
     const deadline = createProviderExecutionDeadline(
       controller.signal,
@@ -341,7 +342,7 @@ export class ChatAgentService {
     try {
       const result = await runtime.createAgentLoop(executor, observer).execute({
         agentRunId: runId,
-        system: constrainedSystem,
+        system: groundedSystem,
         messages,
         tools: exposure.tools,
         availableTools: exposure.availableTools,
@@ -707,6 +708,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
       resultRef: aggregate.draft.id
     };
   });
+  registerQuestionImportRepairTool(executor, runtime);
   executor.register('question_bank.confirm', async (call, context) => {
     context.signal?.throwIfAborted();
     const replacements = Array.isArray(call.arguments.replacements)
@@ -826,15 +828,14 @@ function confirmationText(call?: ModelToolCall): string {
 function shouldUseAgent(text: string): boolean {
   return Boolean(text.trim());
 }
-
 function isConfirm(text: string): boolean {
-  return /^(确认|确定|开始|执行|可以|好|好的|行|嗯|是|yes|ok)$/i.test(text.trim());
+  return new Set(['确认', '确定', '开始', '执行', '可以', '好', '好的', '行', '嗯', '是', 'yes', 'ok'])
+    .has(text.trim().toLocaleLowerCase());
 }
-
 function isCancel(text: string): boolean {
-  return /^(取消|算了|不要|停止|不执行|否|no)$/i.test(text.trim());
+  return new Set(['取消', '算了', '不要', '停止', '不执行', '否', 'no'])
+    .has(text.trim().toLocaleLowerCase());
 }
-
 function toolLabel(code: string): string {
   return ({
     'system.read_clock': '读取设备时间',
@@ -850,6 +851,7 @@ function toolLabel(code: string): string {
     'teaching.request_practice': '创建针对性训练',
     'file.read_text': '读取导入文件',
     'question_bank.scan': '扫描题目草稿',
+    'question_bank.repair': '自动修正题目结构',
     'question_bank.resume': '恢复导入草稿',
     'question_bank.confirm': '确认题目草稿',
     'question_bank.publish': '发布正式题组',

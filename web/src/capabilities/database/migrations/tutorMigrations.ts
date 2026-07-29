@@ -27,6 +27,7 @@ import abilityCalibrationSnapshotsSql from './026_ability_calibration_snapshots.
 import webResearchImportMethodSql from './027_web_research_import_method.sql?raw';
 import referencePackComparisonQuestionsSql from './028_reference_pack_comparison_questions.sql?raw';
 import questionSetLibraryPaginationSql from './029_question_set_library_pagination.sql?raw';
+import agentExecutionClassesSql from './030_agent_execution_classes.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -203,5 +204,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'question_set_library_pagination',
     checksum: 'sha256:00377836edcb6a7c44e65f2779eb5c19c41b73cc32b15194120ce8b91ff7a28c',
     sql: questionSetLibraryPaginationSql
+  },
+  {
+    version: 30,
+    name: 'agent_execution_classes',
+    checksum: 'sha256:ef8ff9677d0db87eee419087c5c242e42635cc74c0c59ab7a946e109b8d235fb',
+    sql: agentExecutionClassesSql
   }
 ];

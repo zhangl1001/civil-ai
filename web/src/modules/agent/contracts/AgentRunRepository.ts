@@ -1,12 +1,18 @@
 import type { TransactionContext } from '@/capabilities/database/public';
 import type { AiInvocationId, AgentRunId, ExamCycleId, InstantMs, JsonObject, LearningThreadId, PromptVersionId } from '@/kernel/public';
 import type { InvocationValidationStatus } from '@/capabilities/ai-runtime/public';
-import type { AgentRunStatus, AgentRunType, AgentWorkPool } from '../domain/AgentRunCodes';
+import type {
+  AgentExecutionClass,
+  AgentRunStatus,
+  AgentRunType,
+  AgentWorkPool
+} from '../domain/AgentRunCodes';
 
 export interface AgentRunRecord {
   readonly id: AgentRunId;
   readonly runType: AgentRunType;
   readonly workPool?: AgentWorkPool;
+  readonly executionClass?: AgentExecutionClass;
   readonly status: AgentRunStatus;
   readonly examCycleId?: ExamCycleId;
   readonly learningThreadId?: LearningThreadId;
@@ -77,7 +83,11 @@ export interface AgentRunRepository {
   countInvocations(runIds: readonly AgentRunId[]): Promise<Readonly<Record<string, number>>>;
   listRecent(limit: number): Promise<readonly AgentRunAggregate[]>;
   listRunnable(now: InstantMs, limit: number): Promise<readonly AgentRunAggregate[]>;
-  nextWorkAt(now: InstantMs, workPools?: readonly AgentWorkPool[]): Promise<InstantMs | undefined>;
+  nextWorkAt(
+    now: InstantMs,
+    workPools?: readonly AgentWorkPool[],
+    executionClasses?: readonly AgentExecutionClass[]
+  ): Promise<InstantMs | undefined>;
   claimRunnable(options: AgentRunClaimOptions): Promise<readonly AgentRunAggregate[]>;
   renewLease(runId: AgentRunId, workerId: string, leaseExpiresAt: InstantMs): Promise<boolean>;
   recoverExpiredLeases(options: AgentRunRecoveryOptions): Promise<readonly AgentRunAggregate[]>;
@@ -96,4 +106,5 @@ export interface AgentRunClaimOptions {
   readonly limit: number;
   readonly eventIds: readonly string[];
   readonly workPools?: readonly AgentWorkPool[];
+  readonly executionClasses?: readonly AgentExecutionClass[];
 }

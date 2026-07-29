@@ -17,6 +17,17 @@ export const AgentWorkPool = {
 } as const;
 export type AgentWorkPool = typeof AgentWorkPool[keyof typeof AgentWorkPool];
 
+/**
+ * Scheduling class is orthogonal to the business work pool.
+ * External research is deliberately isolated so a long web crawl cannot
+ * consume every slot used by interactive tutoring and content generation.
+ */
+export const AgentExecutionClass = {
+  General: 'general',
+  ExternalResearch: 'external_research'
+} as const;
+export type AgentExecutionClass = typeof AgentExecutionClass[keyof typeof AgentExecutionClass];
+
 export const AgentRunStatus = {
   Queued: TaskStatus.Queued,
   Running: TaskStatus.Running,
@@ -58,4 +69,15 @@ export function resolveAgentWorkPool(
     return AgentWorkPool.Assessment;
   }
   return AgentWorkPool.Interactive;
+}
+
+export function resolveAgentExecutionClass(
+  _runType: AgentRunType,
+  targetResourceType?: string,
+  inputSnapshot: Readonly<Record<string, unknown>> = {}
+): AgentExecutionClass {
+  const intent = typeof inputSnapshot.intent === 'string' ? inputSnapshot.intent : '';
+  return targetResourceType === 'business_operation' && intent === 'trueQuestionResearch'
+    ? AgentExecutionClass.ExternalResearch
+    : AgentExecutionClass.General;
 }

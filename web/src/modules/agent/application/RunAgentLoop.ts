@@ -32,7 +32,6 @@ import { executeAgentToolCalls } from './AgentToolBatchExecutor';
 import {
   agentToolSignature,
   attemptedToolNames,
-  claimedUnattemptedTool,
   composeActiveSkillSystem,
   compactAgentLoopMessages,
   completionVerificationInstruction,
@@ -40,9 +39,7 @@ import {
   createToolObservationMessage,
   createToolResultMessage,
   decrementToolSignature,
-  isHonestToolDeferral,
   limitToolResult,
-  repairToolInstruction,
   sanitizeMessageForCheckpoint,
   skillContinuationInstruction,
   validateAgentLoopLimits
@@ -286,11 +283,9 @@ export class RunAgentLoop {
       if (!calls.length) {
         const missingRequiredTool = requiredTool
           && !attemptedNames.has(requiredTool.name)
-          && !isHonestToolDeferral(response.text)
           ? requiredTool
           : undefined;
-        const unsupportedToolClaim = claimedUnattemptedTool(response.text, toolSet.names, attemptedNames);
-        if ((missingRequiredTool || unsupportedToolClaim) && !finalizationOnly) {
+        if (missingRequiredTool && !finalizationOnly) {
           requiredToolRepairCount += 1;
           if (requiredToolRepairCount > 2) {
             throw new Error('模型没有发起必要的真实工具调用，本次操作未执行。');
@@ -299,7 +294,10 @@ export class RunAgentLoop {
             { role: ModelMessageRole.Assistant, content: response.text },
             {
               role: ModelMessageRole.User,
-              content: repairToolInstruction(missingRequiredTool?.name ?? unsupportedToolClaim!)
+              content: [
+                `你刚才没有发起真实的 ${missingRequiredTool.name} 工具调用。`,
+                '不要用文字描述工具状态。现在必须实际调用该工具；若当前输入不足以执行，请明确说明缺少什么，不能声称操作已经开始或完成。'
+              ].join('\n')
             }
           );
           forceRequiredTool = Boolean(missingRequiredTool);
@@ -321,25 +319,25 @@ export class RunAgentLoop {
           continue;
         }
         if (awaitingOperationalTool && !finalizationOnly) {
-          if (isHonestToolDeferral(response.text)) {
-            skillWorkflowState = 'waiting_user';
-          } else {
-            skillContinuationRepairCount += 1;
-            if (skillContinuationRepairCount > 2) {
-              throw new Error('Skill 工作流已经加载，但模型没有执行具体业务工具。');
-            }
-            messages.push(
-              ...(response.text.trim()
-                ? [{ role: ModelMessageRole.Assistant, content: response.text } as ModelMessage]
-                : []),
-              {
-                role: ModelMessageRole.User,
-                content: skillContinuationInstruction([...activeSkills.values()])
-              }
-            );
-            await saveCheckpoint();
-            continue;
+          // A structured tool call is the only proof that a tool ran. This is
+          // a Skill contract, so recover from prose-only output by asking the
+          // model to choose an allowed operational tool. No text classification
+          // is involved here.
+          skillContinuationRepairCount += 1;
+          if (skillContinuationRepairCount > 2) {
+            throw new Error('Skill 工作流已经加载，但模型没有执行具体业务工具。');
           }
+          messages.push(
+            ...(response.text.trim()
+              ? [{ role: ModelMessageRole.Assistant, content: response.text } as ModelMessage]
+              : []),
+            {
+              role: ModelMessageRole.User,
+              content: skillContinuationInstruction([...activeSkills.values()])
+            }
+          );
+          await saveCheckpoint();
+          continue;
         }
         if (!response.text.trim()) {
           if (awaitingOperationalTool) {

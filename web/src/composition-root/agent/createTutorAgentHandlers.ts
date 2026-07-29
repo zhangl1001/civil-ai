@@ -41,6 +41,7 @@ import type {
 import type { UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import type { RequestStructuredPractice } from '@/modules/teaching/public';
 import { aiBusinessTools, type AIBusinessToolCall, type AIBusinessToolName, type AIBusinessToolResult } from '@/services/AIBusinessTools';
+import { practiceModuleCode } from '@/domain/labels';
 import type { GenerationIntent } from '@/services/GenerationTaskService';
 import {
   createStructuredPracticeAgentHandler,
@@ -321,7 +322,7 @@ async function executeBusinessOperation(
       const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
       const nodes = curriculum?.capabilityNodes
         .filter((node) => node.status === 'active' && node.subject === 'aptitude') ?? [];
-      const moduleCode = moduleCodeFromLabel(input.module);
+      const moduleCode = practiceModuleCode(input.module);
       const candidates = moduleCode ? nodes.filter((node) => node.module === moduleCode) : nodes;
       const matched = (
         input.knowledgePoint
@@ -582,13 +583,4 @@ function stepForProgress(progress: number) {
 
 function toJsonObject(value: Record<string, unknown>): JsonObject {
   return JSON.parse(JSON.stringify(value)) as JsonObject;
-}
-
-function moduleCodeFromLabel(value: string): string {
-  if (/判断|图推|逻辑/.test(value)) return 'judgment';
-  if (/言语/.test(value)) return 'verbal';
-  if (/资料/.test(value)) return 'data_analysis';
-  if (/数量|数学/.test(value)) return 'quantity';
-  if (/常识/.test(value)) return 'common_sense';
-  return value;
 }

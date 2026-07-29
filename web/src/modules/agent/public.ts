@@ -3,9 +3,12 @@ export {
   AgentRunStatus,
   AgentRunAction,
   AgentWorkPool,
+  AgentExecutionClass,
   DEFAULT_MAX_CONCURRENT_AGENT_RUNS,
   resolveAgentWorkPool,
-  type AgentWorkPool as AgentWorkPoolCode
+  resolveAgentExecutionClass,
+  type AgentWorkPool as AgentWorkPoolCode,
+  type AgentExecutionClass as AgentExecutionClassCode
 } from './domain/AgentRunCodes';
 export { TaskCenterStep, TaskTargetType, type TaskCenterStep as TaskCenterStepCode, type TaskTargetType as TaskTargetTypeCode } from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
@@ -41,7 +44,10 @@ export {
 export { AgentSystemPromptComposer, type AgentSystemPromptInput } from './domain/AgentSystemPromptComposer';
 export { AgentContextBudgeter, estimateTokens, type BudgetedAgentContext } from './domain/AgentContextBudgeter';
 export { AdaptiveAgentConcurrency } from './domain/AdaptiveAgentConcurrency';
-export { agentWorkPoolsForLane } from './domain/AgentWorkPoolPolicy';
+export {
+  agentExecutionClassesForLane,
+  agentWorkPoolsForLane
+} from './domain/AgentWorkPoolPolicy';
 export {
   AgentDelegationMode,
   SubAgentRegistry,

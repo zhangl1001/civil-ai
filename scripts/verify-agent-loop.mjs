@@ -130,6 +130,12 @@ try {
   const pendingImportExposure = chatCapabilities.planChatAgentCapabilities({ pendingToolName: 'question_bank.confirm' });
   assert.deepEqual(pendingImportExposure.skillNames, ['tutor.question_bank_ingestion']);
   assert.equal(pendingImportExposure.tools.some((tool) => tool.name === 'question_bank.publish'), true);
+  assert.equal(pendingImportExposure.tools.some((tool) => tool.name === 'question_bank.repair'), true);
+  assert.equal(
+    agent.tutorToolCatalog.find((tool) => tool.name === 'question_bank.repair').requiresConfirmation,
+    false,
+    'draft repair must be autonomous while formal publish remains confirmation-gated'
+  );
   assert.equal(
     agent.tutorToolCatalog.find((tool) => tool.name === 'question_bank.publish').requiresConfirmation,
     true,
@@ -467,22 +473,33 @@ try {
         assert.match(request.system, /# Skill: tutor\.practice_library@/);
         assert.match(request.system, /Completion checks/);
         assert.equal(request.tools.some((tool) => tool.name === 'practice_read_library'), true);
-        return { text: '我已经加载题库工作流，接下来读取题库。', usage: {} };
-      }
-      if (dynamicRequests.length === 3) {
-        assert.match(request.messages.at(-1).content, /必须实际调用工具/);
         return {
           text: '',
-          toolCalls: [{ id: 'read-library', name: 'practice_read_library', arguments: { scope: 'all' } }],
+          toolCalls: [{
+            id: 'read-library',
+            name: 'practice_read_library',
+            arguments: { scope: 'all' }
+          }],
           usage: {}
         };
       }
-      return { text: '当前题库有 1 套题组。', usage: {} };
+      if (dynamicRequests.length === 3) {
+        assert.deepEqual(
+          request.messages.at(-1),
+          {
+            role: ai.ModelMessageRole.Tool,
+            toolCallId: 'read-library',
+            content: '{"sets":[{"questionSetId":"set-1"}]}'
+          }
+        );
+        return { text: '当前题库有 1 套题组。', usage: {} };
+      }
+      throw new Error(`unexpected dynamic request ${dynamicRequests.length}`);
     }
   });
   assert.equal(dynamicResult.text, '当前题库有 1 套题组。');
   assert.deepEqual(dynamicExecutions, ['agent.select_skills', 'practice.read_library']);
-  assert.equal(dynamicRequests.length, 4);
+  assert.equal(dynamicRequests.length, 3);
   assert.deepEqual(dynamicCheckpoints.at(-1).activeToolNames.sort(), [
     'agent.select_skills',
     'learning.review_session',
