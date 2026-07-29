@@ -49,9 +49,13 @@ export class ContentSchemaValidator {
     const schemaVersion = readString(record.schemaVersion, '$.schemaVersion', issues);
     const capabilityCode = readString(record.capabilityCode, '$.capabilityCode', issues);
     const prompt = parseDocument(record.prompt, '$.prompt', issues, 0);
+    // Explanation is an enrichment block. A malformed or missing explanation
+    // must not discard an otherwise answerable question.
+    const explanationIssues: ContentValidationIssue[] = [];
     const explanation = record.explanation === undefined || record.explanation === null
       ? emptyDocument('question:explanation:empty')
-      : parseDocument(record.explanation, '$.explanation', issues, 0);
+      : parseDocument(record.explanation, '$.explanation', explanationIssues, 0)
+        ?? emptyDocument('question:explanation:invalid');
     const material = record.material === undefined || record.material === null
       ? undefined
       : parseDocument(record.material, '$.material', issues, 0);

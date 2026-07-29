@@ -26,8 +26,12 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄真题、试卷和学习资料，并在本地压缩后交给 AI 整理。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>用于面试模拟时进行本地语音作答和转写。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择真题、试卷和学习资料进行导入。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>用于将面试模拟中的语音作答转写为文本，便于本地评分和复盘。</string>
 	<key>UILaunchStoryboardName</key>

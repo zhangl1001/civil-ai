@@ -4,7 +4,7 @@ import type {
   AgentRunRepository,
   TutorAgentLifecycleObserver
 } from '@/modules/agent/public';
-import { AgentRunType, TaskTargetType } from '@/modules/agent/public';
+import { AgentRunType, TaskTargetType, invalidProviderRequestText } from '@/modules/agent/public';
 import {
   MessageBusinessLine,
   MessageCategory,
@@ -79,8 +79,9 @@ export class TaskMessageProjector implements TutorAgentLifecycleObserver {
 }
 
 function shouldProject(run: AgentRunAggregate): boolean {
-  return run.run.targetResourceType !== TaskTargetType.ChatTool
-    || run.run.checkpoint.taskCenterVisible === true;
+  const visibleAtTerminal = run.run.checkpoint.taskCenterVisible === true;
+  if (!visibleAtTerminal && run.run.inputSnapshot.taskCenterVisible === false) return false;
+  return visibleAtTerminal || run.run.targetResourceType !== TaskTargetType.ChatTool;
 }
 
 function businessLine(snapshot: JsonObject) {
@@ -130,7 +131,7 @@ function taskErrorText(code: string, diagnostic?: string): string {
   if (code === 'generation.error_diagnosis_invalid') return '模型返回的错因结构不完整，请重新分析';
   if (code.startsWith('generation.')) return '生成内容校验失败，请重新生成';
   if (code === 'provider.authentication') return '模型配置认证失败，请检查 API Key';
-  if (code === 'provider.invalid_request') return '当前模型接口不支持本次结构化请求，请检查供应商和模型配置';
+  if (code === 'provider.invalid_request') return invalidProviderRequestText(diagnostic);
   if (code === 'provider.rate_limited') return '模型服务限流，任务会自动重试';
   if (code === 'provider.empty_response') return '模型没有返回有效内容，请重新生成';
   if (code === 'provider.protocol') return '模型接口返回格式不兼容，请检查 Base URL';

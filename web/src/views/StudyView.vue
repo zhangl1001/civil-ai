@@ -38,6 +38,26 @@
           </div>
         </section>
 
+        <section class="panel app-card lecture-library">
+          <div class="section-title"><strong>我的讲义</strong><span>{{ lectures.length }} 份</span></div>
+          <AppStateView
+            v-if="!lectures.length"
+            compact
+            title="还没有生成讲义"
+            description="从薄弱考点或搜索框发起精讲，生成完成后会保存在这里。"
+          />
+          <template v-else>
+            <button v-for="lecture in lectures" :key="lecture.id" type="button" class="lecture-row" @click="openLecture(lecture.id)">
+              <i><BookOpenIcon /></i>
+              <span>
+                <strong>{{ lecture.title }}</strong>
+                <em>{{ lecture.module }} · {{ formatLectureTime(lecture.updatedAt) }}</em>
+              </span>
+              <ChevronRightIcon />
+            </button>
+          </template>
+        </section>
+
         <section class="panel app-card">
           <div class="section-title"><strong>薄弱考点</strong><span>{{ dashboard.weakPoints.length }} 个需加强</span></div>
           <div v-if="!dashboard.weakPoints.length" class="inline-empty">完成练习后自动显示薄弱考点</div>
@@ -72,11 +92,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { useRoute } from 'vue-router';
-import { BookOpenIcon, SearchIcon } from 'lucide-vue-next';
+import { computed, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { BookOpenIcon, ChevronRightIcon, SearchIcon } from 'lucide-vue-next';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { studyService, type StudyDashboard, type StudyPoint } from '@/services/StudyService';
+import { studyService, type StudyDashboard, type StudyLectureSummary, type StudyPoint } from '@/services/StudyService';
 import { useAIChatStore } from '@/stores/aiChat';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
@@ -85,7 +105,9 @@ import LectureContent from '@/components/content/LectureContent.vue';
 
 const chat = useAIChatStore();
 const route = useRoute();
+const router = useRouter();
 const dashboard = ref<StudyDashboard | null>(null);
+const lectures = ref<StudyLectureSummary[]>([]);
 const isLoading = ref(false);
 const query = ref('');
 const activeModule = ref('');
@@ -98,11 +120,13 @@ const visibleModules = computed(() => {
   return activeModule.value ? modules.filter((module) => module.name === activeModule.value) : modules;
 });
 
-onMounted(load);
+watch(() => route.query.assetId, load, { immediate: true });
 
 async function load() {
   isLoading.value = true;
   try {
+    lectureContent.value = '';
+    lectureTitle.value = '';
     const assetId = typeof route.query.assetId === 'string' ? route.query.assetId : '';
     if (assetId) {
       const runtime = await initializeTutorRuntime();
@@ -111,11 +135,29 @@ async function load() {
       lectureTitle.value = asset?.title || '';
       if (lectureContent.value) return;
     }
-    dashboard.value = await studyService.dashboard();
+    const [nextDashboard, nextLectures] = await Promise.all([
+      studyService.dashboard(),
+      studyService.listLectures()
+    ]);
+    dashboard.value = nextDashboard;
+    lectures.value = nextLectures;
     if (!opened.size && dashboard.value.modules[0]) opened.add(dashboard.value.modules[0].name);
   } finally {
     isLoading.value = false;
   }
+}
+
+async function openLecture(assetId: string) {
+  await router.push({ path: '/vue/study/lecture', query: { assetId } });
+}
+
+function formatLectureTime(value: number): string {
+  const date = new Date(value);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
 }
 
 function toggle(moduleName: string) {
@@ -159,6 +201,15 @@ async function learnQuery() {
 .section-title strong { font-size: var(--type-size-body-large); }
 .section-title span { color:var(--text-secondary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
 .inline-empty { padding:14px; text-align:center; color:var(--text-secondary-color); font-size: var(--type-size-secondary); }
+.lecture-library { overflow:hidden; }
+.lecture-row { width:100%; min-height:62px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.06); padding:10px 0; display:flex; align-items:center; gap:10px; color:inherit; background:transparent; text-align:left; font:inherit; }
+.lecture-row>i { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; flex:0 0 auto; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); }
+.lecture-row>i svg,.lecture-row>svg { width:17px; height:17px; }
+.lecture-row>span { min-width:0; flex:1; }
+.lecture-row strong,.lecture-row em { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lecture-row strong { font-size:var(--type-size-secondary); }
+.lecture-row em { margin-top:4px; color:var(--text-secondary-color); font-size:var(--type-size-micro); font-style:normal; }
+.lecture-row>svg { flex:0 0 auto; color:var(--text-secondary-color); }
 .weak-card { width:100%; gap:10px; padding:12px 0; border:0; border-top:1px solid rgba(var(--color-ink-rgb), .07); background:transparent; text-align:left; font-family: inherit; }
 .weak-card i { width:30px; height:30px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-style:normal; font-weight: var(--type-weight-semibold); flex-shrink: 0; }
 .weak-card i.danger { background:rgba(239,68,68,.12); color:#dc2626; }

@@ -5,6 +5,7 @@ export type AIBusinessToolName =
   | 'redo_wrongbook'
   | 'generate_digest'
   | 'generate_monthly_digest'
+  | 'research_true_questions'
   | 'grade_essay'
   | 'review_interview';
 
@@ -110,6 +111,18 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
     name: 'generate_monthly_digest',
     description: '生成本月时政月报或月度复盘。',
     parameters: { type: 'object', required: [], properties: {} }
+  },
+  {
+    name: 'research_true_questions',
+    description: '创建独立的联网真题研究任务。任务会自行调整检索策略、核验网页并生成待确认草稿；适用于用户要求联网找真题或把公开真题加入题库。',
+    parameters: {
+      type: 'object',
+      required: ['scope'],
+      properties: {
+        scope: { type: 'string', description: '年份、地区、考试类型、模块或考点组成的明确范围' },
+        maxQuestions: { type: 'number', description: '本轮最多整理的可核验题目数', default: 5, minimum: 1, maximum: 10 }
+      }
+    }
   },
   {
     name: 'grade_essay',

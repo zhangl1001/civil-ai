@@ -26,23 +26,17 @@ export class ChatAttachmentService {
     assertAttachmentBatch(files);
     const extractedFiles: Array<{ file: File; extraction: DocumentExtractionResult }> = [];
     const imageParts: ModelImageContentPart[] = [];
-    // Images go directly to the model. Text/PDF files retain the existing
-    // extraction fallback. All work stays sequential to keep iOS memory flat.
+    // Keep the original image for vision models and extract bounded OCR text on
+    // iOS as a fallback for text-only models. Work remains sequential so a
+    // multi-photo import does not decode several full-size images at once.
     for (const file of files) {
       if (isImageFile(file)) {
+        const extraction = await extractImageFallback(file);
         imageParts.push(await prepareVisionImage(file));
         if (imageParts.reduce((total, part) => total + part.dataBase64.length, 0) > MAX_VISION_BATCH_ENCODED_CHARS) {
           throw new Error('本次图片内容过大，请分成两次导入，避免 iPhone 内存不足。');
         }
-        extractedFiles.push({
-          file,
-          extraction: {
-            text: '原图将作为多模态附件交给 AI 识别；本地不先做 OCR。',
-            method: 'image_vision',
-            pageCount: 1,
-            warnings: []
-          }
-        });
+        extractedFiles.push({ file, extraction });
       } else {
         extractedFiles.push({ file, extraction: await documentTextExtractionService.extract(file) });
       }
@@ -62,6 +56,30 @@ export class ChatAttachmentService {
       ...(imageParts.length ? { imageParts } : {})
     };
   }
+}
+
+async function extractImageFallback(file: File): Promise<DocumentExtractionResult> {
+  if (!documentTextExtractionService.canExtractImageLocally()) {
+    return visionOnlyExtraction();
+  }
+  try {
+    return await documentTextExtractionService.extract(file);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : '没有识别到文字';
+    return {
+      ...visionOnlyExtraction(),
+      warnings: [`本地文字识别未完成：${reason}。将继续尝试由当前模型理解原图。`]
+    };
+  }
+}
+
+function visionOnlyExtraction(): DocumentExtractionResult {
+  return {
+    text: '当前没有本地 OCR 正文；原图已作为临时多模态附件提供。若模型不支持图片，请改用支持视觉输入的模型或导入可复制文本。',
+    method: 'image_vision',
+    pageCount: 1,
+    warnings: []
+  };
 }
 
 function extractedDocument(items: readonly { file: File; extraction: DocumentExtractionResult }[]): string {

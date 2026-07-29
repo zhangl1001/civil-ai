@@ -23,7 +23,8 @@ export type GenerationIntent =
   | 'digest'
   | 'monthlyDigest'
   | 'study'
-  | 'interviewReview';
+  | 'interviewReview'
+  | 'trueQuestionResearch';
 
 export interface GenerationTaskInput {
   readonly intent: GenerationIntent;
@@ -49,7 +50,8 @@ const TITLE_BY_INTENT: Record<GenerationIntent, string> = {
   digest: '学习复盘',
   monthlyDigest: '时政月报',
   study: '考点精讲',
-  interviewReview: '面试深度点评'
+  interviewReview: '面试深度点评',
+  trueQuestionResearch: '联网真题研究'
 };
 
 export class GenerationTaskService {
@@ -70,6 +72,7 @@ export class GenerationTaskService {
     const title = input.title || TITLE_BY_INTENT[input.intent];
     const detail = input.detail || input.module || '准备执行';
     const actionRoute = routeForInput(input);
+    const actionParams = actionParamsForInput(input);
     const aggregate = await runtime.createAgentRun.execute({
       idempotencyKey: `business:${scopeKey}:${crypto.randomUUID()}`,
       runType: runTypeForIntent(input.intent),
@@ -88,7 +91,7 @@ export class GenerationTaskService {
         businessLine: businessLineForIntent(input.intent),
         category: MessageCategory.Task,
         actionRoute,
-        actionParams: {}
+        actionParams
       }
     });
     await runtime.messageCenter.publish({
@@ -101,7 +104,7 @@ export class GenerationTaskService {
       sourceType: MessageSourceType.AgentRun,
       sourceId: aggregate.run.id,
       actionRoute,
-      actionParams: {},
+      actionParams,
       dedupKey: `agent-run:${aggregate.run.id}:queued`
     }).catch(() => undefined);
     agentWorkerCoordinator.start(runtime);
@@ -135,6 +138,7 @@ function businessLineForIntent(intent: GenerationIntent) {
   if (intent === 'essayGrade') return MessageBusinessLine.Essay;
   if (intent === 'interviewReview') return MessageBusinessLine.Interview;
   if (intent === 'mock') return MessageBusinessLine.Exam;
+  if (intent === 'trueQuestionResearch') return MessageBusinessLine.Practice;
   if (intent === 'daily' || intent === 'digest' || intent === 'monthlyDigest') return MessageBusinessLine.Digest;
   return MessageBusinessLine.Tutor;
 }
@@ -146,8 +150,14 @@ function routeForInput(input: GenerationTaskInput): string {
   if (intent === 'interviewReview') return '/vue/interview';
   if (intent === 'mock') return input.payload?.subject === '申论' ? '/vue/essay' : '/vue/exam';
   if (intent === 'monthlyDigest') return '/vue/monthly-digest';
+  if (intent === 'trueQuestionResearch') return '/vue/practice';
   if (intent === 'daily' || intent === 'digest') return '/vue/digest';
   return '/vue/study';
+}
+
+function actionParamsForInput(input: GenerationTaskInput): JsonObject {
+  if (input.intent === 'trueQuestionResearch') return { mode: 'true' };
+  return {};
 }
 
 function toJsonObject(value: Record<string, unknown>): JsonObject {

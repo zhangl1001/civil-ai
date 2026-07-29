@@ -15,10 +15,10 @@ export type AgentToolHandler = (
 export class RegisteredAgentToolExecutor implements AgentToolExecutor {
   private readonly handlers = new Map<string, AgentToolHandler>();
 
-  register(toolCode: string, handler: AgentToolHandler): void {
-    if (!toolCode.trim()) throw new Error('Agent tool handler requires a code');
-    if (this.handlers.has(toolCode)) throw new Error(`Duplicate Agent tool handler: ${toolCode}`);
-    this.handlers.set(toolCode, handler);
+  register(toolName: string, handler: AgentToolHandler): void {
+    if (!toolName.trim()) throw new Error('Agent tool handler requires a name');
+    if (this.handlers.has(toolName)) throw new Error(`Duplicate Agent tool handler: ${toolName}`);
+    this.handlers.set(toolName, handler);
   }
 
   async execute(
@@ -26,9 +26,9 @@ export class RegisteredAgentToolExecutor implements AgentToolExecutor {
     call: ModelToolCall,
     context: AgentToolExecutionContext
   ): Promise<AgentToolExecutionResult> {
-    if (definition.code !== call.name) throw new Error(`Agent tool definition mismatch: ${call.name}`);
-    const handler = this.handlers.get(definition.code);
-    if (!handler) throw new Error(`Agent tool executor is unavailable: ${definition.code}`);
+    if (definition.name !== call.name) throw new Error(`Agent tool definition mismatch: ${call.name}`);
+    const handler = this.handlers.get(definition.name);
+    if (!handler) throw new Error(`Agent tool executor is unavailable: ${definition.name}`);
     return handler(call, context);
   }
 }

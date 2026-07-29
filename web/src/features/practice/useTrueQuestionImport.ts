@@ -1,13 +1,15 @@
 import { ref } from 'vue';
-import { importAgentAttachments } from '@/composition-root/public';
+import { enqueueBusinessAgentTask, importAgentAttachments } from '@/composition-root/public';
 import { useAIChatStore } from '@/stores/aiChat';
 import { TrueQuestionImportFeature } from './TrueQuestionImportFeature';
+import { trueQuestionResearchScope, type TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteria';
 
 const trueQuestionImportFeature = new TrueQuestionImportFeature(importAgentAttachments);
 
 export function useTrueQuestionImport(reportError: (message: string) => void) {
   const chat = useAIChatStore();
   const importingTrueQuestion = ref(false);
+  const researchingTrueQuestion = ref(false);
 
   async function importTrueQuestion(files: readonly File[]) {
     if (importingTrueQuestion.value) return;
@@ -23,11 +25,26 @@ export function useTrueQuestionImport(reportError: (message: string) => void) {
     }
   }
 
-  async function researchTrueQuestions(filterSummary: string) {
+  async function researchTrueQuestions(criteria: TrueQuestionResearchCriteria) {
+    if (researchingTrueQuestion.value) return;
+    researchingTrueQuestion.value = true;
     reportError('');
-    const request = trueQuestionImportFeature.researchRequest(filterSummary);
-    await chat.open(request.prompt, undefined, request.invocation);
+    try {
+      const scope = trueQuestionResearchScope(criteria);
+      return await enqueueBusinessAgentTask({
+        intent: 'trueQuestionResearch',
+        title: '联网真题研究',
+        detail: scope,
+        sourceId: scope,
+        payload: { scope, maxQuestions: criteria.maxQuestions }
+      });
+    } catch (cause) {
+      reportError(cause instanceof Error ? cause.message : '创建联网真题研究任务失败');
+    } finally {
+      researchingTrueQuestion.value = false;
+    }
+    return undefined;
   }
 
-  return { importingTrueQuestion, importTrueQuestion, researchTrueQuestions };
+  return { importingTrueQuestion, researchingTrueQuestion, importTrueQuestion, researchTrueQuestions };
 }

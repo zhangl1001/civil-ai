@@ -139,6 +139,26 @@ AI 负责内容和语义判断，代码负责步骤顺序与落库。这样速�
 
 Agent 可以在一次交互中调用多个工具，但不能直接操作 Repository 或数据库。所有写工具最终调用 Application Use Case。
 
+#### 长流程从对话中分离
+
+联网真题研究、整卷导入、长报告等高耗时工作不能占用聊天 Agent 的 turn、工具数和超时预算。对话 Skill 只负责理解需求、确认最小范围并调用一个业务派发工具；派发成功后立即向用户返回可追踪的任务状态。
+
+```text
+Chat Agent
+→ 确认研究范围
+→ research_true_questions
+→ 创建独立 AgentRun
+→ Content Generation 工作池
+→ TrueQuestionResearchAgent 多轮搜索/读页/纠偏
+→ question_bank.scan 形成待确认草稿
+→ 页面确认
+→ publish 写入正式题库
+```
+
+独立 AgentRun 使用自己的 Skill、预算、检查点、取消信号和恢复策略。它可根据搜索结果调整年份、地区、模块、来源站点和关键词；一次空结果或单个网页失败不能被视为任务完成。聊天会话关闭、切换或达到本轮回复上限，不得终止已派发的业务任务。
+
+`research.true_questions` 在聊天中只暴露 `research_true_questions` 派发工具。`web.search`、`web.read_page` 与 `question_bank.scan` 仅暴露给独立研究 Agent；确认和发布仍由页面上的显式用户动作执行。这样工具结果不会撑大聊天上下文，也不会让长工作流与普通对话争抢预算。
+
 ### 4.3 何时不用 Agent
 
 - 页面动作参数明确时不用 Agent。
@@ -198,9 +218,12 @@ checkpoint
 
 ### 5.2 循环约束
 
-- 默认最多 8 个模型 turn、12 次工具调用。
-- 单 turn 工具调用上限 4。
-- 检测相同工具和相同参数重复调用。
+- 循环采用 `Skill 动态预算 + 进展感知扩容 + 全局硬上限`，业务服务不得写死统一轮次。
+- 无 Skill 的普通对话使用 compact 档；标准工作流、联网研究和长流程分别由 Skill Manifest 声明更高档位。
+- 每个档位同时定义软 turn、软工具数、软耗时和对应硬上限；只有新工具证据或可靠业务结果才允许逐级扩容。
+- 相同参数重复调用、空结果和执行失败不算进展；连续无进展达到软预算时收束。
+- 当前全局硬上限为 32 个模型 turn、64 次工具调用和 15 分钟，单 turn 最多 6 个工具。
+- 区分成功、无进展和失败 observation；成功调用禁止重复，可恢复失败允许受控重试，连续无进展后要求模型调整策略。
 - 只读且互不依赖的工具可并行；写工具和同资源工具串行。
 - 达到上限时停止并给出已完成、未完成和需要用户确认的内容。
 - 取消时保留已经可靠提交的结果，未提交的 staging 结果作废。
@@ -362,31 +385,34 @@ open_target_resource
 
 工具返回结构化、精简、可继续推理的结果，例如资源 ID、状态、关键摘要和下一可用动作。禁止把完整题库、全量画像或巨大 Markdown 作为工具结果塞回上下文。
 
+手机端业务资产位于 SQLite，不把任意文件系统 `Glob` 暴露给模型。`workspace.discover` 提供等价的资源发现层：先按资源类型、时间范围和关键词返回轻量摘要与 ID，再由题库、讲义或积累 Skill 读取选中的单个资源。异步业务统一用 `task.read_status` 按 task ID 或最小时间范围核验，精确查询为空时工具结果必须给出下一查询范围，便于 Agent 调整策略继续执行。
+
 ### 6.5 Skill 体系
 
 `Skill` 不是可任意执行的脚本，也不是一段超长提示词。它是一个版本化能力包，描述 Agent 如何在特定业务场景组合领域知识、提示词章节、工具、工作流和校验器。
 
-Skill Manifest：
+当前 Skill Manifest 的稳定最小合同：
 
 ```text
-skill_id
+name
 version
 description
-applicable_subjects
-applicable_capability_types
-activation_rules
-required_context_views
-prompt_chapters
-allowed_tools
-workflow_templates
-validators
 dependencies
 conflicts
-token_budget
-evaluation_suite
-content_hash
-status
+workflow
+  name
+  steps
+  completion_criteria
+  failure_recovery
+prompt_chapters
+resources
+allowed_tools
+validators
+context_budget_tokens
+execution_budget
 ```
+
+适用科目、能力节点、评测集和发布哈希属于后续发布元数据，可以扩展 Manifest，但不得替代上述运行时合同。
 
 Skill 类型：
 
@@ -398,22 +424,34 @@ Skill 类型：
 ### 6.6 Skill 按需加载
 
 ```text
-当前目标与能力节点
-→ Skill Resolver 匹配候选
-→ 校验版本、依赖和冲突
-→ 选择最小 Skill 集
-→ 合并 prompt chapters
-→ 生成最小 tool catalog
-→ 加载所需 context views
-→ 编译本次 Agent bundle
+系统提示词只发送 Skill name + description
+→ 模型先理解用户目标，自主决定直接回答或按需加载 Skill
+→ 每次可加载最多两个 Skill，获得新证据后可继续加载、切换或组合其他 Skill
+→ Registry 校验版本、依赖和冲突
+→ Bundle Compiler 合并 workflow / prompt chapters / resources / validators
+→ 生成当前 Run 的最小 Tool catalog
+→ Agent Loop 保存活动 Skill、活动 Tool 和工作流状态
+→ 模型根据工具结果继续推理、调整策略或完成
 ```
 
 - Kernel Skill 始终存在，只包含身份、用户控制、安全和通用教学原则。
-- 其他 Skill 根据目标、科目、题型和工作流动态加载。
-- 一次 run 默认不超过 1 个主工作流 Skill、2 个学科/策略 Skill。
+- 其他 Skill 是否加载、加载哪个、调用什么工具，由模型根据用户目标和每轮结果决定；不得使用中文关键词、正则或页面名称把自然语言映射到固定 Skill。
+- 每次加载最多两个 Skill 是上下文保护边界，不是整个 run 的业务上限；复杂任务可在后续回合继续加载。
 - Skill 只决定可见工具和提示词，不直接获得数据库访问权。
+- Workflow、failure recovery 和工具顺序默认是建议，模型可以调整、跳过无关步骤或采用更合适的工具组合。
+- 生成、批改和长任务派发 Skill 使用 `agent.requires-write`，只读发现不能满足完成条件；异步写入使用 `agent.no-false-completion`，任务状态核验前不能宣称内容已经生成。
 - 编译结果按不可变版本和哈希缓存；学生动态上下文不进入静态缓存。
 - 缺失依赖或版本冲突时拒绝启动，不静默选择“差不多”的 Skill。
+
+### 6.6.1 自主性与约束边界
+
+运行时将规则分为三层，避免把 Agent 变成固定流程机：
+
+1. 硬约束：业务事实必须有可信来源，写入与破坏操作必须经过权限和确认，异步任务不得虚报完成，受控答案不得提前泄露。
+2. 重要引导：优先最小数据范围、必要时并行只读工具、失败后根据证据改变范围和策略、控制上下文成本。
+3. 自主决策：是否使用 Skill/Tool、选择哪个能力、调用顺序、重试方式、何时停止，由模型决定。
+
+代码只强制第一层和资源硬上限。第二层通过提示词与 Skill 工作流引导；第三层不得再由正则意图分类、固定工具链或页面路由替模型作决定。页面按钮触发的确定性业务工作流可以显式预加载 Skill，但自由对话必须保持 `tool_choice=auto`。
 
 ### 6.7 Skill 与工具发布
 
@@ -422,7 +460,7 @@ Skill 类型：
 - 发布前运行依赖检查、工具权限检查、token 预算和固定评测集。
 - 已发布版本不可原地编辑；活动工作流固定使用启动时版本。
 - 停用 Skill 不影响历史回放，但不再用于新任务。
-- Skill Registry 提供 `list/resolve/getVersion/validateBundle`，业务不得直接读取 Manifest 文件。
+- Skill Registry 提供 `register/list/get/resolve`，Bundle Compiler 负责 audience、工具数和上下文预算校验；业务不得直接拼装 Manifest。
 
 ## 7. 提示词架构
 
@@ -515,11 +553,33 @@ CurrentUserTurn
 - 摘要绑定输入事实版本；证据纠错或学习主线推进后使相关摘要失效。
 - 记录实际 usage，持续校准估算误差。
 
-硬预算按任务配置：最大输入、最大输出、最大 Agent turn、最大工具结果 token、最大总 token 和最大预计费用。任一预算接近上限时，Agent 必须收束当前目标或请求用户继续，不能自动扩容。
+预算按 Skill 档位配置：最大输入、最大输出、软/硬 Agent turn、软/硬工具数、软/硬耗时、最大工具结果 token、最大总 token 和最大预计费用。Runtime 只能在获得新证据时于当前 Skill 的硬边界内扩容；达到硬上限必须收束当前目标或请求用户继续。
 
 ### 8.4 隐私
 
 Context Compiler 在发送前执行字段白名单和脱敏。API Key、手机号、证件、无关单位信息、本地路径和其他考试周期内容默认不得进入模型请求。
+
+### 8.5 会话压缩与 Agent Memory
+
+对话连续性采用四层上下文，不再把全部会话反复发送给模型：
+
+```text
+当前用户消息
+→ 最近 14 条有效用户/助手原文（约 6000 token）
+→ 带消息游标的滚动会话摘要
+→ 最多 6 条已确认个人记忆
+→ 业务事实按需工具查询
+```
+
+- 最近消息按 token 估算预算选择，工具状态、失败占位和中断标记不进入聊天历史上下文。
+- 只有移出最近窗口的旧消息才进入滚动摘要；摘要保存 `summaryCursorMessageId + summaryVersion`，同一消息不得重复压缩。
+- 一次 Agent Run 的工具链超过 24000 token 时，只压缩早期已完成的调用和结果；最近执行尾部保持原文及 tool-call/result 配对。
+- `working` 记忆只存在当前 Run/Checkpoint；`session` 随会话删除；`prospective` 保存短期待继续事项并设置过期时间；`semantic` 只保存用户明确表达的稳定偏好；业务证据使用领域表，不复制到 Agent Memory。
+- 允许进入 Memory 的当前类型只有回答偏好、学习偏好、个人约束和待继续事项。分数、能力、错因、题目、计划、任务状态、模型推断和思考过程禁止写入。
+- Agent 发现层只看到 `tutor.personal_memory` 的 `name + description`；激活后才加载 `memory.remember/memory.forget` Schema。遗忘属于高风险动作，仍经过 Policy Guard。
+- 每条记忆带作用域、来源、置信度、有效期和替代关系。新值先追加，再 supersede 同作用域旧值；删除会话会写遗忘屏障，阻止迟到写入恢复已删会话记忆。
+
+Agent Memory 只负责“如何继续和这个用户协作”，不负责“这个用户当前能力是多少”。后者必须从 SQLite/IndexedDB 的结构化业务事实按最小范围重新读取。
 
 ## 9. Model Router
 
@@ -619,6 +679,9 @@ prepare_context
 - 大题组按 3-4 题分批，并发受供应商和资源策略控制。
 - 批次先写 staging，校验通过后事务提交。
 - 首批可靠提交后页面即可使用，后续批次继续生成。
+- 内容采用分块就绪模型：核心交互块满足最低合同后立即发布，讲义、解析等必需但非阻塞块进入静默补全队列；错因等作答后块不得提前生成。
+- 静默补全是确定性可靠性机制，不依赖模型主动记得调用工具。公共调度器只治理幂等、重试、工作池、版本冲突和任务生命周期；每个业务策略独立提供 Prompt、Schema、解析与合并规则。
+- 补全合并只能写入当前仍缺失的块，必须用资源版本乐观锁拒绝陈旧结果，不能改写已发布核心块或用户作答状态。
 - 同一批失败只重试该批，不重跑整套。
 - 保持、迁移和锚定题不得读取会泄露答案的教学上下文。
 
@@ -749,7 +812,7 @@ TargetResourceView
 - Agent 运行时输入框保持可编辑，用户发送的新内容作为当前 `agentRunId` 的引导，不创建新任务。
 - 引导使用有界内存队列，在下一轮模型决策前消费；消费后立即释放，运行结束或新 run 开始时清空。
 - 引导作为用户消息进入会话历史，但不进入 Task Dock、铃铛或工具执行列表。
-- 已完成的工具调用不会因引导重复执行；相同工具和参数继续受当前 run 的签名去重约束。
+- 已完成的工具调用不会因引导重复执行；相同工具和参数成功后受当前 run 的签名去重约束，失败调用则按可恢复性有限重试并把 observation 回送模型。
 - 输入区只显示一条当前请求摘要和已接收引导数量，运行结束后自动消失。
 
 ## 15. 提示注入和安全边界
@@ -766,7 +829,7 @@ TargetResourceView
 | 风险 | 典型表现 | 防线 |
 |---|---|---|
 | 上下文膨胀 | 越聊越慢、重要事实被截断 | 记忆分层、按 turn 重编译、视图配额、摘要失效 |
-| 工具死循环 | 重复查状态或反复生题 | 调用签名去重、turn/tool 上限、目标完成条件 |
+| 工具死循环 | 重复查状态或反复生题 | 成功签名去重、失败受控重试、无进展换策略、turn/tool 上限、目标完成条件 |
 | 幻觉业务状态 | 声称已掌握或已落库 | 所有状态来自工具结果，完成以事务提交事件为准 |
 | 提示注入 | 题目材料要求忽略系统规则 | 不可信内容隔离、工具 allowlist、Policy Guard |
 | 跨会话串数据 | A 任务结果进入 B 会话 | run/workflow/session/resource ID 全链路校验 |
@@ -943,10 +1006,10 @@ src/features/tutor-ui/
 
 ### AI Phase 3：对话 Agent
 
-- [ ] 建立版本化 Tool Registry 和 Policy Guard。
-- [ ] 实现原生 tool call 的多 turn Agent loop。
-- [ ] 贯通 session/run/workflow/task/tool call/resource ID。
-- [ ] 实现槽位补齐、风险确认、重复调用和循环上限。
+- [x] 建立版本化 Skill/Tool Registry 和 Policy Guard。
+- [x] 实现原生 tool call 的多 turn Agent loop。
+- [x] 贯通 session/run/workflow/task/tool call/resource ID。
+- [x] 实现必要信息确认、风险确认、重复调用和循环上限。
 
 ### AI Phase 4：质量与优化
 

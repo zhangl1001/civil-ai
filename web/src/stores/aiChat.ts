@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia';
 import type { AIMessage, AISession } from '@/domain/ai';
-import { buildConversationSummary } from '@/ai/ChatContextBuilder';
 import { AI_MESSAGE_CHANGED_EVENT, aiChatRepository } from '@/services/AIChatRepository';
 import { AI_CHAT_MESSAGE_PAGE_SIZE } from '@/ai/ChatMessagePagination';
 import {
@@ -261,7 +260,10 @@ export const useAIChatStore = defineStore('aiChat', {
         });
         if (!routed.handled) throw new Error('AI Agent 未接管当前消息');
         await this.refreshMessages();
-        await this.updateSessionSummary(activeSession.id);
+        const refreshedSession = await aiChatRepository.getSession(activeSession.id);
+        if (refreshedSession && this.session?.id === activeSession.id) {
+          this.session = refreshedSession;
+        }
         await this.refreshSessions();
       } finally {
         const pendingAssistantMessageId = this.pendingAssistantMessageId;
@@ -312,12 +314,8 @@ export const useAIChatStore = defineStore('aiChat', {
     },
 
     async updateSessionSummary(sessionId: string) {
-      const messages = await aiChatRepository.listMessages(sessionId);
-      const summary = buildConversationSummary(messages);
-      await aiChatRepository.updateSessionSummary(sessionId, summary);
-      if (this.session?.id === sessionId) {
-        this.session = { ...this.session, summary, summaryUpdatedAt: Date.now() };
-      }
+      const session = await aiChatRepository.getSession(sessionId);
+      if (session && this.session?.id === sessionId) this.session = session;
     }
   }
 });

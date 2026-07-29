@@ -26,6 +26,7 @@ import tutorCycleConclusionsSql from './025_tutor_cycle_conclusions.sql?raw';
 import abilityCalibrationSnapshotsSql from './026_ability_calibration_snapshots.sql?raw';
 import webResearchImportMethodSql from './027_web_research_import_method.sql?raw';
 import referencePackComparisonQuestionsSql from './028_reference_pack_comparison_questions.sql?raw';
+import questionSetLibraryPaginationSql from './029_question_set_library_pagination.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -196,5 +197,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'reference_pack_comparison_questions',
     checksum: 'sha256:46325ab71bb7b86eaddc68460f9040d1fbeb1a802aff1c0b75a073abe8c6b76b',
     sql: referencePackComparisonQuestionsSql
+  },
+  {
+    version: 29,
+    name: 'question_set_library_pagination',
+    checksum: 'sha256:00377836edcb6a7c44e65f2779eb5c19c41b73cc32b15194120ce8b91ff7a28c',
+    sql: questionSetLibraryPaginationSql
   }
 ];

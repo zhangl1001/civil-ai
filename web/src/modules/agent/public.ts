@@ -11,17 +11,33 @@ export { TaskCenterStep, TaskTargetType, type TaskCenterStep as TaskCenterStepCo
 export { AgentRunMachine } from './domain/AgentRunMachine';
 export {
   AgentToolRisk,
+  AgentToolRole,
   AgentToolRegistry,
-  type AgentCapabilityBundle,
-  type AgentSkillDefinition,
   type AgentToolDefinition,
+  type AgentToolRole as AgentToolRoleCode,
   type AgentToolRisk as AgentToolRiskCode
 } from './domain/AgentToolRegistry';
 export {
-  ToolExposurePlanner,
-  type ToolExposureLimits,
-  type ToolExposurePlan
-} from './domain/ToolExposurePlanner';
+  AgentExecutionBudget,
+  AgentExecutionBudgetTier,
+  isAgentExecutionBudgetTier,
+  type AgentExecutionBudgetDecision,
+  type AgentExecutionBudgetLimits,
+  type AgentExecutionBudgetTier as AgentExecutionBudgetTierCode
+} from './domain/AgentExecutionBudget';
+export {
+  AgentSkillBundleCompiler,
+  AgentSkillRegistry,
+  type AgentPromptChapter,
+  type AgentSkillActivation,
+  type AgentSkillBundle,
+  type AgentSkillBundleLimits,
+  type AgentSkillManifest,
+  type AgentSkillResource,
+  type AgentSkillValidator,
+  type AgentSkillWorkflow,
+  type AgentWorkflowStep
+} from './domain/AgentSkillRegistry';
 export { AgentSystemPromptComposer, type AgentSystemPromptInput } from './domain/AgentSystemPromptComposer';
 export { AgentContextBudgeter, estimateTokens, type BudgetedAgentContext } from './domain/AgentContextBudgeter';
 export { AdaptiveAgentConcurrency } from './domain/AdaptiveAgentConcurrency';
@@ -32,6 +48,8 @@ export {
   type AgentDelegationMode as AgentDelegationModeCode,
   type SubAgentDefinition
 } from './domain/SubAgentRegistry';
+export { agentSystemToolCatalog } from './fixtures/AgentSystemToolCatalog';
+export { agentExternalToolCatalog } from './fixtures/AgentExternalToolCatalog';
 export { tutorSkillCatalog, tutorToolCatalog } from './fixtures/tutorToolCatalog';
 export { tutorSubAgentCatalog } from './fixtures/tutorSubAgentCatalog';
 export type { AgentInvocationRecord, AgentRunAggregate, AgentRunEventRecord, AgentRunRecord, AgentRunRepository } from './contracts/AgentRunRepository';
@@ -51,6 +69,9 @@ export {
   type AgentModelInvoker,
   type AgentRuntimeEvent,
   type AgentRuntimeObserver,
+  type AgentSkillWorkflowState,
+  type AgentToolAttemptState,
+  type AgentToolAttemptStatus,
   type AgentToolExecutionContext,
   type AgentToolExecutionResult,
   type AgentToolExecutor,
@@ -81,4 +102,5 @@ export {
   type TutorAgentHandler,
   type TutorAgentLifecycleObserver
 } from './application/RunTutorAgentBatch';
+export { invalidProviderRequestText } from './application/AgentRunErrorPresentation';
 export { GetAgentRunViews, type AgentRunView } from './application/GetAgentRunViews';

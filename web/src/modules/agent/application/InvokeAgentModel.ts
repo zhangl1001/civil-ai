@@ -7,6 +7,7 @@ import {
   ProviderGatewayError,
   type ModelMessage,
   type ProviderGateway,
+  type ProviderRequest,
   type ProviderResponse,
   type ProviderToolDefinition
 } from '@/capabilities/ai-runtime/public';
@@ -134,28 +135,18 @@ export class InvokeAgentModel implements AgentModelInvoker {
         messages,
         temperature: command.temperature ?? 0.2,
         maxOutputTokens: command.maxOutputTokens ?? 8_192,
-      responseSchema: command.responseSchema,
-      tools: command.tools,
-      toolChoice: command.toolChoice,
-      requestId: invocationId
+        responseSchema: command.responseSchema,
+        tools: command.tools,
+        toolChoice: command.toolChoice,
+        requestId: invocationId
       };
       const shouldStream = Boolean(command.preferStream && gateway.stream && command.onDelta);
-      let emittedDelta = false;
-      let response: ProviderResponse;
-      if (shouldStream) {
-        try {
-          response = await gateway.stream!(request, async (event) => {
-            emittedDelta ||= Boolean(event.text);
-            await command.onDelta?.(event.text);
-          }, deadline.signal);
-        } catch (error) {
-          if (!canFallbackFromStream(error, emittedDelta, deadline.signal.aborted)) throw error;
-          response = await gateway.complete(request, deadline.signal);
-          await command.onDelta?.(response.text);
-        }
-      } else {
-        response = await gateway.complete(request, deadline.signal);
-      }
+      const response = await invokeProviderWithRecovery(
+        gateway,
+        request,
+        shouldStream ? command.onDelta : undefined,
+        deadline.signal
+      );
       if (command.onDelta && !shouldStream) {
         await command.onDelta(response.text);
       }
@@ -216,5 +207,73 @@ function canFallbackFromStream(
   deadlineAborted: boolean
 ): boolean {
   if (emittedDelta || deadlineAborted || !(error instanceof ProviderGatewayError)) return false;
-  return error.kind === ProviderErrorKind.InvalidRequest;
+  return error.kind === ProviderErrorKind.InvalidRequest
+    || error.kind === ProviderErrorKind.EmptyResponse
+    || error.kind === ProviderErrorKind.Protocol;
 }
+
+async function invokeProviderWithRecovery(
+  gateway: ProviderGateway,
+  request: ProviderRequest,
+  onDelta: ((text: string) => void | Promise<void>) | undefined,
+  signal: AbortSignal
+): Promise<ProviderResponse> {
+  for (let attempt = 0; attempt < PROVIDER_ATTEMPT_LIMIT; attempt += 1) {
+    signal.throwIfAborted();
+    let emittedDelta = false;
+    try {
+      if (!onDelta || !gateway.stream) return await gateway.complete(request, signal);
+      try {
+        return await gateway.stream(request, async (event) => {
+          emittedDelta ||= Boolean(event.text);
+          await onDelta(event.text);
+        }, signal);
+      } catch (error) {
+        if (!canFallbackFromStream(error, emittedDelta, signal.aborted)) throw error;
+        const response = await gateway.complete(request, signal);
+        await onDelta(response.text);
+        return response;
+      }
+    } catch (error) {
+      if (!canRetryProviderTurn(error, emittedDelta, signal, attempt)) throw error;
+      await waitForProviderRetry(providerRetryDelayMs(error, attempt), signal);
+    }
+  }
+  throw new Error('AI provider recovery exhausted unexpectedly');
+}
+
+function canRetryProviderTurn(
+  error: unknown,
+  emittedDelta: boolean,
+  signal: AbortSignal,
+  attempt: number
+): boolean {
+  if (emittedDelta || signal.aborted || attempt >= PROVIDER_ATTEMPT_LIMIT - 1) return false;
+  if (!(error instanceof ProviderGatewayError)) return false;
+  return error.kind === ProviderErrorKind.EmptyResponse
+    || error.kind === ProviderErrorKind.Transient
+    || error.kind === ProviderErrorKind.RateLimited;
+}
+
+function providerRetryDelayMs(error: unknown, attempt: number): number {
+  const providerDelay = error instanceof ProviderGatewayError ? error.retryAfterMs : undefined;
+  return Math.min(5_000, providerDelay ?? 250 * 2 ** attempt);
+}
+
+function waitForProviderRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(done, Math.max(0, delayMs));
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? new DOMException('Request aborted', 'AbortError'));
+    };
+    function done() {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+const PROVIDER_ATTEMPT_LIMIT = 4;

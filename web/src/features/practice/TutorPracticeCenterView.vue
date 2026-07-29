@@ -83,13 +83,14 @@
           v-else
           :filter-summary="trueQuestionFilterSummary"
           :practice-count="truePracticeCount"
-          :set-count="filteredTrueQuestionSets.length"
+          :set-count="trueQuestionSets.length"
           :completed-count="completedTrueQuestionCount"
           :launching="launching"
           :importing="importingTrueQuestion"
+          :researching="researchingTrueQuestion"
           @filter="showTrueFilterSheet = true"
-          @import-file="importTrueQuestion"
-          @research="researchTrueQuestions(trueQuestionFilterSummary)"
+          @import-file="importTrueQuestion" @capture-error="error = $event"
+          @research="showTrueResearchSheet = true"
           @special="startTrueQuestionPractice('special')"
           @retest="startTrueQuestionPractice('retest')"
         />
@@ -111,31 +112,15 @@
           :title="emptyTitle"
           :description="emptyDescription"
         />
-        <InfiniteScrollPagination v-else :has-more="activeMode === 'true' && trueQuestionVisibleCount < filteredTrueQuestionSets.length" :has-items="activeMode === 'true' && Boolean(filteredTrueQuestionSets.length)" :on-load-more="loadMoreTrueQuestions">
-          <div class="set-list">
-            <button
-              v-for="set in visibleSets"
-              :key="set.id"
-              type="button"
-              @click="openSet(set)"
-            >
-              <i>{{ moduleShort(set.module) }}</i>
-              <span>
-                <strong>{{ setTitle(set) }}</strong>
-                <em>
-                  <b :class="`status-${set.practiceStatus}`">
-                    <CircleCheckIcon v-if="set.practiceStatus === QuestionSetPracticeStatus.Completed" />
-                    <Clock3Icon v-else-if="set.practiceStatus === QuestionSetPracticeStatus.InProgress" />
-                    <CircleIcon v-else />
-                    {{ questionSetPracticeStatusLabel(set.practiceStatus) }}
-                  </b>
-                  <span>{{ setMeta(set) }}</span>
-                </em>
-              </span>
-              <ChevronRightIcon />
-            </button>
-          </div>
-        </InfiniteScrollPagination>
+        <PracticeQuestionSetList
+          v-else
+          :mode="activeMode"
+          :sets="visibleSets"
+          :has-more="activePageHasMore"
+          :loading="loadingMore"
+          :on-load-more="loadMoreSets"
+          @open="openSet"
+        />
       </section>
     </PullToRefresh>
 
@@ -248,31 +233,31 @@
         <div class="filter-footer">
           <button type="button" class="filter-reset" @click="resetTrueQuestionFilters">重置</button>
           <button type="button" class="filter-apply" @click="showTrueFilterSheet = false">
-            查看 {{ filteredTrueQuestionSets.length }} 套真题
+            查看当前题组
           </button>
         </div>
       </div>
     </BottomSheet>
+    <TrueQuestionImportDraftSheet
+      v-if="researchDraft"
+      v-model="showResearchDraft"
+      :draft="researchDraft"
+      :busy="publishingResearchDraft"
+      :error="researchDraftError"
+      @publish="publishResearchDraft"
+    />
+    <TrueQuestionResearchSheet v-if="showTrueResearchSheet" v-model="showTrueResearchSheet" :exam-name="examName" :province="candidateProvince" :module="trueModuleFilter" @submit="startTrueQuestionResearch" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import {
-  ChevronRightIcon,
-  CircleCheckIcon,
-  CircleIcon,
-  Clock3Icon,
-  FilePenLineIcon,
-  LandmarkIcon,
-  SlidersHorizontalIcon,
-  SparklesIcon
-} from 'lucide-vue-next';
+import { ChevronRightIcon, FilePenLineIcon, LandmarkIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
-import { AppStateView, InfiniteScrollPagination, InitialRefreshState, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, InitialRefreshState, PullToRefresh } from '@/capabilities/design-system/public';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { APTITUDE_PRACTICE_MODULE_OPTIONS, practiceModuleLabel } from '@/domain/labels';
 import { AssessmentRole } from '@/kernel/public';
@@ -283,7 +268,6 @@ import {
   QuestionSetEntryMode,
   QuestionSetPracticeStatus,
   questionOriginLabel,
-  questionSetLibraryTitle,
   questionSetPracticeStatusLabel,
   type QuestionSetLibraryEntry,
   type QuestionSetPracticeStatusCode
@@ -294,22 +278,29 @@ import { actionQuery, StructuredPracticeTaskCenter } from './StructuredPracticeT
 import { PracticeCenterFeature } from './PracticeCenterFeature';
 import { TrueQuestionPracticeFeature } from './TrueQuestionPracticeFeature';
 import TrueQuestionLibraryActions from './TrueQuestionLibraryActions.vue';
+import PracticeQuestionSetList from './PracticeQuestionSetList.vue';
+import TrueQuestionImportDraftSheet from './TrueQuestionImportDraftSheet.vue';
+import TrueQuestionResearchSheet from './TrueQuestionResearchSheet.vue';
 import { useTrueQuestionImport } from './useTrueQuestionImport';
+import { useTrueQuestionResearchDraft } from './useTrueQuestionResearchDraft';
+import { usePracticeQuestionSetPagination, type PracticeCenterMode } from './usePracticeQuestionSetPagination';
+import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteria';
 
-type PracticeMode = 'tutor' | 'self' | 'true';
+type PracticeMode = PracticeCenterMode;
 
 const route = useRoute();
 const router = useRouter();
 const loading = ref(true);
 const launching = ref(false);
 const error = ref('');
-const { importingTrueQuestion, importTrueQuestion, researchTrueQuestions } = useTrueQuestionImport((message) => { error.value = message; });
+const { importingTrueQuestion, researchingTrueQuestion, importTrueQuestion, researchTrueQuestions } = useTrueQuestionImport((message) => { error.value = message; });
 const cycleName = ref('刷题中心');
-const generatedSets = ref<readonly QuestionSetLibraryEntry[]>([]);
-const trueQuestionSets = ref<readonly QuestionSetLibraryEntry[]>([]);
+const examName = ref('公务员考试');
+const candidateProvince = ref('');
 const curriculumNodes = ref<readonly CapabilityNode[]>([]);
 const capabilities = ref<readonly CapabilityNode[]>([]);
 const tutorPrescription = ref<TutorPracticePrescription | null>(null);
+const trueQuestionFacets = ref<readonly QuestionSetLibraryEntry[]>([]);
 const activeMode = ref<PracticeMode>(
   route.query.mode === 'true'
     ? 'true'
@@ -317,16 +308,48 @@ const activeMode = ref<PracticeMode>(
 );
 const tutorTask = ref<AgentRunView | null>(null);
 const selfTask = ref<AgentRunView | null>(null);
+const trueTask = ref<AgentRunView | null>(null);
 const foregroundTaskId = ref('');
 const navigatedTaskId = ref('');
 const showCustomSheet = ref(false);
 const showTrueFilterSheet = ref(false);
+const showTrueResearchSheet = ref(false);
 const trueOriginFilter = ref<'all' | typeof QuestionOriginType.Official | typeof QuestionOriginType.Imported | typeof QuestionOriginType.UserCreated>('all');
 const trueYearFilter = ref(0);
 const trueProvinceFilter = ref('');
 const trueModuleFilter = ref('');
 const trueStatusFilter = ref<'all' | QuestionSetPracticeStatusCode>('all');
-const truePracticeCount = ref(10); const trueQuestionVisibleCount = ref(30);
+const truePracticeCount = ref(10);
+const {
+  loadingMore,
+  trueQuestionSets,
+  visibleSets,
+  activePageHasMore,
+  initializePages,
+  loadMoreSets,
+  reloadTrueQuestionSets,
+  reloadGeneratedQuestionSets
+} = usePracticeQuestionSetPagination(practiceCenterFeature, activeMode, {
+  origin: trueOriginFilter,
+  year: trueYearFilter,
+  province: trueProvinceFilter,
+  module: trueModuleFilter,
+  status: trueStatusFilter
+});
+const {
+  showResearchDraft,
+  publishingResearchDraft,
+  researchDraftError,
+  researchDraft,
+  loadResearchDraftFromRoute,
+  publishResearchDraft
+} = useTrueQuestionResearchDraft({
+  route,
+  router,
+  reloadLibrary: reloadTrueQuestionSets,
+  reportPageError: (message) => { error.value = message; },
+  activateTrueQuestionMode: () => { activeMode.value = 'true'; }
+});
 const customModule = ref('');
 const customQuestionTypeId = ref('');
 const customCapabilityId = ref('');
@@ -352,28 +375,15 @@ const filteredCapabilities = computed(() => capabilities.value.filter((item) => 
 const selectedCustomCapability = computed(() => capabilities.value.find((item) => item.id === customCapabilityId.value) || null);
 const activeTask = computed(() => activeMode.value === 'tutor'
   ? tutorTask.value
-  : activeMode.value === 'self' ? selfTask.value : null);
-const tutorSets = computed(() => generatedSets.value.filter((set) => set.entryMode === QuestionSetEntryMode.Tutor).slice(0, 12));
-const selfSets = computed(() => generatedSets.value.filter((set) => set.entryMode === QuestionSetEntryMode.Self).slice(0, 12));
-const filteredTrueQuestionSets = computed(() => trueQuestionSets.value.filter((set) => (
-  (trueOriginFilter.value === 'all' || set.originType === trueOriginFilter.value)
-  && (!trueYearFilter.value || set.sourceMetadata?.examYear === trueYearFilter.value)
-  && (!trueProvinceFilter.value || set.sourceMetadata?.province === trueProvinceFilter.value)
-  && (!trueModuleFilter.value || set.module === trueModuleFilter.value)
-  && (trueStatusFilter.value === 'all' || set.practiceStatus === trueStatusFilter.value)
-)));
-const visibleTrueQuestionSets = computed(() => filteredTrueQuestionSets.value.slice(0, trueQuestionVisibleCount.value));
-const visibleSets = computed(() => activeMode.value === 'tutor'
-  ? tutorSets.value
-  : activeMode.value === 'self' ? selfSets.value : visibleTrueQuestionSets.value);
+  : activeMode.value === 'self' ? selfTask.value : trueTask.value);
 const trueQuestionYears = computed(() => [...new Set(
-  trueQuestionSets.value.flatMap((set) => set.sourceMetadata?.examYear ? [set.sourceMetadata.examYear] : [])
+  trueQuestionFacets.value.flatMap((set) => set.sourceMetadata?.examYear ? [set.sourceMetadata.examYear] : [])
 )].sort((left, right) => right - left));
 const trueQuestionProvinces = computed(() => [...new Set(
-  trueQuestionSets.value.flatMap((set) => set.sourceMetadata?.province ? [set.sourceMetadata.province] : [])
+  trueQuestionFacets.value.flatMap((set) => set.sourceMetadata?.province ? [set.sourceMetadata.province] : [])
 )].sort((left, right) => left.localeCompare(right, 'zh-CN')));
-const trueQuestionModules = computed(() => [...new Set(trueQuestionSets.value.map((set) => set.module))]);
-const completedTrueQuestionCount = computed(() => trueQuestionSets.value.filter((set) => (
+const trueQuestionModules = computed(() => [...new Set(trueQuestionFacets.value.map((set) => set.module))]);
+const completedTrueQuestionCount = computed(() => trueQuestionFacets.value.filter((set) => (
   set.practiceStatus === QuestionSetPracticeStatus.Completed
   && (trueOriginFilter.value === 'all' || set.originType === trueOriginFilter.value)
   && (!trueYearFilter.value || set.sourceMetadata?.examYear === trueYearFilter.value)
@@ -424,7 +434,7 @@ const emptyTitle = computed(() => ({
 const emptyDescription = computed(() => ({
   tutor: '开始今日教学动作后，私教题组会保存在这里。',
   self: '设置模块、考点和题量后，自主题组会保存在这里。',
-  true: '通过 AI 对话导入并确认题目后，真题会按来源归档在这里。'
+  true: '导入文件或创建联网研究任务，确认草稿后真题会按来源归档在这里。'
 })[activeMode.value]);
 const trueQuestionFilterSummary = computed(() => {
   const filters = [
@@ -434,17 +444,22 @@ const trueQuestionFilterSummary = computed(() => {
     trueModuleFilter.value ? moduleLabel(trueModuleFilter.value) : '',
     trueStatusFilter.value === 'all' ? '' : questionSetPracticeStatusLabel(trueStatusFilter.value)
   ].filter(Boolean);
-  return filters.length ? filters.join(' · ') : `全部来源 · ${trueQuestionSets.value.length}套`;
+  return filters.length ? filters.join(' · ') : `全部来源 · ${trueQuestionFacets.value.length}套`;
 });
 
 onMounted(async () => {
   await load();
+  await loadResearchDraftFromRoute();
   if (route.query.mode === 'self') showCustomSheet.value = true;
   if (route.query.mode === 'tutor' && route.query.start) await startTutorPractice();
   pollTimer = window.setInterval(() => void refreshTasks(), 1200);
 });
 
-watch([activeMode, trueOriginFilter, trueYearFilter, trueProvinceFilter, trueModuleFilter, trueStatusFilter], () => { trueQuestionVisibleCount.value = 30; });
+watch(() => route.query.draftId, () => void loadResearchDraftFromRoute());
+
+watch([trueOriginFilter, trueYearFilter, trueProvinceFilter, trueModuleFilter, trueStatusFilter], () => {
+  if (!loading.value) void reloadTrueQuestionSets();
+}, { flush: 'post' });
 onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer);
 });
@@ -457,12 +472,14 @@ async function load() {
       String(route.query.dailyPlanItemId || '') || undefined
     );
     cycleName.value = state.cycleName;
+    examName.value = state.examName;
+    candidateProvince.value = state.province;
     curriculumNodes.value = state.curriculumNodes;
     capabilities.value = state.capabilities;
     tutorPrescription.value = state.prescription;
+    trueQuestionFacets.value = state.trueQuestionFacets;
     initializeCustomSelection();
-    generatedSets.value = state.generatedSets;
-    trueQuestionSets.value = state.trueQuestionSets; trueQuestionVisibleCount.value = 30;
+    initializePages(state);
     restoreTasks(state.activeRuns);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '读取刷题中心失败';
@@ -470,7 +487,6 @@ async function load() {
     loading.value = false;
   }
 }
-function loadMoreTrueQuestions() { trueQuestionVisibleCount.value = Math.min(trueQuestionSets.value.length, trueQuestionVisibleCount.value + 30); }
 
 function initializeCustomSelection() {
   const requestedModule = normalizeModule(String(route.query.module || ''));
@@ -489,9 +505,18 @@ function initializeCustomSelection() {
 function restoreTasks(activeRuns: readonly AgentRunView[]) {
   tutorTask.value = activeRuns.find((item) => taskMode(item) === 'tutor') || null;
   selfTask.value = activeRuns.find((item) => taskMode(item) === 'self') || null;
-  if (tutorTask.value || selfTask.value) {
+  trueTask.value = activeRuns.find((item) => taskMode(item) === 'true') || null;
+  if (tutorTask.value || selfTask.value || trueTask.value) {
     void initializeTutorRuntime().then((runtime) => new StructuredPracticeTaskCenter(runtime).resume());
   }
+}
+
+async function startTrueQuestionResearch(criteria: TrueQuestionResearchCriteria) {
+  const result = await researchTrueQuestions(criteria);
+  if (!result) return;
+  showTrueResearchSheet.value = false;
+  trueTask.value = result.task;
+  foregroundTaskId.value = result.task.id;
 }
 
 async function startTutorPractice() {
@@ -574,7 +599,7 @@ function trackTask(task: AgentRunView, mode: PracticeMode) {
 }
 
 async function refreshTasks() {
-  const tracked = [tutorTask.value, selfTask.value]
+  const tracked = [tutorTask.value, selfTask.value, trueTask.value]
     .filter((item): item is AgentRunView => Boolean(item?.id && item.isActive));
   if (!tracked.length) return;
   try {
@@ -583,12 +608,14 @@ async function refreshTasks() {
       .filter((item): item is AgentRunView => Boolean(item));
     for (const task of refreshed) {
       if (taskMode(task) === 'tutor') tutorTask.value = task;
-      else selfTask.value = task;
+      else if (taskMode(task) === 'self') selfTask.value = task;
+      else trueTask.value = task;
       if (task.status === 'failed' && task.id === foregroundTaskId.value) error.value = task.detail || '生成练习失败';
     }
-    if (refreshed.some((task) => !task.isActive)) {
-      generatedSets.value = await (await practiceCenterFeature()).listQuestionSets();
-    }
+    const completedModes = [...new Set(refreshed.filter((task) => !task.isActive).map(taskMode))];
+    await Promise.all(completedModes.map((mode) => (
+      mode === 'true' ? reloadTrueQuestionSets() : reloadGeneratedQuestionSets(mode)
+    )));
     const completed = refreshed.find((task) => (
       task.id === foregroundTaskId.value
       && task.status === 'completed'
@@ -601,10 +628,23 @@ async function refreshTasks() {
       foregroundTaskId.value = '';
       await router.push({ path: completed.actionRoute || '/vue/practice/objective-session', query: actionQuery(completed) });
     }
+    const completedResearch = refreshed.find((task) => (
+      taskMode(task) === 'true'
+      && task.id === foregroundTaskId.value
+      && task.status === 'completed'
+      && typeof task.actionParams.draftId === 'string'
+      && navigatedTaskId.value !== task.id
+    ));
+    if (completedResearch) {
+      navigatedTaskId.value = completedResearch.id;
+      foregroundTaskId.value = '';
+      await router.push({ path: completedResearch.actionRoute || '/vue/practice', query: actionQuery(completedResearch) });
+    }
   } catch {
     // A later poll or pull-to-refresh restores durable task state.
   }
 }
+
 function practiceCenterFeature(): Promise<PracticeCenterFeature> {
   practiceCenterFeaturePromise ??= initializeTutorRuntime().then((runtime) => new PracticeCenterFeature(runtime));
   return practiceCenterFeaturePromise;
@@ -616,7 +656,8 @@ async function cancelCurrentTask() {
   const runtime = await initializeTutorRuntime();
   await new StructuredPracticeTaskCenter(runtime).cancel(task);
   if (activeMode.value === QuestionSetEntryMode.Tutor) tutorTask.value = null;
-  else selfTask.value = null;
+  else if (activeMode.value === QuestionSetEntryMode.Self) selfTask.value = null;
+  else trueTask.value = null;
   if (foregroundTaskId.value === task.id) foregroundTaskId.value = '';
 }
 
@@ -715,7 +756,8 @@ function openEssayPractice() {
   });
 }
 
-function taskMode(task: AgentRunView): 'tutor' | 'self' {
+function taskMode(task: AgentRunView): PracticeMode {
+  if (task.scopeKey?.startsWith('trueQuestionResearch:')) return 'true';
   if (task.actionParams.mode === QuestionSetEntryMode.Tutor) return QuestionSetEntryMode.Tutor;
   if (task.actionParams.mode === QuestionSetEntryMode.Self) return QuestionSetEntryMode.Self;
   return task.scopeKey?.startsWith('practice:tutor:')
@@ -736,28 +778,6 @@ function moduleLabel(module: string) {
   return practiceModuleLabel(module);
 }
 
-function moduleShort(module: string) {
-  return moduleLabel(module).slice(0, 1);
-}
-
-function setTitle(set: QuestionSetLibraryEntry) {
-  return activeMode.value === 'true'
-    ? questionSetLibraryTitle(set)
-    : `${moduleLabel(set.module)} · ${set.questionCount}题`;
-}
-
-function setMeta(set: QuestionSetLibraryEntry) {
-  const details = activeMode.value === 'true'
-    ? [
-        questionOriginLabel(set.originType),
-        moduleLabel(set.module),
-        `${set.questionCount}题`
-      ]
-    : [roleLabel(set.assessmentRole)];
-  details.push(formatCreatedAt(set.createdAt));
-  return details.join(' · ');
-}
-
 function roleLabel(role: string) {
   return ({
     teaching: '讲解',
@@ -769,14 +789,6 @@ function roleLabel(role: string) {
   } as Record<string, string>)[role] ?? role;
 }
 
-function formatCreatedAt(value: number) {
-  const date = new Date(value);
-  const today = new Date();
-  if (date.toDateString() === today.toDateString()) {
-    return `今天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
-  }
-  return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
-}
 </script>
 
 <style scoped>
@@ -816,20 +828,6 @@ function formatCreatedAt(value: number) {
 .generation-card em { margin-top:4px; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .generation-card>svg { width:16px; height:16px; color:var(--text-secondary-color); }
 .page-error { margin:0; color:var(--red-color); font-size:var(--type-size-caption); }
-.set-list { overflow:hidden; border-radius:var(--radius-card); background:rgba(var(--color-surface-rgb),.56); box-shadow:var(--shadow-card); }
-.set-list button { width:100%; min-height:66px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.055); padding:10px 12px; display:flex; align-items:center; gap:10px; color:inherit; background:transparent; text-align:left; font:inherit; }
-.set-list button:first-child { border-top:0; }
-.set-list button>i { width:34px; height:34px; display:grid; place-items:center; flex:0 0 auto; border-radius:11px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.1); font-size:var(--type-size-caption); font-style:normal; font-weight:var(--type-weight-semibold); }
-.set-list button>span { min-width:0; flex:1; }
-.set-list strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.set-list strong { font-size:var(--type-size-secondary); }
-.set-list em { margin-top:4px; display:flex; align-items:center; gap:7px; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; }
-.set-list em>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.set-list em>b { flex:0 0 auto; display:inline-flex; align-items:center; gap:3px; color:var(--text-secondary-color); font-size:inherit; font-weight:var(--type-weight-medium); }
-.set-list em>b svg { width:12px; height:12px; }
-.set-list em>b.status-in_progress { color:var(--orange-color); }
-.set-list em>b.status-completed { color:var(--green-color); }
-.set-list button>svg { width:16px; height:16px; color:var(--text-secondary-color); }
 .custom-sheet,.custom-sheet label { display:flex; flex-direction:column; gap:9px; }
 .custom-sheet { gap:15px; }
 .custom-sheet label>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }

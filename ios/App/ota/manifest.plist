@@ -20,9 +20,9 @@
         <string>com.zhangl.examtutor</string>
         <!-- 维护提醒:bundle-version 必须与 project.pbxproj 的 MARKETING_VERSION 保持一致。
              静态 plist 不支持 $(MARKETING_VERSION) 插值,故需在每次发版时手动同步。
-             当前值:1.0 (对齐 pbxproj MARKETING_VERSION) -->
+             当前值:1.1 (对齐 pbxproj MARKETING_VERSION) -->
         <key>bundle-version</key>
-        <string>1.0</string>
+        <string>1.1</string>
         <key>kind</key>
         <string>software</string>
         <key>title</key>

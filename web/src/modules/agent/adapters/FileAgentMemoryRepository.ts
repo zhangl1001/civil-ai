@@ -24,15 +24,23 @@ interface MemoryForgetSessionEntry {
   readonly sessionId: string;
 }
 
-type MemoryEntry = MemoryPutEntry | MemorySupersedeEntry | MemoryForgetSessionEntry;
+interface MemoryForgetEntry {
+  readonly version: 1;
+  readonly operation: 'memory.forget';
+  readonly memoryId: string;
+}
+
+type MemoryEntry = MemoryPutEntry | MemorySupersedeEntry | MemoryForgetEntry | MemoryForgetSessionEntry;
 
 const MEMORY_LOG_KEY = '__agent_memory__';
 
 export class FileAgentMemoryRepository implements AgentMemoryRepository {
+  private statePromise?: Promise<MemoryReplayState>;
+
   constructor(private readonly storage: AgentWorkspaceStorage) {}
 
   async recall(query: AgentMemoryQuery): Promise<readonly AgentMemoryRecord[]> {
-    return [...(await this.replay()).values()]
+    return [...(await this.state()).records.values()]
       .filter((record) => !record.supersededBy)
       .filter((record) => record.expiresAt === undefined || record.expiresAt > query.now)
       .filter((record) => matchesScope(record.examCycleId, query.examCycleId))
@@ -44,58 +52,98 @@ export class FileAgentMemoryRepository implements AgentMemoryRepository {
       .slice(0, query.limit);
   }
 
-  append(record: AgentMemoryRecord): Promise<void> {
+  async append(record: AgentMemoryRecord): Promise<void> {
     const entry: MemoryPutEntry = { version: 1, operation: 'memory.put', record };
-    return this.storage.append(MEMORY_LOG_KEY, JSON.stringify(entry));
+    await this.write(entry);
   }
 
-  supersede(memoryId: string, replacementId: string): Promise<void> {
+  async supersede(memoryId: string, replacementId: string): Promise<void> {
     const entry: MemorySupersedeEntry = {
       version: 1,
       operation: 'memory.supersede',
       memoryId,
       replacementId
     };
-    return this.storage.append(MEMORY_LOG_KEY, JSON.stringify(entry));
+    await this.write(entry);
   }
 
-  forgetSession(sessionId: string): Promise<void> {
+  async forget(memoryId: string): Promise<void> {
+    const entry: MemoryForgetEntry = {
+      version: 1,
+      operation: 'memory.forget',
+      memoryId
+    };
+    await this.write(entry);
+  }
+
+  async forgetSession(sessionId: string): Promise<void> {
     const entry: MemoryForgetSessionEntry = {
       version: 1,
       operation: 'memory.forget_session',
       sessionId
     };
-    return this.storage.append(MEMORY_LOG_KEY, JSON.stringify(entry));
+    await this.write(entry);
   }
 
-  private async replay(): Promise<Map<string, AgentMemoryRecord>> {
-    const records = new Map<string, AgentMemoryRecord>();
-    const superseded = new Map<string, string>();
-    const forgottenSessions = new Set<string>();
+  private async state(): Promise<MemoryReplayState> {
+    this.statePromise ??= this.replay();
+    return this.statePromise;
+  }
+
+  private async write(entry: MemoryEntry): Promise<void> {
+    await this.storage.append(MEMORY_LOG_KEY, JSON.stringify(entry));
+    applyEntry(await this.state(), entry);
+  }
+
+  private async replay(): Promise<MemoryReplayState> {
+    const state: MemoryReplayState = {
+      records: new Map(),
+      superseded: new Map(),
+      forgottenMemoryIds: new Set(),
+      forgottenSessions: new Set()
+    };
     (await this.storage.read(MEMORY_LOG_KEY)).split('\n').forEach((line) => {
       const entry = parseEntry(line);
-      if (!entry) return;
-      if (entry.operation === 'memory.forget_session') {
-        forgottenSessions.add(entry.sessionId);
-        records.forEach((record, id) => {
-          if (record.sessionId === entry.sessionId) records.delete(id);
-        });
-        return;
-      }
-      if (entry.operation === 'memory.supersede') {
-        superseded.set(entry.memoryId, entry.replacementId);
-        const current = records.get(entry.memoryId);
-        if (current) records.set(entry.memoryId, { ...current, supersededBy: entry.replacementId });
-        return;
-      }
-      if (entry.record.sessionId && forgottenSessions.has(entry.record.sessionId)) return;
-      const replacementId = superseded.get(entry.record.id);
-      records.set(entry.record.id, replacementId
-        ? { ...entry.record, supersededBy: replacementId }
-        : entry.record);
+      if (entry) applyEntry(state, entry);
     });
-    return records;
+    return state;
   }
+}
+
+interface MemoryReplayState {
+  readonly records: Map<string, AgentMemoryRecord>;
+  readonly superseded: Map<string, string>;
+  readonly forgottenMemoryIds: Set<string>;
+  readonly forgottenSessions: Set<string>;
+}
+
+function applyEntry(state: MemoryReplayState, entry: MemoryEntry): void {
+  if (entry.operation === 'memory.forget_session') {
+    state.forgottenSessions.add(entry.sessionId);
+    state.records.forEach((record, id) => {
+      if (record.sessionId === entry.sessionId) state.records.delete(id);
+    });
+    return;
+  }
+  if (entry.operation === 'memory.forget') {
+    state.forgottenMemoryIds.add(entry.memoryId);
+    state.records.delete(entry.memoryId);
+    return;
+  }
+  if (entry.operation === 'memory.supersede') {
+    state.superseded.set(entry.memoryId, entry.replacementId);
+    const current = state.records.get(entry.memoryId);
+    if (current) state.records.set(entry.memoryId, { ...current, supersededBy: entry.replacementId });
+    return;
+  }
+  if (
+    state.forgottenMemoryIds.has(entry.record.id)
+    || (entry.record.sessionId && state.forgottenSessions.has(entry.record.sessionId))
+  ) return;
+  const replacementId = state.superseded.get(entry.record.id);
+  state.records.set(entry.record.id, replacementId
+    ? { ...entry.record, supersededBy: replacementId }
+    : entry.record);
 }
 
 function parseEntry(line: string): MemoryEntry | undefined {
@@ -107,6 +155,9 @@ function parseEntry(line: string): MemoryEntry | undefined {
     if (entry.version !== 1) return undefined;
     if (entry.operation === 'memory.forget_session' && typeof entry.sessionId === 'string') {
       return entry as unknown as MemoryForgetSessionEntry;
+    }
+    if (entry.operation === 'memory.forget' && typeof entry.memoryId === 'string') {
+      return entry as unknown as MemoryForgetEntry;
     }
     if (
       entry.operation === 'memory.supersede'

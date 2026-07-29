@@ -12,17 +12,18 @@ import type {
   ContentSchemaVersion,
   QuestionSetLibraryEntry,
   QuestionSetLibraryQuery,
+  QuestionSetEnrichmentPatch,
   QuestionTemplateVersion
 } from '../contracts/ContentRepository';
 import type { QuestionSourceRecord } from '../contracts/QuestionSourceRepository';
 import {
   PublishedAssetStatus,
-  QuestionSetEntryMode,
   QuestionSetPracticeStatus,
   QuestionSetStatus,
   type QuestionTemplateCode
 } from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
+import { resolveQuestionSetEntryMode } from '../domain/QuestionSetEntryModePolicy';
 import {
   QuestionCalibrationRole,
   QuestionOriginType
@@ -111,7 +112,7 @@ export class IndexedDbContentRepository implements ContentRepository {
     const stored = await this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles);
     return stored
       .filter((item) => item.bundle.generationSpec.id === generationSpecId)
-      .sort((left, right) => right.createdAt - left.createdAt)
+      .sort((left, right) => right.createdAt - left.createdAt || right.questionSetId.localeCompare(left.questionSetId))
       .map((item) => normalizedBundle(item.bundle))[0];
   }
 
@@ -145,6 +146,7 @@ export class IndexedDbContentRepository implements ContentRepository {
           : undefined);
       })
       .filter((entry) => matchesLibraryQuery(entry, query))
+      .filter((entry) => isBeforeCursor(entry, query.cursor))
       .slice(0, limit);
   }
 
@@ -189,6 +191,47 @@ export class IndexedDbContentRepository implements ContentRepository {
       } satisfies StoredQuestionSetBundle
     });
   }
+
+  async applyQuestionSetEnrichment(
+    patch: QuestionSetEnrichmentPatch,
+    context: TransactionContext
+  ): Promise<boolean> {
+    const stored = await this.database.get<StoredQuestionSetBundle>(
+      TutorIndexedDbStore.ContentQuestionSetBundles,
+      patch.questionSetId
+    );
+    if (!stored) return false;
+    const current = normalizedBundle(stored.bundle);
+    if (current.questionSet.contentVersion !== patch.expectedContentVersion) return false;
+
+    const questionPatches = new Map(patch.questions.map((question) => [question.id, question]));
+    const documentPatches = patch.lecture
+      ? new Map([[patch.lecture.document.id, patch.lecture.document]])
+      : new Map();
+    this.transactionScope.stage(context, {
+      type: 'put',
+      store: TutorIndexedDbStore.ContentQuestionSetBundles,
+      value: {
+        ...stored,
+        bundle: {
+          ...current,
+          documents: current.documents.map((document) => documentPatches.get(document.id) ?? document),
+          lectures: current.lectures.map((lecture) => (
+            patch.lecture?.lectureId === lecture.id
+              ? { ...lecture, version: lecture.version + 1 }
+              : lecture
+          )),
+          questions: current.questions.map((question) => questionPatches.get(question.id) ?? question),
+          questionSet: {
+            ...current.questionSet,
+            contentHash: patch.nextContentHash,
+            contentVersion: current.questionSet.contentVersion + 1
+          }
+        }
+      } satisfies StoredQuestionSetBundle
+    });
+    return true;
+  }
 }
 
 function compareVersionsDescending(left: { readonly version: string }, right: { readonly version: string }): number {
@@ -199,14 +242,7 @@ function libraryEntry(
   bundle: CommittedQuestionSetBundle,
   sourceMetadata?: QuestionSourceRecord
 ): QuestionSetLibraryEntry {
-  const explicit = bundle.generationSpec.constraints.entryMode;
-  const entryMode = explicit === QuestionSetEntryMode.Self
-    ? QuestionSetEntryMode.Self
-    : explicit === QuestionSetEntryMode.Tutor
-      ? QuestionSetEntryMode.Tutor
-      : bundle.generationSpec.constraints.source === 'custom'
-        ? QuestionSetEntryMode.Self
-        : QuestionSetEntryMode.Tutor;
+  const entryMode = resolveQuestionSetEntryMode(bundle.generationSpec.constraints);
   const source = typeof bundle.generationSpec.constraints.source === 'string'
     ? bundle.generationSpec.constraints.source
     : undefined;
@@ -241,10 +277,17 @@ function libraryEntry(
 function matchesLibraryQuery(entry: QuestionSetLibraryEntry, query: QuestionSetLibraryQuery): boolean {
   return matches(query.capabilityNodeIds, entry.capabilityNodeId)
     && matches(query.originTypes, entry.originType)
+    && matches(query.entryModes, entry.entryMode)
     && matches(query.modules, entry.module)
     && matches(query.practiceStatuses, entry.practiceStatus)
     && matches(query.examYears, entry.sourceMetadata?.examYear)
     && matches(query.provinces, entry.sourceMetadata?.province);
+}
+
+function isBeforeCursor(entry: QuestionSetLibraryEntry, cursor: QuestionSetLibraryQuery['cursor']): boolean {
+  return !cursor
+    || entry.createdAt < cursor.createdAt
+    || (entry.createdAt === cursor.createdAt && entry.id < cursor.id);
 }
 
 function matches<T extends string | number>(accepted: readonly T[] | undefined, value: T | undefined): boolean {

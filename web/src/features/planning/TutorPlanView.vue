@@ -59,6 +59,7 @@ import { AppStateView, InitialRefreshState, PullToRefresh } from '@/capabilities
 import { initializeTutorRuntime } from '@/composition-root/public';
 import type { CapabilityNodeId } from '@/kernel/public';
 import type { DailyPlanAggregate, DailyPlanItemRecord } from '@/modules/planning/public';
+import { dailyPlanItemLocation } from './DailyPlanNavigation';
 import { PlanFeature } from './PlanFeature';
 
 const router = useRouter();
@@ -119,14 +120,8 @@ async function openItem(item: DailyPlanItemRecord) {
   if (openingItemId.value) return;
   openingItemId.value = item.id; error.value = '';
   try {
-    await router.push({
-      path: '/vue/practice/session',
-      query: {
-        mode: 'tutor',
-        dailyPlanItemId: item.id
-      }
-    });
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '启动复习失败'; }
+    await router.push(dailyPlanItemLocation(item));
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '打开计划项失败'; }
   finally { openingItemId.value = ''; }
 }
 

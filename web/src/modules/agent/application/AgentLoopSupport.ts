@@ -1,0 +1,261 @@
+import { ModelMessageRole, type ModelMessage, type ModelToolCall } from '@/capabilities/ai-runtime/public';
+import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
+import { providerToolName } from './ActiveAgentToolSet';
+
+export type AgentGuidanceConsumer = () => readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
+
+export interface AgentLoopLimitOptions {
+  readonly maxTurns?: number;
+  readonly maxToolCalls?: number;
+  readonly maxToolCallsPerTurn?: number;
+  readonly maxParallelReadToolCalls?: number;
+  readonly maxToolResultChars?: number;
+  readonly maxWallTimeMs?: number;
+  readonly maxContextTokens?: number;
+}
+
+export interface AgentLoopLimits {
+  readonly maxTurns: number;
+  readonly maxToolCalls: number;
+  readonly maxToolCallsPerTurn: number;
+  readonly maxParallelReadToolCalls: number;
+  readonly maxToolResultChars: number;
+  readonly maxWallTimeMs: number;
+  readonly maxContextTokens: number;
+}
+
+export async function consumeAgentGuidance(
+  consume?: AgentGuidanceConsumer
+): Promise<readonly ModelMessage[]> {
+  if (!consume) return [];
+  const guidance = await consume();
+  return guidance.filter((message) => messageContentText(message.content).trim());
+}
+
+export function sanitizeMessageForCheckpoint(message: ModelMessage): ModelMessage {
+  if (typeof message.content === 'string') return message;
+  const text = message.content
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+  return {
+    ...message,
+    content: text || '【图片附件已从持久化 Agent 上下文移除；如需继续识别，请重新导入原图。】'
+  };
+}
+
+export function createToolResultMessage(call: ModelToolCall, content: string): ModelMessage {
+  return { role: ModelMessageRole.Tool, toolCallId: call.id, content };
+}
+
+export function createToolObservationMessage(
+  call: ModelToolCall,
+  observation: {
+    readonly status: 'succeeded' | 'no_progress' | 'failed';
+    readonly content: string;
+    readonly retryable?: boolean;
+    readonly failureCode?: string;
+  }
+): ModelMessage {
+  if (observation.status === 'succeeded') {
+    return createToolResultMessage(call, observation.content);
+  }
+  return createToolResultMessage(call, [
+    '【Agent 工具观察】',
+    `status: ${observation.status}`,
+    `retryable: ${observation.retryable !== false}`,
+    observation.failureCode ? `failure_code: ${observation.failureCode}` : '',
+    observation.status === 'no_progress'
+      ? 'guidance: 本次调用没有获得完成目标所需的新证据。请根据结果自主调整参数、范围、工具或步骤，不要机械重复。'
+      : 'guidance: 先判断失败是否可恢复。可恢复时调整策略或受控重试；不可恢复或缺少关键输入时如实向用户说明。',
+    'result:',
+    observation.content
+  ].filter(Boolean).join('\n'));
+}
+
+export function agentToolSignature(call: ModelToolCall): string {
+  return `${call.name}:${stableJson(call.arguments)}`;
+}
+
+export function decrementToolSignature(signatures: Record<string, number>, signature: string): void {
+  const count = signatures[signature] ?? 0;
+  if (count <= 1) {
+    delete signatures[signature];
+    return;
+  }
+  signatures[signature] = count - 1;
+}
+
+export function attemptedToolNames(
+  signatures: Readonly<Record<string, number>>,
+  toolNames: Iterable<string>
+): Set<string> {
+  const attempted = new Set<string>();
+  for (const name of toolNames) {
+    if (Object.keys(signatures).some((signature) => signature.startsWith(`${name}:`))) attempted.add(name);
+  }
+  return attempted;
+}
+
+export function claimedUnattemptedTool(
+  text: string,
+  toolNames: Iterable<string>,
+  attempted: ReadonlySet<string>
+): string | undefined {
+  if (/(?:尚未|没有|未能|无法|不能|并未).{0,12}(?:调用|执行|扫描|导入|写入)/.test(text)) return undefined;
+  const normalized = text.toLocaleLowerCase();
+  for (const name of toolNames) {
+    if (attempted.has(name)) continue;
+    const providerName = providerToolName(name).toLocaleLowerCase();
+    if (normalized.includes(name.toLocaleLowerCase()) || normalized.includes(providerName)) return name;
+  }
+  return /(?:正在|现在|开始|正式|已经|已)(?:\s|[，,:：])*?(?:调用|执行|扫描|导入|写入)/.test(text)
+    ? [...toolNames].find((name) => !attempted.has(name))
+    : undefined;
+}
+
+export function repairToolInstruction(toolName: string): string {
+  return [
+    `你刚才没有发起真实的 ${toolName} 工具调用。`,
+    '不要再用文字描述“正在调用”或输出工具代码。现在必须实际调用该工具；若当前输入不足以执行，请明确说明缺少什么，不能声称操作已经开始或完成。'
+  ].join('\n');
+}
+
+export function composeActiveSkillSystem(base: string, skills: readonly AgentSkillActivation[]): string {
+  if (!skills.length) return base;
+  return [base, '# 当前已加载 Skill 工作流', ...skills.map((skill) => skill.instructions)].join('\n\n');
+}
+
+export function skillContinuationInstruction(skills: readonly AgentSkillActivation[]): string {
+  const allowedTools = [...new Set(skills.flatMap((skill) => skill.allowedTools))];
+  return [
+    'Skill 工作流已经加载，但选择 Skill 本身不算完成，当前还没有执行具体业务工具。',
+    allowedTools.length ? `请从当前允许的工具中选择完成目标所需的最小调用：${allowedTools.join('、')}。` : '',
+    '如果执行条件不足，请直接向用户询问唯一必要的信息；否则必须实际调用工具，不能只描述准备执行。'
+  ].filter(Boolean).join('\n');
+}
+
+export function completionVerificationInstruction(verifierNames: readonly string[]): string {
+  return [
+    '刚才的写工具只返回了异步任务标识，这表示请求可能已受理，不表示任务已经执行或内容已经生成。',
+    verifierNames.length
+      ? `现在必须调用状态核验工具读取真实状态：${verifierNames.join('、')}。`
+      : '现在必须读取真实任务状态。',
+    '如果精确 taskId 查询无结果，请改用 active 或 today 的最小范围查询；仍无结果时如实说明，不得直接生成一份聊天正文冒充业务结果。'
+  ].join('\n');
+}
+
+export function isHonestToolDeferral(text: string): boolean {
+  return /(?:缺少|未提供|没有提供|无法识别|不能确定|范围不明确|信息不足|请重新上传|请补充|需要补充)/.test(text);
+}
+
+export function limitToolResult(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content;
+  const head = Math.floor(maxChars * 0.7);
+  const tail = Math.floor(maxChars * 0.2);
+  return `${content.slice(0, head)}\n...[tool result truncated]...\n${content.slice(-tail)}`;
+}
+
+/**
+ * Compacts only completed, older loop messages. The current execution tail stays
+ * verbatim so tool-call/result pairing and the latest evidence remain intact.
+ */
+export function compactAgentLoopMessages(
+  messages: readonly ModelMessage[],
+  maxTokens: number
+): readonly ModelMessage[] {
+  if (estimateMessageTokens(messages) <= maxTokens || messages.length <= 14) return messages;
+  let tailStart = Math.max(1, messages.length - 12);
+  while (tailStart < messages.length && messages[tailStart]?.role === ModelMessageRole.Tool) {
+    tailStart += 1;
+  }
+  if (tailStart >= messages.length) return messages;
+  const removed = messages.slice(0, tailStart);
+  const retained = messages.slice(tailStart);
+  const summaryLines = removed.map(summarizeLoopMessage).filter(Boolean);
+  const summary: ModelMessage = {
+    role: ModelMessageRole.User,
+    content: [
+      '【系统压缩的早期 Agent 执行上下文】',
+      '以下是本次运行较早阶段的可核验摘要；最新原始消息和工具结果仍保留在后文。',
+      ...summaryLines
+    ].join('\n')
+  };
+  const compacted = [summary, ...retained];
+  if (estimateMessageTokens(compacted) <= maxTokens) return compacted;
+  const clippedSummary: ModelMessage = {
+    ...summary,
+    content: limitToolResult(String(summary.content), Math.max(2_000, Math.floor(maxTokens * 2.2)))
+  };
+  return [clippedSummary, ...retained];
+}
+
+export function validateAgentLoopLimits(command: AgentLoopLimitOptions): AgentLoopLimits {
+  const limits = {
+    maxTurns: command.maxTurns ?? 32,
+    maxToolCalls: command.maxToolCalls ?? 64,
+    maxToolCallsPerTurn: command.maxToolCallsPerTurn ?? 6,
+    maxParallelReadToolCalls: command.maxParallelReadToolCalls ?? 3,
+    maxToolResultChars: command.maxToolResultChars ?? 6_000,
+    maxWallTimeMs: command.maxWallTimeMs ?? 900_000,
+    maxContextTokens: command.maxContextTokens ?? 24_000
+  };
+  assertBoundedInteger(limits.maxTurns, 1, 32, 'Agent maxTurns');
+  assertBoundedInteger(limits.maxToolCalls, 0, 64, 'Agent maxToolCalls');
+  assertBoundedInteger(limits.maxToolCallsPerTurn, 1, 8, 'Agent maxToolCallsPerTurn');
+  assertBoundedInteger(limits.maxParallelReadToolCalls, 1, 6, 'Agent maxParallelReadToolCalls');
+  assertBoundedInteger(limits.maxToolResultChars, 256, 20_000, 'Agent maxToolResultChars');
+  assertBoundedInteger(limits.maxWallTimeMs, 30_000, 1_200_000, 'Agent maxWallTimeMs');
+  assertBoundedInteger(limits.maxContextTokens, 4_000, 100_000, 'Agent maxContextTokens');
+  return limits;
+}
+
+function summarizeLoopMessage(message: ModelMessage): string {
+  const content = messageContentText(message.content).replace(/\s+/g, ' ').trim();
+  if (message.role === ModelMessageRole.Tool) {
+    return `- 工具结果 ${message.toolCallId || 'unknown'}：${clipText(content, 500)}`;
+  }
+  if (message.role === ModelMessageRole.Assistant && message.toolCalls?.length) {
+    const calls = message.toolCalls.map((call) => `${call.name}(${clipText(stableJson(call.arguments), 180)})`).join('；');
+    return `- 助手调用：${calls}${content ? `；说明：${clipText(content, 240)}` : ''}`;
+  }
+  return content
+    ? `- ${message.role === ModelMessageRole.User ? '输入/引导' : '助手阶段结论'}：${clipText(content, 500)}`
+    : '';
+}
+
+function estimateMessageTokens(messages: readonly ModelMessage[]): number {
+  return messages.reduce((total, message) => {
+    const text = messageContentText(message.content);
+    const ascii = text.replace(/[^\x00-\x7F]/g, '').length;
+    const nonAscii = text.length - ascii;
+    const calls = message.toolCalls ? stableJson(message.toolCalls).length / 4 : 0;
+    return total + Math.ceil(ascii / 4 + nonAscii / 1.6 + calls);
+  }, 0);
+}
+
+function clipText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function messageContentText(content: ModelMessage['content']): string {
+  return typeof content === 'string'
+    ? content
+    : content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
+function assertBoundedInteger(value: number, min: number, max: number, label: string): void {
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new RangeError(`${label} must be between ${min} and ${max}`);
+  }
+}

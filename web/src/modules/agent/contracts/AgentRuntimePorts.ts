@@ -6,6 +6,7 @@ import type {
   ProviderToolDefinition
 } from '@/capabilities/ai-runtime/public';
 import type { AgentRunId, InstantMs, JsonObject } from '@/kernel/public';
+import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
 import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 
 export const AgentMemoryLayer = {
@@ -47,6 +48,7 @@ export interface AgentMemoryRepository {
   recall(query: AgentMemoryQuery): Promise<readonly AgentMemoryRecord[]>;
   append(record: AgentMemoryRecord): Promise<void>;
   supersede(memoryId: string, replacementId: string): Promise<void>;
+  forget(memoryId: string): Promise<void>;
   forgetSession(sessionId: string): Promise<void>;
 }
 
@@ -70,7 +72,7 @@ export interface AgentContextRequest {
   readonly agentRunId: AgentRunId;
   readonly audience: string;
   readonly goal: string;
-  readonly skillCodes: readonly string[];
+  readonly skillNames: readonly string[];
   readonly input: JsonObject;
   readonly history: readonly ModelMessage[];
   readonly tokenBudget: number;
@@ -105,10 +107,18 @@ export interface AgentToolExecutionResult {
   readonly content: string;
   readonly resultRef?: string;
   readonly isError?: boolean;
+  /** Stable machine-readable reason. Business details remain in content. */
+  readonly failureCode?: string;
+  /** Whether the same call may be retried after this failure. Defaults to true for execution errors. */
+  readonly retryable?: boolean;
+  /** Explicit progress signal for empty-but-successful results. Runtime falls back to result content when omitted. */
+  readonly madeProgress?: boolean;
   /** Optional deterministic user response that ends the current Agent run. */
   readonly terminalText?: string;
-  /** Tool catalog selection may activate these exact tool schemas for later turns. */
-  readonly activateToolCodes?: readonly string[];
+  /** Skill selection may activate these exact Tool schemas for later turns. */
+  readonly activateToolNames?: readonly string[];
+  /** Full Skill workflows loaded internally after the model selected their summaries. */
+  readonly activateSkills?: readonly AgentSkillActivation[];
 }
 
 export interface AgentToolPolicy {
@@ -159,8 +169,25 @@ export interface AgentLoopCheckpoint {
   readonly toolCallCount: number;
   readonly messages: readonly ModelMessage[];
   readonly toolSignatures: Readonly<Record<string, number>>;
+  readonly toolAttempts?: Readonly<Record<string, AgentToolAttemptState>>;
   readonly pendingConfirmation?: ModelToolCall;
+  readonly activeSkills?: readonly AgentSkillActivation[];
+  readonly activeToolNames?: readonly string[];
+  readonly completedToolNames?: readonly string[];
+  readonly skillWorkflowState?: AgentSkillWorkflowState;
+  readonly awaitingCompletionVerification?: boolean;
 }
+
+export type AgentToolAttemptStatus = 'succeeded' | 'no_progress' | 'failed';
+
+export interface AgentToolAttemptState {
+  readonly attempts: number;
+  readonly status: AgentToolAttemptStatus;
+  readonly retryable: boolean;
+  readonly failureCode?: string;
+}
+
+export type AgentSkillWorkflowState = 'idle' | 'selected' | 'executing' | 'ready_to_finalize' | 'waiting_user';
 
 export type AgentRuntimeEvent =
   | { readonly type: 'run_started'; readonly agentRunId: AgentRunId }

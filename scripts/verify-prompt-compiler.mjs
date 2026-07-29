@@ -22,6 +22,7 @@ try {
   const registry = new runtime.PromptRegistry();
   for (const prompt of [
     runtime.structuredObjectivePromptV2,
+    runtime.questionSetEnrichmentPromptV1,
     runtime.errorDiagnosisPromptV1,
     runtime.errorDiagnosisBatchPromptV1
   ]) {
@@ -65,18 +66,32 @@ try {
   assert(compiled.system.includes('# 第6章 提交前质检'));
   assert(compiled.system.includes('本次生成 5 道题'));
   assert(!compiled.system.includes('{{QUESTION_COUNT}}'));
-  assert.equal(compiled.version, '2.2.0');
+  assert.equal(compiled.version, '2.4.1');
   assert(compiled.system.includes('最小真题参考包'));
   assert(!compiled.responseSchema.properties.questions.items.required.includes('referenceQuestionId'));
   assert.equal(compiled.responseSchema.properties.questions.items.properties.capabilityCode, undefined);
   assert(compiled.system.includes('由应用按照当前 GenerationSpec 统一注入'));
   assert(compiled.system.includes('不要求凑齐全部 kind'));
+  assert(compiled.system.includes('KaTeX 兼容 LaTeX'));
   assert.equal(compiled.responseSchema.properties.lecture.properties.sections.minItems, 0);
   assert.equal(
     compiled.responseSchema.properties.questions.items.properties.explanation.properties.pitfalls.minItems,
     0
   );
   assert.equal(compiled.responseSchema.type, 'object');
+  registry.register(runtime.questionSetEnrichmentPromptV1);
+  const enrichmentPrompt = compiler.compile(
+    runtime.questionSetEnrichmentPromptV1.promptCode,
+    {},
+    {
+      questionSetId: 'QuestionSetId:test',
+      missingBlocks: { lecture: true, explanationQuestionIds: ['QuestionId:test'] }
+    },
+    runtime.questionSetEnrichmentPromptV1.version
+  );
+  assert(enrichmentPrompt.system.includes('题干、材料、选项和答案已经发布'));
+  assert(enrichmentPrompt.system.includes('它们全部不可修改'));
+  assert.equal(enrichmentPrompt.responseSchema.required[0], 'explanations');
 
   const essayGeneration = runtime.businessTutorPromptCatalog.find(
     (item) => item.promptCode === runtime.BusinessTutorPromptCode.EssayGeneration
@@ -94,6 +109,7 @@ try {
   assert(dailyDigest);
   const compiledDigest = compiler.compile(dailyDigest.promptCode, {}, { date: '2026-07-26', type: 'tips' }, dailyDigest.version);
   assert(compiledDigest.system.includes('主题数量、栏目、篇幅和例子数量由信息价值与当天学习负担决定'));
+  assert(compiledDigest.system.includes('百分号必须写成 \\%'));
   assert(!compiledDigest.system.includes('3 至 5 个二级主题'));
 
   const originalWarn = console.warn;

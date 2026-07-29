@@ -9,7 +9,6 @@ import { webResearchService } from '@/services/WebResearchService'; import { bui
 import type { EssayQuestionRecord } from '@/services/EssayRepository';
 import type { AITextMessage, AITextRequestOptions } from '../ai/ConfiguredAIClient';
 import { LearningAssetKind, type LearningAssetKind as LearningAssetKindCode } from '@/modules/content/public';
-
 export type BusinessAgentTaskType =
   | 'chat'
   | 'generate'
@@ -18,7 +17,8 @@ export type BusinessAgentTaskType =
   | 'study'
   | 'mock'
   | 'redo'
-  | 'interview';
+  | 'interview'
+  | 'research';
 
 export interface BusinessAgentTask {
   readonly id: string;

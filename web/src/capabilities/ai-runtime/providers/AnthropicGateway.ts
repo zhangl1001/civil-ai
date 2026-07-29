@@ -12,12 +12,16 @@ import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTranspo
 import { assertNonEmptyProviderResult, assertProviderResponse } from './ProviderHttpSupport';
 import { AnthropicStreamAccumulator, parseAnthropicResponse } from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
-import { StructuredOutputCapability, type StructuredOutputMode } from './StructuredOutputCapability';
+import {
+  hasRequiredStructuredRoot,
+  StructuredOutputCapability,
+  type StructuredOutputMode
+} from './StructuredOutputCapability';
 import {
   anthropicInputSchema,
   anthropicMessagesEndpoint,
   normalizeAnthropicModelName,
-  requiresDisabledThinkingForForcedTools
+  requiresDisabledThinkingForToolUse
 } from './AnthropicCompatibility';
 
 export interface AnthropicGatewayConfig {
@@ -47,7 +51,16 @@ export class AnthropicGateway implements ProviderGateway {
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
     const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
     try {
-      return await this.sendCompletion(request, mode, signal);
+      const result = await this.sendCompletion(request, mode, signal);
+      if (
+        mode === 'tool'
+        && request.responseSchema
+        && !hasRequiredStructuredRoot(result.text, request.responseSchema)
+      ) {
+        this.structuredOutput.markToolModeUnsupported();
+        return this.sendCompletion(request, 'prompt', signal);
+      }
+      return result;
     } catch (error) {
       if (mode !== 'tool' || !request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
       this.structuredOutput.markToolModeUnsupported();
@@ -126,17 +139,20 @@ export class AnthropicGateway implements ProviderGateway {
       tools: request.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        input_schema: tool.inputSchema
+        input_schema: anthropicInputSchema(this.config.baseUrl, tool.inputSchema)
       })),
       tool_choice: anthropicToolChoice(request.toolChoice)
     } : {};
     const system = request.responseSchema && structuredMode === 'prompt'
       ? structuredJsonInstruction(request.system, request.responseSchema)
       : request.system;
-    const forcedToolChoice = structuredMode === 'tool' && Boolean(request.responseSchema)
-      || isForcedToolChoice(request);
-    const thinkingCompatibility = forcedToolChoice
-      && requiresDisabledThinkingForForcedTools(this.config.baseUrl)
+    // Some compatible providers require every thinking block to be replayed
+    // on later tool turns. Reasoning is intentionally not persisted, so keep
+    // thinking disabled for the whole tool chain on those providers.
+    const usesTools = structuredMode === 'tool' && Boolean(request.responseSchema)
+      || Boolean(request.tools?.length);
+    const thinkingCompatibility = usesTools
+      && requiresDisabledThinkingForToolUse(this.config.baseUrl)
       ? { thinking: { type: 'disabled' } }
       : {};
     return {
@@ -219,12 +235,6 @@ function anthropicToolChoice(choice: ProviderRequest['toolChoice']): unknown {
   if (choice === 'none') return { type: 'none' };
   if (choice === 'required') return { type: 'any' };
   return { type: 'tool', name: choice.name };
-}
-
-function isForcedToolChoice(request: ProviderRequest): boolean {
-  if (!request.tools?.length) return false;
-  return request.toolChoice === 'required'
-    || Boolean(request.toolChoice && typeof request.toolChoice === 'object');
 }
 
 function isUnsupportedStructuredRequest(error: unknown): boolean {

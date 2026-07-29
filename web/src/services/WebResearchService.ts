@@ -1,5 +1,6 @@
 import {
   ConfiguredWebResearchGateway,
+  requirePublicWebUrl,
   WebSearchFreshness,
   WebSearchProvider,
   type WebPageResponse,
@@ -11,7 +12,11 @@ import { webResearchConfigService } from './WebResearchConfigService';
 
 const SESSION_TTL_MS = 15 * 60_000;
 const MAX_SESSIONS = 24;
-const MAX_URLS_PER_SESSION = 20;
+const MAX_SEARCH_URLS_PER_SESSION = 96;
+const MAX_DISCOVERED_URLS_PER_SESSION = 48;
+const SEARCH_CACHE_FRESH_MS = 10 * 60_000;
+const SEARCH_CACHE_STALE_MS = 60 * 60_000;
+const MAX_SEARCH_CACHE_ENTRIES = 48;
 
 export interface WebResearchSource {
   readonly title: string;
@@ -24,11 +29,19 @@ export interface WebResearchSource {
 
 interface SearchSession {
   readonly expiresAt: number;
-  readonly urls: ReadonlySet<string>;
+  readonly searchUrls: ReadonlySet<string>;
+  readonly discoveredUrls: ReadonlySet<string>;
+}
+
+interface CachedSearch {
+  readonly response: WebSearchResponse;
+  readonly freshUntil: number;
+  readonly staleUntil: number;
 }
 
 export class WebResearchService {
   private readonly sessions = new Map<string, SearchSession>();
+  private readonly searchCache = new Map<string, CachedSearch>();
 
   async isConfigured(): Promise<boolean> {
     const config = await webResearchConfigService.load();
@@ -44,15 +57,32 @@ export class WebResearchService {
     readonly signal?: AbortSignal;
   }): Promise<WebSearchResponse> {
     const query = normalizeQuery(input.query);
-    const gateway = await this.gateway();
-    const result = await gateway.search({
-      query,
-      freshness: input.freshness ?? WebSearchFreshness.Any,
-      limit: clampLimit(input.limit),
-      signal: input.signal
-    });
-    if (!result.hits.length) throw new Error('网络搜索没有找到可用结果，请调整关键词。');
-    return result;
+    const freshness = input.freshness ?? WebSearchFreshness.Any;
+    const limit = clampLimit(input.limit);
+    const cacheKey = `${freshness}\n${limit}\n${query.toLocaleLowerCase()}`;
+    const cached = this.searchCache.get(cacheKey);
+    if (cached && cached.freshUntil > Date.now()) {
+      this.refreshSearchCacheEntry(cacheKey, cached);
+      return cached.response;
+    }
+    try {
+      const result = await (await this.gateway()).search({
+        query,
+        freshness,
+        limit,
+        signal: input.signal
+      });
+      if (!result.hits.length) throw new Error('网络搜索没有找到可用结果，请调整关键词。');
+      this.rememberSearch(cacheKey, result);
+      return result;
+    } catch (error) {
+      input.signal?.throwIfAborted();
+      if (cached && cached.staleUntil > Date.now()) {
+        this.refreshSearchCacheEntry(cacheKey, cached);
+        return cached.response;
+      }
+      throw error;
+    }
   }
 
   async searchForAgentRun(input: {
@@ -64,34 +94,34 @@ export class WebResearchService {
   }): Promise<WebSearchResponse> {
     const result = await this.search(input);
     this.pruneSessions();
-    const existing = this.sessions.get(input.agentRunId);
-    const urls = new Set([
-      ...(existing?.expiresAt && existing.expiresAt > Date.now() ? existing.urls : []),
-      ...result.hits.map((hit) => hit.url)
-    ]);
-    while (urls.size > MAX_URLS_PER_SESSION) {
-      const oldest = urls.values().next().value as string | undefined;
-      if (!oldest) break;
-      urls.delete(oldest);
-    }
-    this.sessions.set(input.agentRunId, {
-      expiresAt: Date.now() + SESSION_TTL_MS,
-      urls
-    });
+    this.rememberUrls(input.agentRunId, result.hits.map((hit) => hit.url), 'search');
     return result;
   }
 
   async readPageForAgentRun(input: {
     readonly agentRunId: string;
     readonly url: string;
+    readonly focus?: string;
+    readonly offset?: number;
     readonly signal?: AbortSignal;
   }): Promise<WebPageResponse> {
     this.pruneSessions();
+    const targetUrl = requirePublicWebUrl(input.url).toString();
     const session = this.sessions.get(input.agentRunId);
-    if (!session?.urls.has(input.url)) {
+    if (!session || (!session.searchUrls.has(targetUrl) && !session.discoveredUrls.has(targetUrl))) {
       throw new Error('只能读取当前 Agent 运行中 web.search 返回的网页，请先搜索。');
     }
-    return (await this.gateway()).readPage(input.url, input.signal);
+    const page = await (await this.gateway()).readPage(targetUrl, input.signal, {
+      focus: input.focus,
+      offset: input.offset
+    });
+    this.rememberUrls(
+      input.agentRunId,
+      [targetUrl],
+      session.searchUrls.has(targetUrl) ? 'search' : 'discovered'
+    );
+    this.rememberUrls(input.agentRunId, extractPublicPageLinks(page.content), 'discovered');
+    return page;
   }
 
   async collectDailyHotspots(date: string, signal?: AbortSignal): Promise<{
@@ -146,9 +176,74 @@ export class WebResearchService {
       this.sessions.delete(oldest);
     }
   }
+
+  private rememberSearch(cacheKey: string, response: WebSearchResponse): void {
+    const now = Date.now();
+    this.refreshSearchCacheEntry(cacheKey, {
+      response,
+      freshUntil: now + SEARCH_CACHE_FRESH_MS,
+      staleUntil: now + SEARCH_CACHE_STALE_MS
+    });
+    while (this.searchCache.size > MAX_SEARCH_CACHE_ENTRIES) {
+      const oldest = this.searchCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.searchCache.delete(oldest);
+    }
+  }
+
+  private refreshSearchCacheEntry(cacheKey: string, cached: CachedSearch): void {
+    this.searchCache.delete(cacheKey);
+    this.searchCache.set(cacheKey, cached);
+  }
+
+  private rememberUrls(
+    agentRunId: string,
+    values: readonly string[],
+    bucket: 'search' | 'discovered'
+  ): void {
+    const existing = this.sessions.get(agentRunId);
+    const active = existing?.expiresAt && existing.expiresAt > Date.now() ? existing : undefined;
+    const searchUrls = bucket === 'search'
+      ? rememberRecentPublicUrls(active?.searchUrls ?? [], values, MAX_SEARCH_URLS_PER_SESSION)
+      : new Set(active?.searchUrls ?? []);
+    const discoveredUrls = bucket === 'discovered'
+      ? rememberRecentPublicUrls(active?.discoveredUrls ?? [], values, MAX_DISCOVERED_URLS_PER_SESSION)
+      : new Set(active?.discoveredUrls ?? []);
+    this.sessions.set(agentRunId, {
+      expiresAt: Date.now() + SESSION_TTL_MS,
+      searchUrls,
+      discoveredUrls
+    });
+  }
 }
 
 export const webResearchService = new WebResearchService();
+
+export function rememberRecentPublicUrls(
+  existing: Iterable<string>,
+  values: readonly string[],
+  maxSize: number
+): ReadonlySet<string> {
+  const urls = new Set(existing);
+  for (const value of values) {
+    let normalized: string;
+    try {
+      normalized = requirePublicWebUrl(value).toString();
+    } catch {
+      continue;
+    }
+    // Refresh insertion order so a page being read in chunks cannot be
+    // evicted by the child links discovered from that same page.
+    urls.delete(normalized);
+    urls.add(normalized);
+  }
+  while (urls.size > maxSize) {
+    const oldest = urls.values().next().value as string | undefined;
+    if (!oldest) break;
+    urls.delete(oldest);
+  }
+  return urls;
+}
 
 function normalizeQuery(value: string): string {
   const query = value.replace(/\s+/g, ' ').trim();
@@ -165,4 +260,18 @@ function clampLimit(value?: number): number {
 function compact(value: string, max: number): string {
   const text = value.trim();
   return text.length > max ? `${text.slice(0, max)}\n[内容已截断]` : text;
+}
+
+function extractPublicPageLinks(content: string): string[] {
+  const seen = new Set<string>();
+  for (const match of content.matchAll(/https?:\/\/[^\s)>\]}"']+/g)) {
+    try {
+      const url = requirePublicWebUrl(match[0].replace(/&amp;/g, '&').replace(/[.,;:!?，。；：！？]+$/g, ''));
+      seen.add(url.toString());
+    } catch {
+      // Ignore malformed, local, or private links discovered in remote content.
+    }
+    if (seen.size >= 16) break;
+  }
+  return [...seen];
 }

@@ -22,6 +22,7 @@
 		A1B2C3D4E5F6000000000009 /* NativeStreamingHTTPPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000010 /* NativeStreamingHTTPPlugin.swift */; };
 		A1B2C3D4E5F6000000000011 /* NativeAgentWorkspacePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000012 /* NativeAgentWorkspacePlugin.swift */; };
 		A1B2C3D4E5F6000000000013 /* NativeDocumentTextPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000014 /* NativeDocumentTextPlugin.swift */; };
+		A1B2C3D4E5F6000000000015 /* NativeCameraPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000000000016 /* NativeCameraPlugin.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 		A1B2C3D4E5F6000000000010 /* NativeStreamingHTTPPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeStreamingHTTPPlugin.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000012 /* NativeAgentWorkspacePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAgentWorkspacePlugin.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000014 /* NativeDocumentTextPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeDocumentTextPlugin.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000000000016 /* NativeCameraPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCameraPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -85,6 +87,7 @@
 				A1B2C3D4E5F6000000000010 /* NativeStreamingHTTPPlugin.swift */,
 				A1B2C3D4E5F6000000000012 /* NativeAgentWorkspacePlugin.swift */,
 				A1B2C3D4E5F6000000000014 /* NativeDocumentTextPlugin.swift */,
+				A1B2C3D4E5F6000000000016 /* NativeCameraPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -184,6 +187,7 @@
 				A1B2C3D4E5F6000000000009 /* NativeStreamingHTTPPlugin.swift in Sources */,
 				A1B2C3D4E5F6000000000011 /* NativeAgentWorkspacePlugin.swift in Sources */,
 				A1B2C3D4E5F6000000000013 /* NativeDocumentTextPlugin.swift in Sources */,
+				A1B2C3D4E5F6000000000015 /* NativeCameraPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -324,7 +328,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = SYT99564VM;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -332,7 +336,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.zhangl.examtutor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -347,7 +351,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = SYT99564VM;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -355,7 +359,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zhangl.examtutor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";

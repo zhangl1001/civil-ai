@@ -84,18 +84,32 @@ export class AgentToolActivityService {
 function summarizeArguments(argumentsValue: JsonObject): string {
   const parts = Object.entries(argumentsValue).flatMap(([key, value]) => {
     if (/api.?key|token|secret|password|content|base64/i.test(key)) return [];
-    const text = argumentValueText(value);
+    const text = argumentValueText(key, value);
     return text ? [`${argumentLabel(key)}: ${text}`] : [];
   });
   return parts.length ? parts.slice(0, 3).join(' · ') : '无参数';
 }
 
-function argumentValueText(value: unknown): string {
-  if (typeof value === 'string') return compactText(value.replace(/\s+/g, ' '));
+function argumentValueText(key: string, value: unknown): string {
+  if (typeof value === 'string') {
+    const translated = argumentValueLabels[key]?.[value] ?? value;
+    return compactText(translated.replace(/\s+/g, ' '));
+  }
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) return value.slice(0, 3).map(argumentValueText).filter(Boolean).join('、');
+  if (Array.isArray(value)) return value.slice(0, 3).map((item) => argumentValueText(key, item)).filter(Boolean).join('、');
   return '';
 }
+
+const argumentValueLabels: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  purpose: {
+    current_affairs: '时政热点',
+    true_question: '真题资料',
+    exam_syllabus: '考试大纲',
+    general: '综合资料'
+  },
+  freshness: { day: '当天', week: '近一周', month: '近一月', year: '近一年', any: '不限时间' },
+  subject: { aptitude: '行测', essay: '申论', interview: '面试' }
+};
 
 function argumentLabel(key: string): string {
   return ({
@@ -107,7 +121,14 @@ function argumentLabel(key: string): string {
     digestTab: '类型',
     essayTopic: '主题',
     targetScore: '目标分',
-    subject: '科目'
+    subject: '科目',
+    query: '关键词',
+    purpose: '用途',
+    freshness: '时效',
+    limit: '结果数',
+    url: '网页',
+    scope: '范围',
+    maxQuestions: '题量上限'
   } as Record<string, string>)[key] || key;
 }
 

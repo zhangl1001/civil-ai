@@ -15,11 +15,27 @@ const server = await createServer({
 
 async function verify() {
 try {
-  const [content, ai, curriculum] = await Promise.all([
+  const [content, ai, curriculum, corePolicy] = await Promise.all([
     server.ssrLoadModule('/src/modules/content/public.ts'),
     server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts'),
-    server.ssrLoadModule('/src/modules/curriculum/public.ts')
+    server.ssrLoadModule('/src/modules/curriculum/public.ts'),
+    server.ssrLoadModule('/src/modules/content/application/PracticeCoreGenerationPolicy.ts')
   ]);
+  assert.match(
+    corePolicy.practiceCoreSystem('base', 'aptitude.data_analysis.growth'),
+    /materialGroups/,
+    'data analysis must receive its shared-material structural contract'
+  );
+  assert.match(
+    corePolicy.practiceCoreSystem('base', 'aptitude.judgment.graphical.position'),
+    /viewBox/,
+    'graphic reasoning must receive its proportional SVG structural contract'
+  );
+  assert(
+    corePolicy.coreGenerationTokenBudget(2, 'aptitude.data_analysis.growth')
+      > corePolicy.coreGenerationTokenBudget(2, 'aptitude.judgment.argument_structure'),
+    'complex render structures must receive a bounded type-specific token allowance'
+  );
   const clock = new TestClock();
   const ids = new TestIds();
   const curriculumBundle = curriculum.createBundledNationalCurriculum();
@@ -82,6 +98,34 @@ try {
   assert.equal(completed.workflow.status, content.GenerationWorkflowStatus.Committed);
   assert.ok(completed.questionSetId);
   assert.equal(validGateway.callCount, 1);
+  assert.equal(
+    typeof validGateway.requests[0].responseSchema.properties.lecture,
+    'object',
+    'the foreground generation turn must produce the lecture and questions as one teaching unit'
+  );
+  assert(
+    validGateway.requests[0].responseSchema.required.includes('lecture'),
+    'the paired lecture is a required foreground block'
+  );
+  assert.deepEqual(
+    validGateway.requests[0].responseSchema.properties.questions.items.properties.explanation.required,
+    ['knowledgePoint'],
+    'the foreground turn must publish the question knowledge point without expanding the detailed explanation'
+  );
+  assert.match(
+    validGateway.requests[0].system,
+    /本轮必须同时生成配套 lecture 和可立即作答的核心题目包/,
+    'prompt-mode providers must receive the same foreground delivery boundary'
+  );
+  assert.match(
+    validGateway.requests[0].system,
+    /资料分析题|图形推理题|本轮交付策略/,
+    'foreground generation must retain a capability-aware structural contract'
+  );
+  assert(
+    validGateway.requests[0].maxOutputTokens < 5_000,
+    'a one-question core generation request must keep a bounded output budget'
+  );
   assert.equal(contentRepository.bundles.length, 1);
   assert.equal(contentRepository.bundles[0].questions.length, 1);
   assert.equal(contentRepository.bundles[0].lectures[0].learningThreadId, 'learning-thread:test');
@@ -226,6 +270,44 @@ try {
   assert.equal(contentRepository.bundles.at(-1).questions[0].content.materialGroupId, undefined);
   assert.ok(contentRepository.bundles.at(-1).questions[0].content.material);
 
+  const missingQuestionContext = await createWorkflow.execute(
+    generationCommand('generation:test:missing-question-context')
+  );
+  const missingQuestionContextSource = authorGeneratedContentWithSingletonMaterial();
+  missingQuestionContextSource.materialGroups = [];
+  missingQuestionContextSource.questions[0].materialGroupId = null;
+  missingQuestionContextSource.questions[0].material = null;
+  missingQuestionContextSource.questions[0].prompt = '下列哪项如果为真，最能削弱上述论证？';
+  const repairedQuestion = {
+    ...missingQuestionContextSource.questions[0],
+    material: '某市上线公交换乘提醒功能后三个月，公共交通通勤比例明显上升。交通部门据此认为，该功能促使原本驾车通勤的居民改乘公共交通。'
+  };
+  const missingQuestionContextGateway = new SequenceGateway(ai.ProviderCode.Anthropic, [
+    JSON.stringify(missingQuestionContextSource),
+    JSON.stringify({
+      questionPatches: [{ index: 0, question: repairedQuestion }]
+    })
+  ]);
+  const missingQuestionContextResult = await runWorkflow.execute(
+    missingQuestionContext.workflow.id,
+    missingQuestionContextGateway
+  );
+  assert.equal(missingQuestionContextResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    missingQuestionContextGateway.callCount,
+    2,
+    'a referential prompt without material must trigger one localized repair request'
+  );
+  assert.deepEqual(
+    missingQuestionContextGateway.requests[1].responseSchema.properties.questionPatches.items.properties.index.enum,
+    [0],
+    'missing question context must repair only the affected question'
+  );
+  assert.ok(
+    contentRepository.bundles.at(-1).questions[0].content.material,
+    'the repaired question must commit its complete answering material'
+  );
+
   const autonomousStructure = await createWorkflow.execute(generationCommand('generation:test:autonomous-structure'));
   const autonomousSource = authorGeneratedContentWithSingletonMaterial();
   autonomousSource.lecture.sections = autonomousSource.lecture.sections.slice(0, 1);
@@ -264,6 +346,97 @@ try {
     'safe answer-id casing differences must normalize locally'
   );
 
+  const enrichmentPending = await createWorkflow.execute(generationCommand('generation:test:enrichment-pending'));
+  const enrichmentPendingSource = authorGeneratedContentWithSingletonMaterial();
+  delete enrichmentPendingSource.questions[0].explanation;
+  const enrichmentPendingGateway = new StubGateway(
+    ai.ProviderCode.Anthropic,
+    JSON.stringify(enrichmentPendingSource)
+  );
+  const enrichmentPendingResult = await runWorkflow.execute(
+    enrichmentPending.workflow.id,
+    enrichmentPendingGateway
+  );
+  assert.equal(enrichmentPendingResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    enrichmentPendingGateway.callCount,
+    1,
+    'a lecture-plus-core provider result must publish without waiting for per-question explanation enrichment'
+  );
+  assert.equal(
+    contentRepository.bundles.at(-1).generationWorkflow.validation.readiness,
+    content.ContentReadiness.ReadyWithPendingEnrichment
+  );
+  assert(
+    !contentRepository.bundles.at(-1).generationWorkflow.validation.pendingEnrichment.some(
+      (issue) => issue.block === content.GeneratedContentBlockCode.Lecture
+    ),
+    'paired lecture content must already be complete before publication'
+  );
+  const pendingBundle = contentRepository.bundles.at(-1);
+  const pendingBundleIndex = contentRepository.bundles.length - 1;
+  contentRepository.bundles[pendingBundleIndex] = {
+    ...pendingBundle,
+    questionSet: {
+      ...pendingBundle.questionSet,
+      practiceStatus: content.QuestionSetPracticeStatus.InProgress
+    }
+  };
+  const activeBundle = contentRepository.bundles[pendingBundleIndex];
+  assert.equal(
+    content.findQuestionSetEnrichmentNeeds(activeBundle).explanationQuestionIds.length,
+    1,
+    'a renderable but structurally incomplete explanation must remain pending'
+  );
+  const coreQuestionBeforeEnrichment = JSON.stringify({
+    material: activeBundle.questions[0].content.material,
+    prompt: activeBundle.questions[0].content.prompt,
+    options: activeBundle.questions[0].content.options,
+    correctOptionId: activeBundle.questions[0].content.correctOptionId,
+    correctAnswer: activeBundle.questions[0].correctAnswer
+  });
+  const parsedEnrichment = content.parseQuestionSetEnrichment(JSON.stringify({
+    lecture: {
+      sections: [{
+        kind: 'method',
+        title: '论证结构识别',
+        markdown: '先定位结论，再识别支撑结论的论据，最后判断论据与结论之间采用的推理方式。'
+      }]
+    },
+    explanations: [{
+      questionId: activeBundle.questions[0].id,
+      explanation: {
+        knowledgePoint: '论点、论据与论证结构',
+        conclusion: '正确选项能够直接破坏题干中的核心推理关系。',
+        steps: ['定位结论', '还原论据', '比较选项对推理链的影响'],
+        optionAnalysis: activeBundle.questions[0].content.options.map((option) => ({
+          optionId: option.id,
+          verdict: option.id === activeBundle.questions[0].content.correctOptionId ? 'correct' : 'incorrect',
+          analysis: option.id === activeBundle.questions[0].content.correctOptionId
+            ? '该项直接作用于核心推理链。'
+            : '该项没有破坏核心推理链。'
+        })),
+        pitfalls: ['不要只看选项是否与题干主题相关。']
+      }
+    }]
+  }), activeBundle);
+  const enrichmentResult = await new content.ApplyQuestionSetEnrichment(
+    unitOfWork,
+    contentRepository
+  ).execute(activeBundle.questionSet.id, parsedEnrichment);
+  assert.equal(enrichmentResult.applied, true);
+  const enrichedBundle = await contentRepository.findQuestionSet(activeBundle.questionSet.id);
+  assert.equal(enrichedBundle.questionSet.practiceStatus, content.QuestionSetPracticeStatus.InProgress);
+  assert.equal(JSON.stringify({
+    material: enrichedBundle.questions[0].content.material,
+    prompt: enrichedBundle.questions[0].content.prompt,
+    options: enrichedBundle.questions[0].content.options,
+    correctOptionId: enrichedBundle.questions[0].content.correctOptionId,
+    correctAnswer: enrichedBundle.questions[0].correctAnswer
+  }), coreQuestionBeforeEnrichment, 'background enrichment must never rewrite answerable core blocks');
+  assert.equal(content.findQuestionSetEnrichmentNeeds(enrichedBundle).lecture, false);
+  assert.equal(content.findQuestionSetEnrichmentNeeds(enrichedBundle).explanationQuestionIds.length, 0);
+
   const emptyLectureSource = validGeneratedContent();
   emptyLectureSource.lecture.blocks = [];
   const emptyLectureReport = new content.StructuredObjectiveContentQualityValidator().validate(
@@ -271,11 +444,11 @@ try {
     1,
     'aptitude.judgment.weaken'
   );
-  assert.equal(emptyLectureReport.valid, true);
-  assert.equal(emptyLectureReport.readiness, content.ContentReadiness.ReadyWithPendingEnrichment);
+  assert.equal(emptyLectureReport.valid, false);
+  assert.equal(emptyLectureReport.readiness, content.ContentReadiness.Invalid);
   assert(
-    emptyLectureReport.pendingIssues.some((issue) => issue.code === 'quality.lecture_empty'),
-    'an empty lecture must be accepted as answerable content that still needs enrichment'
+    emptyLectureReport.blockingIssues.some((issue) => issue.code === 'quality.lecture_empty'),
+    'an empty lecture must block publication because lecture and questions are one teaching unit'
   );
 
   const standardPresentation = content.resolveQuestionPresentation(validGeneratedContent().questions[0]);
@@ -309,10 +482,10 @@ try {
     1,
     'aptitude.judgment.weaken'
   );
-  assert.equal(duplicateOptionReport.valid, false);
+  assert.equal(duplicateOptionReport.valid, true);
   assert(
-    duplicateOptionReport.blockingIssues.some((issue) => issue.code === 'quality.option_duplicate'),
-    'identical options must be rejected because the question is not uniquely answerable'
+    duplicateOptionReport.advisories.some((issue) => issue.code === 'quality.option_duplicate'),
+    'semantic option duplication must be observed without rejecting a structurally answerable question'
   );
 
   const structuralRepair = await createWorkflow.execute(generationCommand('generation:test:structural-repair'));
@@ -389,6 +562,63 @@ try {
     'localized repair must replace the invalid question'
   );
 
+  const largeBatch = await createWorkflow.execute(
+    generationCommand('generation:test:parallel-25', 25)
+  );
+  const parallelGateway = new ParallelShardGateway(ai.ProviderCode.Anthropic);
+  const largeBatchResult = await runWorkflow.execute(largeBatch.workflow.id, parallelGateway);
+  assert.equal(largeBatchResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(parallelGateway.callCount, 6, '25 questions plus one lecture must use six bounded calls');
+  assert.equal(
+    parallelGateway.peakActive,
+    6,
+    'lecture and question shards must respect the per-workflow concurrency ceiling'
+  );
+  assert.equal(
+    parallelGateway.requests.filter((request) => request.responseSchema.properties.lecture).length,
+    1,
+    'the paired lecture must be generated once beside the question shards'
+  );
+  const largeBatchBundle = contentRepository.bundles.at(-1);
+  assert.equal(largeBatchBundle.questions.length, 25);
+  assert.deepEqual(
+    largeBatchBundle.questions.map((question) => question.content.prompt.blocks[0].source),
+    Array.from({ length: 25 }, (_, index) => `并行题目 ${index + 1}`),
+    'parallel completion order must not change the original question order'
+  );
+  assert(
+    invocationRepository.items
+      .filter((item) => item.workflowId === largeBatch.workflow.id)
+      .every((item) => item.validationStatus === ai.InvocationValidationStatus.Valid),
+    'every successful shard invocation must leave the pending state'
+  );
+
+  const repairedLargeBatch = await createWorkflow.execute(
+    generationCommand('generation:test:parallel-25-local-repair', 25)
+  );
+  const repairingParallelGateway = new ParallelShardGateway(
+    ai.ProviderCode.Anthropic,
+    2
+  );
+  const repairedLargeBatchResult = await runWorkflow.execute(
+    repairedLargeBatch.workflow.id,
+    repairingParallelGateway
+  );
+  assert.equal(repairedLargeBatchResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    repairingParallelGateway.callCount,
+    7,
+    'one invalid shard must add one repair call without regenerating the other shards'
+  );
+  assert.equal(
+    repairingParallelGateway.requests.filter(
+      (request) => request.responseSchema.properties.lecture
+    ).length,
+    1,
+    'a shard repair must never regenerate the lecture'
+  );
+  assert.equal(contentRepository.bundles.at(-1).questions.length, 25);
+
   const cancellable = await createWorkflow.execute(generationCommand('generation:test:cancel'));
   const cancelled = await runWorkflow.cancel(cancellable.workflow.id);
   assert.equal(cancelled.status, content.GenerationWorkflowStatus.Cancelled);
@@ -447,6 +677,32 @@ class MemoryContentRepository {
   }
   async findQuestionSet(id) { return this.bundles.find((item) => item.questionSet.id === id); }
   async findQuestionSetByGenerationSpec(id) { return this.bundles.find((item) => item.generationSpec.id === id); }
+  async applyQuestionSetEnrichment(patch) {
+    const index = this.bundles.findIndex((item) => item.questionSet.id === patch.questionSetId);
+    if (index < 0) return false;
+    const current = this.bundles[index];
+    if (current.questionSet.contentVersion !== patch.expectedContentVersion) return false;
+    const documentPatches = new Map(
+      patch.lecture ? [[patch.lecture.document.id, patch.lecture.document]] : []
+    );
+    const questionPatches = new Map(patch.questions.map((question) => [question.id, question]));
+    this.bundles[index] = {
+      ...current,
+      documents: current.documents.map((document) => documentPatches.get(document.id) ?? document),
+      lectures: current.lectures.map((lecture) => (
+        lecture.id === patch.lecture?.lectureId
+          ? { ...lecture, version: lecture.version + 1 }
+          : lecture
+      )),
+      questions: current.questions.map((question) => questionPatches.get(question.id) ?? question),
+      questionSet: {
+        ...current.questionSet,
+        contentHash: patch.nextContentHash,
+        contentVersion: current.questionSet.contentVersion + 1
+      }
+    };
+    return true;
+  }
 }
 
 class MemoryOutboxRepository {
@@ -476,12 +732,14 @@ class MemoryInvocationRepository {
 class StubGateway {
   model = 'test-model';
   callCount = 0;
+  requests = [];
   constructor(provider, text, failure) {
     this.provider = provider;
     this.text = text;
     this.failure = failure;
   }
-  async complete() {
+  async complete(request) {
+    this.requests.push(request);
     this.callCount += 1;
     if (this.failure) throw this.failure;
     return {
@@ -511,6 +769,64 @@ class SequenceGateway {
       finishReason: 'end_turn',
       usage: { inputTokens: 1200, outputTokens: 900 }
     };
+  }
+}
+
+class ParallelShardGateway {
+  model = 'test-model';
+  callCount = 0;
+  active = 0;
+  peakActive = 0;
+  requests = [];
+  failedConfiguredShard = false;
+  constructor(provider, failShardIndex) {
+    this.provider = provider;
+    this.failShardIndex = failShardIndex;
+  }
+  async complete(request) {
+    this.requests.push(request);
+    this.callCount += 1;
+    this.active += 1;
+    this.peakActive = Math.max(this.peakActive, this.active);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const includesLecture = Boolean(request.responseSchema.properties.lecture);
+      const count = request.responseSchema.properties.questions?.minItems ?? 1;
+      const user = String(request.messages[0].content);
+      const shardIndex = Number(user.match(/"shardIndex":(\d+)/)?.[1] ?? 0);
+      const source = validGeneratedContent(count);
+      if (includesLecture) {
+        return {
+          text: JSON.stringify({ lecture: source.lecture }),
+          providerRequestId: `provider-parallel:${this.callCount}`,
+          finishReason: 'end_turn',
+          usage: { inputTokens: 1200, outputTokens: 900 }
+        };
+      }
+      source.questions.forEach((question, localIndex) => {
+        const globalIndex = shardIndex * 5 + localIndex;
+        question.prompt = document(
+          `question:parallel:${globalIndex + 1}:prompt`,
+          `并行题目 ${globalIndex + 1}`
+        );
+      });
+      if (
+        !includesLecture
+        && shardIndex === this.failShardIndex
+        && !this.failedConfiguredShard
+      ) {
+        source.questions[0].options.splice(1);
+        this.failedConfiguredShard = true;
+      }
+      return {
+        text: JSON.stringify(includesLecture ? source : { questions: source.questions }),
+        providerRequestId: `provider-parallel:${this.callCount}`,
+        finishReason: 'end_turn',
+        usage: { inputTokens: 1200, outputTokens: 900 }
+      };
+    } finally {
+      this.active -= 1;
+    }
   }
 }
 

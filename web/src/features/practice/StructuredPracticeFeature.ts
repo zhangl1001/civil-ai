@@ -24,7 +24,15 @@ export class StructuredPracticeFeature {
   }
 
   async run(workflowId: WorkflowId, gateway: ProviderGateway, signal?: AbortSignal) {
-    return this.runtime.runStructuredObjectiveGenerationWorkflow.execute(workflowId, gateway, signal);
+    const result = await this.runtime.runStructuredObjectiveGenerationWorkflow.execute(workflowId, gateway, signal);
+    if (result.questionSetId) {
+      await this.runtime.ensureQuestionSetEnrichment.execute({
+        questionSetId: result.questionSetId
+      }).catch((error: unknown) => {
+        console.warn('[StructuredPracticeFeature] failed to schedule question-set enrichment', error);
+      });
+    }
+    return result;
   }
 
   status(workflowId: WorkflowId) {

@@ -1,11 +1,14 @@
 import type { AgentRunId, InstantMs, JsonObject } from '@/kernel/public';
 import type { AgentRunAggregate, AgentRunRepository } from '../contracts/AgentRunRepository';
 import { AgentRunStatus, AgentRunType, type AgentRunStatus as AgentRunStatusValue, type AgentRunType as AgentRunTypeValue } from '../domain/AgentRunCodes';
+import { invalidProviderRequestText } from './AgentRunErrorPresentation';
 
 export interface AgentRunView {
   readonly id: AgentRunId;
   readonly runType: AgentRunTypeValue;
   readonly status: AgentRunStatusValue;
+  readonly examCycleId?: string;
+  readonly intent?: string;
   readonly title: string;
   readonly detail: string;
   readonly statusText: string;
@@ -67,10 +70,13 @@ export class GetAgentRunViews {
   }
 
   private toView(aggregate: AgentRunAggregate, invocationCount: number): AgentRunView {
+    const terminalVisibility = aggregate.run.checkpoint.taskCenterVisible === true;
     return {
       id: aggregate.run.id,
       runType: aggregate.run.runType,
       status: aggregate.run.status,
+      examCycleId: aggregate.run.examCycleId,
+      intent: textField(aggregate.run.inputSnapshot.intent),
       title: titleFor(aggregate),
       detail: detailFor(aggregate),
       statusText: statusText(aggregate.run.status),
@@ -91,8 +97,16 @@ export class GetAgentRunViews {
       linkedTaskId: linkedTaskId(aggregate),
       toolName: textField(aggregate.run.checkpoint.toolName) || textField(aggregate.run.inputSnapshot.toolName),
       chatSessionId: textField(aggregate.run.inputSnapshot.chatSessionId),
-      taskCenterVisible: aggregate.run.targetResourceType !== 'chat_tool'
-        || aggregate.run.checkpoint.taskCenterVisible === true,
+      taskCenterVisible: (
+        terminalVisibility
+        || (
+          aggregate.run.inputSnapshot.taskCenterVisible !== false
+          && (
+            aggregate.run.targetResourceType !== 'chat_tool'
+            || terminalVisibility
+          )
+        )
+      ),
       isActive: isActive(aggregate.run.status),
       canCancel: canCancel(aggregate.run.status),
       eventCount: aggregate.events.length,
@@ -177,7 +191,7 @@ function taskErrorText(code: string, diagnostic?: string): string {
   if (code === 'generation.error_diagnosis_invalid') return '模型返回的错因结构不完整，请重新分析';
   if (code.startsWith('generation.')) return '生成内容校验失败，请重新生成';
   if (code === 'provider.authentication') return '模型配置认证失败，请检查 API Key';
-  if (code === 'provider.invalid_request') return '当前模型接口不支持本次结构化请求，请检查供应商和模型配置';
+  if (code === 'provider.invalid_request') return invalidProviderRequestText(diagnostic);
   if (code === 'provider.rate_limited') return '模型服务限流，任务会自动重试';
   if (code === 'provider.empty_response') return '模型没有返回有效内容，请重新生成';
   if (code === 'provider.protocol') return '模型接口返回格式不兼容，请检查 Base URL';
@@ -202,6 +216,7 @@ function describeTool(toolName: string, args: Record<string, unknown>): string {
   if (toolName === 'generate_essay') return `生成${asText(args.essayTopic, '申论')}题`;
   if (toolName === 'generate_digest') return args.digestTab === 'tips' ? '生成每日知识点' : '生成每日热点';
   if (toolName === 'generate_monthly_digest') return '生成时政月报';
+  if (toolName === 'research_true_questions') return `联网真题研究 · ${asText(args.scope, '当前备考范围')}`;
   if (toolName === 'grade_essay') return '申论批改入口';
   if (toolName === 'review_interview') return '面试点评入口';
   return toolName || '工具调用';

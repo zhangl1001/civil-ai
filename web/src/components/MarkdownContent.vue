@@ -189,6 +189,27 @@ const html = computed(() => {
   border-radius: 10px;
   background: rgba(255, 255, 255, .68);
 }
+.markdown-content :deep(.katex) {
+  max-width: 100%;
+  color: var(--text-color);
+  font-size: 1em;
+}
+.markdown-content :deep(.katex-display) {
+  width: 100%;
+  max-width: 100%;
+  margin: 10px 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  -webkit-overflow-scrolling: touch;
+}
+.markdown-content :deep(.katex-error) {
+  color: var(--red-color) !important;
+  font-family: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .markdown-content :deep(table) {
   width: 100%;
   min-width: 420px;

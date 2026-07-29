@@ -3,6 +3,10 @@ import type { ContentDocument } from '../contracts/ContentDocument';
 import type { SingleChoiceQuestionContent } from '../contracts/QuestionContent';
 import { contentBlockText, contentDocumentText } from '../domain/ContentDocumentText';
 import { QuestionPresentationCode } from '../domain/ContentCodes';
+import {
+  GeneratedContentBlockCode,
+  GeneratedContentValidationTier
+} from '../domain/GeneratedContentBlockPolicy';
 import type { GeneratedLectureQuestionSet } from './GeneratedContentParser';
 
 export interface ContentQualityIssue {
@@ -10,6 +14,8 @@ export interface ContentQualityIssue {
   readonly path: string;
   readonly message: string;
   readonly priority: ContentQualityPriority;
+  readonly block: GeneratedContentBlockCode;
+  readonly validationTier: GeneratedContentValidationTier;
 }
 
 export const ContentQualityPriority = {
@@ -44,20 +50,18 @@ export interface ContentQualityReport {
 // references. Quality review must only block defects that make the committed
 // question set unusable; pedagogical quality signals remain observable warnings.
 const blockingIssueCodes = new Set<string>([
+  'quality.lecture_empty',
   'quality.question_count_mismatch',
   'quality.option_count_invalid',
   'quality.option_empty',
-  'quality.option_duplicate',
+  'quality.question_context_missing',
+  'quality.expected_graphic_missing',
   'quality.material_group_content_missing',
   'quality.material_group_inconsistent'
 ]);
 const pendingIssueCodes = new Set<string>([
-  'quality.lecture_empty',
-  'quality.question_count_partial',
   'quality.explanation_section_missing',
-  'quality.option_analysis_incomplete',
-  'quality.expected_graphic_missing',
-  'quality.data_material_not_structured'
+  'quality.option_analysis_incomplete'
 ]);
 const PARTIAL_ACCEPTANCE_RATIO = 0.8;
 
@@ -180,6 +184,14 @@ function validateQuestion(
   }
   const prompt = contentDocumentText(question.prompt);
   const material = question.material ? contentDocumentText(question.material) : '';
+  if (!material.trim() && hasUnresolvedContextReference(prompt)) {
+    issue(
+      issues,
+      'quality.question_context_missing',
+      `${path}.material`,
+      'Question prompt references material or an argument that was not generated'
+    );
+  }
   if (expectedCapabilityCode && isGraphicCapability(expectedCapabilityCode)
     && question.presentationCode !== QuestionPresentationCode.GraphicChoice) {
     issue(issues, 'quality.expected_graphic_missing', `${path}.prompt`, 'Graphic reasoning content should include a renderable visual');
@@ -238,12 +250,52 @@ function isGraphicCapability(value: string): boolean {
   return /(?:visual|graphic|figure|sequence|图形|图推)/i.test(value);
 }
 
+function hasUnresolvedContextReference(prompt: string): boolean {
+  const normalized = prompt.replace(/\s+/g, '');
+  return /^(?:上述|以上|前述|根据(?:上述|以上|前述|该|这段)?(?:材料|文段|文章|论证|实验|调查)|(?:下列|以下).{0,80}(?:上述|以上|前述|题干|材料中|文中|该论证))/.test(normalized);
+}
+
 function issue(issues: ContentQualityIssue[], code: string, path: string, message: string): void {
-  issues.push({ code, path, message, priority: issuePriority(code) });
+  const block = issueBlock(code);
+  issues.push({
+    code,
+    path,
+    message,
+    priority: issuePriority(code),
+    block,
+    validationTier: blockValidationTier(block)
+  });
 }
 
 function issuePriority(code: string): ContentQualityPriority {
   if (blockingIssueCodes.has(code)) return ContentQualityPriority.Blocking;
   if (pendingIssueCodes.has(code)) return ContentQualityPriority.PendingEnrichment;
   return ContentQualityPriority.Advisory;
+}
+
+function issueBlock(code: string): GeneratedContentBlockCode {
+  if (code.startsWith('quality.lecture_')) return GeneratedContentBlockCode.Lecture;
+  if (code === 'quality.option_analysis_incomplete' || code.startsWith('quality.explanation_')) {
+    return GeneratedContentBlockCode.Explanation;
+  }
+  if (
+    code.startsWith('quality.material_')
+    || code === 'quality.data_material_not_structured'
+    || code === 'quality.question_context_missing'
+  ) {
+    return GeneratedContentBlockCode.Material;
+  }
+  if (code.startsWith('quality.option_')) return GeneratedContentBlockCode.Options;
+  if (code === 'quality.question_count_mismatch' || code === 'quality.question_count_partial') {
+    return GeneratedContentBlockCode.QuestionSet;
+  }
+  return GeneratedContentBlockCode.Prompt;
+}
+
+function blockValidationTier(block: GeneratedContentBlockCode): GeneratedContentValidationTier {
+  if (block === GeneratedContentBlockCode.Explanation) {
+    return GeneratedContentValidationTier.PendingEnrichment;
+  }
+  if (block === GeneratedContentBlockCode.Diagnosis) return GeneratedContentValidationTier.PostPractice;
+  return GeneratedContentValidationTier.RequiredToPractice;
 }

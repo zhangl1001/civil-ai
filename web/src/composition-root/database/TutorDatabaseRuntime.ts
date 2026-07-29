@@ -34,6 +34,7 @@ import type {
 } from '@/modules/candidate/public';
 import type {
   ArchiveQuestionSource,
+  ApplyQuestionSetEnrichment,
   ConfirmQuestionImportDraft,
   ContentRepository,
   CreateGenerationWorkflow,
@@ -103,6 +104,7 @@ import type {
   AbilityCalibrationRepository,
   BuildAbilityCalibration
 } from '@/modules/calibration/public';
+import type { EnsureQuestionSetEnrichment } from '../agent/EnsureQuestionSetEnrichment';
 
 /** Platform-neutral application runtime. Platform files may only supply adapters and lifecycle. */
 export interface TutorDatabaseRuntime {
@@ -153,6 +155,8 @@ export interface TutorDatabaseRuntime {
   readonly updateDailyPlanItemStatus: UpdateDailyPlanItemStatus;
   readonly createGenerationWorkflow: CreateGenerationWorkflow;
   readonly runStructuredObjectiveGenerationWorkflow: RunStructuredObjectiveGenerationWorkflow;
+  readonly applyQuestionSetEnrichment: ApplyQuestionSetEnrichment;
+  readonly ensureQuestionSetEnrichment: EnsureQuestionSetEnrichment;
   readonly getGenerationStatus: GetGenerationStatus;
   readonly createLearningThread: CreateLearningThread;
   readonly transitionLearningThread: TransitionLearningThread;

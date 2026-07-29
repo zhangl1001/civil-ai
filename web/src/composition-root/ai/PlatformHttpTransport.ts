@@ -53,9 +53,11 @@ export class PlatformHttpTransport implements HttpTransport {
         request.signal
       );
       request.signal?.throwIfAborted();
+      const headers = normalizeHeaders(response.headers);
+      if (response.url) headers.set('x-platform-final-url', response.url);
       return new Response(serializeBody(response.data), {
         status: response.status,
-        headers: normalizeHeaders(response.headers)
+        headers
       });
     } catch (error) {
       if (request.signal?.aborted) throw request.signal.reason;

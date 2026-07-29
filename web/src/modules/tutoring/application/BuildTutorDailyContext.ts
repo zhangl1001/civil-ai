@@ -29,6 +29,7 @@ interface AbilityCalibrationPort {
 export interface TutorDailyContext {
   readonly policyVersion: string;
   readonly generatedAt: number;
+  readonly calendar: JsonObject;
   readonly profile: JsonObject;
   readonly todayPlan: JsonObject;
   readonly priorityCapabilities: readonly JsonObject[];
@@ -60,6 +61,7 @@ export class BuildTutorDailyContext {
     if (!cycle) return undefined;
     const now = this.clock.now();
     const planDate = localDate(now, cycle.examCycle.timeZone) as LocalDate;
+    const daysUntilExam = daysBetweenLocalDates(planDate, cycle.examCycle.examDate);
     const [curriculum, tracks, reviews, plan, recentSessions, conclusionRows, calibration] = await Promise.all([
       this.curriculums.findBundle(cycle.examCycle.curriculumVersionId),
       this.mastery.listPriorityTracks(cycle.examCycle.id, MAX_PRIORITY_TRACKS),
@@ -116,10 +118,20 @@ export class BuildTutorDailyContext {
     return {
       policyVersion: TUTOR_CONTEXT_POLICY_VERSION,
       generatedAt: now,
+      calendar: {
+        today: planDate,
+        timeZone: cycle.examCycle.timeZone,
+        now: now as number,
+        daysUntilExam,
+        examDate: cycle.examCycle.examDate,
+        examStatus: daysUntilExam < 0 ? 'passed' : daysUntilExam === 0 ? 'today' : 'upcoming'
+      },
       profile: {
         examCycleId: cycle.examCycle.id,
         examName: cycle.examCycle.examName ?? cycle.examCycle.examType,
         examDate: cycle.examCycle.examDate,
+        today: planDate,
+        daysUntilExam,
         phase: cycle.examCycle.phase,
         availableMinutes: isWeekend(planDate) ? cycle.studyConstraints.weekendMinutes : cycle.studyConstraints.weekdayMinutes,
         scoreTargets: cycle.scoreTargets.filter((target) => target.status === 'active').map((target) => {
@@ -233,6 +245,13 @@ function localDate(now: number, timeZone: string): string {
 function isWeekend(date: string): boolean {
   const day = new Date(`${date}T12:00:00Z`).getUTCDay();
   return day === 0 || day === 6;
+}
+
+function daysBetweenLocalDates(start: string, end: string): number {
+  const startMs = Date.parse(`${start}T12:00:00Z`);
+  const endMs = Date.parse(`${end}T12:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 0;
+  return Math.round((endMs - startMs) / 86_400_000);
 }
 
 function latestScore(

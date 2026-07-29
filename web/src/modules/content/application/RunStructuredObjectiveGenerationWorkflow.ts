@@ -1,10 +1,12 @@
 import type {
   AIInvocation,
   AIInvocationRepository,
+  CompiledPrompt,
   ModelMessage,
   PromptCompiler,
   PromptRepository,
-  ProviderGateway
+  ProviderGateway,
+  ProviderRequest
 } from '@/capabilities/ai-runtime/public';
 import {
   createProviderExecutionDeadline,
@@ -16,7 +18,6 @@ import {
 } from '@/capabilities/ai-runtime/public';
 import type { UnitOfWork } from '@/capabilities/database/public';
 import {
-  sha256Json,
   type Clock,
   type IdGenerator,
   type JsonObject,
@@ -26,8 +27,7 @@ import {
 import type { OutboxRepository } from '@/modules/task/public';
 import type { ContentRepository, GenerationWorkflowRecord } from '../contracts/ContentRepository';
 import type {
-  QuestionReferencePackRepository,
-  TrueQuestionReferencePack
+  QuestionReferencePackRepository
 } from '../contracts/QuestionReferencePackRepository';
 import type { QuestionSourceRepository } from '../contracts/QuestionSourceRepository';
 import type { GenerationAggregate, GenerationRepository } from '../contracts/GenerationRepository';
@@ -41,6 +41,21 @@ import {
 import { GenerationWorkflowMachine } from '../domain/GenerationWorkflowMachine';
 import { GeneratedContentCommitBuilder } from './GeneratedContentCommitBuilder';
 import { GeneratedContentParseError, GeneratedContentParser, type GeneratedLectureQuestionSet } from './GeneratedContentParser';
+import { GenerationModelInvoker } from './GenerationModelInvoker';
+import {
+  createPracticeGenerationPlan,
+  coreGenerationTokenBudget,
+  practiceCoreResponseSchema,
+  practiceCoreSystem
+} from './PracticeCoreGenerationPolicy';
+import {
+  ShardedObjectiveGenerator,
+  type ShardedGenerationProgress
+} from './ShardedObjectiveGenerator';
+import {
+  generationPromptPayload,
+  generationPromptVariables
+} from './StructuredObjectivePromptContext';
 import { StructuredObjectiveContentQualityValidator } from './StructuredObjectiveContentQualityValidator';
 import { TrueQuestionStructuralDifferenceValidator } from './TrueQuestionStructuralDifferenceValidator';
 
@@ -49,10 +64,7 @@ export interface GenerationWorkflowResult {
   readonly questionSetId?: string;
 }
 
-export type GenerationWorkflowProgress = (
-  step: 'compiling_prompt' | 'invoking_model' | 'parsing_response' | 'validating_content' | 'committing_result',
-  message: string
-) => Promise<void> | void;
+export type GenerationWorkflowProgress = ShardedGenerationProgress;
 
 export class RunStructuredObjectiveGenerationWorkflow {
   private readonly machine = new GenerationWorkflowMachine();
@@ -60,6 +72,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
   private readonly qualityValidator = new StructuredObjectiveContentQualityValidator();
   private readonly differenceValidator = new TrueQuestionStructuralDifferenceValidator();
   private readonly commitBuilder: GeneratedContentCommitBuilder;
+  private readonly modelInvoker: GenerationModelInvoker;
+  private readonly shardedGenerator: ShardedObjectiveGenerator;
 
   constructor(
     private readonly unitOfWork: UnitOfWork,
@@ -75,6 +89,19 @@ export class RunStructuredObjectiveGenerationWorkflow {
     private readonly ids: IdGenerator
   ) {
     this.commitBuilder = new GeneratedContentCommitBuilder(clock, ids);
+    this.modelInvoker = new GenerationModelInvoker(
+      unitOfWork,
+      invocationRepository,
+      clock,
+      ids
+    );
+    this.shardedGenerator = new ShardedObjectiveGenerator(
+      promptCompiler,
+      this.modelInvoker,
+      (input, expectedCount, expectedCapabilityCode) => (
+        this.parseAndValidateObject(input, expectedCount, expectedCapabilityCode)
+      )
+    );
   }
 
   async execute(
@@ -110,28 +137,12 @@ export class RunStructuredObjectiveGenerationWorkflow {
       let output: GeneratedLectureQuestionSet;
       if (aggregate.workflow.stagedResult) {
         output = this.parser.parseObject(aggregate.workflow.stagedResult, capabilityCode(aggregate));
-        this.assertStructuralDifference(output, referencePack);
       } else {
-        await onProgress?.('compiling_prompt', '正在按能力节点组装讲义、题目与质检规则');
+        await onProgress?.('compiling_prompt', '正在按能力节点组装题目核心结构与质检规则');
         aggregate = await this.advanceToInvocation(aggregate);
         if (aggregate.workflow.currentStep !== GenerationWorkflowStep.InvokeModel) {
           throw new Error(`Generation checkpoint has no staged result at ${aggregate.workflow.currentStep}`);
         }
-        const compiled = this.promptCompiler.compile(
-          promptBundle.promptCode,
-          promptVariables(aggregate),
-          generationPayload(aggregate, referencePack),
-          promptBundle.version
-        );
-        const invocationId = this.ids.next('AiInvocationId');
-        const requestHash = await sha256Json(toJson({
-          provider: gateway.provider,
-          model: gateway.model,
-          system: compiled.system,
-          user: compiled.user,
-          responseSchema: compiled.responseSchema
-        }));
-        const started = Number(this.clock.monotonicNowMs());
         const interrupted = await this.pendingInvocation(workflowId);
         const attemptedWorkflow = this.machine.startAttempt(aggregate.workflow, this.clock.now());
         await this.unitOfWork.run(async (context) => {
@@ -144,137 +155,32 @@ export class RunStructuredObjectiveGenerationWorkflow {
           await this.generationRepository.replaceWorkflow(attemptedWorkflow, aggregate.workflow.version, context);
         });
         aggregate = { spec: aggregate.spec, workflow: attemptedWorkflow };
-        invocation = {
-          id: invocationId,
-          workflowId,
-          provider: gateway.provider,
-          model: gateway.model,
-          modelRole: 'content_generation',
-          promptVersionId: aggregate.spec.promptVersionId,
-          contentSchemaVersionId: aggregate.spec.contentSchemaVersionId,
-          requestHash,
-          validationStatus: InvocationValidationStatus.Pending,
-          createdAt: this.clock.now()
-        };
-        await this.unitOfWork.runAutocommit((context) => this.invocationRepository.append(invocation!, context));
-        invocation = undefined;
-        await onProgress?.('invoking_model', 'AI 私教正在生成讲义和配套题目');
-        let response = await gateway.complete({
-          system: compiled.system,
-          messages: [{ role: ModelMessageRole.User, content: compiled.user }],
-          temperature: 0.2,
-          maxOutputTokens: generationTokenBudget(aggregate.spec.requestedCount ?? 0),
-          responseSchema: compiled.responseSchema,
-          requestId: invocationId
-        }, deadline.signal);
-        const invocationResult = {
-          providerRequestId: response.providerRequestId,
-          inputTokens: response.usage.inputTokens,
-          outputTokens: response.usage.outputTokens,
-          latencyMs: Math.max(0, Number(this.clock.monotonicNowMs()) - started),
-          finishReason: response.finishReason
-        };
-        await this.unitOfWork.runAutocommit((context) => this.invocationRepository.updateResult(invocationId, invocationResult, context));
-        await onProgress?.('parsing_response', '正在解析题干、选项、答案与讲义结构');
-        try {
-          output = this.parseAndValidateCandidate(
-            response.text,
-            aggregate.spec.requestedCount ?? 0,
-            capabilityCode(aggregate),
-            referencePack
-          );
-        } catch (error) {
-          if (!(error instanceof GeneratedContentParseError)) throw error;
-          const acceptedSubset = this.tryAcceptValidSubset(
-            response.text,
-            error,
-            aggregate.spec.requestedCount ?? 0,
-            capabilityCode(aggregate),
-            referencePack
-          );
-          if (acceptedSubset) {
-            output = acceptedSubset.output;
-            await onProgress?.(
-              'parsing_response',
-              `已保留 ${output.questions.length} 道有效题，丢弃 ${acceptedSubset.droppedCount} 道结构异常题`
+        const plan = createPracticeGenerationPlan(
+          aggregate.spec.requestedCount ?? 0,
+          capabilityCode(aggregate)
+        );
+        output = plan.shards.length > 1
+          ? await this.shardedGenerator.generate({
+              aggregate,
+              promptBundle,
+              referencePack,
+              plan,
+              gateway,
+              signal: deadline.signal,
+              onProgress
+            })
+          : await this.generateSingleCore(
+              aggregate,
+              this.promptCompiler.compile(
+                promptBundle.promptCode,
+                generationPromptVariables(aggregate),
+                generationPromptPayload(aggregate, referencePack),
+                promptBundle.version
+              ),
+              gateway,
+              deadline.signal,
+              onProgress
             );
-          } else {
-            await this.unitOfWork.runAutocommit((context) => this.invocationRepository.updateValidation(
-              invocationId,
-              InvocationValidationStatus.Invalid,
-              error.code,
-              context
-            ));
-            let localizedRepair: LocalizedRepairPlan | undefined;
-            try {
-              localizedRepair = createLocalizedRepairPlan(
-                localizedRepairContext(aggregate),
-                response.text,
-                error,
-                compiled.responseSchema
-              );
-            } catch {
-              localizedRepair = undefined;
-            }
-            await onProgress?.(
-              'parsing_response',
-              localizedRepair
-                ? localizedRepair.progressMessage
-                : '结构存在偏差，AI 私教正在重建不完整内容'
-            );
-            const repairInvocationId = this.ids.next('AiInvocationId');
-            const repairMessages = localizedRepair?.messages
-              ?? structuredRepairMessages(compiled.user, response.text, error);
-            const repairResponseSchema = localizedRepair?.responseSchema ?? compiled.responseSchema;
-            const repairRequestHash = await sha256Json(toJson({
-              provider: gateway.provider,
-              model: gateway.model,
-              system: compiled.system,
-              messages: repairMessages,
-              responseSchema: repairResponseSchema,
-              repairOf: invocationId
-            }));
-            const repairInvocation: AIInvocation = {
-              id: repairInvocationId,
-              workflowId,
-              provider: gateway.provider,
-              model: gateway.model,
-              modelRole: 'content_generation_repair',
-              promptVersionId: aggregate.spec.promptVersionId,
-              contentSchemaVersionId: aggregate.spec.contentSchemaVersionId,
-              requestHash: repairRequestHash,
-              validationStatus: InvocationValidationStatus.Pending,
-              createdAt: this.clock.now()
-            };
-            await this.unitOfWork.runAutocommit((context) => this.invocationRepository.append(repairInvocation, context));
-            const repairStarted = Number(this.clock.monotonicNowMs());
-            response = await gateway.complete({
-              system: compiled.system,
-              messages: repairMessages,
-              temperature: 0.1,
-              maxOutputTokens: localizedRepair?.maxOutputTokens
-                ?? generationTokenBudget(aggregate.spec.requestedCount ?? 0),
-              responseSchema: repairResponseSchema,
-              requestId: repairInvocationId
-            }, deadline.signal);
-            await this.unitOfWork.runAutocommit((context) => this.invocationRepository.updateResult(repairInvocationId, {
-              providerRequestId: response.providerRequestId,
-              inputTokens: response.usage.inputTokens,
-              outputTokens: response.usage.outputTokens,
-              latencyMs: Math.max(0, Number(this.clock.monotonicNowMs()) - repairStarted),
-              finishReason: response.finishReason
-            }, context));
-            const repairedText = localizedRepair
-              ? localizedRepair.merge(response.text)
-              : response.text;
-            output = this.parseAndValidateCandidate(
-              repairedText,
-              aggregate.spec.requestedCount ?? 0,
-              capabilityCode(aggregate),
-              referencePack
-            );
-          }
-        }
         const parsedWorkflow = this.machine.advance(
           aggregate.workflow,
           GenerationWorkflowStep.ParseStructure,
@@ -348,12 +254,14 @@ export class RunStructuredObjectiveGenerationWorkflow {
     const aggregate = await this.requireAggregate(workflowId);
     if (isTerminal(aggregate.workflow)) return aggregate.workflow;
     const cancelled = this.machine.cancel(aggregate.workflow, this.clock.now());
-    const pending = await this.pendingInvocation(workflowId);
+    const pending = await this.pendingInvocations(workflowId);
     await this.unitOfWork.run(async (context) => {
       await this.generationRepository.replaceWorkflow(cancelled, aggregate.workflow.version, context);
-      if (pending) await this.invocationRepository.updateValidation(
-        pending.id, InvocationValidationStatus.Cancelled, 'generation.cancelled', context
-      );
+      for (const invocation of pending) {
+        await this.invocationRepository.updateValidation(
+          invocation.id, InvocationValidationStatus.Cancelled, 'generation.cancelled', context
+        );
+      }
     });
     return cancelled;
   }
@@ -382,43 +290,172 @@ export class RunStructuredObjectiveGenerationWorkflow {
     return current;
   }
 
+  private async generateSingleCore(
+    aggregate: GenerationAggregate,
+    compiled: CompiledPrompt,
+    gateway: ProviderGateway,
+    signal: AbortSignal,
+    onProgress?: GenerationWorkflowProgress
+  ): Promise<GeneratedLectureQuestionSet> {
+    const expectedCount = aggregate.spec.requestedCount ?? 0;
+    const capability = capabilityCode(aggregate);
+    const result = await this.generateCompleteCandidate({
+      aggregate,
+      compiled,
+      gateway,
+      signal,
+      expectedCount,
+      system: practiceCoreSystem(compiled.system, capability),
+      responseSchema: practiceCoreResponseSchema(compiled.responseSchema, expectedCount),
+      role: 'content_generation',
+      allowValidSubset: true,
+      onProgress
+    });
+    return result.output;
+  }
+
+  private async generateCompleteCandidate(input: {
+    readonly aggregate: GenerationAggregate;
+    readonly compiled: CompiledPrompt;
+    readonly gateway: ProviderGateway;
+    readonly signal: AbortSignal;
+    readonly expectedCount: number;
+    readonly system: string;
+    readonly responseSchema: JsonObject;
+    readonly role: string;
+    readonly allowValidSubset: boolean;
+    readonly onProgress?: GenerationWorkflowProgress;
+  }): Promise<{ readonly output: GeneratedLectureQuestionSet; readonly text: string }> {
+    await input.onProgress?.('invoking_model', 'AI 私教正在生成配套讲义与核心题目');
+    const request: Omit<ProviderRequest, 'requestId'> = {
+      system: input.system,
+      messages: [{ role: ModelMessageRole.User, content: input.compiled.user }],
+      temperature: 0.2,
+      maxOutputTokens: coreGenerationTokenBudget(
+        input.expectedCount,
+        capabilityCode(input.aggregate)
+      ),
+      responseSchema: input.responseSchema
+    };
+    let invocationResult = await this.modelInvoker.invoke(
+      input.aggregate,
+      input.gateway,
+      request,
+      input.role,
+      input.signal
+    );
+    await input.onProgress?.('parsing_response', '正在解析讲义、材料、题干、选项与答案');
+    try {
+      return {
+        output: this.parseAndValidateCandidate(
+          invocationResult.response.text,
+          input.expectedCount,
+          capabilityCode(input.aggregate)
+        ),
+        text: invocationResult.response.text
+      };
+    } catch (error) {
+      if (!(error instanceof GeneratedContentParseError)) throw error;
+      const acceptedSubset = input.allowValidSubset
+        ? this.tryAcceptValidSubset(
+            invocationResult.response.text,
+            error,
+            input.expectedCount,
+            capabilityCode(input.aggregate)
+          )
+        : undefined;
+      if (acceptedSubset) {
+        await input.onProgress?.(
+          'parsing_response',
+          `已保留 ${acceptedSubset.output.questions.length} 道有效题，丢弃 ${acceptedSubset.droppedCount} 道结构异常题`
+        );
+        return {
+          output: acceptedSubset.output,
+          text: JSON.stringify(acceptedSubset.output.raw)
+        };
+      }
+      await this.modelInvoker.markInvalid(invocationResult.invocationId, error.code);
+      let localizedRepair: LocalizedRepairPlan | undefined;
+      try {
+        localizedRepair = createLocalizedRepairPlan(
+          localizedRepairContext(input.aggregate),
+          invocationResult.response.text,
+          error,
+          input.responseSchema
+        );
+      } catch {
+        localizedRepair = undefined;
+      }
+      await input.onProgress?.(
+        'parsing_response',
+        localizedRepair
+          ? localizedRepair.progressMessage
+          : '结构存在偏差，AI 私教正在重建不完整内容'
+      );
+      const repairMessages = localizedRepair?.messages
+        ?? structuredRepairMessages(input.compiled.user, invocationResult.response.text, error);
+      invocationResult = await this.modelInvoker.invoke(
+        input.aggregate,
+        input.gateway,
+        {
+          system: input.system,
+          messages: repairMessages,
+          temperature: 0.1,
+          maxOutputTokens: localizedRepair?.maxOutputTokens
+            ?? coreGenerationTokenBudget(
+              input.expectedCount,
+              capabilityCode(input.aggregate)
+            ),
+          responseSchema: localizedRepair?.responseSchema ?? input.responseSchema
+        },
+        `${input.role}_repair`,
+        input.signal
+      );
+      const repairedText = localizedRepair
+        ? localizedRepair.merge(invocationResult.response.text)
+        : invocationResult.response.text;
+      return {
+        output: this.parseAndValidateCandidate(
+          repairedText,
+          input.expectedCount,
+          capabilityCode(input.aggregate)
+        ),
+        text: repairedText
+      };
+    }
+  }
+
   private parseAndValidateCandidate(
     text: string,
     expectedCount: number,
-    expectedCapabilityCode: string,
-    referencePack?: TrueQuestionReferencePack
+    expectedCapabilityCode: string
   ): GeneratedLectureQuestionSet {
     const output = this.parser.parseText(text, expectedCapabilityCode);
     const report = this.qualityValidator.validate(output, expectedCount, expectedCapabilityCode);
     if (!report.valid) {
       throw new GeneratedContentParseError('generation.quality_invalid', report.blockingIssues);
     }
-    this.assertStructuralDifference(output, referencePack);
     return output;
   }
 
-  private assertStructuralDifference(
-    output: GeneratedLectureQuestionSet,
-    referencePack?: TrueQuestionReferencePack
-  ): void {
-    const result = this.differenceValidator.evaluate(output, referencePack);
-    if (!result.nearDuplicateIndexes.length) return;
-    throw new GeneratedContentParseError(
-      'generation.true_question_near_duplicate',
-      result.nearDuplicateIndexes.map((index) => ({
-        code: 'generation.true_question_near_duplicate',
-        path: `$.questions[${index}]`,
-        message: 'Generated question is too similar to a source question and must be rewritten'
-      }))
-    );
+  private parseAndValidateObject(
+    input: JsonObject,
+    expectedCount: number,
+    expectedCapabilityCode: string
+  ): GeneratedLectureQuestionSet {
+    const output = this.parser.parseObject(input, expectedCapabilityCode);
+    const report = this.qualityValidator.validate(output, expectedCount, expectedCapabilityCode);
+    if (!report.valid) {
+      throw new GeneratedContentParseError('generation.quality_invalid', report.blockingIssues);
+    }
+    return output;
   }
 
   private tryAcceptValidSubset(
     text: string,
     error: GeneratedContentParseError,
     expectedCount: number,
-    expectedCapabilityCode: string,
-    referencePack?: TrueQuestionReferencePack
+    expectedCapabilityCode: string
   ): { readonly output: GeneratedLectureQuestionSet; readonly droppedCount: number } | undefined {
     if (
       error.code !== 'generation.author_schema_invalid'
@@ -452,8 +489,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
         output: this.parseAndValidateCandidate(
           JSON.stringify({ ...root, questions: retainedQuestions }),
           expectedCount,
-          expectedCapabilityCode,
-          referencePack
+          expectedCapabilityCode
         ),
         droppedCount: root.questions.length - retainedQuestions.length
       };
@@ -495,12 +531,14 @@ export class RunStructuredObjectiveGenerationWorkflow {
     }
     if (current.workflow.currentStep === GenerationWorkflowStep.ValidateDomain) {
       const next = this.machine.advance(current.workflow, GenerationWorkflowStep.QualityReview, this.clock.now());
-      const pending = await this.pendingInvocation(current.workflow.id);
+      const pending = await this.pendingInvocations(current.workflow.id);
       await this.unitOfWork.run(async (context) => {
         await this.generationRepository.replaceWorkflow(next, current.workflow.version, context);
-        if (pending) await this.invocationRepository.updateValidation(
-          pending.id, InvocationValidationStatus.Valid, undefined, context
-        );
+        for (const invocation of pending) {
+          await this.invocationRepository.updateValidation(
+            invocation.id, InvocationValidationStatus.Valid, undefined, context
+          );
+        }
       });
       current = { spec: current.spec, workflow: next };
     }
@@ -537,7 +575,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
     const terminal = cancelled
       ? this.machine.cancel(aggregate.workflow, this.clock.now())
       : this.machine.fail(aggregate.workflow, code, this.clock.now());
-    const pending = invocation ? undefined : await this.pendingInvocation(workflowId);
+    const pending = invocation ? [] : await this.pendingInvocations(workflowId);
     await this.unitOfWork.run(async (context) => {
       if (invocation) {
         await this.invocationRepository.append({
@@ -545,21 +583,27 @@ export class RunStructuredObjectiveGenerationWorkflow {
           validationStatus: cancelled ? InvocationValidationStatus.Cancelled : InvocationValidationStatus.Invalid,
           errorCode: code
         }, context);
-      } else if (pending) {
-        await this.invocationRepository.updateValidation(
-          pending.id,
-          cancelled ? InvocationValidationStatus.Cancelled : InvocationValidationStatus.Invalid,
-          code,
-          context
-        );
+      } else {
+        for (const pendingInvocation of pending) {
+          await this.invocationRepository.updateValidation(
+            pendingInvocation.id,
+            cancelled ? InvocationValidationStatus.Cancelled : InvocationValidationStatus.Invalid,
+            code,
+            context
+          );
+        }
       }
       await this.generationRepository.replaceWorkflow(terminal, aggregate.workflow.version, context);
     });
   }
 
   private async pendingInvocation(workflowId: WorkflowId): Promise<AIInvocation | undefined> {
+    return (await this.pendingInvocations(workflowId)).at(-1);
+  }
+
+  private async pendingInvocations(workflowId: WorkflowId): Promise<readonly AIInvocation[]> {
     const invocations = await this.invocationRepository.listByWorkflow(workflowId);
-    return [...invocations].reverse().find((item) => item.validationStatus === InvocationValidationStatus.Pending);
+    return invocations.filter((item) => item.validationStatus === InvocationValidationStatus.Pending);
   }
 
   private async requireAggregate(workflowId: WorkflowId): Promise<GenerationAggregate> {
@@ -567,18 +611,6 @@ export class RunStructuredObjectiveGenerationWorkflow {
     if (!aggregate) throw new Error(`Generation workflow does not exist: ${workflowId}`);
     return aggregate;
   }
-}
-
-function promptVariables(aggregate: GenerationAggregate) {
-  const min = aggregate.spec.difficulty.min;
-  const max = aggregate.spec.difficulty.max;
-  if (typeof min !== 'number' || typeof max !== 'number') throw new TypeError('Generation difficulty is invalid');
-  return {
-    QUESTION_COUNT: aggregate.spec.requestedCount ?? 0,
-    ASSESSMENT_ROLE: aggregate.spec.assessmentRole,
-    DIFFICULTY_MIN: min,
-    DIFFICULTY_MAX: max
-  };
 }
 
 function capabilityCode(aggregate: GenerationAggregate): string {
@@ -589,47 +621,6 @@ function capabilityCode(aggregate: GenerationAggregate): string {
   const code = (capability as Record<string, unknown>).code;
   if (typeof code !== 'string' || !code.trim()) throw new TypeError('Generation capability code is missing');
   return code.trim();
-}
-
-function generationPayload(
-  aggregate: GenerationAggregate,
-  referencePack?: TrueQuestionReferencePack
-): JsonObject {
-  return {
-    generationSpecId: aggregate.spec.id,
-    examCycleId: aggregate.spec.examCycleId,
-    capabilityNodeId: aggregate.spec.capabilityNodeId,
-    assessmentRole: aggregate.spec.assessmentRole,
-    requestedCount: aggregate.spec.requestedCount ?? null,
-    difficulty: aggregate.spec.difficulty,
-    constraints: aggregate.spec.constraints,
-    studentContext: aggregate.spec.contextSnapshot,
-    trueQuestionReference: referencePack ? {
-      referencePackId: referencePack.id,
-      policyVersion: referencePack.policyVersion,
-      module: referencePack.module,
-      examScope: referencePack.examScope,
-      sourceQuestionCount: referencePack.sourceQuestionCount,
-      sourceSetCount: referencePack.sourceSetCount,
-      questionTypeDistribution: referencePack.questionTypeDistribution,
-      difficultyDistribution: referencePack.difficultyDistribution,
-      structuralDistribution: referencePack.structuralDistribution,
-      distractorPatterns: [...referencePack.distractorPatterns],
-      representativeQuestions: referencePack.representativeQuestions.map((question) => ({
-        questionId: question.questionId,
-        difficulty: question.difficulty,
-        material: question.material ?? null,
-        prompt: question.prompt,
-        options: question.options.map((option) => ({ ...option })),
-        correctOptionId: question.correctOptionId,
-        structuralSignature: question.structuralSignature
-      }))
-    } : null
-  };
-}
-
-function generationTokenBudget(questionCount: number): number {
-  return Math.min(14_000, Math.max(5_000, 2_800 + Math.max(1, questionCount) * 900));
 }
 
 interface LocalizedRepairPlan {
@@ -766,7 +757,7 @@ function createLocalizedRepairPlan(
         `局部原文与上下文：${JSON.stringify(repairInput)}`,
         `必须修复的问题：${JSON.stringify(issues)}`,
         '只提交 response schema 要求的 lecture 和/或 questionPatches。',
-        'questionPatches 必须保持 index 不变；每个 question 提交完整题干、选项、答案和结构化解析。',
+        'questionPatches 必须保持 index 不变；每个 question 只提交完整材料、题干、选项、答案和必要图形。',
         '不得输出解释、Markdown 代码围栏或未要求的题目。'
       ].join('\n')
     }
@@ -886,7 +877,7 @@ function structuredRepairMessages(
         '上一次结构化结果未通过本地严格校验。请只修复结构与缺失内容，不要解释错误。',
         `错误码：${error.code}`,
         `字段问题：${JSON.stringify(issues)}`,
-        '重新通过指定工具提交完整 lecture 和 questions；不得省略未报错字段，也不得输出 Markdown 代码围栏。'
+        '重新通过指定工具提交完整 lecture 与 questions 核心结构；不得输出逐题解析、Markdown 代码围栏或解释错误的文字。'
       ].join('\n')
     }
   ] as const;

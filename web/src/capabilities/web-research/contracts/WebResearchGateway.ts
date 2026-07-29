@@ -37,7 +37,12 @@ export interface WebPageResponse {
   readonly fetchedAt: number;
 }
 
+export interface WebPageReadOptions {
+  readonly focus?: string;
+  readonly offset?: number;
+}
+
 export interface WebResearchGateway {
   search(request: WebSearchRequest): Promise<WebSearchResponse>;
-  readPage(url: string, signal?: AbortSignal): Promise<WebPageResponse>;
+  readPage(url: string, signal?: AbortSignal, options?: WebPageReadOptions): Promise<WebPageResponse>;
 }

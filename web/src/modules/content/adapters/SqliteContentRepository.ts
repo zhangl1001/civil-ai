@@ -36,6 +36,7 @@ import type {
   QuestionRecord,
   QuestionSetLibraryEntry,
   QuestionSetLibraryQuery,
+  QuestionSetEnrichmentPatch,
   QuestionSetRecord,
   QuestionTemplateVersion
 } from '../contracts/ContentRepository';
@@ -53,11 +54,14 @@ import type {
 } from '../domain/ContentCodes';
 import { QuestionSetEntryMode } from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
+import { resolveQuestionSetEntryMode } from '../domain/QuestionSetEntryModePolicy';
 import type {
   QuestionCalibrationRole,
   QuestionGenerationIntent,
   QuestionOriginType
 } from '../domain/QuestionSourceCodes';
+import { applyQuestionSetEnrichmentSql } from './ApplyQuestionSetEnrichmentSql';
+import { appendQuestionSetLibraryQuery } from './QuestionSetLibraryQuerySql';
 
 interface ReleaseRow extends SqlRow { id: string; content_hash: string; }
 interface SchemaRow extends SqlRow {
@@ -97,7 +101,7 @@ interface QuestionSetRow extends SqlRow {
   id: string; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; generation_spec_id: string;
   purpose: QuestionSetPurpose; assessment_role: AssessmentRole; module: string; status: QuestionSetStatus;
   origin_type: QuestionOriginType; source_id: string | null; calibration_role: QuestionCalibrationRole;
-  practice_status: QuestionSetPracticeStatus; question_count: number; content_hash: string | null; content_version: number; created_at: number;
+  practice_status: QuestionSetPracticeStatus; entry_mode: QuestionSetEntryMode; question_count: number; content_hash: string | null; content_version: number; created_at: number;
 }
 interface QuestionSetLibraryRow extends QuestionSetRow {
   constraints_json: string;
@@ -124,20 +128,6 @@ interface CapabilityLinkRow extends SqlRow {
 }
 interface LectureLinkRow extends SqlRow {
   lecture_id: string; question_set_id: string; relation_role: 'primary' | 'extension' | 'review';
-}
-
-function appendInFilter(
-  filters: string[],
-  params: Array<string | number>,
-  column: string,
-  values?: readonly (string | number)[]
-): void {
-  const normalized = [...new Set((values ?? []).filter((value) => (
-    typeof value === 'number' ? Number.isFinite(value) : Boolean(value.trim())
-  )))];
-  if (!normalized.length) return;
-  filters.push(`${column} IN (${normalized.map(() => '?').join(', ')})`);
-  params.push(...normalized);
 }
 
 export class SqliteContentRepository implements ContentRepository {
@@ -205,7 +195,11 @@ export class SqliteContentRepository implements ContentRepository {
     const transaction = this.transactionScope.resolve(context);
     for (const document of bundle.documents) await this.insertDocument(transaction, document);
     for (const lecture of bundle.lectures) await this.insertLecture(transaction, lecture);
-    await this.insertQuestionSet(transaction, bundle.questionSet);
+    await this.insertQuestionSet(
+      transaction,
+      bundle.questionSet,
+      resolveQuestionSetEntryMode(bundle.generationSpec.constraints)
+    );
     for (const link of bundle.lectureLinks) {
       await transaction.run(
         'INSERT INTO lecture_question_sets(lecture_id, question_set_id, relation_role) VALUES (?, ?, ?)',
@@ -255,12 +249,7 @@ export class SqliteContentRepository implements ContentRepository {
     assertQuestionSetQueryLimit(limit);
     const filters = [`question_set.exam_cycle_id = ?`, `question_set.status = 'ready'`];
     const params: Array<string | number> = [examCycleId];
-    appendInFilter(filters, params, 'question_set.capability_node_id', query.capabilityNodeIds);
-    appendInFilter(filters, params, 'question_set.origin_type', query.originTypes);
-    appendInFilter(filters, params, 'question_set.module', query.modules);
-    appendInFilter(filters, params, 'question_set.practice_status', query.practiceStatuses);
-    appendInFilter(filters, params, 'source.exam_year', query.examYears);
-    appendInFilter(filters, params, 'source.province', query.provinces);
+    appendQuestionSetLibraryQuery(filters, params, query);
     const rows = await this.database.query<QuestionSetLibraryRow>(
       `SELECT question_set.*, generation_spec.constraints_json,
               source.source_type,
@@ -275,19 +264,11 @@ export class SqliteContentRepository implements ContentRepository {
        JOIN generation_specs generation_spec ON generation_spec.id = question_set.generation_spec_id
        LEFT JOIN question_sources source ON source.id = question_set.source_id AND source.status = 'active'
        WHERE ${filters.join(' AND ')}
-       ORDER BY question_set.created_at DESC LIMIT ?`,
+       ORDER BY question_set.created_at DESC, question_set.id DESC LIMIT ?`,
       [...params, limit]
     );
     return rows.map((row) => {
       const constraints = parseJsonObject(row.constraints_json, 'generation_specs.constraints_json');
-      const explicit = constraints.entryMode;
-      const entryMode = explicit === QuestionSetEntryMode.Self
-        ? QuestionSetEntryMode.Self
-        : explicit === QuestionSetEntryMode.Tutor
-          ? QuestionSetEntryMode.Tutor
-          : constraints.source === 'custom'
-            ? QuestionSetEntryMode.Self
-            : QuestionSetEntryMode.Tutor;
       return {
         id: row.id as QuestionSetId,
         examCycleId: row.exam_cycle_id as ExamCycleId,
@@ -298,7 +279,7 @@ export class SqliteContentRepository implements ContentRepository {
         module: row.module,
         questionCount: row.question_count,
         practiceStatus: row.practice_status,
-        entryMode,
+        entryMode: row.entry_mode,
         source: typeof constraints.source === 'string' ? constraints.source : undefined,
         originType: row.origin_type,
         sourceId: row.source_id as QuestionSourceId | null ?? undefined,
@@ -352,6 +333,13 @@ export class SqliteContentRepository implements ContentRepository {
        WHERE id = ? AND practice_status IN (${currentStatuses.map(() => '?').join(', ')})`,
       [status, questionSetId, ...currentStatuses]
     );
+  }
+
+  async applyQuestionSetEnrichment(
+    patch: QuestionSetEnrichmentPatch,
+    context: TransactionContext
+  ): Promise<boolean> {
+    return applyQuestionSetEnrichmentSql(this.transactionScope.resolve(context), patch);
   }
 
   private async loadBundle(questionSetRow: QuestionSetRow): Promise<CommittedQuestionSetBundle> {
@@ -450,16 +438,20 @@ export class SqliteContentRepository implements ContentRepository {
     );
   }
 
-  private insertQuestionSet(transaction: SqlTransaction, value: QuestionSetRecord): Promise<unknown> {
+  private insertQuestionSet(
+    transaction: SqlTransaction,
+    value: QuestionSetRecord,
+    entryMode: QuestionSetEntryMode
+  ): Promise<unknown> {
     return transaction.run(
       `INSERT INTO question_sets(
         id, exam_cycle_id, learning_thread_id, teaching_blueprint_id, capability_node_id, generation_spec_id, purpose, assessment_role,
-        module, origin_type, source_id, calibration_role, status, practice_status, question_count,
-        content_hash, content_version, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        module, origin_type, source_id, calibration_role, status, practice_status, entry_mode,
+        question_count, content_hash, content_version, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [value.id, value.examCycleId, value.learningThreadId ?? null, value.teachingBlueprintId ?? null, value.capabilityNodeId, value.generationSpecId, value.purpose,
         value.assessmentRole, value.module, value.originType ?? 'ai_generated', value.sourceId ?? null,
-        value.calibrationRole ?? 'none', value.status, value.practiceStatus, value.questionCount, value.contentHash ?? null,
+        value.calibrationRole ?? 'none', value.status, value.practiceStatus, entryMode, value.questionCount, value.contentHash ?? null,
         value.contentVersion, value.createdAt]
     );
   }

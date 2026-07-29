@@ -124,7 +124,7 @@ function importIssues(error: unknown): readonly QuestionImportIssue[] {
 }
 
 function classifyIssue(code: string): QuestionImportIssue['code'] {
-  if (/answer_missing/.test(code)) return QuestionImportIssueCode.MissingAnswer;
+  if (/answer_missing|generation\.answer_invalid/.test(code)) return QuestionImportIssueCode.MissingAnswer;
   if (/answer_mismatch/.test(code)) return QuestionImportIssueCode.AnswerConflict;
   if (/option/.test(code)) return QuestionImportIssueCode.InvalidOptions;
   return QuestionImportIssueCode.InvalidStructure;

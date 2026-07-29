@@ -18,173 +18,283 @@ try {
   const ai = await server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts');
   const toolActivity = await server.ssrLoadModule('/src/services/AgentToolActivityService.ts');
   const chatCapabilities = await server.ssrLoadModule('/src/services/ChatAgentCapabilities.ts');
-  const practiceLibraryTool = agent.tutorToolCatalog.find((tool) => tool.code === 'practice.read_library');
-  const practiceQuestionSetTool = agent.tutorToolCatalog.find((tool) => tool.code === 'practice.read_question_set');
+  const externalTools = await server.ssrLoadModule('/src/modules/agent/fixtures/AgentExternalToolCatalog.ts');
+  const responsePresentation = await server.ssrLoadModule('/src/services/AgentResponsePresentation.ts');
+  assert.equal(
+    responsePresentation.visibleAssistantText('`web.search` 和 research.true_questions 暂时不可用'),
+    '`联网搜索` 和 真题检索流程 暂时不可用'
+  );
+  const practiceLibraryTool = agent.tutorToolCatalog.find((tool) => tool.name === 'practice.read_library');
+  const practiceQuestionSetTool = agent.tutorToolCatalog.find((tool) => tool.name === 'practice.read_question_set');
   assert.ok(practiceLibraryTool);
   assert.ok(practiceQuestionSetTool);
   assert.deepEqual(practiceLibraryTool.inputSchema.required, ['scope']);
   assert.equal(practiceLibraryTool.inputSchema.properties.scope.enum.includes('all'), true);
   assert.equal(practiceLibraryTool.description.includes('不读取题目正文'), true);
   assert.equal(
-    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.practice_library')
-      .toolCodes.includes('practice.read_library'),
+    agent.tutorSkillCatalog.find((skill) => skill.name === 'tutor.practice_library')
+      .allowedTools.includes('practice.read_library'),
     true
   );
   assert.equal(
-    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.practice_library')
-      .toolCodes.includes('practice.read_question_set'),
+    agent.tutorSkillCatalog.find((skill) => skill.name === 'tutor.practice_library')
+      .allowedTools.includes('practice.read_question_set'),
     true
   );
   assert.equal(
-    agent.tutorSkillCatalog.find((skill) => skill.code === 'tutor.practice_library')
-      .toolCodes.includes('learning.review_session'),
+    agent.tutorSkillCatalog.find((skill) => skill.name === 'tutor.practice_library')
+      .allowedTools.includes('learning.review_session'),
     true
   );
   const companionExposure = chatCapabilities.planChatAgentCapabilities();
+  const baseToolNames = [
+    'system.read_clock',
+    'student.read_profile',
+    'tutor.read_daily_context',
+    'workspace.discover',
+    'task.read_status'
+  ];
   assert.equal(companionExposure.skills.length, 0);
   assert.deepEqual(
-    companionExposure.tools.map((tool) => tool.code),
-    ['agent.select_skills'],
-    'ordinary chat exposes only the catalog selector, never business tools'
+    companionExposure.tools.map((tool) => tool.name),
+    ['agent.select_skills', ...baseToolNames],
+    'ordinary chat exposes bounded read-only grounding tools and the Skill selector'
   );
   const dailyExposure = chatCapabilities.planChatAgentCapabilities({
-    preselectedSkillCodes: ['tutor.daily_coaching']
+    preselectedSkillNames: ['tutor.daily_coaching']
   });
-  assert.deepEqual(dailyExposure.skillCodes, ['tutor.daily_coaching']);
-  assert.deepEqual(dailyExposure.tools.map((tool) => tool.code), [
+  assert.deepEqual(dailyExposure.skillNames, ['tutor.daily_coaching']);
+  assert.deepEqual(dailyExposure.tools.map((tool) => tool.name), [
     'agent.select_skills',
-    'tutor.read_daily_context',
+    ...baseToolNames,
     'planning.propose_daily_plan',
     'teaching.request_practice'
   ]);
   const libraryExposure = chatCapabilities.planChatAgentCapabilities({
-    preselectedSkillCodes: ['tutor.practice_library']
+    preselectedSkillNames: ['tutor.practice_library']
   });
-  assert.deepEqual(libraryExposure.skillCodes, ['tutor.practice_library']);
-  assert.deepEqual(libraryExposure.tools.map((tool) => tool.code), [
+  assert.deepEqual(libraryExposure.skillNames, ['tutor.practice_library']);
+  assert.deepEqual(libraryExposure.tools.map((tool) => tool.name), [
     'agent.select_skills',
+    ...baseToolNames,
     'practice.read_library',
     'practice.read_question_set',
     'learning.review_session'
   ]);
   const essayExposure = chatCapabilities.planChatAgentCapabilities({
-    preselectedSkillCodes: ['tutor.essay_workflow']
+    preselectedSkillNames: ['tutor.essay_workflow']
   });
-  assert.deepEqual(essayExposure.skillCodes, ['tutor.essay_workflow']);
-  assert.deepEqual(essayExposure.tools.map((tool) => tool.code), ['agent.select_skills', 'generate_essay', 'grade_essay']);
-  const hotspotExposure = chatCapabilities.planChatAgentCapabilities({
-    preselectedSkillCodes: ['research.current_affairs']
-  });
-  assert.deepEqual(hotspotExposure.skillCodes, ['research.current_affairs']);
-  assert.deepEqual(hotspotExposure.tools.map((tool) => tool.code), ['agent.select_skills', 'web.search', 'web.read_page']);
-  const digestExposure = chatCapabilities.planChatAgentCapabilities({
-    preselectedSkillCodes: ['research.current_affairs', 'tutor.digest_generation']
-  });
-  assert.deepEqual(digestExposure.skillCodes, ['research.current_affairs', 'tutor.digest_generation']);
-  assert.deepEqual(digestExposure.tools.map((tool) => tool.code), [
+  assert.deepEqual(essayExposure.skillNames, ['tutor.essay_workflow']);
+  assert.deepEqual(essayExposure.tools.map((tool) => tool.name), [
     'agent.select_skills',
+    ...baseToolNames,
+    'generate_essay',
+    'grade_essay'
+  ]);
+  const hotspotExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillNames: ['research.current_affairs']
+  });
+  assert.deepEqual(hotspotExposure.skillNames, ['research.current_affairs']);
+  assert.deepEqual(hotspotExposure.tools.map((tool) => tool.name), ['agent.select_skills', ...baseToolNames, 'web.search', 'web.read_page']);
+  const digestExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillNames: ['research.current_affairs', 'tutor.digest_generation']
+  });
+  assert.deepEqual(digestExposure.skillNames, ['research.current_affairs', 'tutor.digest_generation']);
+  assert.deepEqual(digestExposure.tools.map((tool) => tool.name), [
+    'agent.select_skills',
+    ...baseToolNames,
     'web.search',
     'web.read_page',
     'generate_digest',
     'generate_monthly_digest'
   ]);
   const trueQuestionExposure = chatCapabilities.planChatAgentCapabilities({
-    preselectedSkillCodes: ['research.true_questions']
+    preselectedSkillNames: ['research.true_questions']
   });
-  assert.deepEqual(trueQuestionExposure.skillCodes, ['research.true_questions']);
-  assert.deepEqual(trueQuestionExposure.tools.map((tool) => tool.code), [
+  assert.deepEqual(trueQuestionExposure.skillNames, ['research.true_questions']);
+  assert.deepEqual(trueQuestionExposure.tools.map((tool) => tool.name), [
     'agent.select_skills',
-    'web.search',
-    'web.read_page',
-    'question_bank.scan',
-    'question_bank.resume',
-    'question_bank.confirm',
-    'question_bank.publish'
+    ...baseToolNames,
+    'research_true_questions'
   ]);
-  const syllabusExposure = chatCapabilities.planChatAgentCapabilities({
-    preselectedSkillCodes: ['research.exam_syllabus']
-  });
-  assert.deepEqual(syllabusExposure.skillCodes, ['research.exam_syllabus']);
-  assert.deepEqual(syllabusExposure.tools.map((tool) => tool.code), ['agent.select_skills', 'web.search', 'web.read_page']);
-  const pendingImportExposure = chatCapabilities.planChatAgentCapabilities({ pendingToolCode: 'question_bank.confirm' });
-  assert.deepEqual(pendingImportExposure.skillCodes, ['tutor.question_bank_ingestion']);
-  assert.equal(pendingImportExposure.tools.some((tool) => tool.code === 'question_bank.publish'), true);
   assert.equal(
-    agent.tutorToolCatalog.find((tool) => tool.code === 'question_bank.publish').requiresConfirmation,
+    trueQuestionExposure.tools.some((tool) => tool.name === 'web.search' || tool.name === 'question_bank.scan'),
+    false,
+    'chat only dispatches durable research work; the independent Agent owns research tools'
+  );
+  const syllabusExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillNames: ['research.exam_syllabus']
+  });
+  assert.deepEqual(syllabusExposure.skillNames, ['research.exam_syllabus']);
+  assert.deepEqual(syllabusExposure.tools.map((tool) => tool.name), ['agent.select_skills', ...baseToolNames, 'web.search', 'web.read_page']);
+  const pendingImportExposure = chatCapabilities.planChatAgentCapabilities({ pendingToolName: 'question_bank.confirm' });
+  assert.deepEqual(pendingImportExposure.skillNames, ['tutor.question_bank_ingestion']);
+  assert.equal(pendingImportExposure.tools.some((tool) => tool.name === 'question_bank.publish'), true);
+  assert.equal(
+    agent.tutorToolCatalog.find((tool) => tool.name === 'question_bank.publish').requiresConfirmation,
     true,
     'publishing a confirmed question-bank draft requires a second explicit confirmation'
   );
+  const memoryExposure = chatCapabilities.planChatAgentCapabilities({
+    preselectedSkillNames: ['tutor.personal_memory']
+  });
+  assert.deepEqual(memoryExposure.skillNames, ['tutor.personal_memory']);
+  assert.deepEqual(
+    memoryExposure.tools.map((tool) => tool.name),
+    ['agent.select_skills', ...baseToolNames, 'memory.remember', 'memory.forget']
+  );
+  assert.equal(
+    memoryExposure.skillCatalog.find((skill) => skill.name === 'tutor.personal_memory').description.includes('明确要求'),
+    true
+  );
   const composedSystem = chatCapabilities.chatAgentSystemPromptComposer.compose({
     basePrompt: '你是个人公考 AI 私教。',
-    exposure: dailyExposure,
-    capabilityCatalog: dailyExposure.capabilityCatalog
+    skillCatalog: dailyExposure.skillCatalog
   });
-  assert.match(composedSystem, /可发现能力摘要/);
-  assert.match(composedSystem, /agent\.select_skills/);
-  assert.match(composedSystem, /当前按需能力/);
-  assert.match(composedSystem, /基于今日计划、能力证据和到期复习安排下一步学习/);
-  assert.match(composedSystem, /不得只回复“正在导入”后结束/);
+  assert.match(composedSystem, /可发现 Skill 摘要/);
+  assert.match(composedSystem, /# 自主决策/);
+  assert.match(composedSystem, /由你根据当前目标和每轮结果自主决定/);
+  assert.match(composedSystem, /tutor\.daily_coaching/);
+  assert.doesNotMatch(composedSystem, /Recommended workflow:|Completion checks|Suggested recovery/);
   assert.doesNotMatch(composedSystem, /\"scope\"|\"entryMode\"/);
+  assert.doesNotMatch(
+    composedSystem,
+    /(?:你好|任务|题库|真题|热点).*(?:tutor\.|research\.)/,
+    'the discovery prompt must not route natural-language keywords to fixed skills'
+  );
 
-  const extensionRegistry = new agent.AgentToolRegistry();
-  extensionRegistry.registerBundle({
-    tools: [{
-      code: 'research.search',
-      description: '检索少量外部来源。',
-      inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-      risk: agent.AgentToolRisk.Read,
-      requiresConfirmation: false,
-      enabledFor: ['tutor_turn']
-    }],
-    skills: [{
-      code: 'research.exam',
-      description: '研究考试公开资料。',
-      toolCodes: ['research.search'],
-      contextBudgetTokens: 300
-    }]
+  let budgetNow = 0;
+  const adaptiveBudget = new agent.AgentExecutionBudget({
+    maxTurns: 32,
+    maxToolCalls: 64,
+    maxWallTimeMs: 900_000
+  }, [], () => budgetNow);
+  assert.equal(adaptiveBudget.allowNextTurn(7, 0).allowed, true);
+  assert.equal(adaptiveBudget.allowNextTurn(8, 0).reasonCode, 'agent.no_progress_budget_exhausted');
+  adaptiveBudget.recordProgress();
+  assert.equal(adaptiveBudget.allowNextTurn(8, 0).allowed, true, 'new evidence expands the compact soft budget');
+  adaptiveBudget.activate([agent.AgentExecutionBudgetTier.Research]);
+  budgetNow = 480_001;
+  assert.equal(adaptiveBudget.allowNextTurn(8, 0).reasonCode, 'agent.no_progress_budget_exhausted');
+  adaptiveBudget.recordProgress();
+  assert.equal(adaptiveBudget.allowNextTurn(8, 0).allowed, true, 'progress also expands the wall-clock budget');
+  budgetNow = 720_000;
+  assert.equal(adaptiveBudget.allowNextTurn(8, 0).reasonCode, 'agent.time_hard_limit');
+
+  const extensionToolRegistry = new agent.AgentToolRegistry();
+  extensionToolRegistry.register({
+    name: 'research.search',
+    description: '检索少量外部来源。',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+    risk: agent.AgentToolRisk.Read,
+    requiresConfirmation: false,
+    enabledFor: ['tutor_turn']
   });
-  const extensionPlan = new agent.ToolExposurePlanner(extensionRegistry).plan(
+  const extensionSkillRegistry = new agent.AgentSkillRegistry(extensionToolRegistry);
+  extensionSkillRegistry.register({
+    name: 'research.exam',
+    version: '1.0.0',
+    description: '研究考试公开资料。',
+    dependencies: [],
+    conflicts: [],
+    workflow: {
+      name: '考试研究',
+      description: '检索并核实考试资料。',
+      steps: [{ name: '检索', description: '调用检索工具获取最小必要证据。' }],
+      completionCriteria: ['已获得可靠来源或明确说明缺少来源。'],
+      failureRecovery: ['检索失败时缩小范围。']
+    },
+    promptChapters: [{ name: 'source', title: '来源', content: '优先官方来源。' }],
+    resources: [],
+    allowedTools: ['research.search'],
+    validators: [{ name: 'source.required', description: '事实结论必须有来源。' }],
+    contextBudgetTokens: 300,
+    executionBudget: agent.AgentExecutionBudgetTier.Research
+  });
+  const extensionCompiler = new agent.AgentSkillBundleCompiler(extensionSkillRegistry, extensionToolRegistry);
+  const extensionPlan = extensionCompiler.compile(
     ['research.exam'],
     'tutor_turn'
   );
-  assert.deepEqual(extensionPlan.tools.map((tool) => tool.code), ['research.search']);
-  assert.throws(() => extensionRegistry.registerBundle({
-    tools: [{
-      code: 'research.search',
+  assert.deepEqual(extensionPlan.tools.map((tool) => tool.name), ['research.search']);
+  assert.match(extensionPlan.activations[0].instructions, /Recommended workflow: 考试研究/);
+  assert.match(extensionPlan.activations[0].instructions, /不是不可变脚本/);
+  assert.throws(() => extensionToolRegistry.register({
+      name: 'research.search',
       description: '重复工具。',
       inputSchema: { type: 'object', properties: {} },
       risk: agent.AgentToolRisk.Read,
       requiresConfirmation: false,
       enabledFor: ['tutor_turn']
-    }],
-    skills: []
   }), /Duplicate agent tool/);
   assert.deepEqual(
-    extensionRegistry.resolve(['research.exam'], 'tutor_turn').tools.map((tool) => tool.code),
+    extensionCompiler.compile(['research.exam'], 'tutor_turn').tools.map((tool) => tool.name),
     ['research.search'],
-    'a rejected capability bundle must not corrupt the existing registry'
+    'a rejected tool must not corrupt the existing registries'
   );
-  assert.throws(() => extensionRegistry.registerBundle({
-    tools: [{
-      code: 'research.read_page',
-      description: '读取单个页面。',
-      inputSchema: { type: 'object', properties: {} },
-      risk: agent.AgentToolRisk.Read,
-      requiresConfirmation: false,
-      enabledFor: ['tutor_turn']
-    }],
-    skills: [{
-      code: 'research.invalid_bundle',
+  assert.throws(() => extensionSkillRegistry.register({
+      name: 'research.invalid_bundle',
+      version: '1.0.0',
       description: '无效扩展包。',
-      toolCodes: ['research.missing_tool'],
-      contextBudgetTokens: 300
-    }]
-  }), /unknown tool/);
+      dependencies: [],
+      conflicts: [],
+      workflow: {
+        name: '无效流程',
+        description: '用于校验。',
+        steps: [{ name: '执行', description: '调用不存在的工具。' }],
+        completionCriteria: ['完成。'],
+        failureRecovery: []
+      },
+      promptChapters: [],
+      resources: [],
+      allowedTools: ['research.missing_tool'],
+      validators: [],
+      contextBudgetTokens: 300,
+      executionBudget: agent.AgentExecutionBudgetTier.Standard
+  }), /unknown tool/i);
   assert.throws(
-    () => extensionRegistry.resolve(['research.invalid_bundle'], 'tutor_turn'),
+    () => extensionSkillRegistry.resolve(['research.invalid_bundle']),
     /Unknown agent skill/,
-    'an invalid capability bundle must be rejected atomically'
+    'an invalid skill must be rejected atomically'
   );
+  let directConversationTurns = 0;
+  const directConversationLoop = new agent.RunAgentLoop(
+    {
+      async invoke(request, provider, signal) {
+        return provider.complete(request, signal);
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { throw new Error('ordinary conversation must not execute a tool'); } },
+    { async save() {} }
+  );
+  const directConversationResult = await directConversationLoop.execute({
+    agentRunId: 'agent-run-direct-conversation',
+    system: composedSystem,
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天有点累，陪我聊两句。' }],
+    tools: companionExposure.tools,
+    availableTools: companionExposure.availableTools,
+    executionContext: { agentRunId: 'agent-run-direct-conversation' }
+  }, {
+    provider: ai.ProviderCode.OpenAICompatible,
+    model: 'test-model',
+    async complete(request) {
+      directConversationTurns += 1;
+      assert.equal(request.toolChoice, 'auto', 'free chat must leave the tool decision to the model');
+      assert.deepEqual(request.tools.map((tool) => tool.name), [
+        'agent_select_skills',
+        'system_read_clock',
+        'student_read_profile',
+        'tutor_read_daily_context',
+        'workspace_discover',
+        'task_read_status'
+      ]);
+      return { text: '先缓一缓，我们把下一步缩小到一件事。', usage: {} };
+    }
+  });
+  assert.equal(directConversationTurns, 1);
+  assert.equal(directConversationResult.text, '先缓一缓，我们把下一步缩小到一件事。');
+
   const requests = [];
   const gateway = {
     provider: ai.ProviderCode.OpenAICompatible,
@@ -268,26 +378,63 @@ try {
   assert.equal(events.some((event) => event.type === 'tool_call_started'), true);
   assert.equal(events.some((event) => event.type === 'tool_call_succeeded'), true);
 
+  let adaptiveTurn = 0;
+  const adaptiveLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { return { content: JSON.stringify({ evidence: adaptiveTurn }) }; } },
+    { async save() {} }
+  );
+  const adaptiveResult = await adaptiveLoop.execute({
+    agentRunId: 'agent-run-adaptive-budget',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '持续检索直到证据充分。' }],
+    tools: [practiceLibraryTool],
+    executionContext: { agentRunId: 'agent-run-adaptive-budget' }
+  }, {
+    provider: ai.ProviderCode.OpenAICompatible,
+    model: 'test-model',
+    async complete() {
+      adaptiveTurn += 1;
+      return adaptiveTurn <= 9
+        ? {
+            text: '',
+            toolCalls: [{
+              id: `adaptive-call-${adaptiveTurn}`,
+              name: 'practice_read_library',
+              arguments: { scope: 'all', createdFrom: `2026-07-${String(adaptiveTurn).padStart(2, '0')}` }
+            }],
+            usage: {}
+          }
+        : { text: '证据已充分。', usage: {} };
+    }
+  });
+  assert.equal(adaptiveResult.status, 'completed');
+  assert.equal(adaptiveTurn, 10, 'a progressing run may continue beyond the compact eight-turn soft budget');
+
   const selectorTool = companionExposure.tools[0];
+  const practiceLibraryBundle = chatCapabilities.compileChatAgentSkills(['tutor.practice_library']);
   const dynamicRequests = [];
   const dynamicExecutions = [];
+  const dynamicCheckpoints = [];
   const dynamicLoop = new agent.RunAgentLoop(
     modelInvoker,
     { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
     {
       async execute(definition) {
-        dynamicExecutions.push(definition.code);
-        if (definition.code === 'agent.select_skills') {
+        dynamicExecutions.push(definition.name);
+        if (definition.name === 'agent.select_skills') {
           return {
             content: '{"selectedSkills":["tutor.practice_library"]}',
-            activateToolCodes: ['practice.read_library', 'practice.read_question_set', 'learning.review_session']
+            activateToolNames: practiceLibraryBundle.tools.map((tool) => tool.name),
+            activateSkills: practiceLibraryBundle.activations
           };
         }
-        assert.equal(definition.code, 'practice.read_library');
+        assert.equal(definition.name, 'practice.read_library');
         return { content: '{"sets":[{"questionSetId":"set-1"}]}' };
       }
     },
-    { async save() {} }
+    { async save(checkpoint) { dynamicCheckpoints.push(checkpoint); } }
   );
   const dynamicResult = await dynamicLoop.execute({
     agentRunId: 'agent-run-dynamic-tool-selection',
@@ -303,18 +450,27 @@ try {
       dynamicRequests.push(request);
       if (dynamicRequests.length === 1) {
         assert.deepEqual(request.tools.map((tool) => tool.name), ['agent_select_skills']);
+        assert.equal(request.toolChoice, 'auto', 'the model autonomously chooses whether to load a skill');
+        assert.doesNotMatch(request.system, /# 当前已加载 Skill 工作流/);
         return {
           text: '',
           toolCalls: [{
             id: 'select-library-skill',
             name: 'agent_select_skills',
-            arguments: { skillCodes: ['tutor.practice_library'] }
+            arguments: { skillNames: ['tutor.practice_library'] }
           }],
           usage: {}
         };
       }
       if (dynamicRequests.length === 2) {
+        assert.match(request.system, /# 当前已加载 Skill 工作流/);
+        assert.match(request.system, /# Skill: tutor\.practice_library@/);
+        assert.match(request.system, /Completion checks/);
         assert.equal(request.tools.some((tool) => tool.name === 'practice_read_library'), true);
+        return { text: '我已经加载题库工作流，接下来读取题库。', usage: {} };
+      }
+      if (dynamicRequests.length === 3) {
+        assert.match(request.messages.at(-1).content, /必须实际调用工具/);
         return {
           text: '',
           toolCalls: [{ id: 'read-library', name: 'practice_read_library', arguments: { scope: 'all' } }],
@@ -326,19 +482,297 @@ try {
   });
   assert.equal(dynamicResult.text, '当前题库有 1 套题组。');
   assert.deepEqual(dynamicExecutions, ['agent.select_skills', 'practice.read_library']);
-  assert.equal(dynamicRequests.length, 3);
+  assert.equal(dynamicRequests.length, 4);
+  assert.deepEqual(dynamicCheckpoints.at(-1).activeToolNames.sort(), [
+    'agent.select_skills',
+    'learning.review_session',
+    'practice.read_library',
+    'practice.read_question_set',
+    'workspace.discover'
+  ]);
+  assert.deepEqual(dynamicCheckpoints.at(-1).activeSkills.map((skill) => skill.name), ['tutor.practice_library']);
+  assert.equal(dynamicCheckpoints.at(-1).skillWorkflowState, 'ready_to_finalize');
+
+  const adaptiveSearchQueries = [];
+  let adaptiveSearchTurn = 0;
+  const adaptiveSearchLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    {
+      async execute(_definition, call) {
+        adaptiveSearchQueries.push(call.arguments.query);
+        return adaptiveSearchQueries.length === 1
+          ? {
+              content: '{"results":[],"hint":"query_too_broad"}',
+              madeProgress: false
+            }
+          : {
+              content: '{"results":[{"title":"2025年江苏行测真题","url":"https://example.test/paper"}]}',
+              madeProgress: true
+            };
+      }
+    },
+    { async save() {} }
+  );
+  const adaptiveSearchResult = await adaptiveSearchLoop.execute({
+    agentRunId: 'agent-run-adaptive-search',
+    system: '工具结果不足时调整策略后继续。',
+    messages: [{ role: ai.ModelMessageRole.User, content: '查找近3年江苏行测真题' }],
+    tools: [externalTools.agentExternalToolCatalog[0]],
+    executionContext: { agentRunId: 'agent-run-adaptive-search' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete(request) {
+      adaptiveSearchTurn += 1;
+      if (adaptiveSearchTurn === 1) {
+        return { text: '', toolCalls: [{ id: 'search-broad', name: 'web_search', arguments: { query: '公考真题', purpose: 'true_question' } }], usage: {} };
+      }
+      if (adaptiveSearchTurn === 2) {
+        assert.match(String(request.messages.at(-1).content), /status: no_progress/);
+        assert.match(String(request.messages.at(-1).content), /调整参数、范围、工具或步骤/);
+        return { text: '', toolCalls: [{ id: 'search-narrow', name: 'web_search', arguments: { query: '2023 2024 2025 江苏省考 行测 真题', purpose: 'true_question' } }], usage: {} };
+      }
+      return { text: '已调整搜索策略并找到可核验的真题候选。', usage: {} };
+    }
+  });
+  assert.deepEqual(adaptiveSearchQueries, ['公考真题', '2023 2024 2025 江苏省考 行测 真题']);
+  assert.equal(adaptiveSearchResult.text, '已调整搜索策略并找到可核验的真题候选。');
+
+  let recoverableFailureExecutions = 0;
+  let recoverableFailureTurns = 0;
+  const recoverableFailureLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    {
+      async execute() {
+        recoverableFailureExecutions += 1;
+        return recoverableFailureExecutions === 1
+          ? {
+              content: '搜索服务连接被临时重置。',
+              isError: true,
+              retryable: true,
+              failureCode: 'web.transient'
+            }
+          : {
+              content: '{"results":[{"title":"江苏省考公告","url":"https://example.test/notice"}]}',
+              madeProgress: true
+            };
+      }
+    },
+    { async save() {} }
+  );
+  const recoverableFailureResult = await recoverableFailureLoop.execute({
+    agentRunId: 'agent-run-recoverable-tool-failure',
+    system: '观察失败后自主决定是否重试或调整策略。',
+    messages: [{ role: ai.ModelMessageRole.User, content: '查询江苏省考公告。' }],
+    tools: [externalTools.agentExternalToolCatalog[0]],
+    executionContext: { agentRunId: 'agent-run-recoverable-tool-failure' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete(request) {
+      recoverableFailureTurns += 1;
+      if (recoverableFailureTurns === 1) {
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'transient-search-1',
+            name: 'web_search',
+            arguments: { query: '江苏省考 公告', purpose: 'exam_notice' }
+          }],
+          usage: {}
+        };
+      }
+      if (recoverableFailureTurns === 2) {
+        const observation = String(request.messages.at(-1).content);
+        assert.match(observation, /status: failed/);
+        assert.match(observation, /retryable: true/);
+        assert.match(observation, /failure_code: web\.transient/);
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'transient-search-2',
+            name: 'web_search',
+            arguments: { query: '江苏省考 公告', purpose: 'exam_notice' }
+          }],
+          usage: {}
+        };
+      }
+      return { text: '临时故障恢复后已查到江苏省考公告。', usage: {} };
+    }
+  });
+  assert.equal(recoverableFailureExecutions, 2, 'a recoverable failure may retry the same call once');
+  assert.equal(recoverableFailureTurns, 3);
+  assert.equal(recoverableFailureResult.text, '临时故障恢复后已查到江苏省考公告。');
+
+  let strategyChangeExecutions = 0;
+  let strategyChangeTurns = 0;
+  const strategyChangeLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    {
+      async execute(_definition, call) {
+        strategyChangeExecutions += 1;
+        return call.arguments.query === '江苏 真题'
+          ? {
+              content: '{"results":[]}',
+              madeProgress: false
+            }
+          : {
+              content: '{"results":[{"title":"2025江苏省考行测真题","url":"https://example.test/paper"}]}',
+              madeProgress: true
+            };
+      }
+    },
+    { async save() {} }
+  );
+  const strategyChangeResult = await strategyChangeLoop.execute({
+    agentRunId: 'agent-run-tool-strategy-change',
+    system: '连续无进展时改变检索策略。',
+    messages: [{ role: ai.ModelMessageRole.User, content: '找江苏省考真题。' }],
+    tools: [externalTools.agentExternalToolCatalog[0]],
+    executionContext: { agentRunId: 'agent-run-tool-strategy-change' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete(request) {
+      strategyChangeTurns += 1;
+      if (strategyChangeTurns <= 3) {
+        return {
+          text: '',
+          toolCalls: [{
+            id: `same-empty-search-${strategyChangeTurns}`,
+            name: 'web_search',
+            arguments: { query: '江苏 真题', purpose: 'true_question' }
+          }],
+          usage: {}
+        };
+      }
+      if (strategyChangeTurns === 4) {
+        assert.match(String(request.messages.at(-1).content), /停止机械重复/);
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'changed-search',
+            name: 'web_search',
+            arguments: { query: '2025 江苏省考 行测 真题 PDF', purpose: 'true_question' }
+          }],
+          usage: {}
+        };
+      }
+      return { text: '调整检索条件后找到了真题候选。', usage: {} };
+    }
+  });
+  assert.equal(strategyChangeExecutions, 3, 'the third identical no-progress call must be blocked before execution');
+  assert.equal(strategyChangeTurns, 5);
+  assert.equal(strategyChangeResult.text, '调整检索条件后找到了真题候选。');
+
+  const digestBundle = chatCapabilities.compileChatAgentSkills(['tutor.digest_generation']);
+  const completionVerificationRequests = [];
+  const completionVerificationExecutions = [];
+  const completionVerificationCheckpoints = [];
+  const completionVerificationLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.allowed' }; } },
+    {
+      async execute(definition, call) {
+        completionVerificationExecutions.push(definition.name);
+        if (definition.name === 'workspace.discover') {
+          return {
+            content: '{"resourceType":"digests","scope":"today","total":0,"items":[]}',
+            madeProgress: true
+          };
+        }
+        if (definition.name === 'generate_digest') {
+          return {
+            content: '{"accepted":true,"taskId":"AgentRunId:task-digest-1"}',
+            resultRef: 'AgentRunId:task-digest-1'
+          };
+        }
+        assert.equal(definition.name, 'task.read_status');
+        assert.equal(call.arguments.taskId, 'AgentRunId:task-digest-1');
+        return {
+          content: '{"found":true,"task":{"status":"running","statusText":"生成中"}}',
+          madeProgress: true
+        };
+      }
+    },
+    { async save(checkpoint) { completionVerificationCheckpoints.push(checkpoint); } }
+  );
+  const completionVerificationResult = await completionVerificationLoop.execute({
+    agentRunId: 'agent-run-completion-verification',
+    system: '异步业务必须核验真实状态。',
+    messages: [{ role: ai.ModelMessageRole.User, content: '生成今天的每日热点。' }],
+    tools: digestBundle.tools,
+    skills: digestBundle.activations,
+    executionContext: { agentRunId: 'agent-run-completion-verification' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete(request) {
+      completionVerificationRequests.push(request);
+      if (completionVerificationRequests.length === 1) {
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'discover-digest',
+            name: 'workspace_discover',
+            arguments: { resourceType: 'digests', scope: 'today' }
+          }],
+          usage: {}
+        };
+      }
+      if (completionVerificationRequests.length === 2) {
+        return { text: '我直接为你整理一份今日热点正文。', usage: {} };
+      }
+      if (completionVerificationRequests.length === 3) {
+        assert.match(request.messages.at(-1).content, /必须实际调用工具/);
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'generate-digest-task',
+            name: 'generate_digest',
+            arguments: { digestTab: 'news' }
+          }],
+          usage: {}
+        };
+      }
+      if (completionVerificationRequests.length === 4) {
+        return { text: '今日热点已经生成完成。', usage: {} };
+      }
+      if (completionVerificationRequests.length === 5) {
+        assert.match(request.messages.at(-1).content, /必须调用状态核验工具/);
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'verify-digest-task',
+            name: 'task_read_status',
+            arguments: { taskId: 'AgentRunId:task-digest-1' }
+          }],
+          usage: {}
+        };
+      }
+      return { text: '每日热点任务已受理，目前正在生成。', usage: {} };
+    }
+  });
+  assert.equal(completionVerificationResult.text, '每日热点任务已受理，目前正在生成。');
+  assert.equal(completionVerificationRequests.length, 6);
+  assert.deepEqual(completionVerificationExecutions, ['workspace.discover', 'generate_digest', 'task.read_status']);
+  assert.equal(completionVerificationCheckpoints.at(-1).awaitingCompletionVerification, false);
+  assert.deepEqual(completionVerificationCheckpoints.at(-1).completedToolNames, ['generate_digest']);
 
   const requiredToolRequests = [];
   const requiredToolEvents = [];
   let requiredToolExecutions = 0;
-  const scanTool = agent.tutorToolCatalog.find((tool) => tool.code === 'question_bank.scan');
+  const scanTool = agent.tutorToolCatalog.find((tool) => tool.name === 'question_bank.scan');
   const importPrompt = '请扫描并导入真题。';
   const requiredToolLoop = new agent.RunAgentLoop(
     modelInvoker,
     { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.write_allowed' }; } },
     {
       async execute(definition) {
-        assert.equal(definition.code, 'question_bank.scan');
+        assert.equal(definition.name, 'question_bank.scan');
         requiredToolExecutions += 1;
         return { content: '{"draftId":"draft-1","totalCount":5}', resultRef: 'draft-1' };
       }
@@ -351,7 +785,7 @@ try {
     system: 'system',
     messages: [{ role: ai.ModelMessageRole.User, content: importPrompt }],
     tools: [scanTool],
-    requiredToolCode: 'question_bank.scan',
+    requiredToolName: 'question_bank.scan',
     forceRequiredToolOnFirstTurn: true,
     executionContext: { agentRunId: 'agent-run-required-scan' }
   }, {
@@ -403,8 +837,8 @@ try {
     agentRunId: 'agent-run-import-resume-missing',
     system: 'system',
     messages: [{ role: ai.ModelMessageRole.User, content: '重新录入吧' }],
-    tools: [agent.tutorToolCatalog.find((tool) => tool.code === 'question_bank.resume')],
-    requiredToolCode: 'question_bank.resume',
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'question_bank.resume')],
+    requiredToolName: 'question_bank.resume',
     forceRequiredToolOnFirstTurn: true,
     executionContext: { agentRunId: 'agent-run-import-resume-missing' }
   }, {
@@ -441,7 +875,7 @@ try {
     agentRunId: 'agent-run-blank-after-tool',
     system: 'system',
     messages: [{ role: ai.ModelMessageRole.User, content: '题库有题吗？' }],
-    tools: [agent.tutorToolCatalog.find((tool) => tool.code === 'practice.read_library')],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'practice.read_library')],
     executionContext: { agentRunId: 'agent-run-blank-after-tool' }
   }, {
     provider: ai.ProviderCode.Anthropic,
@@ -558,7 +992,7 @@ try {
     agentRunId: 'agent-run-confirm',
     system: 'system',
     messages: [{ role: ai.ModelMessageRole.User, content: '修改目标' }],
-    tools: [agent.tutorToolCatalog.find((tool) => tool.code === 'candidate.change_target')],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'candidate.change_target')],
     executionContext: { agentRunId: 'agent-run-confirm' }
   }, {
     provider: ai.ProviderCode.Anthropic,
@@ -579,7 +1013,7 @@ try {
     agentRunId: 'agent-run-confirm',
     system: 'system',
     messages: [{ role: ai.ModelMessageRole.User, content: '修改目标' }],
-    tools: [agent.tutorToolCatalog.find((tool) => tool.code === 'candidate.change_target')],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'candidate.change_target')],
     executionContext: { agentRunId: 'agent-run-confirm' },
     checkpoint: confirmation.checkpoint,
     confirmationDecision: 'confirm'
@@ -603,22 +1037,22 @@ try {
     modelInvoker,
     {
       async evaluate(definition) {
-        return definition.code === 'candidate.change_target'
+        return definition.name === 'candidate.change_target'
           ? { decision: agent.AgentToolPolicyDecision.Confirm, reasonCode: 'policy.user_confirmation_required' }
           : { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' };
       }
     },
     {
       async execute(definition) {
-        mixedExecutions.push(definition.code);
+        mixedExecutions.push(definition.name);
         return { content: JSON.stringify({ ok: true }) };
       }
     },
     { async save() {} }
   );
   const mixedTools = [
-    agent.tutorToolCatalog.find((tool) => tool.code === 'student.read_profile'),
-    agent.tutorToolCatalog.find((tool) => tool.code === 'candidate.change_target')
+    agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile'),
+    agent.tutorToolCatalog.find((tool) => tool.name === 'candidate.change_target')
   ];
   const mixedWaiting = await mixedLoop.execute({
     agentRunId: 'agent-run-mixed-confirm',
@@ -681,11 +1115,11 @@ try {
 
   const subAgents = new agent.SubAgentRegistry();
   subAgents.register({
-    code: 'tutor.aptitude_specialist',
+    name: 'tutor.aptitude_specialist',
     description: '处理行测能力诊断和教学建议。',
     instructionRef: 'prompt.agent.aptitude@1',
-    skillCodes: ['tutor.daily_coaching'],
-    toolCodes: ['student.read_profile'],
+    allowedSkills: ['tutor.daily_coaching'],
+    allowedTools: ['student.read_profile'],
     delegationMode: agent.AgentDelegationMode.AsTool,
     maxTurns: 4,
     maxToolCalls: 6

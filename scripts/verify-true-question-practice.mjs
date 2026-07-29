@@ -16,19 +16,61 @@ const server = await createServer({
 
 async function main() {
   try {
-    const [content, practice, truePractice] = await Promise.all([
+    const [content, practice, truePractice, researchCriteria] = await Promise.all([
       server.ssrLoadModule('/src/modules/content/public.ts'),
       server.ssrLoadModule('/src/features/practice/PracticeCenterFeature.ts'),
-      server.ssrLoadModule('/src/features/practice/TrueQuestionPracticeFeature.ts')
+      server.ssrLoadModule('/src/features/practice/TrueQuestionPracticeFeature.ts'),
+      server.ssrLoadModule('/src/features/practice/TrueQuestionResearchCriteria.ts')
     ]);
     verifySourcePresentation(content);
     await verifyLearningThreadResolution(practice);
+    await verifyQuestionSetPagination(practice);
     await verifySpecialPracticeManifest(content, truePractice);
+    verifyResearchCriteria(researchCriteria);
     await verifyRepositoryAndViewContracts();
     console.log('True-question practice verification passed.');
   } finally {
     await server.close();
   }
+}
+
+function verifyResearchCriteria(research) {
+  const criteria = research.defaultTrueQuestionResearchCriteria({
+    examName: '江苏省公务员考试',
+    province: '江苏',
+    module: 'judgment'
+  });
+  assert.equal(criteria.examType, research.TrueQuestionResearchExamType.Provincial);
+  assert.equal(criteria.province, '江苏');
+  assert.equal(criteria.maxQuestions, 5);
+  assert.match(research.trueQuestionResearchScope(criteria), /江苏公务员考试；最近三年；行测判断推理/);
+  const national = research.defaultTrueQuestionResearchCriteria({ examName: '国家公务员考试', province: '北京' });
+  assert.equal(national.province, '全国');
+}
+
+async function verifyQuestionSetPagination(practice) {
+  let receivedQuery;
+  const rows = Array.from({ length: 13 }, (_, index) => ({
+    id: `QuestionSetId:${String(index).padStart(2, '0')}`,
+    createdAt: 10_000 - index
+  }));
+  const feature = new practice.PracticeCenterFeature({
+    candidateRepository: { findCurrentCycle: async () => ({ examCycle: { id: 'ExamCycleId:1' } }) },
+    contentRepository: {
+      queryQuestionSetLibrary: async (query) => {
+        receivedQuery = query;
+        return rows;
+      }
+    }
+  });
+  const cursor = { createdAt: 20_000, id: 'QuestionSetId:cursor' };
+  const page = await feature.listQuestionSetPage({ entryModes: ['self'], cursor, limit: 12 });
+  assert.equal(receivedQuery.limit, 13, 'repository reads one look-ahead row instead of the full library');
+  assert.deepEqual(receivedQuery.cursor, cursor);
+  assert.deepEqual(receivedQuery.entryModes, ['self']);
+  assert.equal(page.entries.length, 12);
+  assert.equal(page.hasMore, true);
+  assert.deepEqual(page.nextCursor, { createdAt: 9_989, id: 'QuestionSetId:11' });
 }
 
 async function verifySpecialPracticeManifest(content, truePractice) {
@@ -182,39 +224,80 @@ async function verifyRepositoryAndViewContracts() {
   const [
     contract,
     sqlite,
+    querySql,
     indexedDb,
     centerView,
     libraryActions,
     importFeature,
+    importComposable,
+    researchAgent,
+    researchSheet,
+    researchDraftSheet,
     sessionView,
+    listComponent,
+    infiniteScroll,
     submission
   ] = await Promise.all([
     readFile(path.join(webRoot, 'src/modules/content/contracts/ContentRepository.ts'), 'utf8'),
     readFile(path.join(webRoot, 'src/modules/content/adapters/SqliteContentRepository.ts'), 'utf8'),
+    readFile(path.join(webRoot, 'src/modules/content/adapters/QuestionSetLibraryQuerySql.ts'), 'utf8'),
     readFile(path.join(webRoot, 'src/modules/content/adapters/IndexedDbContentRepository.ts'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/TutorPracticeCenterView.vue'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/TrueQuestionLibraryActions.vue'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/TrueQuestionImportFeature.ts'), 'utf8'),
+    readFile(path.join(webRoot, 'src/features/practice/useTrueQuestionImport.ts'), 'utf8'),
+    readFile(path.join(webRoot, 'src/composition-root/agent/TrueQuestionResearchAgent.ts'), 'utf8'),
+    readFile(path.join(webRoot, 'src/features/practice/TrueQuestionResearchSheet.vue'), 'utf8'),
+    readFile(path.join(webRoot, 'src/features/practice/TrueQuestionImportDraftSheet.vue'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/TutorPracticeSessionView.vue'), 'utf8'),
+    readFile(path.join(webRoot, 'src/features/practice/PracticeQuestionSetList.vue'), 'utf8'),
+    readFile(path.join(webRoot, 'src/capabilities/design-system/components/InfiniteScrollPagination.vue'), 'utf8'),
     readFile(path.join(webRoot, 'src/modules/evidence/application/SubmitObjectiveSession.ts'), 'utf8')
   ]);
   assert.match(contract, /interface QuestionSetLibraryQuery/);
+  assert.match(contract, /cursor\?: QuestionSetLibraryCursor/);
+  assert.match(contract, /entryModes\?: readonly QuestionSetEntryMode\[\]/);
   assert.match(contract, /sourceMetadata\?: QuestionSetSourceSummary/);
   assert.match(sqlite, /LEFT JOIN question_sources source/);
-  assert.match(sqlite, /appendInFilter\(filters, params, 'source\.exam_year'/);
+  assert.match(sqlite, /appendQuestionSetLibraryQuery\(filters, params, query\)/);
+  assert.match(querySql, /query\.entryModes/);
+  assert.match(querySql, /question_set\.entry_mode/);
+  assert.match(querySql, /question_set\.created_at < \?/);
   assert.match(indexedDb, /matchesLibraryQuery\(entry, query\)/);
+  assert.match(indexedDb, /isBeforeCursor\(entry, query\.cursor\)/);
   assert.match(centerView, /<LandmarkIcon \/>真题/);
   assert.match(centerView, /showTrueFilterSheet/);
-  assert.match(centerView, /查看 \{\{ filteredTrueQuestionSets\.length \}\} 套真题/);
+  assert.match(centerView, /<PracticeQuestionSetList/);
   assert.match(centerView, /resolveLearningThread\(set\.id\)/);
   assert.match(libraryActions, /筛选真题/);
-  assert.match(libraryActions, /导入真题/);
+  assert.match(libraryActions, /文件导入/);
+  assert.match(libraryActions, /拍照导入/);
   assert.match(libraryActions, /AI 联网找题/);
-  assert.match(libraryActions, /DOCUMENT_IMPORT_ACCEPT/);
-  assert.match(importFeature, /skillCodes: \['tutor\.question_bank_ingestion'\]/);
-  assert.match(importFeature, /skillCodes: \['research\.true_questions'\]/);
+  assert.match(libraryActions, /DOCUMENT_FILE_IMPORT_ACCEPT/);
+  assert.doesNotMatch(libraryActions, /image\/\*/);
+  assert.match(libraryActions, /CameraPermissionError/);
+  assert.match(libraryActions, /confirm-text="去设置"/);
+  assert.match(importFeature, /skillNames: \['tutor\.question_bank_ingestion'\]/);
   assert.match(importFeature, /待确认草稿/);
+  assert.match(importComposable, /enqueueBusinessAgentTask\(\{/);
+  assert.match(importComposable, /intent: 'trueQuestionResearch'/);
+  assert.doesNotMatch(importComposable, /chat\.open\(.*research/i);
+  assert.match(researchAgent, /allowedTools: \['web\.search', 'web\.read_page', 'question_bank\.scan'\]/);
+  assert.match(researchAgent, /requiredToolName: 'question_bank\.scan'/);
+  assert.match(researchAgent, /一次空结果不代表任务结束/);
+  assert.match(researchAgent, /hasPublishableResearchCandidate/);
+  assert.match(researchAgent, /至少 1 道 ready 候选/);
+  assert.match(researchSheet, /考试类型/);
+  assert.match(researchSheet, /年份范围/);
+  assert.match(researchSheet, /行测模块/);
+  assert.match(researchSheet, /创建联网研究任务/);
+  assert.match(researchSheet, /不会直接写入正式题库/);
+  assert.match(researchDraftSheet, /确认并导入/);
+  assert.match(researchDraftSheet, /max-height:min\(42dvh,360px\)/);
   assert.match(sessionView, /question-source-meta/);
+  assert.match(listComponent, /max-height:clamp\(238px,42dvh,390px\)/);
+  assert.match(listComponent, /:scroll-root="viewport"/);
+  assert.match(infiniteScroll, /root: props\.scrollRoot \?\? null/);
   assert.match(sessionView, /questionOriginLabel\(sourceMetadata\.sourceType\)/);
   assert.match(submission, /questionOriginType: question\.originType/);
   assert.match(submission, /questionSourceId: question\.sourceId/);

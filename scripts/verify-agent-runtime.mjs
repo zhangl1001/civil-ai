@@ -133,7 +133,7 @@ try {
   let maxActiveObserverWrites = 0;
   let secondTurnMessages = [];
   const readToolDefinitions = [1, 2, 3].map((index) => ({
-    code: `web.read_${index}`,
+    name: `web.read_${index}`,
     description: `并行读取 ${index}`,
     inputSchema: { type: 'object', properties: {} },
     risk: agent.AgentToolRisk.Read,
@@ -245,8 +245,7 @@ try {
   assert.deepEqual(streamedDeltas, ['正在', '处理']);
 
   let protocolFallbackCalls = 0;
-  await assert.rejects(
-    streamingInvocation.execute({
+  const protocolFallbackResult = await streamingInvocation.execute({
       agentRunId: running.id,
       modelRole: 'agent.tutor_turn',
       system: 'system',
@@ -258,15 +257,42 @@ try {
       model: 'test-model',
       async complete() {
         protocolFallbackCalls += 1;
-        return { text: '不应执行', usage: {} };
+        return { text: '协议恢复成功', usage: {} };
       },
       async stream() {
         throw new ai.ProviderGatewayError('invalid SSE', ai.ProviderErrorKind.Protocol);
       }
-    }),
-    /invalid SSE/
-  );
-  assert.equal(protocolFallbackCalls, 0);
+    });
+  assert.equal(protocolFallbackCalls, 1);
+  assert.equal(protocolFallbackResult.text, '协议恢复成功');
+
+  let emptyStreamCalls = 0;
+  let emptyCompletionCalls = 0;
+  const emptyRecoveryResult = await streamingInvocation.execute({
+    agentRunId: running.id,
+    modelRole: 'agent.tutor_turn',
+    system: 'system',
+    messages: [{ role: 'user', content: '工具结果返回后继续' }],
+    preferStream: true,
+    onDelta() {}
+  }, {
+    provider: 'anthropic',
+    model: 'test-model',
+    async complete() {
+      emptyCompletionCalls += 1;
+      if (emptyCompletionCalls === 1) {
+        throw new ai.ProviderGatewayError('empty completion', ai.ProviderErrorKind.EmptyResponse);
+      }
+      return { text: '已根据工具结果继续完成', usage: {} };
+    },
+    async stream() {
+      emptyStreamCalls += 1;
+      throw new ai.ProviderGatewayError('empty stream', ai.ProviderErrorKind.EmptyResponse);
+    }
+  });
+  assert.equal(emptyStreamCalls, 2);
+  assert.equal(emptyCompletionCalls, 2);
+  assert.equal(emptyRecoveryResult.text, '已根据工具结果继续完成');
 
   let unsupportedFallbackCalls = 0;
   const unsupportedStreamResult = await streamingInvocation.execute({
@@ -384,6 +410,13 @@ try {
     })).map((record) => record.id),
     ['memory:session-1-replacement']
   );
+  await memories.forget('memory:session-1-replacement');
+  assert.equal((await memories.recall({
+    sessionId: 'session:1',
+    layers: [agent.AgentMemoryLayer.Session],
+    limit: 10,
+    now: 3_000
+  })).length, 0);
   await memories.forgetSession('session:1');
   await memories.append({
     id: 'memory:late-session-1',
@@ -559,5 +592,25 @@ try {
   assert.deepEqual(toastLifecycle.observe(true, [historicalRun, newRun]), [newRun]);
   const finishedRun = { ...newRun, status: agent.AgentRunStatus.Completed };
   assert.deepEqual(toastLifecycle.observe(true, [historicalRun, finishedRun]), [finishedRun]);
+  const silentRun = {
+    id: 'run:silent-enrichment',
+    status: agent.AgentRunStatus.Running,
+    taskCenterVisible: false
+  };
+  assert.deepEqual(
+    toastLifecycle.observe(true, [historicalRun, silentRun]),
+    [],
+    'hidden child work must not create a user-facing toast'
+  );
+  const silentRunCompleted = {
+    ...silentRun,
+    status: agent.AgentRunStatus.Completed,
+    taskCenterVisible: true
+  };
+  assert.deepEqual(
+    toastLifecycle.observe(true, [historicalRun, silentRunCompleted]),
+    [silentRunCompleted],
+    'the parent enrichment run may notify once after its final result is committed'
+  );
   console.log('Agent runtime verification passed.');
 } finally { await server.close(); }

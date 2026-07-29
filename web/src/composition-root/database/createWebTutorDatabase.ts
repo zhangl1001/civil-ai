@@ -32,6 +32,7 @@ import {
   PromptCompiler,
   PromptRegistry,
   questionImportPolicyV1,
+  questionSetEnrichmentPromptV1,
   structuredObjectivePromptV2
 } from '@/capabilities/ai-runtime/public';
 import { IndexedDbContentRepository } from '@/modules/content/adapters/IndexedDbContentRepository';
@@ -42,6 +43,7 @@ import { IndexedDbQuestionImportDraftRepository } from '@/modules/content/adapte
 import { IndexedDbQuestionReferencePackRepository } from '@/modules/content/adapters/IndexedDbQuestionReferencePackRepository';
 import {
   ArchiveQuestionSource,
+  ApplyQuestionSetEnrichment,
   BuildTrueQuestionReferencePack,
   ConfirmQuestionImportDraft,
   createBundledContentMetadata,
@@ -109,6 +111,8 @@ import {
   SubmitObjectiveSession
 } from '@/modules/evidence/public';
 import { createTutorAgentHandlers } from '../agent/createTutorAgentHandlers';
+import { EnqueueContentEnrichment } from '../agent/EnqueueContentEnrichment';
+import { EnsureQuestionSetEnrichment } from '../agent/EnsureQuestionSetEnrichment';
 import { TaskMessageProjector } from '../agent/TaskMessageProjector';
 import { IndexedDbTutorCycleRepository } from '@/modules/tutoring/adapters/IndexedDbTutorCycleRepository';
 import { IndexedDbAbilityCalibrationRepository } from '@/modules/calibration/adapters/IndexedDbAbilityCalibrationRepository';
@@ -216,6 +220,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
   const promptRegistry = new PromptRegistry();
   promptRegistry.register(structuredObjectivePromptV2);
+  promptRegistry.register(questionSetEnrichmentPromptV1);
   promptRegistry.register(questionImportPolicyV1);
   promptRegistry.register(errorDiagnosisPromptV1);
   promptRegistry.register(errorDiagnosisBatchPromptV1);
@@ -257,6 +262,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     clock,
     new UuidV7IdGenerator(clock)
   );
+  const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
   const getGenerationStatus = new GetGenerationStatus(generationRepository, contentRepository);
   const createLearningThread = new CreateLearningThread(
     unitOfWork,
@@ -312,6 +318,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     contentRepository
   );
   const createAgentRun = new CreateAgentRun(unitOfWork, agentRunRepository, outboxRepository, clock, new UuidV7IdGenerator(clock));
+  const ensureQuestionSetEnrichment = new EnsureQuestionSetEnrichment(contentRepository, agentRunRepository, new EnqueueContentEnrichment(createAgentRun));
   const transitionAgentRun = new TransitionAgentRun(unitOfWork, agentRunRepository, outboxRepository, clock, new UuidV7IdGenerator(clock));
   const agentRunExecutions = new AgentRunExecutionRegistry();
   const taskMessageProjector = new TaskMessageProjector(messageCenter, agentRunRepository);
@@ -385,7 +392,14 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
       startReviewQueueItem,
       retryReviewQueueItem,
       failReviewQueueItem,
-      recordSubjectiveAssessment
+      recordSubjectiveAssessment,
+      scanQuestionImportDraft,
+      questionImportDraftRepository,
+      createAgentLoop,
+      createAgentRun,
+      contentRepository,
+      applyQuestionSetEnrichment,
+      ensureQuestionSetEnrichment
     }),
     agentRunExecutions,
     taskMessageProjector
@@ -522,6 +536,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     updateDailyPlanItemStatus,
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
+    applyQuestionSetEnrichment,
+    ensureQuestionSetEnrichment,
     getGenerationStatus,
     createLearningThread,
     transitionLearningThread,
@@ -562,6 +578,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
       await alignCandidateCurriculum.execute(bundledCurriculum);
       await ensureContentMetadata.execute(bundledContentMetadata);
       await ensurePromptBundle.execute(structuredObjectivePromptV2);
+      await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
       await ensurePromptBundle.execute(questionImportPolicyV1);
       await ensurePromptBundle.execute(errorDiagnosisPromptV1);
       await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);

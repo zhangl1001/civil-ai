@@ -63,21 +63,19 @@
 
             <div v-if="toolRows.length" :class="['tool-process', { running: hasToolRunning, open: processOpen }]" @click="processOpen = !processOpen">
               <div class="process-head">
-                <span :class="['process-icon', toolRows[0]?.status]"><component :is="taskIcon(toolRows[0])" /></span>
+                <ProcessStatusLight :status="toolProcessStatus" />
                 <strong>工具执行</strong>
                 <p>{{ toolSummary }}</p>
-                <b class="process-index">{{ processMetaText(toolRows) }}</b>
                 <ChevronDownIcon class="process-chevron" />
               </div>
               <Transition name="process-list">
                 <div v-if="processOpen" class="process-list">
                   <article v-for="task in toolRows" :key="task.id" class="process-row" @click.stop="openTask(task)">
                     <span class="process-row-main">
-                      <span :class="['process-icon', task.status]"><component :is="taskIcon(task)" /></span>
+                      <ProcessStatusLight :status="task.status" />
                       <strong>{{ task.title }}</strong>
                       <span v-if="taskDetailText(task)">{{ taskDetailText(task) }}</span>
                     </span>
-                    <em>{{ task.statusText }}</em>
                   </article>
                 </div>
               </Transition>
@@ -253,6 +251,7 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import type { AIMessage } from '@/domain/ai';
 import type { AgentRunStatus, AgentRunView } from '@/modules/agent/public';
 import MarkdownContent from '@/components/MarkdownContent.vue';
+import ProcessStatusLight from '@/components/ai-chat/ProcessStatusLight.vue';
 import { chatErrorText, clampChatSheetHeight, compactGuidanceText, formatSessionTime } from '@/components/ai-chat/AIChatPresentation';
 import { useChatMessageScroll } from '@/components/ai-chat/useChatMessageScroll';
 const chat = useAIChatStore();
@@ -345,6 +344,7 @@ const toolRows = computed<ProcessItem[]>(() => {
 
 const hasTaskRunning = computed(() => taskRows.value.some((task) => task.isRunningLike));
 const hasToolRunning = computed(() => toolRows.value.some((task) => task.isRunningLike));
+const toolProcessStatus = computed<ProcessStatus>(() => hasToolRunning.value ? 'running' : toolRows.value.some((task) => task.status === 'failed') ? 'failed' : toolRows.value.every((task) => task.status === 'done') ? 'done' : 'queued');
 const hasRunning = computed(() => chat.isSending || hasToolRunning.value || hasTaskRunning.value);
 const displayMessages = computed(() => chat.messages.filter((message) => message.role !== 'tool'));
 const isSteeringDraft = computed(() => chat.isSending && Boolean(guidancePreview.value));
@@ -409,7 +409,7 @@ function agentRunToProcessItem(run: AgentRunView): ProcessItem {
 function toolActivityToProcessItem(activity: AgentToolActivity): ProcessItem {
   const parent = agentRuns.value.find((run) => run.id === activity.agentRunId);
   const status = toolActivityProcessStatus(activity.status);
-  const detail = [activity.toolName, activity.argumentSummary].filter(Boolean).join(' · ');
+  const detail = activity.argumentSummary;
   return {
     id: `agent-tool-${activity.agentRunId}-${activity.toolCallId}`,
     type: activity.toolName === 'file.read_text' ? 'read' : runTypeForToolName(activity.toolName),
@@ -1376,19 +1376,6 @@ function clampFabPosition(position: { left: number; top: number }) {
   align-items: center;
   justify-content: flex-start;
   gap: 5px;
-}
-
-.process-row .process-icon {
-  width: 16px;
-  height: 16px;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.process-row .process-icon svg {
-  width: 15px;
-  height: 15px;
 }
 
 .process-row + .process-row {
