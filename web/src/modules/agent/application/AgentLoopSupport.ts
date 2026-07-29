@@ -1,6 +1,5 @@
 import { ModelMessageRole, type ModelMessage, type ModelToolCall } from '@/capabilities/ai-runtime/public';
 import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
-import { providerToolName } from './ActiveAgentToolSet';
 
 export type AgentGuidanceConsumer = () => readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
 
@@ -98,30 +97,6 @@ export function attemptedToolNames(
   return attempted;
 }
 
-export function claimedUnattemptedTool(
-  text: string,
-  toolNames: Iterable<string>,
-  attempted: ReadonlySet<string>
-): string | undefined {
-  if (/(?:尚未|没有|未能|无法|不能|并未).{0,12}(?:调用|执行|扫描|导入|写入)/.test(text)) return undefined;
-  const normalized = text.toLocaleLowerCase();
-  for (const name of toolNames) {
-    if (attempted.has(name)) continue;
-    const providerName = providerToolName(name).toLocaleLowerCase();
-    if (normalized.includes(name.toLocaleLowerCase()) || normalized.includes(providerName)) return name;
-  }
-  return /(?:正在|现在|开始|正式|已经|已)(?:\s|[，,:：])*?(?:调用|执行|扫描|导入|写入)/.test(text)
-    ? [...toolNames].find((name) => !attempted.has(name))
-    : undefined;
-}
-
-export function repairToolInstruction(toolName: string): string {
-  return [
-    `你刚才没有发起真实的 ${toolName} 工具调用。`,
-    '不要再用文字描述“正在调用”或输出工具代码。现在必须实际调用该工具；若当前输入不足以执行，请明确说明缺少什么，不能声称操作已经开始或完成。'
-  ].join('\n');
-}
-
 export function composeActiveSkillSystem(base: string, skills: readonly AgentSkillActivation[]): string {
   if (!skills.length) return base;
   return [base, '# 当前已加载 Skill 工作流', ...skills.map((skill) => skill.instructions)].join('\n\n');
@@ -144,10 +119,6 @@ export function completionVerificationInstruction(verifierNames: readonly string
       : '现在必须读取真实任务状态。',
     '如果精确 taskId 查询无结果，请改用 active 或 today 的最小范围查询；仍无结果时如实说明，不得直接生成一份聊天正文冒充业务结果。'
   ].join('\n');
-}
-
-export function isHonestToolDeferral(text: string): boolean {
-  return /(?:缺少|未提供|没有提供|无法识别|不能确定|范围不明确|信息不足|请重新上传|请补充|需要补充)/.test(text);
 }
 
 export function limitToolResult(content: string, maxChars: number): string {

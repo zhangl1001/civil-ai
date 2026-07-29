@@ -2,6 +2,7 @@ import { appLifecycleAdapter } from '@/platform/AppLifecycleAdapter';
 import { AI_CONFIG_CHANGED_EVENT, aiConfigService } from '@/services/AIConfigService';
 import {
   AdaptiveAgentConcurrency,
+  agentExecutionClassesForLane,
   agentWorkPoolsForLane,
   DEFAULT_MAX_CONCURRENT_AGENT_RUNS,
 } from '@/modules/agent/public';
@@ -121,9 +122,10 @@ export class AgentWorkerCoordinator {
         continue;
       }
       const workPools = agentWorkPoolsForLane(laneIndex, activeLimit, schedulingCycle);
+      const executionClasses = agentExecutionClassesForLane(laneIndex, activeLimit);
       schedulingCycle += 1;
       const now = Date.now() as Parameters<typeof runtime.agentRunRepository.nextWorkAt>[0];
-      const nextWorkAt = await runtime.agentRunRepository.nextWorkAt(now, workPools);
+      const nextWorkAt = await runtime.agentRunRepository.nextWorkAt(now, workPools, executionClasses);
       if (nextWorkAt === undefined) {
         await delay(WORKER_POLL_INTERVAL_MS, signal);
         continue;
@@ -137,7 +139,8 @@ export class AgentWorkerCoordinator {
         gateway: await getGateway(),
         maxConcurrent: 1,
         leaseMs: WORKER_LEASE_MS,
-        workPools
+        workPools,
+        executionClasses
       });
       if (batch.retried > 0) {
         this.concurrency.recordRetry();

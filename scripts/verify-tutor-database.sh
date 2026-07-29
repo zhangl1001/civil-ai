@@ -32,6 +32,7 @@ ability_calibration_snapshots_schema_file="$project_root/web/src/capabilities/da
 web_research_import_method_schema_file="$project_root/web/src/capabilities/database/migrations/027_web_research_import_method.sql"
 reference_pack_comparison_questions_schema_file="$project_root/web/src/capabilities/database/migrations/028_reference_pack_comparison_questions.sql"
 question_set_library_pagination_schema_file="$project_root/web/src/capabilities/database/migrations/029_question_set_library_pagination.sql"
+agent_execution_classes_schema_file="$project_root/web/src/capabilities/database/migrations/030_agent_execution_classes.sql"
 database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.XXXXXX.sqlite")"
 
 cleanup() {
@@ -362,6 +363,7 @@ INSERT INTO question_reference_packs(
 .read $web_research_import_method_schema_file
 .read $reference_pack_comparison_questions_schema_file
 .read $question_set_library_pagination_schema_file
+.read $agent_execution_classes_schema_file
 
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;

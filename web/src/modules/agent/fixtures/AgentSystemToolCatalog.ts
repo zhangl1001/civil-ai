@@ -11,7 +11,7 @@ const emptyObjectSchema: JsonObject = {
 export const agentSystemToolCatalog: readonly AgentToolDefinition[] = [
   {
     name: 'system.read_clock',
-    description: '读取设备当前本地日期、时间、时区和日历日。涉及“今天、明天、剩余几天、截止日期或按时间调整计划”时按需调用，不使用会话记忆猜测当前日期。',
+    description: '读取设备当前本地日期、时间、时区和日历日。涉及当前日期或时间时优先使用工具结果；长任务中如果时间事实可能已过期，可以再次调用刷新。不要用会话记忆或模型猜测替代设备时间。',
     inputSchema: emptyObjectSchema,
     risk: 'read',
     requiresConfirmation: false,

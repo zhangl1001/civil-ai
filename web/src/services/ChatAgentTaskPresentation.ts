@@ -64,5 +64,6 @@ function completionText(toolName: string): string {
   if (toolName === 'question_bank.publish') return '真题已经发布到题库，可进入真题练习查看。';
   if (toolName === 'question_bank.confirm') return '导入草稿已经确认，正式发布前仍需你的确认。';
   if (toolName === 'question_bank.scan') return '真题扫描草稿已经生成，请确认题目和来源后再发布。';
+  if (toolName === 'question_bank.repair') return '真题草稿结构已自动修正，正在重新校验。';
   return '本次真题导入处理已结束，可进入真题练习查看状态。';
 }

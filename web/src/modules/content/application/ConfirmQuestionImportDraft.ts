@@ -19,6 +19,11 @@ import {
 export interface ConfirmQuestionImportDraftCommand {
   readonly draftId: QuestionImportDraftId;
   readonly expectedVersion: number;
+  /**
+   * Repairs an unconfirmed draft without treating the repair as user approval.
+   * Publishing still requires the normal confirmation boundary.
+   */
+  readonly repairOnly?: boolean;
   readonly sourceMetadata?: Partial<QuestionImportSourceMetadata>;
   readonly replacements?: readonly {
     readonly candidateId: QuestionImportCandidateId;
@@ -48,7 +53,7 @@ export class ConfirmQuestionImportDraft {
     if (current.draft.status === QuestionImportDraftStatus.Rejected) throw new Error('Rejected question import draft cannot be confirmed');
 
     const replacementById = new Map((command.replacements ?? []).map((item) => [item.candidateId, item]));
-    const rejected = new Set(command.rejectedCandidateIds ?? []);
+    const rejected = new Set(command.repairOnly ? [] : command.rejectedCandidateIds ?? []);
     assertCandidateSelection(current, replacementById, rejected);
     const materialGroupUses = countMaterialGroupUses(current.candidates, replacementById);
     const candidates = await Promise.all(current.candidates.map(async (candidate) => {
@@ -86,7 +91,7 @@ export class ConfirmQuestionImportDraft {
       sourceMetadata,
       candidates.filter((candidate) => candidate.status !== QuestionImportCandidateStatus.Rejected).length
     );
-    const canConfirm = draftIssues.length === 0
+    const canConfirm = !command.repairOnly && draftIssues.length === 0
       && candidates.some((candidate) => candidate.status === QuestionImportCandidateStatus.Ready)
       && candidates.every((candidate) => (
         candidate.status === QuestionImportCandidateStatus.Ready

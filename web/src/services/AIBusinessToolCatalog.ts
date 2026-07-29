@@ -52,7 +52,11 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
       type: 'object',
       required: ['module'],
       properties: {
-        module: { type: 'string', description: '行测模块', enum: ['资料分析', '判断推理', '言语理解', '数量关系', '常识判断'] },
+        module: {
+          type: 'string',
+          description: '行测模块 code。只从工具 schema 的枚举中选择；不要自行拼接模块名称。',
+          enum: APTITUDE_PRACTICE_MODULE_OPTIONS.map((item) => item.code)
+        },
         knowledgePoint: { type: 'string', description: '用户明确指定的细分知识点；未指定时省略，由学习档案选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 120 },
         difficulty: { type: 'string', description: '难度', enum: ['基础', '标准', '进阶'], default: '标准' }
@@ -90,7 +94,11 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
       type: 'object',
       required: [],
       properties: {
-        module: { type: 'string', description: '错题模块', enum: ['资料分析', '判断推理', '言语理解', '数量关系', '常识判断'] },
+        module: {
+          type: 'string',
+          description: '错题模块 code。只从工具 schema 的枚举中选择；不要自行拼接模块名称。',
+          enum: APTITUDE_PRACTICE_MODULE_OPTIONS.map((item) => item.code)
+        },
         knowledgePoint: { type: 'string', description: '用户明确指定的错题知识点；未指定时根据能力轨迹选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 60 }
       }
@@ -135,3 +143,4 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
     parameters: { type: 'object', required: [], properties: {} }
   }
 ];
+import { APTITUDE_PRACTICE_MODULE_OPTIONS } from '@/domain/labels';

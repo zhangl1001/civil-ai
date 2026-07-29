@@ -4,6 +4,7 @@ import type { OutboxRepository } from '@/modules/task/public';
 import type { AgentRunAggregate, AgentRunRepository } from '../contracts/AgentRunRepository';
 import {
   AgentRunStatus,
+  resolveAgentExecutionClass,
   resolveAgentWorkPool,
   type AgentRunType,
   type AgentWorkPool
@@ -33,6 +34,7 @@ export class CreateAgentRun {
       id: this.ids.next('AgentRunId'),
       runType: command.runType,
       workPool: command.workPool ?? resolveAgentWorkPool(command.runType, targetResourceType, command.inputSnapshot),
+      executionClass: resolveAgentExecutionClass(command.runType, targetResourceType, command.inputSnapshot),
       status: AgentRunStatus.Queued,
       examCycleId: command.examCycleId,
       learningThreadId: command.learningThreadId,

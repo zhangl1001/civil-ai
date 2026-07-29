@@ -3,6 +3,7 @@ import type { Clock, JsonObject } from '@/kernel/public';
 import type { AgentRunAggregate } from '../contracts/AgentRunRepository';
 import {
   AgentRunAction,
+  type AgentExecutionClass,
   type AgentRunType,
   type AgentWorkPool,
   DEFAULT_MAX_CONCURRENT_AGENT_RUNS
@@ -24,6 +25,7 @@ export interface RunTutorAgentBatchCommand {
   readonly leaseMs?: number;
   readonly maxConcurrent?: number;
   readonly workPools?: readonly AgentWorkPool[];
+  readonly executionClasses?: readonly AgentExecutionClass[];
   readonly signal?: AbortSignal;
 }
 
@@ -70,7 +72,8 @@ export class RunTutorAgentBatch {
       workerId: command.workerId,
       leaseExpiresAt: (this.clock.now() + leaseMs) as ReturnType<Clock['now']>,
       limit: maxConcurrent,
-      workPools: command.workPools
+      workPools: command.workPools,
+      executionClasses: command.executionClasses
     });
     const heartbeat = claimed.length
       ? globalThis.setInterval(() => {

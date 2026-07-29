@@ -1,8 +1,10 @@
 import type { Clock, IdGenerator, InstantMs } from '@/kernel/public';
 import type { AgentRunAggregate, AgentRunRepository } from '../contracts/AgentRunRepository';
 import {
+  AgentExecutionClass,
   AgentWorkPool,
   DEFAULT_MAX_CONCURRENT_AGENT_RUNS,
+  type AgentExecutionClass as AgentExecutionClassValue,
   type AgentWorkPool as AgentWorkPoolValue
 } from '../domain/AgentRunCodes';
 
@@ -11,6 +13,7 @@ export interface ClaimAgentRunsCommand {
   readonly leaseExpiresAt: InstantMs;
   readonly limit?: number;
   readonly workPools?: readonly AgentWorkPoolValue[];
+  readonly executionClasses?: readonly AgentExecutionClassValue[];
 }
 
 export class ClaimAgentRuns {
@@ -27,10 +30,17 @@ export class ClaimAgentRuns {
     ) {
       throw new Error('Invalid agent run work pool');
     }
+    if (
+      command.executionClasses?.length
+      && command.executionClasses.some((value) => !Object.values(AgentExecutionClass).includes(value))
+    ) {
+      throw new Error('Invalid agent run execution class');
+    }
     return this.repository.claimRunnable({
       workerId: command.workerId.trim(), now, leaseExpiresAt: command.leaseExpiresAt, limit,
       eventIds: Array.from({ length: limit }, () => this.ids.next('AgentRunEventId')),
-      workPools: command.workPools
+      workPools: command.workPools,
+      executionClasses: command.executionClasses
     });
   }
 
