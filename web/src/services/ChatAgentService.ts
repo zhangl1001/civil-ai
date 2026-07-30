@@ -663,7 +663,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
       resultRef: review.session.id
     };
   });
-  executor.register('teaching.request_practice', async (call) => {
+  executor.register('teaching.request_practice', async (call, context) => {
     const result = await aiBusinessTools.execute({
       name: 'generate_practice',
       arguments: {
@@ -672,7 +672,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
         questionCount: call.arguments.questionCount,
         difficulty: call.arguments.difficulty
       }
-    }, { sessionId });
+    }, { sessionId, idempotencyKey: context.businessIdempotencyKey });
     return {
       content: JSON.stringify({ message: result.reply, taskId: result.taskId ?? null }),
       resultRef: result.taskId,

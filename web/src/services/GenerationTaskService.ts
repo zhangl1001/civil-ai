@@ -28,6 +28,7 @@ export type GenerationIntent =
 
 export interface GenerationTaskInput {
   readonly intent: GenerationIntent;
+  readonly idempotencyKey?: string;
   readonly title?: string;
   readonly detail?: string;
   readonly module?: string;
@@ -74,7 +75,8 @@ export class GenerationTaskService {
     const actionRoute = routeForInput(input);
     const actionParams = actionParamsForInput(input);
     const aggregate = await runtime.createAgentRun.execute({
-      idempotencyKey: `business:${scopeKey}:${crypto.randomUUID()}`,
+      idempotencyKey: input.idempotencyKey?.trim()
+        || `business:${scopeKey}:${crypto.randomUUID()}`,
       runType: runTypeForIntent(input.intent),
       examCycleId: cycle?.examCycle.id,
       targetResourceType: TaskTargetType.BusinessOperation,

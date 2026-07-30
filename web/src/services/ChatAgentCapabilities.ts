@@ -24,6 +24,7 @@ export const chatAgentBusinessTools: readonly AgentToolDefinition[] = AI_BUSINES
     description: tool.description,
     inputSchema: tool.parameters as unknown as JsonObject,
     risk: AgentToolRisk.Write,
+    impact: tool.impact,
     requiresConfirmation: false,
     enabledFor: ['tutor_turn']
   }));

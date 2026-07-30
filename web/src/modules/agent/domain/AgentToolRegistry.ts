@@ -3,6 +3,27 @@ import type { JsonObject } from '@/kernel/public';
 export const AgentToolRisk = { Read: 'read', Write: 'write', Destructive: 'destructive' } as const;
 export type AgentToolRisk = typeof AgentToolRisk[keyof typeof AgentToolRisk];
 
+export const AgentToolCostTier = { Low: 'low', Medium: 'medium', High: 'high' } as const;
+export type AgentToolCostTier = typeof AgentToolCostTier[keyof typeof AgentToolCostTier];
+
+export const AgentToolNetworkScope = { None: 'none', Bounded: 'bounded', Broad: 'broad' } as const;
+export type AgentToolNetworkScope =
+  typeof AgentToolNetworkScope[keyof typeof AgentToolNetworkScope];
+
+export const AgentToolPersistence = { None: 'none', Reversible: 'reversible', Durable: 'durable' } as const;
+export type AgentToolPersistence =
+  typeof AgentToolPersistence[keyof typeof AgentToolPersistence];
+
+export interface AgentToolImpact {
+  readonly cost: AgentToolCostTier;
+  readonly network: AgentToolNetworkScope;
+  readonly persistence: AgentToolPersistence;
+  readonly confirmAbove?: {
+    readonly argument: string;
+    readonly value: number;
+  };
+}
+
 export const AgentToolRole = {
   Operational: 'operational',
   SkillSelector: 'skill_selector',
@@ -16,6 +37,7 @@ export interface AgentToolDefinition {
   readonly description: string;
   readonly inputSchema: JsonObject;
   readonly risk: AgentToolRisk;
+  readonly impact?: AgentToolImpact;
   readonly role?: AgentToolRole;
   readonly requiresConfirmation: boolean;
   readonly enabledFor: readonly string[];
@@ -73,6 +95,12 @@ function freezeTool(tool: AgentToolDefinition): AgentToolDefinition {
   return Object.freeze({
     ...tool,
     inputSchema: cloneAndFreezeJson(tool.inputSchema),
+    impact: tool.impact ? Object.freeze({
+      ...tool.impact,
+      confirmAbove: tool.impact.confirmAbove
+        ? Object.freeze({ ...tool.impact.confirmAbove })
+        : undefined
+    }) : undefined,
     enabledFor: Object.freeze([...tool.enabledFor])
   });
 }
