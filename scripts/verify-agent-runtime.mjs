@@ -17,6 +17,36 @@ try {
   const toolBatch = await server.ssrLoadModule('/src/modules/agent/application/AgentToolBatchExecutor.ts');
   const toolCallIdentity = await server.ssrLoadModule('/src/modules/agent/application/AgentToolCallIdentity.ts');
   const abortableConcurrency = await server.ssrLoadModule('/src/kernel/abortableConcurrency.ts');
+  const { WebAgentWorkspaceStorage } = await server.ssrLoadModule('/src/modules/agent/adapters/WebAgentWorkspaceStorage.ts');
+  const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const workspaceLocalStorage = fakeLocalStorage();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: workspaceLocalStorage
+  });
+  try {
+    const webWorkspace = new WebAgentWorkspaceStorage({
+      maximumKeyBytes: 8,
+      maximumLineBytes: 8,
+      maximumFileBytes: 20,
+      maximumFileCount: 2,
+      maximumWorkspaceBytes: 30
+    });
+    await webWorkspace.append('log-a', '12345678');
+    await assert.rejects(() => webWorkspace.append('log-a', '123456789'));
+    await webWorkspace.replace('log-b', '1234567890');
+    await assert.rejects(() => webWorkspace.replace('log-c', '1'));
+    await webWorkspace.replace('log-a', '12345678901234567890');
+    await assert.rejects(() => webWorkspace.append('log-b', '1'));
+    assert.equal((await webWorkspace.read('log-a')).length, 20);
+    await assert.rejects(() => webWorkspace.read('key-is-too-long'));
+  } finally {
+    if (localStorageDescriptor) {
+      Object.defineProperty(globalThis, 'localStorage', localStorageDescriptor);
+    } else {
+      delete globalThis.localStorage;
+    }
+  }
   const clock = { value: 1000, now() { return ++this.value; } };
   const machine = new agent.AgentRunMachine();
   const queued = { id: 'run:1', runType: agent.AgentRunType.ErrorDiagnosis, status: agent.AgentRunStatus.Queued, inputSnapshot: {}, checkpoint: {}, attemptCount: 0, idempotencyKey: 'run:1', createdAt: 1000, updatedAt: 1000, version: 1 };
@@ -1087,4 +1117,16 @@ function deferred() {
     resolve = accept;
   });
   return { promise, resolve };
+}
+
+function fakeLocalStorage() {
+  const values = new Map();
+  return {
+    get length() { return values.size; },
+    clear() { values.clear(); },
+    getItem(key) { return values.get(String(key)) ?? null; },
+    key(index) { return [...values.keys()][index] ?? null; },
+    removeItem(key) { values.delete(String(key)); },
+    setItem(key, value) { values.set(String(key), String(value)); }
+  };
 }
