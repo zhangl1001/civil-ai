@@ -17,6 +17,10 @@ import {
   StructuredOutputCapability,
   type StructuredOutputMode
 } from './StructuredOutputCapability';
+import {
+  ModelCapabilityMatrix,
+  type ModelRequestCapabilityOverrides
+} from './ModelCapabilityMatrix';
 
 export interface OpenAICompatibleGatewayConfig {
   readonly apiKey: string;
@@ -31,15 +35,30 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   readonly capabilities = { multimodalInput: true } as const;
   readonly model: string;
   private readonly structuredOutput = new StructuredOutputCapability();
+  private readonly modelCapabilities: ModelCapabilityMatrix;
 
   constructor(
     private readonly config: OpenAICompatibleGatewayConfig,
-    private readonly transport: HttpTransport = new FetchHttpTransport()
+    private readonly transport: HttpTransport = new FetchHttpTransport(),
+    capabilityOverrides: ModelRequestCapabilityOverrides = {}
   ) {
     this.model = config.model;
+    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides);
   }
 
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
+    try {
+      return await this.completeWithCurrentCapabilities(request, signal);
+    } catch (error) {
+      if (!this.modelCapabilities.learnFromInvalidRequest(error)) throw error;
+      return this.completeWithCurrentCapabilities(request, signal);
+    }
+  }
+
+  private async completeWithCurrentCapabilities(
+    request: ProviderRequest,
+    signal?: AbortSignal
+  ): Promise<ProviderResponse> {
     const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
     try {
       const result = await this.sendCompletion(request, mode, signal);
@@ -69,8 +88,14 @@ export class OpenAICompatibleGateway implements ProviderGateway {
       await onEvent({ type: 'text_delta', text: result.text });
       return result;
     }
-    const response = await this.transport.send(this.httpRequest(request, true, 'none', signal));
-    await assertProviderResponse(response);
+    let response: Response;
+    try {
+      response = await this.transport.send(this.httpRequest(request, true, 'none', signal));
+      await assertProviderResponse(response);
+    } catch (error) {
+      if (!this.modelCapabilities.learnFromInvalidRequest(error)) throw error;
+      return this.stream(request, onEvent, signal);
+    }
     if (!response.body) return this.complete(request, signal);
     const accumulator = new OpenAIStreamAccumulator();
     try {
@@ -124,9 +149,9 @@ export class OpenAICompatibleGateway implements ProviderGateway {
         { role: 'system', content: system },
         ...request.messages.map(toOpenAIMessage)
       ],
-      temperature: request.temperature,
       max_tokens: request.maxOutputTokens,
-      stream
+      stream,
+      ...this.modelCapabilities.samplingParameters(request.temperature)
     };
     if (request.responseSchema && structuredMode === 'tool') {
       body.tools = [{

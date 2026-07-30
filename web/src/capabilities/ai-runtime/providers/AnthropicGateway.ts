@@ -18,6 +18,10 @@ import {
   type StructuredOutputMode
 } from './StructuredOutputCapability';
 import {
+  ModelCapabilityMatrix,
+  type ModelRequestCapabilityOverrides
+} from './ModelCapabilityMatrix';
+import {
   anthropicInputSchema,
   anthropicMessagesEndpoint,
   normalizeAnthropicModelName,
@@ -39,16 +43,31 @@ export class AnthropicGateway implements ProviderGateway {
   readonly model: string;
   private readonly config: AnthropicGatewayConfig;
   private readonly structuredOutput = new StructuredOutputCapability();
+  private readonly modelCapabilities: ModelCapabilityMatrix;
 
   constructor(
     config: AnthropicGatewayConfig,
-    private readonly transport: HttpTransport = new FetchHttpTransport()
+    private readonly transport: HttpTransport = new FetchHttpTransport(),
+    capabilityOverrides: ModelRequestCapabilityOverrides = {}
   ) {
     this.model = normalizeAnthropicModelName(config.baseUrl, config.model);
     this.config = { ...config, model: this.model };
+    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides);
   }
 
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
+    try {
+      return await this.completeWithCurrentCapabilities(request, signal);
+    } catch (error) {
+      if (!this.modelCapabilities.learnFromInvalidRequest(error)) throw error;
+      return this.completeWithCurrentCapabilities(request, signal);
+    }
+  }
+
+  private async completeWithCurrentCapabilities(
+    request: ProviderRequest,
+    signal?: AbortSignal
+  ): Promise<ProviderResponse> {
     const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
     try {
       const result = await this.sendCompletion(request, mode, signal);
@@ -80,8 +99,14 @@ export class AnthropicGateway implements ProviderGateway {
       await onEvent({ type: 'text_delta', text: result.text });
       return result;
     }
-    const response = await this.transport.send(this.httpRequest(request, true, 'none', signal));
-    await assertProviderResponse(response);
+    let response: Response;
+    try {
+      response = await this.transport.send(this.httpRequest(request, true, 'none', signal));
+      await assertProviderResponse(response);
+    } catch (error) {
+      if (!this.modelCapabilities.learnFromInvalidRequest(error)) throw error;
+      return this.stream(request, onEvent, signal);
+    }
     if (!response.body) return this.complete(request, signal);
     const accumulator = new AnthropicStreamAccumulator();
     try {
@@ -168,9 +193,9 @@ export class AnthropicGateway implements ProviderGateway {
         model: this.config.model,
         system,
         messages: toAnthropicMessages(request.messages),
-        temperature: request.temperature,
         max_tokens: request.maxOutputTokens,
         stream,
+        ...this.modelCapabilities.samplingParameters(request.temperature),
         ...thinkingCompatibility,
         ...structuredOutput
       }),
