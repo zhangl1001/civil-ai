@@ -12,6 +12,14 @@ export {
 } from './domain/AgentRunCodes';
 export { TaskCenterStep, TaskTargetType, type TaskCenterStep as TaskCenterStepCode, type TaskTargetType as TaskTargetTypeCode } from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
+export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';
+export { createDurableAgentLoopFactory } from './application/CreateDurableAgentLoop';
+export {
+  AgentToolReceiptStatus,
+  type AgentToolReceipt,
+  type AgentToolReceiptRepository,
+  type AgentToolReceiptStatus as AgentToolReceiptStatusCode
+} from './contracts/AgentToolReceiptRepository';
 export {
   AgentToolRisk,
   AgentToolRole,

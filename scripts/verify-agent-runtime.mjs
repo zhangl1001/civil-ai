@@ -179,6 +179,69 @@ try {
     'single-lane scheduling must rotate foreground pools instead of starving one business line'
   );
 
+  const receiptValues = new Map();
+  const receiptRepository = {
+    async claim(receipt) {
+      const key = `${receipt.agentRunId}:${receipt.toolCallId}`;
+      const existing = receiptValues.get(key);
+      if (existing) return existing;
+      receiptValues.set(key, receipt);
+      return receipt;
+    },
+    async replace(receipt, expectedVersion) {
+      const key = `${receipt.agentRunId}:${receipt.toolCallId}`;
+      const existing = receiptValues.get(key);
+      assert.equal(existing?.version, expectedVersion);
+      receiptValues.set(key, receipt);
+    }
+  };
+  let writeExecutions = 0;
+  let readExecutions = 0;
+  let observedBusinessKey = '';
+  const durableExecutor = new agent.DurableAgentToolExecutor({
+    async execute(definition, _call, context) {
+      if (definition.risk === agent.AgentToolRisk.Read) {
+        readExecutions += 1;
+        return { content: 'read-result' };
+      }
+      writeExecutions += 1;
+      observedBusinessKey = context.businessIdempotencyKey;
+      return { content: 'write-result', resultRef: 'QuestionSetId:1' };
+    }
+  }, receiptRepository, clock);
+  const writeDefinition = {
+    name: 'practice.generate',
+    description: '生成练习。',
+    inputSchema: { type: 'object', properties: {} },
+    risk: agent.AgentToolRisk.Write,
+    requiresConfirmation: false,
+    enabledFor: ['tutor_turn']
+  };
+  const writeCall = { id: 'tool-call:1', name: writeDefinition.name, arguments: { count: 5 } };
+  const toolContext = { agentRunId: 'run:receipt' };
+  const firstWrite = await durableExecutor.execute(writeDefinition, writeCall, toolContext);
+  const replayedWrite = await durableExecutor.execute(writeDefinition, writeCall, toolContext);
+  assert.equal(writeExecutions, 1, 'a completed write Tool call must replay its durable receipt');
+  assert.equal(replayedWrite.resultRef, firstWrite.resultRef);
+  assert.equal(observedBusinessKey, 'agent-tool:run:receipt:tool-call:1');
+  await assert.rejects(
+    () => durableExecutor.execute(
+      writeDefinition,
+      { ...writeCall, arguments: { count: 10 } },
+      toolContext
+    ),
+    /identity conflict/,
+    'the same Tool call id cannot be reused with different arguments'
+  );
+  const readDefinition = { ...writeDefinition, name: 'practice.read', risk: agent.AgentToolRisk.Read };
+  await durableExecutor.execute(
+    readDefinition,
+    { id: 'read-call:1', name: readDefinition.name, arguments: {} },
+    toolContext
+  );
+  assert.equal(readExecutions, 1);
+  assert.equal(receiptValues.size, 1, 'read Tool calls remain ephemeral');
+
   let agentTurn = 0;
   let activeReadTools = 0;
   let maxActiveReadTools = 0;

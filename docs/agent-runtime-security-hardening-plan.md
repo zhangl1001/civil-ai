@@ -84,18 +84,18 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### 数据模型
 
-- [ ] 新增持久化 `agent_tool_receipts`，唯一键为 `agentRunId + toolCallId`。
-- [ ] receipt 状态至少包含 `prepared/running/succeeded/failed/unknown`。
-- [ ] 保存工具名、参数哈希、业务幂等键、resultRef、错误码和时间戳。
+- [x] 新增持久化 `agent_tool_receipts`，唯一键为 `agentRunId + toolCallId`。
+- [x] receipt 状态至少包含 `prepared/running/succeeded/failed/unknown`。
+- [x] 保存工具名、参数哈希、业务幂等键、resultRef、错误码和时间戳。
 - [ ] receipt 与核心业务写入、业务资源和 Outbox 在同一最小事务提交。
 
 ### 执行协议
 
-- [ ] 工具执行前先持久化 prepared receipt。
-- [ ] Tool Executor 强制向 Use Case 传递业务幂等键。
-- [ ] 恢复时先查 receipt 和目标资源；成功则复用结果，unknown 则核验，不直接重放。
-- [ ] 只读工具不写持久化 receipt，仅保留当前 run 的有界执行轨迹。
-- [ ] 为生成、研究、批改、发布和导入逐一接入幂等边界。
+- [x] 工具执行前先持久化 prepared receipt。
+- [x] Tool Executor 强制向 Use Case 传递业务幂等键。
+- [ ] 恢复时先查 receipt 和目标资源；已完成结果可以复用，unknown 的资源核验仍待补。
+- [x] 只读工具不写持久化 receipt，仅保留当前 run 的有界执行轨迹。
+- [ ] 为生成、研究、批改、发布和导入逐一接入幂等边界（专项练习和真题发布已接稳定键，其余待逐项收口）。
 
 ### 验收
 

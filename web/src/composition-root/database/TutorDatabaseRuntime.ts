@@ -13,6 +13,7 @@ import type {
   AgentMemoryRepository,
   AgentRunRepository,
   AgentRuntimeObserver,
+  AgentToolReceiptRepository,
   AgentToolExecutor,
   CancelAgentRun,
   ClaimAgentRuns,
@@ -137,6 +138,7 @@ export interface TutorDatabaseRuntime {
   readonly errorDiagnosisRepository: ErrorDiagnosisRepository;
   readonly learningEvidenceRepository: LearningEvidenceRepository;
   readonly agentRunRepository: AgentRunRepository;
+  readonly agentToolReceiptRepository: AgentToolReceiptRepository;
   readonly messageCenterRepository: MessageCenterRepository;
   readonly messageCenter: MessageCenter;
   readonly proactiveSignalRepository: ProactiveSignalRepository;

@@ -42,6 +42,7 @@ export interface AIBusinessToolResult {
 
 export interface AIBusinessToolExecuteMeta {
   sessionId?: string;
+  idempotencyKey?: string;
 }
 
 export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
