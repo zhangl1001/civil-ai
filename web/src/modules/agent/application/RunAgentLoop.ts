@@ -23,6 +23,7 @@ import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
 import { AgentCompletionTracker, completionResolutionInstruction } from './AgentCompletionTracker';
 import type { AgentLoopResult, RunAgentLoopCommand } from './AgentLoopContracts';
+import { agentToolArgumentsHash, cloneAgentToolCall } from './AgentToolCallIdentity';
 import { AgentToolInvocationValidator } from './AgentToolInvocationValidator';
 import {
   blockedRepeatReason,
@@ -122,6 +123,17 @@ export class RunAgentLoop {
     if (pendingConfirmation) {
       const definition = toolSet.byName(pendingConfirmation.name);
       if (!definition) throw new Error(`Pending Agent tool is unavailable: ${pendingConfirmation.name}`);
+      const validation = this.validator.validate(definition, pendingConfirmation);
+      if (!validation.valid) {
+        throw new Error(`Pending Agent tool arguments are invalid: ${validation.errors.join('; ')}`);
+      }
+      const argumentsHash = agentToolArgumentsHash(pendingConfirmation);
+      if (
+        command.checkpoint?.pendingConfirmationArgumentsHash
+        && command.checkpoint.pendingConfirmationArgumentsHash !== argumentsHash
+      ) {
+        throw new Error('Pending Agent tool arguments changed after confirmation was requested');
+      }
       if (!command.confirmationDecision) {
         throw new Error('Pending Agent tool requires an explicit confirmation decision');
       }
@@ -560,7 +572,12 @@ export class RunAgentLoop {
       messages: messages.map(sanitizeMessageForCheckpoint),
       toolSignatures: { ...signatures },
       toolAttempts: { ...toolAttempts },
-      pendingConfirmation: state.pendingConfirmation,
+      pendingConfirmation: state.pendingConfirmation
+        ? cloneAgentToolCall(state.pendingConfirmation)
+        : undefined,
+      pendingConfirmationArgumentsHash: state.pendingConfirmation
+        ? agentToolArgumentsHash(state.pendingConfirmation)
+        : undefined,
       activeSkills: state.activeSkills,
       activeToolNames: state.activeToolNames,
       completedToolNames: state.completedToolNames,
