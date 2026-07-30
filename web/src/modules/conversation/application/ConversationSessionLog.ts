@@ -18,26 +18,36 @@ type SessionEntry = SessionPutEntry | SessionDeleteEntry;
 const SESSION_INDEX_KEY = '__conversation_sessions__';
 
 export class ConversationSessionLog {
+  private mutation: Promise<void> = Promise.resolve();
+
   constructor(private readonly storage: AgentWorkspaceStorage) {}
 
   async get(sessionId: string): Promise<ConversationSession | undefined> {
+    await this.mutation;
     return (await this.replay()).get(sessionId);
   }
 
   async list(projectId: string): Promise<readonly ConversationSession[]> {
+    await this.mutation;
     return [...(await this.replay()).values()]
       .filter((session) => session.projectId === projectId)
       .sort((left, right) => right.updatedAt - left.updatedAt || right.id.localeCompare(left.id));
   }
 
   put(session: ConversationSession): Promise<void> {
-    const entry: SessionPutEntry = { version: 1, operation: 'put', session };
-    return this.storage.append(SESSION_INDEX_KEY, JSON.stringify(entry));
+    return this.mutate(async () => {
+      const sessions = await this.replay();
+      sessions.set(session.id, session);
+      await this.storage.replace(SESSION_INDEX_KEY, serializeSessions(sessions.values()));
+    });
   }
 
   delete(sessionId: string): Promise<void> {
-    const entry: SessionDeleteEntry = { version: 1, operation: 'delete', sessionId };
-    return this.storage.append(SESSION_INDEX_KEY, JSON.stringify(entry));
+    return this.mutate(async () => {
+      const sessions = await this.replay();
+      sessions.delete(sessionId);
+      await this.storage.replace(SESSION_INDEX_KEY, serializeSessions(sessions.values()));
+    });
   }
 
   private async replay(): Promise<Map<string, ConversationSession>> {
@@ -50,6 +60,24 @@ export class ConversationSessionLog {
     });
     return sessions;
   }
+
+  private mutate(operation: () => Promise<void>): Promise<void> {
+    const next = this.mutation.catch(() => undefined).then(operation);
+    this.mutation = next;
+    return next;
+  }
+}
+
+function serializeSessions(sessions: Iterable<ConversationSession>): string {
+  const content = [...sessions]
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+    .map((session) => JSON.stringify({
+      version: 1,
+      operation: 'put',
+      session
+    } satisfies SessionPutEntry))
+    .join('\n');
+  return content ? `${content}\n` : '';
 }
 
 function parseEntry(line: string): SessionEntry | undefined {
