@@ -49,9 +49,20 @@ public final class LearningNotificationPlugin: CAPPlugin, CAPBridgedPlugin {
             let center = UNUserNotificationCenter.current()
             let ids = payload.items.map { $0.id }
             center.removePendingNotificationRequests(withIdentifiers: ids)
+            let validItems = payload.items.compactMap { item -> (LearningNotificationItem, Date)? in
+                guard let date = parseDate(item.at), date > Date() else { return nil }
+                return (item, date)
+            }
+            guard !validItems.isEmpty else {
+                call.resolve(["scheduled": 0, "failed": 0])
+                return
+            }
+
+            let group = DispatchGroup()
+            let resultLock = NSLock()
             var scheduled = 0
-            for item in payload.items {
-                guard let date = parseDate(item.at), date > Date() else { continue }
+            var failures: [String] = []
+            for (item, date) in validItems {
                 let content = UNMutableNotificationContent()
                 content.title = item.title
                 content.body = item.body
@@ -59,10 +70,25 @@ public final class LearningNotificationPlugin: CAPPlugin, CAPBridgedPlugin {
                 content.userInfo = ["route": item.route]
                 let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
                 let request = UNNotificationRequest(identifier: item.id, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
-                center.add(request)
-                scheduled += 1
+                group.enter()
+                center.add(request) { error in
+                    resultLock.lock()
+                    if let error {
+                        failures.append("\(item.id): \(error.localizedDescription)")
+                    } else {
+                        scheduled += 1
+                    }
+                    resultLock.unlock()
+                    group.leave()
+                }
             }
-            call.resolve(["scheduled": scheduled])
+            group.notify(queue: .main) {
+                call.resolve([
+                    "scheduled": scheduled,
+                    "failed": failures.count,
+                    "errors": failures
+                ])
+            }
         } catch {
             call.reject("Invalid notification payload", "NOTIFICATION_PAYLOAD_INVALID", error)
         }

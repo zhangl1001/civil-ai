@@ -21,7 +21,11 @@ export interface LearningNotificationItem {
 
 export interface LearningNotificationsPlugin {
   requestPermission(): Promise<{ granted: boolean }>;
-  schedule(input: { items: LearningNotificationItem[] }): Promise<{ scheduled: number }>;
+  schedule(input: { items: LearningNotificationItem[] }): Promise<{
+    scheduled: number;
+    failed: number;
+    errors?: string[];
+  }>;
   getStatus(): Promise<{ native: boolean; authorization: string; pending: number }>;
   clearAll(): Promise<void>;
   consumePendingRoute(): Promise<{ route: string | null }>;
