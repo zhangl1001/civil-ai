@@ -142,9 +142,9 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### Context Compiler
 
-- [ ] 实现并装配生产级 `AgentContextCompiler`。
-- [ ] 对 system、tools、skills、memory、history、media、tool results 和 output reserve 统一预算。
-- [ ] 用户文本、网页内容、历史模型回复和摘要标记为低信任数据，禁止直接提升为 system 指令。
+- [x] 实现并装配首版生产 `AgentContextCompiler`。
+- [ ] 对 system、tools、skills、memory、history、media、tool results 和 output reserve 统一预算（首轮 system/tools/memory/history/output 已接入，循环内 tool results 与 media 待收口）。
+- [x] 用户文本、历史模型回复、记忆和摘要标记为低信任数据，不再拼入 system 指令。
 - [ ] 只按考试周期、学习主线和当前任务加载最小证据范围。
 
 ### Provider
@@ -254,3 +254,4 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B5 第二部分：Chat 与 Worker 共用根取消注册表，Task Dock 取消可中断 Provider、Agent loop 与工具信号。
 - [ ] B5 剩余：父子任务通知聚合。
 - [x] B6 Provider 第一部分：消除 Worker 与 Provider 的重试叠乘，并让重试等待受根信号和绝对 deadline 约束。
+- [x] B6 Context 第一部分：装配统一上下文预算器，将学生档案、记忆和摘要降为带来源标签的低信任数据消息。

@@ -122,6 +122,7 @@ export { ClaimAgentRuns, type ClaimAgentRunsCommand } from './application/ClaimA
 export { RecoverExpiredAgentRuns } from './application/RecoverExpiredAgentRuns';
 export { CancelAgentRun } from './application/CancelAgentRun';
 export { AgentRunExecutionRegistry } from './application/AgentRunExecutionRegistry';
+export { DefaultAgentContextCompiler } from './application/DefaultAgentContextCompiler';
 export { UpdateAgentRunProgress, type UpdateAgentRunProgressCommand } from './application/UpdateAgentRunProgress';
 export { InvokeAgentModel, type InvokeAgentModelCommand, type InvokeAgentModelResult } from './application/InvokeAgentModel';
 export { DefaultAgentToolPolicy } from './application/DefaultAgentToolPolicy';

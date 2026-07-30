@@ -45,6 +45,7 @@ import {
 import { agentFileReader } from './AgentFileReader';
 import { hasVisibleAssistantContent, visibleAssistantText } from './AgentResponsePresentation';
 import { chatTaskPresentation, publishChatTaskMessage } from './ChatAgentTaskPresentation';
+import { compileChatAgentContext } from './ChatAgentContextCompiler';
 import {
   chatAgentBusinessTools,
   chatAgentMemoryTools,
@@ -138,7 +139,6 @@ export class ChatAgentService {
           reason: 'user_replaced_pending_agent_action'
         });
       }
-
       await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
       active.controller.signal.throwIfAborted();
       const cycle = await runtime.candidateRepository.findCurrentCycle();
@@ -321,23 +321,23 @@ export class ChatAgentService {
       currentPrompt,
       currentUserContent
     );
-    const messages = preparedContext.messages;
     const exposure = planChatAgentCapabilities({
       preselectedSkillNames: options.invocation?.skillNames,
       pendingToolName: checkpoint?.pendingConfirmation?.name
     });
-    const studentContext = await aiStudentContextService.buildSystemContext();
-    const latestSession = await runtime.conversationStore.getSession(session.id);
+    const studentContext = await aiStudentContextService.buildContextData();
     const system = chatAgentSystemPromptComposer.compose({
-      basePrompt: buildCompanionChatPrompt(
-        options.thinkingEnabled,
-        studentContext,
-        preparedContext.sessionSummary || latestSession?.summary || '',
-        preparedContext.memoryContext
-      ),
+      basePrompt: buildCompanionChatPrompt(options.thinkingEnabled),
       skillCatalog: exposure.skillCatalog
     });
     const groundedSystem = composeGroundedAgentSystem([system, options.invocation?.systemConstraint].filter(Boolean).join('\n\n'));
+    const compiledContext = await compileChatAgentContext({
+      agentRunId: runId,
+      system: groundedSystem,
+      studentContext,
+      conversation: preparedContext,
+      tools: exposure.tools,
+    });
     const config = await aiConfigService.load();
     const deadline = createProviderExecutionDeadline(
       controller.signal,
@@ -347,8 +347,8 @@ export class ChatAgentService {
     try {
       const result = await runtime.createAgentLoop(executor, observer).execute({
         agentRunId: runId,
-        system: groundedSystem,
-        messages,
+        system: compiledContext.system,
+        messages: compiledContext.messages,
         tools: exposure.tools,
         availableTools: exposure.availableTools,
         skills: exposure.activations,
