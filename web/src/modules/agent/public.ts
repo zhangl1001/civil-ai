@@ -58,7 +58,16 @@ export { agentSystemToolCatalog } from './fixtures/AgentSystemToolCatalog';
 export { agentExternalToolCatalog } from './fixtures/AgentExternalToolCatalog';
 export { tutorSkillCatalog, tutorToolCatalog } from './fixtures/tutorToolCatalog';
 export { tutorSubAgentCatalog } from './fixtures/tutorSubAgentCatalog';
-export type { AgentInvocationRecord, AgentRunAggregate, AgentRunEventRecord, AgentRunRecord, AgentRunRepository } from './contracts/AgentRunRepository';
+export {
+  leaseTokenOf,
+  type AgentInvocationRecord,
+  type AgentRunAggregate,
+  type AgentRunEventRecord,
+  type AgentRunLeaseToken,
+  type AgentRunMutationGuard,
+  type AgentRunRecord,
+  type AgentRunRepository
+} from './contracts/AgentRunRepository';
 export {
   AgentMemoryLayer,
   AgentToolPolicyDecision,

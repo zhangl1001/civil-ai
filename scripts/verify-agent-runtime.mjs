@@ -44,8 +44,18 @@ try {
   assert.ok(agentRunInsert, 'SQLite Agent run INSERT must be present');
   assert.equal(
     (agentRunInsert[1].match(/\?/g) || []).length,
-    22,
-    'SQLite Agent run INSERT must bind exactly the 22 tutor_agent_runs columns'
+    23,
+    'SQLite Agent run INSERT must bind exactly the 23 tutor_agent_runs columns'
+  );
+  assert.match(
+    sqliteAgentRunRepositorySource,
+    /lease_epoch=lease_epoch\+1/,
+    'claiming a run must advance its lease epoch'
+  );
+  assert.match(
+    sqliteAgentRunRepositorySource,
+    /lease_owner=\? AND lease_epoch=\? AND lease_expires_at>\?/,
+    'worker writes and renewals must fence stale leases'
   );
   assert.doesNotMatch(
     workerCoordinatorSource,

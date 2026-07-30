@@ -14,6 +14,7 @@ dist/
 ios/App/build/
 ios/App/build-ipa/
 ios/App/DerivedData/
+ios/App/ota/*.pem
 
 # Local logs and temp files
 *.log

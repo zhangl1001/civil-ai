@@ -44,6 +44,7 @@ export class CreateAgentRun {
       checkpoint: {},
       attemptCount: 0,
       nextRunAt: command.nextRunAt,
+      leaseEpoch: 0,
       idempotencyKey: command.idempotencyKey,
       createdAt: now,
       updatedAt: now,

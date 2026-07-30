@@ -31,6 +31,7 @@
 | [模块化分层与组合标准](./modular-architecture-standard.md) | 模块边界、分层、合同、Registry 和装配 | 生效 |
 | [编码质量规范](./coding-quality-standard.md) | TypeScript/Vue/SQL/异步/错误/测试规范 | 生效 |
 | [拆分实施计划](./implementation-roadmap.md) | 可交付工作包、依赖、验收和当前进度 | 执行中 |
+| [Agent Runtime 安全与可靠性加固](./agent-runtime-security-hardening-plan.md) | G6 审计问题、租约 fencing、工具幂等、原生边界和发布门禁 | 待实施 |
 | [核心底座交接](./core-foundation-handoff.md) | 当前运行入口、不变量、验证结果与下一批任务 | 生效 |
 | [剩余交付任务清单](./remaining-delivery-checklist.md) | 真机验收、算法校准和发布任务 | 执行中 |
 

@@ -1,7 +1,7 @@
 import type { UnitOfWork } from '@/capabilities/database/public';
 import type { AgentRunId, Clock, IdGenerator, JsonObject } from '@/kernel/public';
 import type { OutboxRepository } from '@/modules/task/public';
-import type { AgentRunAggregate, AgentRunRepository } from '../contracts/AgentRunRepository';
+import type { AgentRunAggregate, AgentRunLeaseToken, AgentRunRepository } from '../contracts/AgentRunRepository';
 import { AgentRunStatus } from '../domain/AgentRunCodes';
 import type { TaskCenterStep } from '../domain/TaskCenterCodes';
 
@@ -11,6 +11,7 @@ export interface UpdateAgentRunProgressCommand {
   readonly progress: number;
   readonly message: string;
   readonly data?: JsonObject;
+  readonly leaseToken?: AgentRunLeaseToken;
 }
 
 export class UpdateAgentRunProgress {
@@ -54,7 +55,13 @@ export class UpdateAgentRunProgress {
       idempotencyKey: `agent-run:${run.id}:progress:${run.version}`
     };
     await this.unitOfWork.run(async (context) => {
-      await this.repository.replace(run, aggregate.run.version, event, context);
+      await this.repository.replace(
+        run,
+        aggregate.run.version,
+        event,
+        context,
+        command.leaseToken ? { leaseToken: command.leaseToken, now } : undefined
+      );
       await this.outbox.append({
         id: this.ids.next('OutboxEventId'),
         aggregateType: 'tutor_agent_run',

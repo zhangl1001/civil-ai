@@ -2,7 +2,17 @@ import type { IndexedDbTransactionScope } from '@/capabilities/database/adapters
 import { TutorIndexedDb, TutorIndexedDbStore } from '@/capabilities/database/adapters/indexeddb/TutorIndexedDb';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type { AgentRunId, InstantMs } from '@/kernel/public';
-import type { AgentInvocationRecord, AgentRunAggregate, AgentRunClaimOptions, AgentRunEventRecord, AgentRunRecord, AgentRunRecoveryOptions, AgentRunRepository } from '../contracts/AgentRunRepository';
+import type {
+  AgentInvocationRecord,
+  AgentRunAggregate,
+  AgentRunClaimOptions,
+  AgentRunEventRecord,
+  AgentRunLeaseToken,
+  AgentRunMutationGuard,
+  AgentRunRecord,
+  AgentRunRecoveryOptions,
+  AgentRunRepository
+} from '../contracts/AgentRunRepository';
 import {
   AgentExecutionClass,
   AgentWorkPool,
@@ -19,8 +29,12 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
     if (await this.findByIdempotencyKey(run.idempotencyKey)) throw new Error(`Agent run already exists: ${run.idempotencyKey}`);
     this.scope.stage(context, { type:'add', store:TutorIndexedDbStore.AgentRunAggregates, value:stored(run,[created],[]) });
   }
-  async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext): Promise<void> {
-    const current=await this.findById(run.id); if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new Error(`Agent run version conflict: ${run.id}`);
+  async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext, guard?: AgentRunMutationGuard): Promise<void> {
+    const current=await this.findById(run.id);
+    if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new Error(`Agent run version conflict: ${run.id}`);
+    if (guard && !matchesActiveLease(current.run, guard.leaseToken, guard.now)) {
+      throw new Error(`Agent run lease conflict: ${run.id}`);
+    }
     this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...current.events,event],(await this.get(run.id))!.invocations)});
   }
   async findById(id: AgentRunId): Promise<AgentRunAggregate|undefined> { const item=await this.get(id); return item&&{run:item.run,events:item.events}; }
@@ -42,17 +56,18 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
     return this.database.mutateStore<StoredRun,readonly AgentRunAggregate[]>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{
       const candidates=values.filter(v=>v.run.status==='queued'&&(!v.run.nextRunAt||v.run.nextRunAt<=options.now)&&(!pools.length||pools.includes(workPoolOf(v.run)))&&(!classes.length||classes.includes(executionClassOf(v.run)))).sort((a,b)=>executionClassPriority(executionClassOf(a.run),classes)-executionClassPriority(executionClassOf(b.run),classes)||poolPriority(workPoolOf(a.run),pools)-poolPriority(workPoolOf(b.run),pools)||a.run.updatedAt-b.run.updatedAt).slice(0,options.limit);
       const operations=[]; const claimed=[];
-      for(let index=0;index<candidates.length;index+=1){const item=candidates[index];const run={...item.run,status:'running' as const,attemptCount:item.run.attemptCount+1,leaseOwner:options.workerId.trim(),leaseExpiresAt:options.leaseExpiresAt,updatedAt:options.now,version:item.run.version+1};const event={id:options.eventIds[index],agentRunId:run.id,eventType:'started' as const,fromStatus:'queued' as const,toStatus:'running' as const,reasonCode:'agent_run.claimed',payload:{workerId:options.workerId.trim(),leaseExpiresAt:options.leaseExpiresAt},occurredAt:options.now,idempotencyKey:`agent-run:${run.id}:claim:${run.version}`};const next=stored(run,[...item.events,event],item.invocations);operations.push({type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:next});claimed.push({run,events:[...item.events,event]});}
+      for(let index=0;index<candidates.length;index+=1){const item=candidates[index];const leaseEpoch=(item.run.leaseEpoch??0)+1;const run={...item.run,status:'running' as const,attemptCount:item.run.attemptCount+1,leaseOwner:options.workerId.trim(),leaseExpiresAt:options.leaseExpiresAt,leaseEpoch,updatedAt:options.now,version:item.run.version+1};const event={id:options.eventIds[index],agentRunId:run.id,eventType:'started' as const,fromStatus:'queued' as const,toStatus:'running' as const,reasonCode:'agent_run.claimed',payload:{workerId:options.workerId.trim(),leaseExpiresAt:options.leaseExpiresAt,leaseEpoch},occurredAt:options.now,idempotencyKey:`agent-run:${run.id}:claim:${run.version}`};const next=stored(run,[...item.events,event],item.invocations);operations.push({type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:next});claimed.push({run,events:[...item.events,event]});}
       return {operations,result:claimed};
     });
   }
-  async renewLease(runId:AgentRunId,workerId:string,leaseExpiresAt:InstantMs):Promise<boolean>{return this.database.mutateStore<StoredRun,boolean>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{const current=values.find(item=>item.run.id===runId);if(!current||current.run.status!=='running'||current.run.leaseOwner!==workerId)return{operations:[],result:false};return{operations:[{type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:stored({...current.run,leaseExpiresAt},current.events,current.invocations)}],result:true};});}
+  async renewLease(token:AgentRunLeaseToken,now:InstantMs,leaseExpiresAt:InstantMs):Promise<boolean>{return this.database.mutateStore<StoredRun,boolean>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{const current=values.find(item=>item.run.id===token.agentRunId);if(!current||!matchesActiveLease(current.run,token,now))return{operations:[],result:false};return{operations:[{type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:stored({...current.run,leaseExpiresAt},current.events,current.invocations)}],result:true};});}
+  async hasActiveLease(token:AgentRunLeaseToken,now:InstantMs):Promise<boolean>{const current=await this.get(token.agentRunId);return Boolean(current&&matchesActiveLease(current.run,token,now));}
   async recoverExpiredLeases(options:AgentRunRecoveryOptions):Promise<readonly AgentRunAggregate[]> {if(!Number.isInteger(options.limit)||options.limit<1||options.limit>100||options.eventIds.length<options.limit)throw new Error('Invalid agent run recovery options');return this.database.mutateStore<StoredRun,readonly AgentRunAggregate[]>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{const candidates=values.filter(v=>v.run.status==='running'&&v.run.leaseExpiresAt!==undefined&&v.run.leaseExpiresAt<=options.now).sort((a,b)=>(a.run.leaseExpiresAt??0)-(b.run.leaseExpiresAt??0)).slice(0,options.limit);const operations=[];const recovered=[];for(let index=0;index<candidates.length;index+=1){const item=candidates[index];const run={...item.run,status:'queued' as const,nextRunAt:options.now,leaseOwner:undefined,leaseExpiresAt:undefined,updatedAt:options.now,version:item.run.version+1};const event={id:options.eventIds[index],agentRunId:run.id,eventType:'recovered' as const,fromStatus:'running' as const,toStatus:'queued' as const,reasonCode:'agent_run.lease_expired',payload:{},occurredAt:options.now,idempotencyKey:`agent-run:${run.id}:recover:${run.version}`};operations.push({type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...item.events,event],item.invocations)});recovered.push({run,events:[...item.events,event]});}return{operations,result:recovered};});}
   private get(id:AgentRunId):Promise<StoredRun|undefined>{ return this.database.get<StoredRun>(TutorIndexedDbStore.AgentRunAggregates,id); }
   private targetRuns(type:string,id:string):Promise<readonly StoredRun[]>{return this.database.getAllByIndex<StoredRun>(TutorIndexedDbStore.AgentRunAggregates,'by_target',[type,id]);}
   private async findInvocation(id:AgentInvocationRecord['id']):Promise<{stored:StoredRun;invocation:AgentInvocationRecord}|undefined>{const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates);for(const stored of all){const invocation=stored.invocations.find(item=>item.id===id);if(invocation)return{stored,invocation};}return undefined;}
 }
-function stored(run:AgentRunRecord,events:readonly AgentRunEventRecord[],invocations:readonly AgentInvocationRecord[]):StoredRun{const normalized={...run,workPool:workPoolOf(run),executionClass:executionClassOf(run)};return{runId:run.id,idempotencyKey:run.idempotencyKey,run:normalized,events,invocations};}
+function stored(run:AgentRunRecord,events:readonly AgentRunEventRecord[],invocations:readonly AgentInvocationRecord[]):StoredRun{const normalized={...run,leaseEpoch:run.leaseEpoch??0,workPool:workPoolOf(run),executionClass:executionClassOf(run)};return{runId:run.id,idempotencyKey:run.idempotencyKey,run:normalized,events,invocations};}
 function active(status:AgentRunRecord['status']):boolean{return status==='queued'||status==='running'||status==='waiting_user';}
 function workPoolOf(run:AgentRunRecord):AgentWorkPoolValue{return run.workPool??resolveAgentWorkPool(run.runType,run.targetResourceType,run.inputSnapshot);}
 function executionClassOf(run:AgentRunRecord):AgentExecutionClass{return run.executionClass??resolveAgentExecutionClass(run.runType,run.targetResourceType,run.inputSnapshot);}
@@ -60,3 +75,4 @@ function normalizeWorkPools(values?:readonly AgentWorkPoolValue[]):AgentWorkPool
 function normalizeExecutionClasses(values?:readonly AgentExecutionClass[]):AgentExecutionClass[]{if(!values?.length)return[];const allowed=new Set(Object.values(AgentExecutionClass));const classes=[...new Set(values)];if(classes.some(value=>!allowed.has(value)))throw new Error('Invalid agent execution class filter');return classes;}
 function poolPriority(pool:AgentWorkPoolValue,pools:readonly AgentWorkPoolValue[]):number{const index=pools.indexOf(pool);return index<0?pools.length:index;}
 function executionClassPriority(value:AgentExecutionClass,classes:readonly AgentExecutionClass[]):number{const index=classes.indexOf(value);return index<0?classes.length:index;}
+function matchesActiveLease(run:AgentRunRecord,token:AgentRunLeaseToken,now:InstantMs):boolean{return run.id===token.agentRunId&&run.status==='running'&&run.leaseOwner===token.workerId&&(run.leaseEpoch??0)===token.leaseEpoch&&run.leaseExpiresAt!==undefined&&run.leaseExpiresAt>now;}

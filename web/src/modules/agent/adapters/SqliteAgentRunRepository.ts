@@ -2,7 +2,17 @@ import type { SqlDatabase, SqlRow } from '@/capabilities/database/contracts/SqlD
 import type { SqlTransactionScope } from '@/capabilities/database/adapters/sqlite/SqlTransactionScope';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type { AiInvocationId, AgentRunId, ExamCycleId, InstantMs, LearningThreadId, PromptVersionId } from '@/kernel/public';
-import type { AgentInvocationRecord, AgentRunAggregate, AgentRunClaimOptions, AgentRunEventRecord, AgentRunRecord, AgentRunRecoveryOptions, AgentRunRepository } from '../contracts/AgentRunRepository';
+import type {
+  AgentInvocationRecord,
+  AgentRunAggregate,
+  AgentRunClaimOptions,
+  AgentRunEventRecord,
+  AgentRunMutationGuard,
+  AgentRunRecord,
+  AgentRunRecoveryOptions,
+  AgentRunRepository,
+  AgentRunLeaseToken
+} from '../contracts/AgentRunRepository';
 import {
   AgentExecutionClass,
   AgentWorkPool,
@@ -18,7 +28,7 @@ import type { InvocationValidationStatus } from '@/capabilities/ai-runtime/publi
 interface RunRow extends SqlRow {
   id: string; run_type: AgentRunType; work_pool: AgentWorkPoolValue; execution_class: AgentExecutionClassValue; status: AgentRunStatus; exam_cycle_id: string | null; learning_thread_id: string | null;
   target_resource_type: string | null; target_resource_id: string | null; input_snapshot_json: string; checkpoint_json: string;
-  attempt_count: number; next_run_at: number | null; lease_owner: string | null; lease_expires_at: number | null; error_code: string | null; cancellation_reason: string | null;
+  attempt_count: number; next_run_at: number | null; lease_owner: string | null; lease_expires_at: number | null; lease_epoch: number; error_code: string | null; cancellation_reason: string | null;
   idempotency_key: string; created_at: number; updated_at: number; completed_at: number | null; version: number;
 }
 interface EventRow extends SqlRow {
@@ -36,16 +46,25 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
   constructor(private readonly database: SqlDatabase, private readonly transactionScope: SqlTransactionScope) {}
   async create(run: AgentRunRecord, created: AgentRunEventRecord, context: TransactionContext): Promise<void> {
     const tx = this.transactionScope.resolve(context);
-    await tx.run(`INSERT INTO tutor_agent_runs(id, run_type, work_pool, execution_class, status, exam_cycle_id, learning_thread_id, target_resource_type, target_resource_id, input_snapshot_json, checkpoint_json, attempt_count, next_run_at, lease_owner, lease_expires_at, error_code, cancellation_reason, idempotency_key, created_at, updated_at, completed_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [run.id, run.runType, run.workPool ?? resolveAgentWorkPool(run.runType, run.targetResourceType, run.inputSnapshot), run.executionClass ?? resolveAgentExecutionClass(run.runType, run.targetResourceType, run.inputSnapshot), run.status, run.examCycleId ?? null, run.learningThreadId ?? null, run.targetResourceType ?? null, run.targetResourceId ?? null, JSON.stringify(run.inputSnapshot), JSON.stringify(run.checkpoint), run.attemptCount, run.nextRunAt ?? null, run.leaseOwner ?? null, run.leaseExpiresAt ?? null, run.errorCode ?? null, run.cancellationReason ?? null, run.idempotencyKey, run.createdAt, run.updatedAt, run.completedAt ?? null, run.version]);
+    await tx.run(`INSERT INTO tutor_agent_runs(id, run_type, work_pool, execution_class, status, exam_cycle_id, learning_thread_id, target_resource_type, target_resource_id, input_snapshot_json, checkpoint_json, attempt_count, next_run_at, lease_owner, lease_expires_at, lease_epoch, error_code, cancellation_reason, idempotency_key, created_at, updated_at, completed_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [run.id, run.runType, run.workPool ?? resolveAgentWorkPool(run.runType, run.targetResourceType, run.inputSnapshot), run.executionClass ?? resolveAgentExecutionClass(run.runType, run.targetResourceType, run.inputSnapshot), run.status, run.examCycleId ?? null, run.learningThreadId ?? null, run.targetResourceType ?? null, run.targetResourceId ?? null, JSON.stringify(run.inputSnapshot), JSON.stringify(run.checkpoint), run.attemptCount, run.nextRunAt ?? null, run.leaseOwner ?? null, run.leaseExpiresAt ?? null, run.leaseEpoch, run.errorCode ?? null, run.cancellationReason ?? null, run.idempotencyKey, run.createdAt, run.updatedAt, run.completedAt ?? null, run.version]);
     await insertEvent(tx, created);
   }
-  async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext): Promise<void> {
+  async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext, guard?: AgentRunMutationGuard): Promise<void> {
     if (run.version !== expectedVersion + 1) throw new Error('Agent run version must advance by one');
+    assertMutationGuard(run.id, guard);
     const tx = this.transactionScope.resolve(context);
-    const result = await tx.run(`UPDATE tutor_agent_runs SET status=?, checkpoint_json=?, attempt_count=?, next_run_at=?, lease_owner=?, lease_expires_at=?, error_code=?, cancellation_reason=?, updated_at=?, completed_at=?, version=? WHERE id=? AND version=?`,
-      [run.status, JSON.stringify(run.checkpoint), run.attemptCount, run.nextRunAt ?? null, run.leaseOwner ?? null, run.leaseExpiresAt ?? null, run.errorCode ?? null, run.cancellationReason ?? null, run.updatedAt, run.completedAt ?? null, run.version, run.id, expectedVersion]);
-    if (result.changes !== 1) throw new Error(`Agent run version conflict: ${run.id}`);
+    const guardSql = guard
+      ? " AND status='running' AND lease_owner=? AND lease_epoch=? AND lease_expires_at>?"
+      : '';
+    const guardValues = guard
+      ? [guard.leaseToken.workerId, guard.leaseToken.leaseEpoch, guard.now]
+      : [];
+    const result = await tx.run(`UPDATE tutor_agent_runs SET status=?, checkpoint_json=?, attempt_count=?, next_run_at=?, lease_owner=?, lease_expires_at=?, lease_epoch=?, error_code=?, cancellation_reason=?, updated_at=?, completed_at=?, version=? WHERE id=? AND version=?${guardSql}`,
+      [run.status, JSON.stringify(run.checkpoint), run.attemptCount, run.nextRunAt ?? null, run.leaseOwner ?? null, run.leaseExpiresAt ?? null, run.leaseEpoch, run.errorCode ?? null, run.cancellationReason ?? null, run.updatedAt, run.completedAt ?? null, run.version, run.id, expectedVersion, ...guardValues]);
+    if (result.changes !== 1) {
+      throw new Error(`${guard ? 'Agent run lease conflict' : 'Agent run version conflict'}: ${run.id}`);
+    }
     await insertEvent(tx, event);
   }
   async findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined> { return this.find('id = ?', [runId]); }
@@ -132,21 +151,29 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
       const claimed: AgentRunAggregate[] = [];
       for (let index = 0; index < rows.length; index += 1) {
         const row = rows[index];
-        const result = await tx.run(`UPDATE tutor_agent_runs SET status='running', attempt_count=attempt_count+1, lease_owner=?, lease_expires_at=?, updated_at=?, version=version+1 WHERE id=? AND version=? AND status='queued'`, [options.workerId.trim(), options.leaseExpiresAt, options.now, row.id, row.version]);
+        const result = await tx.run(`UPDATE tutor_agent_runs SET status='running', attempt_count=attempt_count+1, lease_owner=?, lease_expires_at=?, lease_epoch=lease_epoch+1, updated_at=?, version=version+1 WHERE id=? AND version=? AND status='queued'`, [options.workerId.trim(), options.leaseExpiresAt, options.now, row.id, row.version]);
         if (result.changes !== 1) continue;
-        const event: AgentRunEventRecord = { id: options.eventIds[index], agentRunId: row.id as AgentRunId, eventType: 'started', fromStatus: 'queued', toStatus: 'running', reasonCode: 'agent_run.claimed', payload: { workerId: options.workerId.trim(), leaseExpiresAt: options.leaseExpiresAt }, occurredAt: options.now, idempotencyKey: `agent-run:${row.id}:claim:${row.version + 1}` };
+        const leaseEpoch = row.lease_epoch + 1;
+        const event: AgentRunEventRecord = { id: options.eventIds[index], agentRunId: row.id as AgentRunId, eventType: 'started', fromStatus: 'queued', toStatus: 'running', reasonCode: 'agent_run.claimed', payload: { workerId: options.workerId.trim(), leaseExpiresAt: options.leaseExpiresAt, leaseEpoch }, occurredAt: options.now, idempotencyKey: `agent-run:${row.id}:claim:${row.version + 1}` };
         await insertEvent(tx, event);
-        claimed.push({ run: { ...mapRun(row), status: 'running', attemptCount: row.attempt_count + 1, leaseOwner: options.workerId.trim(), leaseExpiresAt: options.leaseExpiresAt, updatedAt: options.now, version: row.version + 1 }, events: [event] });
+        claimed.push({ run: { ...mapRun(row), status: 'running', attemptCount: row.attempt_count + 1, leaseOwner: options.workerId.trim(), leaseExpiresAt: options.leaseExpiresAt, leaseEpoch, updatedAt: options.now, version: row.version + 1 }, events: [event] });
       }
       return claimed;
     });
   }
-  async renewLease(runId:AgentRunId,workerId:string,leaseExpiresAt:InstantMs):Promise<boolean> {
+  async renewLease(token: AgentRunLeaseToken, now: InstantMs, leaseExpiresAt: InstantMs): Promise<boolean> {
     const result=await this.database.run(
-      "UPDATE tutor_agent_runs SET lease_expires_at=? WHERE id=? AND status='running' AND lease_owner=?",
-      [leaseExpiresAt,runId,workerId]
+      "UPDATE tutor_agent_runs SET lease_expires_at=? WHERE id=? AND status='running' AND lease_owner=? AND lease_epoch=? AND lease_expires_at>?",
+      [leaseExpiresAt, token.agentRunId, token.workerId, token.leaseEpoch, now]
     );
     return result.changes===1;
+  }
+  async hasActiveLease(token: AgentRunLeaseToken, now: InstantMs): Promise<boolean> {
+    const rows = await this.database.query<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM tutor_agent_runs WHERE id=? AND status='running' AND lease_owner=? AND lease_epoch=? AND lease_expires_at>?",
+      [token.agentRunId, token.workerId, token.leaseEpoch, now]
+    );
+    return rows[0]?.total === 1;
   }
   async recoverExpiredLeases(options: AgentRunRecoveryOptions): Promise<readonly AgentRunAggregate[]> {
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100 || options.eventIds.length < options.limit) throw new Error('Invalid agent run recovery options');
@@ -168,7 +195,7 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
 }
 function assertRecentLimit(limit: number): void { if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new RangeError('Agent recent limit must be between 1 and 50'); }
 function insertEvent(tx: ReturnType<SqlTransactionScope['resolve']>, value: AgentRunEventRecord): Promise<unknown> { return tx.run('INSERT INTO tutor_agent_run_events(id, agent_run_id, event_type, from_status, to_status, reason_code, payload_json, occurred_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [value.id, value.agentRunId, value.eventType, value.fromStatus ?? null, value.toStatus, value.reasonCode, JSON.stringify(value.payload), value.occurredAt, value.idempotencyKey]); }
-function mapRun(r: RunRow): AgentRunRecord { return { id:r.id as AgentRunId, runType:r.run_type, workPool:r.work_pool, executionClass:r.execution_class, status:r.status, examCycleId:r.exam_cycle_id as ExamCycleId | null ?? undefined, learningThreadId:r.learning_thread_id as LearningThreadId | null ?? undefined, targetResourceType:r.target_resource_type??undefined, targetResourceId:r.target_resource_id??undefined, inputSnapshot:json(r.input_snapshot_json), checkpoint:json(r.checkpoint_json), attemptCount:r.attempt_count, nextRunAt:r.next_run_at as InstantMs | null ?? undefined, leaseOwner:r.lease_owner??undefined, leaseExpiresAt:r.lease_expires_at as InstantMs | null ?? undefined, errorCode:r.error_code??undefined, cancellationReason:r.cancellation_reason??undefined, idempotencyKey:r.idempotency_key, createdAt:r.created_at as InstantMs, updatedAt:r.updated_at as InstantMs, completedAt:r.completed_at as InstantMs | null ?? undefined, version:r.version }; }
+function mapRun(r: RunRow): AgentRunRecord { return { id:r.id as AgentRunId, runType:r.run_type, workPool:r.work_pool, executionClass:r.execution_class, status:r.status, examCycleId:r.exam_cycle_id as ExamCycleId | null ?? undefined, learningThreadId:r.learning_thread_id as LearningThreadId | null ?? undefined, targetResourceType:r.target_resource_type??undefined, targetResourceId:r.target_resource_id??undefined, inputSnapshot:json(r.input_snapshot_json), checkpoint:json(r.checkpoint_json), attemptCount:r.attempt_count, nextRunAt:r.next_run_at as InstantMs | null ?? undefined, leaseOwner:r.lease_owner??undefined, leaseExpiresAt:r.lease_expires_at as InstantMs | null ?? undefined, leaseEpoch:r.lease_epoch??0, errorCode:r.error_code??undefined, cancellationReason:r.cancellation_reason??undefined, idempotencyKey:r.idempotency_key, createdAt:r.created_at as InstantMs, updatedAt:r.updated_at as InstantMs, completedAt:r.completed_at as InstantMs | null ?? undefined, version:r.version }; }
 function mapEvent(r: EventRow): AgentRunEventRecord { return { id:r.id, agentRunId:r.agent_run_id as AgentRunId, eventType:r.event_type, fromStatus:r.from_status??undefined, toStatus:r.to_status, reasonCode:r.reason_code, payload:json(r.payload_json), occurredAt:r.occurred_at as InstantMs, idempotencyKey:r.idempotency_key }; }
 function mapInvocation(r: InvocationRow): AgentInvocationRecord { return { id:r.id as AiInvocationId, agentRunId:r.agent_run_id as AgentRunId, provider:r.provider, model:r.model, modelRole:r.model_role, promptVersionId:r.prompt_version_id as PromptVersionId | null ?? undefined, toolSchemaVersion:r.tool_schema_version??undefined, requestHash:r.request_hash, providerRequestId:r.provider_request_id??undefined, inputTokens:r.input_tokens??undefined, outputTokens:r.output_tokens??undefined, latencyMs:r.latency_ms??undefined, finishReason:r.finish_reason??undefined, validationStatus:r.validation_status, errorCode:r.error_code??undefined, createdAt:r.created_at as InstantMs }; }
 function json(value:string) { const parsed:unknown=JSON.parse(value); if(!parsed||typeof parsed!=='object'||Array.isArray(parsed)) throw new TypeError('Agent runtime JSON must be an object'); return parsed as import('@/kernel/public').JsonObject; }
@@ -185,4 +212,11 @@ function normalizeExecutionClasses(values?: readonly AgentExecutionClassValue[])
   const classes = [...new Set(values)];
   if (classes.some((value) => !allowed.has(value))) throw new Error('Invalid agent execution class filter');
   return classes;
+}
+function assertMutationGuard(runId: AgentRunId, guard?: AgentRunMutationGuard): void {
+  if (!guard) return;
+  const token = guard.leaseToken;
+  if (token.agentRunId !== runId || !token.workerId.trim() || token.leaseEpoch < 1) {
+    throw new Error(`Invalid agent run lease token: ${runId}`);
+  }
 }

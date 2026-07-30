@@ -8,6 +8,7 @@ import type {
 import type { AgentRunId, InstantMs, JsonObject } from '@/kernel/public';
 import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
 import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
+import type { AgentRunLeaseToken } from './AgentRunRepository';
 
 export const AgentMemoryLayer = {
   Working: 'working',
@@ -97,6 +98,7 @@ export interface AgentToolPolicyResult {
 
 export interface AgentToolExecutionContext {
   readonly agentRunId: AgentRunId;
+  readonly leaseToken?: AgentRunLeaseToken;
   readonly examCycleId?: string;
   readonly learningThreadId?: string;
   readonly sessionId?: string;
@@ -138,11 +140,12 @@ export interface AgentToolExecutor {
 }
 
 export interface AgentCheckpointStore {
-  save(checkpoint: AgentLoopCheckpoint): Promise<void>;
+  save(checkpoint: AgentLoopCheckpoint, leaseToken?: AgentRunLeaseToken): Promise<void>;
 }
 
 export interface AgentModelInvocation {
   readonly agentRunId: AgentRunId;
+  readonly leaseToken?: AgentRunLeaseToken;
   readonly modelRole: string;
   readonly system: string;
   readonly messages: readonly ModelMessage[];

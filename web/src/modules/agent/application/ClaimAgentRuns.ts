@@ -1,5 +1,5 @@
-import type { Clock, IdGenerator, InstantMs } from '@/kernel/public';
-import type { AgentRunAggregate, AgentRunRepository } from '../contracts/AgentRunRepository';
+import type { AgentRunId, Clock, IdGenerator, InstantMs } from '@/kernel/public';
+import { leaseTokenOf, type AgentRunAggregate, type AgentRunRepository } from '../contracts/AgentRunRepository';
 import {
   AgentExecutionClass,
   AgentWorkPool,
@@ -44,8 +44,19 @@ export class ClaimAgentRuns {
     });
   }
 
-  async renew(runIds: readonly AgentRunAggregate['run']['id'][], workerId: string, leaseMs: number): Promise<void> {
-    const leaseExpiresAt = (this.clock.now() + leaseMs) as InstantMs;
-    await Promise.all(runIds.map((runId) => this.repository.renewLease(runId, workerId, leaseExpiresAt)));
+  async renew(runs: readonly AgentRunAggregate[], workerId: string, leaseMs: number): Promise<readonly AgentRunId[]> {
+    if (!workerId.trim() || !Number.isInteger(leaseMs) || leaseMs < 10_000) {
+      throw new Error('Invalid agent run lease renewal command');
+    }
+    const now = this.clock.now();
+    const leaseExpiresAt = (now + leaseMs) as InstantMs;
+    const renewed = await Promise.all(runs.map(async ({ run }) => {
+      const token = leaseTokenOf(run);
+      if (!token || token.workerId !== workerId.trim()) return false;
+      return this.repository.renewLease(token, now, leaseExpiresAt);
+    }));
+    return runs
+      .filter((_, index) => !renewed[index])
+      .map(({ run }) => run.id);
   }
 }

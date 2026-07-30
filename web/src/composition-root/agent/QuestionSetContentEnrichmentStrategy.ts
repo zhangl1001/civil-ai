@@ -7,6 +7,7 @@ import {
 import type { JsonObject, QuestionSetId } from '@/kernel/public';
 import {
   TaskCenterStep,
+  leaseTokenOf,
   type AgentRunAggregate,
   type InvokeAgentModel,
   type UpdateAgentRunProgress
@@ -66,7 +67,8 @@ async function executeQuestionSetEnrichment(
       agentRunId: run.run.id,
       step: TaskCenterStep.PreparingContext,
       progress: 20,
-      message: `正在并行补全 ${needs.explanationQuestionIds.length} 道题的解析`
+      message: `正在并行补全 ${needs.explanationQuestionIds.length} 道题的解析`,
+      leaseToken: leaseTokenOf(run.run)
     });
     const failures: unknown[] = [];
     let commitTail: Promise<void> = Promise.resolve();
@@ -99,7 +101,8 @@ async function executeQuestionSetEnrichment(
       agentRunId: run.run.id,
       step: TaskCenterStep.CommittingResult,
       progress: 85,
-      message: '正在核对已补全的逐题解析'
+      message: '正在核对已补全的逐题解析',
+      leaseToken: leaseTokenOf(run.run)
     });
     bundle = await requireQuestionSet(dependencies.contentRepository, questionSetId);
     needs = findQuestionSetEnrichmentNeeds(bundle);
@@ -141,6 +144,7 @@ async function requestEnrichmentShard(
   );
   const response = await dependencies.invokeAgentModel.execute({
     agentRunId: run.run.id,
+    leaseToken: leaseTokenOf(run.run),
     modelRole: needs.lecture
       ? 'content_enrichment.question_set.lecture'
       : 'content_enrichment.question_set.explanation',

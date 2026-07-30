@@ -138,7 +138,8 @@ export class RunAgentLoop {
         completedToolNames: [...completedToolNames],
         skillWorkflowState,
         awaitingCompletionVerification
-      }
+      },
+      command.executionContext.leaseToken
     );
     await this.emit({ type: 'run_started', agentRunId: command.agentRunId });
 
@@ -259,7 +260,7 @@ export class RunAgentLoop {
       if (skillWorkflowState === 'selected') skillWorkflowState = 'executing';
       await this.emit({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: turnCount });
       const response = await this.modelInvoker.invoke({
-        agentRunId: command.agentRunId,
+        agentRunId: command.agentRunId, leaseToken: command.executionContext.leaseToken,
         modelRole: 'agent.tutor_turn',
         system: composeActiveSkillSystem(command.system, [...activeSkills.values()]),
         messages: [...messages],
@@ -568,7 +569,8 @@ export class RunAgentLoop {
       readonly completedToolNames: readonly string[];
       readonly skillWorkflowState: AgentSkillWorkflowState;
       readonly awaitingCompletionVerification: boolean;
-    }
+    },
+    leaseToken?: AgentToolExecutionContext['leaseToken']
   ): Promise<AgentLoopCheckpoint> {
     const checkpoint: AgentLoopCheckpoint = {
       agentRunId,
@@ -584,7 +586,7 @@ export class RunAgentLoop {
       skillWorkflowState: state.skillWorkflowState,
       awaitingCompletionVerification: state.awaitingCompletionVerification
     };
-    await this.checkpoints.save(checkpoint);
+    await this.checkpoints.save(checkpoint, leaseToken);
     await this.emit({ type: 'checkpoint_saved', agentRunId, turn: turnCount });
     return checkpoint;
   }
