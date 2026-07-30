@@ -24,6 +24,75 @@ try {
     responsePresentation.visibleAssistantText('`web.search` 和 research.true_questions 暂时不可用'),
     '`联网搜索` 和 真题检索流程 暂时不可用'
   );
+  const invocationValidator = new agent.AgentToolInvocationValidator();
+  const validationDefinition = {
+    name: 'test.validate',
+    description: '验证参数。',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['count', 'mode', 'items'],
+      properties: {
+        count: { type: 'integer', minimum: 1, maximum: 5 },
+        mode: { type: 'string', enum: ['quick', 'deep'] },
+        items: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id'],
+            properties: { id: { type: 'string', minLength: 1 } }
+          }
+        }
+      }
+    },
+    risk: agent.AgentToolRisk.Write,
+    requiresConfirmation: false,
+    enabledFor: ['tutor_turn']
+  };
+  assert.equal(invocationValidator.validate(validationDefinition, {
+    id: 'valid:1',
+    name: validationDefinition.name,
+    arguments: { count: 2, mode: 'quick', items: [{ id: 'one' }] }
+  }).valid, true);
+  const invalidArguments = invocationValidator.validate(validationDefinition, {
+    id: 'invalid:1',
+    name: validationDefinition.name,
+    arguments: { count: 8, mode: 'unknown', items: [{}], extra: true }
+  });
+  assert.equal(invalidArguments.valid, false);
+  assert.equal(invalidArguments.errors.length >= 4, true);
+  let evaluatedInvalidPolicy = false;
+  const invalidDecision = await invocationValidator.evaluate({
+    async evaluate() {
+      evaluatedInvalidPolicy = true;
+      return { decision: 'allow', reasonCode: 'allowed' };
+    }
+  }, validationDefinition, {
+    id: 'invalid:2',
+    name: validationDefinition.name,
+    arguments: {}
+  }, { agentRunId: 'run:validation' });
+  assert.equal(evaluatedInvalidPolicy, false, 'invalid arguments must be rejected before Tool policy');
+  assert.equal(invalidDecision.reasonCode, 'agent.tool_arguments_invalid');
+  assert.equal(invalidDecision.retryable, true);
+  assert.equal(invocationValidator.validate({
+    ...validationDefinition,
+    inputSchema: { type: ['string', 'null'], minLength: 2 }
+  }, {
+    id: 'nullable:1',
+    name: validationDefinition.name,
+    arguments: null
+  }).valid, true);
+  assert.equal(invocationValidator.validate({
+    ...validationDefinition,
+    inputSchema: { type: ['string', 'null'], minLength: 2 }
+  }, {
+    id: 'nullable:2',
+    name: validationDefinition.name,
+    arguments: 'x'
+  }).valid, false);
   const practiceLibraryTool = agent.tutorToolCatalog.find((tool) => tool.name === 'practice.read_library');
   const practiceQuestionSetTool = agent.tutorToolCatalog.find((tool) => tool.name === 'practice.read_question_set');
   assert.ok(practiceLibraryTool);
@@ -386,6 +455,59 @@ try {
   assert.equal(events.some((event) => event.type === 'tool_call_started'), true);
   assert.equal(events.some((event) => event.type === 'tool_call_succeeded'), true);
 
+  let argumentRepairTurn = 0;
+  let argumentRepairExecutions = 0;
+  const argumentRepairLoop = new agent.RunAgentLoop(
+    modelInvoker,
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.allowed' }; } },
+    {
+      async execute() {
+        argumentRepairExecutions += 1;
+        return { content: '{"accepted":true}', resultRef: 'validation:accepted' };
+      }
+    },
+    { async save() {} }
+  );
+  const argumentRepairResult = await argumentRepairLoop.execute({
+    agentRunId: 'agent-run-argument-repair',
+    system: '工具参数错误时根据观察修正。',
+    messages: [{ role: ai.ModelMessageRole.User, content: '执行参数校验测试。' }],
+    tools: [validationDefinition],
+    executionContext: { agentRunId: 'agent-run-argument-repair' }
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete(request) {
+      argumentRepairTurn += 1;
+      if (argumentRepairTurn === 1) {
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'repair-invalid',
+            name: 'test_validate',
+            arguments: { count: 9, mode: 'unknown', items: [] }
+          }],
+          usage: {}
+        };
+      }
+      if (argumentRepairTurn === 2) {
+        assert.match(String(request.messages.at(-1).content), /agent\.tool_arguments_invalid/);
+        return {
+          text: '',
+          toolCalls: [{
+            id: 'repair-valid',
+            name: 'test_validate',
+            arguments: { count: 2, mode: 'deep', items: [{ id: 'item-1' }] }
+          }],
+          usage: {}
+        };
+      }
+      return { text: '参数修正后执行成功。', usage: {} };
+    }
+  });
+  assert.equal(argumentRepairResult.status, 'completed');
+  assert.equal(argumentRepairExecutions, 1, 'invalid Tool arguments must not reach the executor');
+
   let adaptiveTurn = 0;
   const adaptiveLoop = new agent.RunAgentLoop(
     modelInvoker,
@@ -410,7 +532,7 @@ try {
             toolCalls: [{
               id: `adaptive-call-${adaptiveTurn}`,
               name: 'practice_read_library',
-              arguments: { scope: 'all', createdFrom: `2026-07-${String(adaptiveTurn).padStart(2, '0')}` }
+              arguments: { scope: 'all', capabilityKeyword: `round-${adaptiveTurn}` }
             }],
             usage: {}
           }
@@ -598,7 +720,7 @@ try {
           toolCalls: [{
             id: 'transient-search-1',
             name: 'web_search',
-            arguments: { query: '江苏省考 公告', purpose: 'exam_notice' }
+            arguments: { query: '江苏省考 公告', purpose: 'general' }
           }],
           usage: {}
         };
@@ -613,7 +735,7 @@ try {
           toolCalls: [{
             id: 'transient-search-2',
             name: 'web_search',
-            arguments: { query: '江苏省考 公告', purpose: 'exam_notice' }
+            arguments: { query: '江苏省考 公告', purpose: 'general' }
           }],
           usage: {}
         };
@@ -820,7 +942,22 @@ try {
         assert.deepEqual(request.toolChoice, { name: 'question_bank_scan' });
         return {
           text: '',
-          toolCalls: [{ id: 'scan-call-1', name: 'question_bank_scan', arguments: {} }],
+          toolCalls: [{
+            id: 'scan-call-1',
+            name: 'question_bank_scan',
+            arguments: {
+              capability: '论证结构',
+              module: '判断推理',
+              sourceType: 'imported',
+              importMethod: 'manual_text',
+              sourceMetadata: {},
+              questions: [{
+                id: 'q-1',
+                prompt: '下列说法正确的是？',
+                options: [{ id: 'A', text: '选项一' }, { id: 'B', text: '选项二' }]
+              }]
+            }
+          }],
           usage: {}
         };
       }
@@ -1019,7 +1156,11 @@ try {
     async complete() {
       return {
         text: '',
-        toolCalls: [{ id: 'call-confirm', name: 'candidate_change_target', arguments: { targetScore: 90 } }],
+        toolCalls: [{
+          id: 'call-confirm',
+          name: 'candidate_change_target',
+          arguments: { subject: 'aptitude', targetScore: 90 }
+        }],
         usage: {}
       };
     }
