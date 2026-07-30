@@ -26,6 +26,35 @@ assert.deepEqual(
   [],
   `Release security check failed: private key material found in ${findings.join(', ')}`
 );
+
+const nativeStreamingSource = await readFile(
+  path.join(repositoryRoot, 'ios/App/App/NativeStreamingHTTPPlugin.swift'),
+  'utf8'
+);
+for (const requiredBoundary of [
+  'NativeNetworkTargetPolicy.validate(url)',
+  'method == "POST"',
+  'maximumConcurrentStreams',
+  'maximumRequestBodyBytes',
+  'maximumResponseBytes',
+  'maximumDataEvents',
+  'maximumPendingEvents',
+  'willPerformHTTPRedirection',
+  'redirectHost == context.originalHost',
+  'getaddrinfo(host',
+  'isPublicIPv4',
+  'isPublicIPv6',
+  'allowedHeaders'
+]) {
+  assert.ok(
+    nativeStreamingSource.includes(requiredBoundary),
+    `Release security check failed: NativeStreamingHTTP is missing ${requiredBoundary}`
+  );
+}
+assert.ok(
+  !nativeStreamingSource.includes('call.getObject("headers")?.forEach'),
+  'Release security check failed: NativeStreamingHTTP forwards arbitrary request headers'
+);
 console.log('Release security verification passed.');
 
 async function filesUnder(directory) {

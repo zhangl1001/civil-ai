@@ -1,6 +1,6 @@
 # Agent Runtime 安全与可靠性加固计划
 
-> 状态：实施中（R0 代码止血、R1 AgentRun fencing、R2 receipt 基础和 R3 结构参数校验已完成）
+> 状态：实施中（R0 代码止血、R1 AgentRun fencing、R2 receipt 基础、R3 结构参数校验和 R5 原生模型网络边界已完成）
 > 建立日期：2026-07-30
 > 输入：`G6.code-review-report.md` 及 2026-07-30 独立复核
 > 目标：在不改变现有产品功能和页面入口的前提下，补齐 Agent 一致性、安全、恢复和发布门禁。
@@ -170,10 +170,10 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### Native HTTP / Web Research
 
-- [ ] 原生层只允许 HTTPS 和配置的 Provider/Search host。
-- [ ] 拒绝 loopback、link-local、私网、保留地址和非标准端口。
-- [ ] DNS 解析后校验实际 IP；重定向逐跳重新校验。
-- [ ] 限制 method、headers、并发数、累计字节、事件数、时长和缓冲队列。
+- [x] 原生模型传输只允许公开 HTTPS 端点，不按单一模型供应商写死域名。
+- [x] 拒绝 loopback、link-local、私网、保留地址和非标准端口。
+- [x] DNS 解析后校验实际 IP；重定向逐跳重新校验并禁止跨主机跳转。
+- [x] 限制 method、headers、并发数、请求体、累计字节、事件数、时长和缓冲队列。
 - [ ] Web Research 与 Native HTTP 复用同一网络目标策略。
 
 ### 文件、OCR、工作区和语音
@@ -255,3 +255,4 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [ ] B5 剩余：父子任务通知聚合。
 - [x] B6 Provider 第一部分：消除 Worker 与 Provider 的重试叠乘，并让重试等待受根信号和绝对 deadline 约束。
 - [x] B6 Context 第一部分：装配统一上下文预算器，将学生档案、记忆和摘要降为带来源标签的低信任数据消息。
+- [x] B7 网络第一部分：原生模型流式传输接入公开 HTTPS/DNS/逐跳重定向校验，并增加并发、流量、事件和积压硬上限。
