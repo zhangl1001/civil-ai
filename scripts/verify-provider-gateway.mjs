@@ -710,6 +710,56 @@ try {
     'an endpoint that rejected temperature must retain the learned capability'
   );
 
+  const adaptiveThinkingBodies = [];
+  const adaptiveThinkingGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'adaptive-thinking-model'
+  }, {
+    async send(request) {
+      const body = JSON.parse(request.body);
+      adaptiveThinkingBodies.push(body);
+      if (adaptiveThinkingBodies.length === 1) {
+        return new Response(JSON.stringify({
+          error: { message: 'thinking is not supported by this compatible endpoint' }
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'adaptive-thinking',
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const adaptiveThinkingRequest = {
+    ...adaptiveRequest,
+    tools: [{
+      name: 'student.read_profile',
+      description: '读取当前考生档案。',
+      inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+    }],
+    toolChoice: 'auto',
+    requestId: 'adaptive-thinking'
+  };
+  await adaptiveThinkingGateway.complete(adaptiveThinkingRequest);
+  await adaptiveThinkingGateway.complete({
+    ...adaptiveThinkingRequest,
+    requestId: 'adaptive-thinking-2'
+  });
+  assert.equal(adaptiveThinkingBodies[0].thinking.type, 'disabled');
+  assert.equal('thinking' in adaptiveThinkingBodies[1], false);
+  assert.equal(adaptiveThinkingBodies[1].temperature, 0.2);
+  assert.equal(
+    'thinking' in adaptiveThinkingBodies[2],
+    false,
+    'an endpoint that rejected thinking must retain the learned capability'
+  );
+  assert.equal(
+    adaptiveThinkingBodies[2].temperature,
+    0.2,
+    'thinking fallback must not disable unrelated sampling parameters'
+  );
+
   const adaptiveOpenAIBodies = [];
   const adaptiveOpenAIGateway = new ai.OpenAICompatibleGateway({
     apiKey: 'test-key',
