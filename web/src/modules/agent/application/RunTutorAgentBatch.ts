@@ -12,6 +12,7 @@ import {
   AgentRunNotificationMode,
   resolveAgentRunNotificationMode
 } from '../domain/TaskCenterCodes';
+import { isAgentRunSuspended } from '../domain/AgentRunInterruption';
 import { ClaimAgentRuns } from './ClaimAgentRuns';
 import { RecoverExpiredAgentRuns } from './RecoverExpiredAgentRuns';
 import { TransitionAgentRun } from './TransitionAgentRun';
@@ -146,7 +147,7 @@ export class RunTutorAgentBatch {
     }
     const executionSignal = this.executions?.begin(run.run.id, signal) ?? signal;
     try {
-      if (isLeaseLostSignal(executionSignal)) return 'cancelled';
+      if (isRecoverableInterruption(executionSignal)) return 'cancelled';
       if (executionSignal?.aborted) {
         await this.cancel(run, 'agent_run.worker_aborted');
         await this.notify(() => this.lifecycle?.cancelled(run, 'agent_run.worker_aborted'));
@@ -164,7 +165,7 @@ export class RunTutorAgentBatch {
           ...errorDiagnostics(error)
         }));
       }
-      if (isLeaseLostSignal(executionSignal)) return 'cancelled';
+      if (isRecoverableInterruption(executionSignal)) return 'cancelled';
       if (executionSignal?.aborted) {
         await this.cancel(run, 'agent_run.worker_aborted');
         await this.notify(() => this.lifecycle?.cancelled(run, 'agent_run.worker_aborted'));
@@ -255,6 +256,11 @@ function combineSignals(...signals: readonly (AbortSignal | undefined)[]): Abort
 function isLeaseLostSignal(signal?: AbortSignal): boolean {
   return signal?.aborted === true
     && signal.reason instanceof AgentRunLeaseLostError;
+}
+
+function isRecoverableInterruption(signal?: AbortSignal): boolean {
+  return isLeaseLostSignal(signal)
+    || (signal?.aborted === true && isAgentRunSuspended(signal.reason));
 }
 
 function retryDelay(error: unknown, attemptCount: number): number | undefined {

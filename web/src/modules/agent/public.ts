@@ -20,6 +20,10 @@ export {
   type TaskTargetType as TaskTargetTypeCode
 } from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
+export {
+  AgentRunSuspendedError,
+  isAgentRunSuspended
+} from './domain/AgentRunInterruption';
 export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';
 export { AuthorizedAgentToolExecutor } from './application/AuthorizedAgentToolExecutor';
 export { createDurableAgentLoopFactory } from './application/CreateDurableAgentLoop';

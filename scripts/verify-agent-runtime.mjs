@@ -864,6 +864,41 @@ try {
   assert.equal(retryTransitions[0].action, agent.AgentRunAction.Fail);
   assert.equal(retryTransitions[0].errorCode, 'generation.json_invalid');
 
+  const lifecycleTransitions = [];
+  const lifecycleController = new AbortController();
+  const lifecycleHandlerStarted = deferred();
+  const lifecycleBatch = new agent.RunTutorAgentBatch(
+    { async execute() { return []; } },
+    { async execute() { return []; } },
+    { async execute(command) { lifecycleTransitions.push(command); } },
+    clock,
+    [{
+      runType: agent.AgentRunType.ContentGeneration,
+      async execute(_run, _gateway, signal) {
+        lifecycleHandlerStarted.resolve();
+        await new Promise((resolve, reject) => {
+          const abort = () => reject(signal.reason);
+          if (signal.aborted) abort();
+          else signal.addEventListener('abort', abort, { once: true });
+        });
+      }
+    }]
+  );
+  const lifecycleExecution = lifecycleBatch.executeRuns(
+    [retryRun],
+    undefined,
+    lifecycleController.signal
+  );
+  await lifecycleHandlerStarted.promise;
+  lifecycleController.abort(new agent.AgentRunSuspendedError());
+  const lifecycleResult = await lifecycleExecution;
+  assert.equal(lifecycleResult.cancelled, 1);
+  assert.equal(
+    lifecycleTransitions.length,
+    0,
+    'foreground suspension must leave a claimed run for lease recovery instead of marking it cancelled'
+  );
+
   const toastLifecycle = new taskToast.TaskToastLifecycle();
   const historicalRun = {
     id: 'run:historical',
@@ -1045,3 +1080,11 @@ try {
   assert.equal(siblingSettled, true, 'the concurrency boundary must await sibling cleanup before returning');
   console.log('Agent runtime verification passed.');
 } finally { await server.close(); }
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}

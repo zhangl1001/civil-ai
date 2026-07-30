@@ -24,7 +24,9 @@ import {
   AgentRunAction,
   AgentRunType,
   AuthorizedAgentToolExecutor,
+  AgentRunSuspendedError,
   agentExternalToolCatalog,
+  isAgentRunSuspended,
   RegisteredAgentToolExecutor,
   TaskCenterStep,
   TaskTargetType,
@@ -44,7 +46,11 @@ import {
   agentRunCompletionVerification
 } from './AgentCompletionEvidence';
 import { agentFileReader } from './AgentFileReader';
-import { hasVisibleAssistantContent, visibleAssistantText } from './AgentResponsePresentation';
+import {
+  chatExecutionFailureText,
+  hasVisibleAssistantContent,
+  visibleAssistantText
+} from './AgentResponsePresentation';
 import { chatTaskPresentation, publishChatTaskMessage } from './ChatAgentTaskPresentation';
 import { compileChatAgentContext } from './ChatAgentContextCompiler';
 import {
@@ -85,12 +91,15 @@ interface ActiveChatRun {
 }
 export class ChatAgentService {
   private readonly activeRuns = new Map<string, ActiveChatRun>();
-  cancel(sessionId?: string): void {
+  cancel(sessionId?: string, reason: 'user' | 'lifecycle' = 'user'): void {
+    const interruption = reason === 'lifecycle'
+      ? new AgentRunSuspendedError('Foreground chat stopped because the app left the foreground.')
+      : new DOMException('User cancelled the Agent run.', 'AbortError');
     if (sessionId) {
-      this.activeRuns.get(sessionId)?.controller.abort();
+      this.activeRuns.get(sessionId)?.controller.abort(interruption);
       return;
     }
-    this.activeRuns.forEach((run) => run.controller.abort());
+    this.activeRuns.forEach((run) => run.controller.abort(interruption));
   }
   async steer(text: string, session: AISession): Promise<AIMessage | undefined> {
     const guidance = text.trim();
@@ -176,7 +185,9 @@ export class ChatAgentService {
         if (current?.run.status === 'running' || current?.run.status === 'waiting_user') {
           await runtime.cancelAgentRun.execute({
             agentRunId: current.run.id,
-            reason: 'user_cancelled_chat_agent'
+            reason: isAgentRunSuspended(active.controller.signal.reason)
+              ? 'app_lifecycle_interrupted_chat_agent'
+              : 'user_cancelled_chat_agent'
           });
         }
       }
@@ -410,6 +421,7 @@ export class ChatAgentService {
       await publishChatTaskMessage(runtime, completed, 'completed');
     } catch (error) {
       const aborted = controller.signal.aborted;
+      const lifecycleInterrupted = isAgentRunSuspended(controller.signal.reason);
       const visibleStreamedText = visibleAssistantText(streamedText);
       const interruptedContent = aborted
         ? ''
@@ -431,7 +443,11 @@ export class ChatAgentService {
           action: aborted ? AgentRunAction.Cancel : AgentRunAction.Fail,
           reasonCode: aborted ? 'chat_agent.cancelled' : 'chat_agent.failed',
           ...(aborted
-            ? { cancellationReason: 'user_cancelled_chat_agent' }
+            ? {
+                cancellationReason: lifecycleInterrupted
+                  ? 'app_lifecycle_interrupted_chat_agent'
+                  : 'user_cancelled_chat_agent'
+              }
             : { errorCode: 'agent.execution_failed' })
         });
         await publishChatTaskMessage(runtime, failed, aborted ? 'cancelled' : 'failed');
@@ -922,23 +938,8 @@ function asJsonRecord(value: unknown): JsonObject {
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
-
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function chatExecutionFailureText(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error || '');
-  if (/multimodal|vision|image input|image_url|media_type|图片.*不支持|不支持.*图片/i.test(message)) {
-    return '当前模型不支持图片理解，请在 AI 配置中换用支持视觉输入的模型后重试。';
-  }
-  if (/network|fetch|timeout|超时|连接|provider\.transient|provider\.rate_limited/i.test(message)) {
-    return '模型服务暂时没有响应，请稍后重试。';
-  }
-  if (/version conflict|database|sqlite|transaction|事务|数据库/i.test(message)) {
-    return '本地数据正在忙，请稍后重试。刚才的工具执行状态已保留。';
-  }
-  return '后续回复没有正常返回，请重试。刚才的工具执行状态已保留。';
 }
 
 function isWeekend(): boolean {

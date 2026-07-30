@@ -8,6 +8,9 @@ import { proactiveTutorCoordinator } from '@/composition-root/proactive/Proactiv
 import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evidence/ObjectiveSubmissionRecoveryCoordinator';
 import { tutorDatabaseLifecycleCoordinator } from '@/composition-root/database/TutorDatabaseLifecycleCoordinator';
 import { projectRepository } from './ProjectRepository';
+import { chatAgentService } from './ChatAgentService';
+
+let chatLifecycleInstalled = false;
 
 export async function bootstrapLocalApp(): Promise<void> {
   projectRepository.bindCurrentProject(async () => {
@@ -24,6 +27,12 @@ export async function bootstrapLocalApp(): Promise<void> {
     };
   });
   appLifecycleAdapter.init();
+  if (!chatLifecycleInstalled) {
+    chatLifecycleInstalled = true;
+    appLifecycleAdapter.onChange((event) => {
+      if (event.state !== 'active') chatAgentService.cancel(undefined, 'lifecycle');
+    });
+  }
   statusBarAdapter.init();
   installWebViewRepaintGuard();
   const runtime = await initializeTutorRuntime();
