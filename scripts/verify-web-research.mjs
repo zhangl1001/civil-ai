@@ -15,11 +15,12 @@ const server = await createServer({
 try {
   const research = await server.ssrLoadModule('/src/capabilities/web-research/public.ts');
   const researchService = await server.ssrLoadModule('/src/services/WebResearchService.ts');
-  assert.throws(() => research.requirePublicWebUrl('http://127.0.0.1/private'), /本机或内网/);
-  assert.throws(() => research.requirePublicWebUrl('http://[::ffff:127.0.0.1]/private'), /本机或内网/);
+  assert.throws(() => research.requirePublicWebUrl('https://127.0.0.1/private'), /本机或内网/);
+  assert.throws(() => research.requirePublicWebUrl('https://[::ffff:127.0.0.1]/private'), /本机或内网/);
   assert.throws(() => research.requirePublicWebUrl('https://user:secret@example.com/private'), /账号信息/);
   assert.throws(() => research.requirePublicWebUrl('https://example.com:8443/private'), /非标准端口/);
-  assert.throws(() => research.requirePublicWebUrl('file:///tmp/test'), /HTTP/);
+  assert.throws(() => research.requirePublicWebUrl('http://example.com/plaintext'), /HTTPS/);
+  assert.throws(() => research.requirePublicWebUrl('file:///tmp/test'), /HTTPS/);
   assert.equal(research.requirePublicWebUrl('https://www.gov.cn/test#section').hash, '');
   const recentUrls = researchService.rememberRecentPublicUrls(
     ['https://example.com/exam', ...Array.from({ length: 31 }, (_, index) => `https://example.com/old-${index}`)],
@@ -315,7 +316,7 @@ try {
   const jinaResult = await jina.search({ query: '省考大纲', freshness: 'any', limit: 5 });
   assert.equal(jinaResult.hits[0].title, '省考公告');
   assert.equal(jinaResult.hits[0].content, '公告正文摘要');
-  await assert.rejects(() => jina.readPage('http://192.168.1.10/private'), /本机或内网/);
+  await assert.rejects(() => jina.readPage('https://192.168.1.10/private'), /本机或内网/);
 
   console.log('Web research verification passed.');
 } finally {

@@ -6,9 +6,18 @@ interface NativeStreamEvent {
   readonly type: 'response' | 'data' | 'complete';
   readonly status?: number;
   readonly headers?: Record<string, string>;
+  readonly url?: string;
   readonly base64?: string;
   readonly error?: string | null;
 }
+
+export const NativeHttpRequestPurpose = {
+  Model: 'model',
+  PublicWeb: 'publicWeb'
+} as const;
+
+export type NativeHttpRequestPurpose =
+  typeof NativeHttpRequestPurpose[keyof typeof NativeHttpRequestPurpose];
 
 interface NativeStreamingHTTPPlugin {
   getStatus(): Promise<{
@@ -22,6 +31,7 @@ interface NativeStreamingHTTPPlugin {
     readonly method: string;
     readonly headers: Record<string, string>;
     readonly body: string;
+    readonly purpose: NativeHttpRequestPurpose;
   }): Promise<{ readonly requestId: string }>;
   cancelStream(options: { readonly requestId: string }): Promise<void>;
   addListener(
@@ -39,6 +49,10 @@ export function isNativeStreamingPluginUnavailable(error: unknown): boolean {
 }
 
 export class NativeStreamingHttpAdapter {
+  constructor(
+    private readonly purpose: NativeHttpRequestPurpose = NativeHttpRequestPurpose.Model
+  ) {}
+
   async send(request: HttpTransportRequest): Promise<Response> {
     request.signal?.throwIfAborted();
     await ensureNativeStreamingAvailable();
@@ -83,9 +97,11 @@ export class NativeStreamingHttpAdapter {
         if (event.type === 'response') {
           if (settled) return;
           settled = true;
+          const headers = new Headers(event.headers ?? {});
+          if (event.url) headers.set('x-platform-final-url', event.url);
           resolve(new Response(stream, {
             status: event.status ?? 200,
-            headers: event.headers ?? {}
+            headers
           }));
           return;
         }
@@ -115,7 +131,8 @@ export class NativeStreamingHttpAdapter {
           url: request.url,
           method: request.method,
           headers: { ...request.headers },
-          body: request.body ?? ''
+          body: request.body ?? '',
+          purpose: this.purpose
         });
       }).catch(fail);
     });
