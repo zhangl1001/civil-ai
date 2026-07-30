@@ -58,6 +58,10 @@ export {
   type OpenAICompatibleGatewayConfig
 } from './providers/OpenAICompatibleGateway';
 export {
+  ModelCapabilityMatrix,
+  type ModelRequestCapabilityOverrides
+} from './providers/ModelCapabilityMatrix';
+export {
   AnthropicStreamAccumulator,
   OpenAIStreamAccumulator,
   anthropicTextDelta,

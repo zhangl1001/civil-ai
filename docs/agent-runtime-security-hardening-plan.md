@@ -149,7 +149,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### Provider
 
-- [ ] Provider Adapter 维护模型 capability matrix，按模型决定是否发送 temperature、thinking 和结构化参数。
+- [ ] Provider Adapter 维护模型 capability matrix，按模型决定是否发送 temperature、thinking 和结构化参数（temperature 与结构化输出已接入端点级自适应学习，thinking 待统一收口）。
 - [x] 建立单一 retry owner：有租约的后台任务由 AgentRun Worker 重试，前台直连调用才使用 Provider 本轮恢复。
 - [x] 在绝对 deadline 允许时尊重完整 `Retry-After`，不再固定截断到五秒。
 - [ ] 预算耗尽进入可恢复状态，不再以 failed 状态承诺“可以继续”。
@@ -263,3 +263,4 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B4 第二部分：新增统一 Tool 资源授权执行器，按当前会话和考期保护题库草稿、题组、练习记录与任务；待确认调用持久化参数哈希并在恢复执行前复核。
 - [x] B3 恢复增强：遗留 `running` receipt 先进入 `unknown`，再用原业务幂等键受控恢复；专项练习、模考、申论、每日积累、月报、联网真题和教学练习均贯穿稳定幂等键。
 - [x] B4 风险矩阵：Tool manifest 声明成本、联网范围、持久化影响和题量阈值；Routine 动作保持自主，高成本与广域联网由 Runtime 要求参数冻结确认。
+- [x] B6 Provider 第二部分：OpenAI-compatible 与 Anthropic Adapter 在端点拒绝采样参数后自动降级并记忆能力；结构化输出继续使用独立能力状态，业务层不再感知供应商差异。

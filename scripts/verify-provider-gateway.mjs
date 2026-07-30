@@ -672,6 +672,68 @@ try {
   assert.equal(anthropicAgentBody.messages[2].content[0].type, 'tool_result');
   assert.equal(anthropicAgentBody.tools[0].name, 'student.read_profile');
 
+  const adaptiveAnthropicBodies = [];
+  const adaptiveAnthropicGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://anthropic-compatible.test/v1',
+    model: 'adaptive-model'
+  }, {
+    async send(request) {
+      const body = JSON.parse(request.body);
+      adaptiveAnthropicBodies.push(body);
+      if (adaptiveAnthropicBodies.length === 1) {
+        return new Response(JSON.stringify({
+          error: { message: 'temperature is unavailable in thinking mode' }
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'adaptive-anthropic',
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const adaptiveRequest = {
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: 'hello' }],
+    temperature: 0.2,
+    maxOutputTokens: 100,
+    requestId: 'adaptive-temperature'
+  };
+  await adaptiveAnthropicGateway.complete(adaptiveRequest);
+  await adaptiveAnthropicGateway.complete({ ...adaptiveRequest, requestId: 'adaptive-temperature-2' });
+  assert.equal(adaptiveAnthropicBodies[0].temperature, 0.2);
+  assert.equal('temperature' in adaptiveAnthropicBodies[1], false);
+  assert.equal(
+    'temperature' in adaptiveAnthropicBodies[2],
+    false,
+    'an endpoint that rejected temperature must retain the learned capability'
+  );
+
+  const adaptiveOpenAIBodies = [];
+  const adaptiveOpenAIGateway = new ai.OpenAICompatibleGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://openai-compatible.test/v1',
+    model: 'adaptive-model'
+  }, {
+    async send(request) {
+      const body = JSON.parse(request.body);
+      adaptiveOpenAIBodies.push(body);
+      if (adaptiveOpenAIBodies.length === 1) {
+        return new Response(JSON.stringify({
+          error: { message: 'unsupported sampling parameter: temperature' }
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'adaptive-openai',
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  await adaptiveOpenAIGateway.complete(adaptiveRequest);
+  assert.equal(adaptiveOpenAIBodies[0].temperature, 0.2);
+  assert.equal('temperature' in adaptiveOpenAIBodies[1], false);
+
   assert.equal(ai.openAITextDelta({ choices: [{ delta: { content: '甲' } }] }), '甲');
   assert.equal(ai.anthropicTextDelta({
     type: 'content_block_delta',
