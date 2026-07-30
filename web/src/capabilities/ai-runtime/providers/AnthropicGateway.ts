@@ -178,8 +178,8 @@ export class AnthropicGateway implements ProviderGateway {
       || Boolean(request.tools?.length);
     const thinkingCompatibility = usesTools
       && requiresDisabledThinkingForToolUse(this.config.baseUrl)
-      ? { thinking: { type: 'disabled' } }
-      : {};
+      ? { type: 'disabled' }
+      : undefined;
     return {
       url: anthropicMessagesEndpoint(this.config.baseUrl),
       method: 'POST' as const,
@@ -196,7 +196,7 @@ export class AnthropicGateway implements ProviderGateway {
         max_tokens: request.maxOutputTokens,
         stream,
         ...this.modelCapabilities.samplingParameters(request.temperature),
-        ...thinkingCompatibility,
+        ...this.modelCapabilities.thinkingParameters(thinkingCompatibility),
         ...structuredOutput
       }),
       signal

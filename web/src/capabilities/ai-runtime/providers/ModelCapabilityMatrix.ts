@@ -5,6 +5,7 @@ import {
 
 export interface ModelRequestCapabilityOverrides {
   readonly temperature?: boolean;
+  readonly thinking?: boolean;
 }
 
 /**
@@ -13,24 +14,44 @@ export interface ModelRequestCapabilityOverrides {
  */
 export class ModelCapabilityMatrix {
   private temperatureSupported: boolean;
+  private thinkingSupported: boolean;
 
   constructor(overrides: ModelRequestCapabilityOverrides = {}) {
     this.temperatureSupported = overrides.temperature !== false;
+    this.thinkingSupported = overrides.thinking !== false;
   }
 
   samplingParameters(temperature: number): Readonly<Record<string, unknown>> {
     return this.temperatureSupported ? { temperature } : {};
   }
 
+  thinkingParameters(
+    thinking?: Readonly<Record<string, unknown>>
+  ): Readonly<Record<string, unknown>> {
+    return thinking && this.thinkingSupported ? { thinking } : {};
+  }
+
   learnFromInvalidRequest(error: unknown): boolean {
-    if (!this.temperatureSupported || !isUnsupportedTemperature(error)) return false;
-    this.temperatureSupported = false;
-    return true;
+    if (this.temperatureSupported && isUnsupportedTemperature(error)) {
+      this.temperatureSupported = false;
+      return true;
+    }
+    if (this.thinkingSupported && isUnsupportedThinking(error)) {
+      this.thinkingSupported = false;
+      return true;
+    }
+    return false;
   }
 }
 
 function isUnsupportedTemperature(error: unknown): boolean {
   return error instanceof ProviderGatewayError
     && error.kind === ProviderErrorKind.InvalidRequest
-    && /temperature|sampling parameter|sampling parameters|thinking mode/i.test(error.message);
+    && /temperature|sampling parameter|sampling parameters/i.test(error.message);
+}
+
+function isUnsupportedThinking(error: unknown): boolean {
+  return error instanceof ProviderGatewayError
+    && error.kind === ProviderErrorKind.InvalidRequest
+    && /thinking|reasoning(?:_effort)?|extended thinking/i.test(error.message);
 }
