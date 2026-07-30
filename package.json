@@ -3,6 +3,7 @@
   "version": "1.1.0",
   "main": "index.js",
   "scripts": {
+    "postinstall": "patch-package",
     "web:build": "cd web && npm run build",
     "ios:sync": "npm run web:build && bash scripts/sync-vue-ios-public.sh",
     "ios:sync:web": "npm run ios:sync",
@@ -42,5 +43,8 @@
     "@capacitor/ios": "^8.4.1",
     "@capacitor/status-bar": "^8.0.2"
   },
-  "description": ""
+  "description": "",
+  "devDependencies": {
+    "patch-package": "^8.0.1"
+  }
 }
