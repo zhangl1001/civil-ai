@@ -2,9 +2,11 @@ import { appLifecycleAdapter } from '@/platform/AppLifecycleAdapter';
 import { AI_CONFIG_CHANGED_EVENT, aiConfigService } from '@/services/AIConfigService';
 import {
   AdaptiveAgentConcurrency,
+  AgentRunSuspendedError,
   agentExecutionClassesForLane,
   agentWorkPoolsForLane,
   DEFAULT_MAX_CONCURRENT_AGENT_RUNS,
+  isAgentRunSuspended,
 } from '@/modules/agent/public';
 import type { TutorDatabaseRuntime } from '../database/createTutorDatabaseRuntime';
 import { tutorDatabaseLifecycleCoordinator } from '../database/TutorDatabaseLifecycleCoordinator';
@@ -23,8 +25,10 @@ const WORKER_LEASE_MS = 60_000;
 export class AgentWorkerCoordinator {
   private runtime?: TutorDatabaseRuntime;
   private worker?: Promise<void>;
-  private removeActiveListener?: () => void;
+  private removeLifecycleListener?: () => void;
+  private activeController?: AbortController;
   private wakeRequested = false;
+  private suspended = appLifecycleAdapter.current().state !== 'active';
   private providerConfigurationPaused = false;
   private configurationWarningReported = false;
   private configurationListenerInstalled = false;
@@ -32,13 +36,17 @@ export class AgentWorkerCoordinator {
 
   install(runtime: TutorDatabaseRuntime): void {
     this.runtime = runtime;
-    if (!this.removeActiveListener) {
-      this.removeActiveListener = appLifecycleAdapter.onActive(() => {
-        if (this.worker) {
-          this.wakeRequested = true;
-        } else {
-          this.start();
+    if (!this.removeLifecycleListener) {
+      this.removeLifecycleListener = appLifecycleAdapter.onChange((event) => {
+        if (event.state !== 'active') {
+          this.suspended = true;
+          this.wakeRequested = false;
+          this.activeController?.abort(new AgentRunSuspendedError());
+          return;
         }
+        this.suspended = false;
+        if (this.worker) this.wakeRequested = true;
+        else this.start();
       });
     }
     if (!this.configurationListenerInstalled) {
@@ -54,13 +62,14 @@ export class AgentWorkerCoordinator {
 
   start(runtime?: TutorDatabaseRuntime): void {
     if (runtime) this.runtime = runtime;
-    if (!this.runtime || this.providerConfigurationPaused) return;
+    if (!this.runtime || this.providerConfigurationPaused || this.suspended) return;
     if (this.worker) {
       this.wakeRequested = true;
       return;
     }
     this.worker = this.run(this.runtime)
       .catch((error: unknown) => {
+        if (isAgentRunSuspended(error)) return;
         if (error instanceof ProviderConfigurationError) {
           this.providerConfigurationPaused = true;
           this.wakeRequested = false;
@@ -74,7 +83,7 @@ export class AgentWorkerCoordinator {
       })
       .finally(() => {
         this.worker = undefined;
-        if (this.wakeRequested && !this.providerConfigurationPaused) {
+        if (this.wakeRequested && !this.providerConfigurationPaused && !this.suspended) {
           this.wakeRequested = false;
           globalThis.setTimeout(() => this.start(), 0);
         }
@@ -91,6 +100,7 @@ export class AgentWorkerCoordinator {
     };
     const workerSessionId = crypto.randomUUID();
     const controller = new AbortController();
+    this.activeController = controller;
     const lanes = Array.from(
       { length: DEFAULT_MAX_CONCURRENT_AGENT_RUNS },
       (_, laneIndex) => this.runLane(runtime, laneIndex, workerSessionId, getGateway, controller.signal)
@@ -101,6 +111,8 @@ export class AgentWorkerCoordinator {
       controller.abort();
       await Promise.allSettled(lanes);
       throw error;
+    } finally {
+      if (this.activeController === controller) this.activeController = undefined;
     }
   }
 
@@ -140,7 +152,8 @@ export class AgentWorkerCoordinator {
         maxConcurrent: 1,
         leaseMs: WORKER_LEASE_MS,
         workPools,
-        executionClasses
+        executionClasses,
+        signal
       });
       if (batch.retried > 0) {
         this.concurrency.recordRetry();

@@ -1,6 +1,7 @@
 import Capacitor
 import Darwin
 import Foundation
+import UIKit
 
 @objc(NativeStreamingHTTPPlugin)
 public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSessionDataDelegate, URLSessionTaskDelegate {
@@ -81,6 +82,20 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
 
     private let lock = NSLock()
     private var streams: [ObjectIdentifier: StreamContext] = [:]
+    private var lifecycleObserver: NSObjectProtocol?
+
+    public override func load() {
+        super.load()
+        lifecycleObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.cancelAllStreams(
+                message: "Native HTTP request stopped because the app entered background"
+            )
+        }
+    }
 
     @objc func getStatus(_ call: CAPPluginCall) {
         lock.lock()
@@ -404,13 +419,23 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
     }
 
     deinit {
+        if let lifecycleObserver {
+            NotificationCenter.default.removeObserver(lifecycleObserver)
+        }
+        cancelAllStreams(message: "Native HTTP transport was released")
+    }
+
+    private func cancelAllStreams(message: String) {
         lock.lock()
         let active = Array(streams.values)
-        streams.removeAll()
+        active.forEach { context in
+            if context.terminalError == nil {
+                context.terminalError = message
+            }
+        }
         lock.unlock()
         active.forEach {
             $0.task.cancel()
-            $0.session.invalidateAndCancel()
         }
     }
 }
