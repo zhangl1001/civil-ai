@@ -144,6 +144,20 @@ export interface AgentToolExecutionResult {
   readonly activateSkills?: readonly AgentSkillActivation[];
 }
 
+export interface AgentToolAuthorizationResult {
+  readonly authorized: boolean;
+  readonly reasonCode: string;
+  readonly message?: string;
+}
+
+export interface AgentToolAuthorization {
+  authorize(
+    definition: AgentToolDefinition,
+    call: ModelToolCall,
+    context: AgentToolExecutionContext
+  ): Promise<AgentToolAuthorizationResult>;
+}
+
 export interface AgentToolPolicy {
   evaluate(
     definition: AgentToolDefinition,
@@ -195,6 +209,7 @@ export interface AgentLoopCheckpoint {
   readonly toolSignatures: Readonly<Record<string, number>>;
   readonly toolAttempts?: Readonly<Record<string, AgentToolAttemptState>>;
   readonly pendingConfirmation?: ModelToolCall;
+  readonly pendingConfirmationArgumentsHash?: string;
   readonly activeSkills?: readonly AgentSkillActivation[];
   readonly activeToolNames?: readonly string[];
   readonly completedToolNames?: readonly string[];

@@ -109,8 +109,8 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 - [x] 在 Policy 和 Executor 之前统一执行 JSON Schema。
 - [x] 强制校验 required、单一/联合类型、enum、数值与长度范围、数组边界和 `additionalProperties`。
-- [ ] 校验 branded ID、session、examCycle、learningThread 和目标资源归属。
-- [ ] 参数验证后生成不可变参数哈希；用户确认和执行时必须一致。
+- [x] 敏感资源工具在统一授权执行器中校验 session、examCycle 和目标资源归属；普通 branded ID 格式约束继续随各 schema 收口。
+- [x] 参数验证后生成不可变参数哈希；用户确认和执行时必须一致。
 
 ### 风险与确认
 
@@ -249,7 +249,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B3 基础：新增 SQLite/IndexedDB `agent_tool_receipts`，写工具执行前持久化 receipt，并向业务 Use Case 传递稳定幂等键。
 - [x] B4 第一部分：统一 `AgentToolInvocationValidator` 在 Policy 和 Executor 前执行；无效参数不进入工具，作为可重试观察交给 Agent 自主修正。
 - [x] B4 回归：覆盖嵌套对象、联合类型、数组、枚举、范围、未声明字段及“模型修正参数后继续执行”。
-- [ ] B4 剩余：资源归属验证、确认参数冻结，以及其余写工具的业务事务幂等收口。
+- [ ] B4 剩余：其余写工具的业务事务幂等收口；资源归属验证和确认参数冻结已完成。
 - [x] B5 第一部分：异步写入与精确资源状态核验使用类型化合同；运行中任务以 delegated 结束对话，避免持续轮询和假完成。
 - [x] B5 第二部分：Chat 与 Worker 共用根取消注册表，Task Dock 取消可中断 Provider、Agent loop 与工具信号。
 - [ ] B5 剩余：父子任务通知聚合。
@@ -259,3 +259,4 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B7 资源第二部分：文档在 Base64 解码前限额，图片 OCR 使用像素预算和降采样；Agent 工作区接入容量配额；语音生命周期统一释放。
 - [x] B8 发布第一部分：增加 App 自有 Privacy Manifest，并将 development 导出配置从被忽略的构建目录迁入版本控制。
 - [x] B8 发布第二部分：SwiftPM 根声明与 Xcode lock 统一到 Capacitor 8.4.1，并通过 `postinstall` 自动修正 SQLite 插件的上游 branch 约束。
+- [x] B4 第二部分：新增统一 Tool 资源授权执行器，按当前会话和考期保护题库草稿、题组、练习记录与任务；待确认调用持久化参数哈希并在恢复执行前复核。

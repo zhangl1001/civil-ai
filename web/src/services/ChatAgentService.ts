@@ -23,6 +23,7 @@ import type {
 import {
   AgentRunAction,
   AgentRunType,
+  AuthorizedAgentToolExecutor,
   agentExternalToolCatalog,
   RegisteredAgentToolExecutor,
   TaskCenterStep,
@@ -58,10 +59,8 @@ import { QuestionImportAgentService } from './QuestionImportAgentService';
 import { agentWorkspaceQueryService } from './AgentWorkspaceQueryService';
 import { composeGroundedAgentSystem, readDeviceClock } from './AgentSystemTools';
 import { registerQuestionImportRepairTool } from './RegisterQuestionImportRepairTool';
-import {
-  agentConversationMemoryService,
-  type RememberAgentPreferenceInput
-} from './AgentConversationMemoryService';
+import { ChatAgentToolAuthorization } from './ChatAgentToolAuthorization';
+import { agentConversationMemoryService, type RememberAgentPreferenceInput } from './AgentConversationMemoryService';
 export interface ChatAgentResult {
   readonly handled: boolean;
 }
@@ -222,7 +221,7 @@ export class ChatAgentService {
   ): Promise<void> {
     const controller = active.controller;
     controller.signal.throwIfAborted();
-    const executor = createExecutor(runtime, session.id);
+    const executor = new AuthorizedAgentToolExecutor(createExecutor(runtime, session.id), new ChatAgentToolAuthorization(runtime, session.id));
     const streamMessageId = `stream:${runId}`;
     let streamedText = '';
     let streamPublished = false;

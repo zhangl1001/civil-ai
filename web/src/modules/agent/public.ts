@@ -13,6 +13,7 @@ export {
 export { TaskCenterStep, TaskTargetType, type TaskCenterStep as TaskCenterStepCode, type TaskTargetType as TaskTargetTypeCode } from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
 export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';
+export { AuthorizedAgentToolExecutor } from './application/AuthorizedAgentToolExecutor';
 export { createDurableAgentLoopFactory } from './application/CreateDurableAgentLoop';
 export {
   AgentCompletionTracker,
@@ -104,6 +105,8 @@ export {
   type AgentRuntimeEvent,
   type AgentRuntimeObserver,
   type AgentSkillWorkflowState,
+  type AgentToolAuthorization,
+  type AgentToolAuthorizationResult,
   type AgentToolAttemptState,
   type AgentToolAttemptStatus,
   type AgentToolExecutionContext,

@@ -20,6 +20,7 @@ try {
   const chatCapabilities = await server.ssrLoadModule('/src/services/ChatAgentCapabilities.ts');
   const externalTools = await server.ssrLoadModule('/src/modules/agent/fixtures/AgentExternalToolCatalog.ts');
   const responsePresentation = await server.ssrLoadModule('/src/services/AgentResponsePresentation.ts');
+  const chatAuthorization = await server.ssrLoadModule('/src/services/ChatAgentToolAuthorization.ts');
   assert.equal(
     responsePresentation.visibleAssistantText('`web.search` 和 research.true_questions 暂时不可用'),
     '`联网搜索` 和 真题检索流程 暂时不可用'
@@ -85,6 +86,58 @@ try {
     name: validationDefinition.name,
     arguments: null
   }).valid, true);
+  let unauthorizedExecutionCount = 0;
+  const authorizationExecutor = new agent.AuthorizedAgentToolExecutor({
+    async execute() {
+      unauthorizedExecutionCount += 1;
+      return { content: 'must not execute' };
+    }
+  }, {
+    async authorize() {
+      return {
+        authorized: false,
+        reasonCode: 'agent.tool_resource_forbidden'
+      };
+    }
+  });
+  const authorizationResult = await authorizationExecutor.execute(
+    validationDefinition,
+    { id: 'authorization:1', name: validationDefinition.name, arguments: { count: 2, mode: 'quick', items: [{ id: 'one' }] } },
+    { agentRunId: 'run:authorization' }
+  );
+  assert.equal(authorizationResult.isError, true);
+  assert.equal(authorizationResult.retryable, false);
+  assert.equal(authorizationResult.failureCode, 'agent.tool_resource_forbidden');
+  assert.equal(unauthorizedExecutionCount, 0, 'unauthorized resources must not reach Tool handlers');
+
+  const draftAuthorization = new chatAuthorization.ChatAgentToolAuthorization({
+    candidateRepository: {
+      async findCurrentCycle() {
+        return { examCycle: { id: 'ExamCycleId:current' } };
+      }
+    },
+    questionImportDraftRepository: {
+      async find() {
+        return {
+          draft: {
+            examCycleId: 'ExamCycleId:current',
+            ownerSessionId: 'chat:other'
+          }
+        };
+      }
+    }
+  }, 'chat:current');
+  const publishDefinition = agent.tutorToolCatalog.find((tool) => tool.name === 'question_bank.publish');
+  const crossSessionDecision = await draftAuthorization.authorize(
+    publishDefinition,
+    {
+      id: 'authorization:draft',
+      name: publishDefinition.name,
+      arguments: { draftId: 'QuestionImportDraftId:1', expectedVersion: 1 }
+    },
+    { agentRunId: 'run:authorization', sessionId: 'chat:current' }
+  );
+  assert.equal(crossSessionDecision.authorized, false, 'a chat session must not publish another session draft');
   assert.equal(invocationValidator.validate({
     ...validationDefinition,
     inputSchema: { type: ['string', 'null'], minLength: 2 }
@@ -1207,7 +1260,33 @@ try {
   assert.equal(confirmation.status, 'waiting_user');
   assert.equal(confirmation.checkpoint.pendingConfirmation.id, 'call-confirm');
   assert.equal(confirmation.checkpoint.pendingConfirmation.name, 'candidate.change_target');
+  assert.equal(typeof confirmation.checkpoint.pendingConfirmationArgumentsHash, 'string');
   assert.equal(confirmedExecutions, 0);
+  await assert.rejects(
+    confirmationLoop.execute({
+      agentRunId: 'agent-run-confirm',
+      system: 'system',
+      messages: [],
+      tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'candidate.change_target')],
+      executionContext: { agentRunId: 'agent-run-confirm' },
+      checkpoint: {
+        ...confirmation.checkpoint,
+        pendingConfirmation: {
+          ...confirmation.checkpoint.pendingConfirmation,
+          arguments: { subject: 'aptitude', targetScore: 99 }
+        }
+      },
+      confirmationDecision: 'confirm'
+    }, {
+      provider: ai.ProviderCode.Anthropic,
+      model: 'test-model',
+      async complete() {
+        throw new Error('tampered confirmation must not invoke the model');
+      }
+    }),
+    /arguments changed after confirmation/
+  );
+  assert.equal(confirmedExecutions, 0, 'tampered confirmed arguments must not execute');
   const resumed = await confirmationLoop.execute({
     agentRunId: 'agent-run-confirm',
     system: 'system',
