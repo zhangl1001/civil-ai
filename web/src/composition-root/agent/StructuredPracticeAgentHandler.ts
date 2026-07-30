@@ -10,6 +10,7 @@ import {
   AgentRunType,
   TaskCenterStep,
   TaskTargetType,
+  leaseTokenOf,
   type AgentRunAggregate,
   type TransitionAgentRun,
   type TutorAgentHandler,
@@ -142,7 +143,8 @@ async function executeStructuredPractice(
         questionSetId: result.questionSetId,
         learningThreadId: aggregate.spec.learningThreadId,
         workflowId: aggregate.workflow.id
-      }
+      },
+      leaseToken: leaseTokenOf(run.run)
     });
     await dependencies.ensureQuestionSetEnrichment.execute({
         questionSetId: result.questionSetId,
@@ -181,7 +183,14 @@ async function progress(
   data?: JsonObject
 ): Promise<void> {
   signal?.throwIfAborted();
-  await updater.execute({ agentRunId: run.run.id, step, progress: value, message, data });
+  await updater.execute({
+    agentRunId: run.run.id,
+    step,
+    progress: value,
+    message,
+    data,
+    leaseToken: leaseTokenOf(run.run)
+  });
 }
 
 function generationProgress(step: string) {

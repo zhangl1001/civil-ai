@@ -28,6 +28,7 @@ import webResearchImportMethodSql from './027_web_research_import_method.sql?raw
 import referencePackComparisonQuestionsSql from './028_reference_pack_comparison_questions.sql?raw';
 import questionSetLibraryPaginationSql from './029_question_set_library_pagination.sql?raw';
 import agentExecutionClassesSql from './030_agent_execution_classes.sql?raw';
+import agentRunLeaseFencingSql from './031_agent_run_lease_fencing.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -210,5 +211,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'agent_execution_classes',
     checksum: 'sha256:ef8ff9677d0db87eee419087c5c242e42635cc74c0c59ab7a946e109b8d235fb',
     sql: agentExecutionClassesSql
+  },
+  {
+    version: 31,
+    name: 'agent_run_lease_fencing',
+    checksum: 'sha256:4cb69b3df9f2afc6ef874668e15635692dcf5aa9a1c0cbd6b9105ea541ed4396',
+    sql: agentRunLeaseFencingSql
   }
 ];

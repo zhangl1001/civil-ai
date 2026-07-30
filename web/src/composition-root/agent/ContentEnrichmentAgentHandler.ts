@@ -3,6 +3,7 @@ import {
   AgentRunAction,
   TaskCenterStep,
   TaskTargetType,
+  leaseTokenOf,
   type AgentRunAggregate,
   type TransitionAgentRun
 } from '@/modules/agent/public';
@@ -44,7 +45,8 @@ export async function executeContentEnrichment(
       // only once all shards have committed and the final result is known.
       taskCenterVisible: true
     },
-    payload: result.payload
+    payload: result.payload,
+    leaseToken: leaseTokenOf(run.run)
   });
 }
 

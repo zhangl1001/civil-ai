@@ -24,6 +24,7 @@ export interface AgentRunRecord {
   readonly nextRunAt?: InstantMs;
   readonly leaseOwner?: string;
   readonly leaseExpiresAt?: InstantMs;
+  readonly leaseEpoch: number;
   readonly errorCode?: string;
   readonly cancellationReason?: string;
   readonly idempotencyKey: string;
@@ -69,13 +70,30 @@ export interface AgentRunAggregate {
   readonly events: readonly AgentRunEventRecord[];
 }
 
+export interface AgentRunLeaseToken {
+  readonly agentRunId: AgentRunId;
+  readonly workerId: string;
+  readonly leaseEpoch: number;
+}
+
+export interface AgentRunMutationGuard {
+  readonly leaseToken: AgentRunLeaseToken;
+  readonly now: InstantMs;
+}
+
 export interface AgentRunRepository {
   create(run: AgentRunRecord, created: AgentRunEventRecord, context: TransactionContext): Promise<void>;
   findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined>;
   findByIdempotencyKey(idempotencyKey: string): Promise<AgentRunAggregate | undefined>;
   findLatestByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
   findActiveByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
-  replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext): Promise<void>;
+  replace(
+    run: AgentRunRecord,
+    expectedVersion: number,
+    event: AgentRunEventRecord,
+    context: TransactionContext,
+    guard?: AgentRunMutationGuard
+  ): Promise<void>;
   appendInvocation(invocation: AgentInvocationRecord, context: TransactionContext): Promise<void>;
   updateInvocationResult(id: AiInvocationId, result: Pick<AgentInvocationRecord, 'providerRequestId' | 'inputTokens' | 'outputTokens' | 'latencyMs' | 'finishReason'>, context: TransactionContext): Promise<void>;
   updateInvocationValidation(id: AiInvocationId, status: InvocationValidationStatus, errorCode: string | undefined, context: TransactionContext): Promise<void>;
@@ -89,8 +107,18 @@ export interface AgentRunRepository {
     executionClasses?: readonly AgentExecutionClass[]
   ): Promise<InstantMs | undefined>;
   claimRunnable(options: AgentRunClaimOptions): Promise<readonly AgentRunAggregate[]>;
-  renewLease(runId: AgentRunId, workerId: string, leaseExpiresAt: InstantMs): Promise<boolean>;
+  renewLease(token: AgentRunLeaseToken, now: InstantMs, leaseExpiresAt: InstantMs): Promise<boolean>;
+  hasActiveLease(token: AgentRunLeaseToken, now: InstantMs): Promise<boolean>;
   recoverExpiredLeases(options: AgentRunRecoveryOptions): Promise<readonly AgentRunAggregate[]>;
+}
+
+export function leaseTokenOf(run: AgentRunRecord): AgentRunLeaseToken | undefined {
+  if (!run.leaseOwner || run.leaseEpoch < 1) return undefined;
+  return {
+    agentRunId: run.id,
+    workerId: run.leaseOwner,
+    leaseEpoch: run.leaseEpoch
+  };
 }
 
 export interface AgentRunRecoveryOptions {

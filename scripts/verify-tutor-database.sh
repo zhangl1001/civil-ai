@@ -33,6 +33,7 @@ web_research_import_method_schema_file="$project_root/web/src/capabilities/datab
 reference_pack_comparison_questions_schema_file="$project_root/web/src/capabilities/database/migrations/028_reference_pack_comparison_questions.sql"
 question_set_library_pagination_schema_file="$project_root/web/src/capabilities/database/migrations/029_question_set_library_pagination.sql"
 agent_execution_classes_schema_file="$project_root/web/src/capabilities/database/migrations/030_agent_execution_classes.sql"
+agent_run_lease_fencing_schema_file="$project_root/web/src/capabilities/database/migrations/031_agent_run_lease_fencing.sql"
 database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.XXXXXX.sqlite")"
 
 cleanup() {
@@ -364,6 +365,7 @@ INSERT INTO question_reference_packs(
 .read $reference_pack_comparison_questions_schema_file
 .read $question_set_library_pagination_schema_file
 .read $agent_execution_classes_schema_file
+.read $agent_run_lease_fencing_schema_file
 
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
@@ -433,5 +435,34 @@ expect_count "SELECT COUNT(*) FROM content_schema_versions;" "1" "global content
 expect_count "SELECT COUNT(*) FROM prompt_definitions WHERE prompt_code='question.generate.weakening';" "1" "prompt definition after version upgrade"
 expect_count "SELECT COUNT(*) FROM prompt_versions WHERE prompt_definition_id='prompt-question';" "2" "prompt versions after definition reuse"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='work_pool';" "1" "agent work pool column"
+expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='lease_epoch';" "1" "agent lease epoch column"
+
+sqlite3 "$database_file" <<'SQL'
+INSERT INTO tutor_agent_runs(
+  id, run_type, work_pool, execution_class, status, input_snapshot_json,
+  checkpoint_json, attempt_count, idempotency_key, created_at, updated_at, version
+) VALUES (
+  'agent-run-lease-test', 'content_generation', 'content_generation', 'general',
+  'queued', '{}', '{}', 0, 'agent-run-lease-test', 2000, 2000, 1
+);
+UPDATE tutor_agent_runs
+SET status='running', attempt_count=attempt_count+1, lease_owner='worker-a',
+    lease_expires_at=3000, lease_epoch=lease_epoch+1, updated_at=2100, version=version+1
+WHERE id='agent-run-lease-test' AND status='queued';
+UPDATE tutor_agent_runs
+SET status='queued', lease_owner=NULL, lease_expires_at=NULL, updated_at=3100, version=version+1
+WHERE id='agent-run-lease-test' AND status='running' AND lease_expires_at<=3100;
+UPDATE tutor_agent_runs
+SET status='running', attempt_count=attempt_count+1, lease_owner='worker-b',
+    lease_expires_at=5000, lease_epoch=lease_epoch+1, updated_at=3200, version=version+1
+WHERE id='agent-run-lease-test' AND status='queued';
+UPDATE tutor_agent_runs
+SET checkpoint_json='{"stale":true}', version=version+1
+WHERE id='agent-run-lease-test' AND status='running' AND lease_owner='worker-a'
+  AND lease_epoch=1 AND lease_expires_at>3300;
+SQL
+
+expect_count "SELECT lease_epoch FROM tutor_agent_runs WHERE id='agent-run-lease-test';" "2" "lease epoch after reclaim"
+expect_count "SELECT COUNT(*) FROM tutor_agent_runs WHERE id='agent-run-lease-test' AND lease_owner='worker-b' AND checkpoint_json='{}';" "1" "stale worker fenced from write"
 
 printf 'Tutor database schema verification passed.\n'

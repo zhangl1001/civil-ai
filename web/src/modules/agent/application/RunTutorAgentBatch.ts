@@ -1,6 +1,6 @@
 import { ProviderGatewayError, type ProviderGateway } from '@/capabilities/ai-runtime/public';
 import type { Clock, JsonObject } from '@/kernel/public';
-import type { AgentRunAggregate } from '../contracts/AgentRunRepository';
+import { leaseTokenOf, type AgentRunAggregate } from '../contracts/AgentRunRepository';
 import {
   AgentRunAction,
   type AgentExecutionClass,
@@ -75,14 +75,35 @@ export class RunTutorAgentBatch {
       workPools: command.workPools,
       executionClasses: command.executionClasses
     });
+    const leaseControllers = new Map(claimed.map(({ run }) => [run.id, new AbortController()]));
+    let renewalInFlight = false;
     const heartbeat = claimed.length
       ? globalThis.setInterval(() => {
-        void this.claim.renew(claimed.map((run) => run.run.id), command.workerId, leaseMs).catch(() => undefined);
+        if (renewalInFlight) return;
+        renewalInFlight = true;
+        void this.claim.renew(claimed, command.workerId, leaseMs)
+          .then((lostRunIds) => {
+            lostRunIds.forEach((runId) => {
+              leaseControllers.get(runId)?.abort(new AgentRunLeaseLostError(runId));
+            });
+          })
+          .catch(() => {
+            claimed.forEach(({ run }) => {
+              leaseControllers.get(run.id)?.abort(new AgentRunLeaseLostError(run.id));
+            });
+          })
+          .finally(() => {
+            renewalInFlight = false;
+          });
       }, Math.max(5_000, Math.floor(leaseMs / 3)))
       : undefined;
     let outcomes: Array<'completed' | 'retried' | 'failed' | 'cancelled'>;
     try {
-      outcomes = await Promise.all(claimed.map((run) => this.executeOne(run, command.gateway, command.signal)));
+      outcomes = await Promise.all(claimed.map((run) => this.executeOne(
+        run,
+        command.gateway,
+        combineSignals(command.signal, leaseControllers.get(run.run.id)?.signal)
+      )));
     } finally {
       if (heartbeat !== undefined) globalThis.clearInterval(heartbeat);
     }
@@ -121,6 +142,7 @@ export class RunTutorAgentBatch {
     }
     const executionSignal = this.executions?.begin(run.run.id, signal) ?? signal;
     try {
+      if (isLeaseLostSignal(executionSignal)) return 'cancelled';
       if (executionSignal?.aborted) {
         await this.cancel(run, 'agent_run.worker_aborted');
         await this.notify(() => this.lifecycle?.cancelled(run, 'agent_run.worker_aborted'));
@@ -138,6 +160,7 @@ export class RunTutorAgentBatch {
           ...errorDiagnostics(error)
         }));
       }
+      if (isLeaseLostSignal(executionSignal)) return 'cancelled';
       if (executionSignal?.aborted) {
         await this.cancel(run, 'agent_run.worker_aborted');
         await this.notify(() => this.lifecycle?.cancelled(run, 'agent_run.worker_aborted'));
@@ -150,7 +173,8 @@ export class RunTutorAgentBatch {
           idempotencyKey: `agent-run:${run.run.id}:retry:${run.run.attemptCount}`,
           agentRunId: run.run.id, action: AgentRunAction.Retry, reasonCode: 'agent_run.transient_failure',
           errorCode: code, nextRunAt: (this.clock.now() + retryAfterMs) as ReturnType<Clock['now']>,
-          payload: { retryAfterMs, errorCode: code } as JsonObject
+          payload: { retryAfterMs, errorCode: code } as JsonObject,
+          leaseToken: leaseTokenOf(run.run)
         });
         await this.notify(() => this.lifecycle?.retrying(run, code));
         return 'retried';
@@ -183,7 +207,8 @@ export class RunTutorAgentBatch {
             ? { taskCenterVisible: true }
             : {})
         },
-        payload: diagnostics
+        payload: diagnostics,
+        leaseToken: leaseTokenOf(run.run)
       });
     } catch (error) {
       if (!isTerminalTransitionConflict(error)) throw error;
@@ -192,7 +217,7 @@ export class RunTutorAgentBatch {
 
   private async cancel(run: AgentRunAggregate, reason: string): Promise<void> {
     try {
-      await this.transition.execute({ idempotencyKey: `agent-run:${run.run.id}:cancelled:${run.run.attemptCount}`, agentRunId: run.run.id, action: AgentRunAction.Cancel, reasonCode: reason, cancellationReason: reason });
+      await this.transition.execute({ idempotencyKey: `agent-run:${run.run.id}:cancelled:${run.run.attemptCount}`, agentRunId: run.run.id, action: AgentRunAction.Cancel, reasonCode: reason, cancellationReason: reason, leaseToken: leaseTokenOf(run.run) });
     } catch (error) {
       if (!isTerminalTransitionConflict(error)) throw error;
     }
@@ -205,6 +230,27 @@ export class RunTutorAgentBatch {
       // Message projection is secondary and must never change the task outcome.
     }
   }
+}
+
+class AgentRunLeaseLostError extends Error {
+  readonly code = 'agent_run.lease_lost';
+
+  constructor(runId: string) {
+    super(`Agent run lease lost: ${runId}`);
+    this.name = 'AgentRunLeaseLostError';
+  }
+}
+
+function combineSignals(...signals: readonly (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (!active.length) return undefined;
+  if (active.length === 1) return active[0];
+  return AbortSignal.any(active);
+}
+
+function isLeaseLostSignal(signal?: AbortSignal): boolean {
+  return signal?.aborted === true
+    && signal.reason instanceof AgentRunLeaseLostError;
 }
 
 function retryDelay(error: unknown, attemptCount: number): number | undefined {

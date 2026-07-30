@@ -9,6 +9,7 @@ import {
   AgentRunType,
   TaskCenterStep,
   TaskTargetType,
+  leaseTokenOf,
   type AgentRunAggregate,
   type InvokeAgentModel,
   type CreateAgentRun,
@@ -212,7 +213,8 @@ async function executeChatTool(run: AgentRunAggregate, signal: AbortSignal | und
     action: AgentRunAction.Complete,
     reasonCode: 'chat_tool.completed',
     checkpoint: { taskId: result.taskId || null, toolName, reply: result.reply },
-    payload: { taskId: result.taskId || null, toolName, reply: result.reply }
+    payload: { taskId: result.taskId || null, toolName, reply: result.reply },
+    leaseToken: leaseTokenOf(run.run)
   });
 }
 
@@ -256,7 +258,8 @@ async function executeBusinessOperation(
         agentRunId: run.run.id,
         step: stepForProgress(progress),
         progress,
-        message: progressText
+        message: progressText,
+        leaseToken: leaseTokenOf(run.run)
       });
     },
     log: async (message) => {
@@ -264,7 +267,8 @@ async function executeBusinessOperation(
         agentRunId: run.run.id,
         step: TaskCenterStep.InvokingModel,
         progress: 70,
-        message: message.slice(0, 160)
+        message: message.slice(0, 160),
+        leaseToken: leaseTokenOf(run.run)
       });
     },
     setResult: async (result) => {
@@ -277,6 +281,7 @@ async function executeBusinessOperation(
     complete: async (messages, options = {}) => {
       const response = await dependencies.invokeAgentModel.execute({
         agentRunId: run.run.id,
+        leaseToken: leaseTokenOf(run.run),
         modelRole: `business.${intent}`,
         system: messages
           .filter((message) => message.role === 'system')
@@ -297,6 +302,7 @@ async function executeBusinessOperation(
     stream: async (messages, onDelta, options = {}) => {
       const response = await dependencies.invokeAgentModel.execute({
         agentRunId: run.run.id,
+        leaseToken: leaseTokenOf(run.run),
         modelRole: `business.${intent}`,
         system: messages
           .filter((message) => message.role === 'system')
@@ -491,7 +497,8 @@ async function executeBusinessOperation(
       actionRoute: navigation.route,
       actionParams: navigation.params
     },
-    payload: { intent, ...resultData }
+    payload: { intent, ...resultData },
+    leaseToken: leaseTokenOf(run.run)
   });
 }
 

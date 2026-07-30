@@ -13,7 +13,12 @@ import type {
   JsonObject,
   LearningSessionId
 } from '@/kernel/public';
-import { AgentRunAction, InvokeAgentModel, TransitionAgentRun } from '@/modules/agent/public';
+import {
+  AgentRunAction,
+  InvokeAgentModel,
+  TransitionAgentRun,
+  type AgentRunLeaseToken
+} from '@/modules/agent/public';
 import type { OutboxRepository } from '@/modules/task/public';
 import type { ErrorDiagnosisRepository } from '../contracts/LearningRepositories';
 import type {
@@ -37,6 +42,7 @@ interface ErrorDiagnosisBatchItem {
 
 interface RunAiErrorDiagnosisCommand {
   readonly agentRunId: AgentRunId;
+  readonly leaseToken?: AgentRunLeaseToken;
   readonly items: readonly ErrorDiagnosisBatchItem[];
 }
 
@@ -109,11 +115,11 @@ export class RunAiErrorDiagnosis {
 
     if (!pending.length) {
       await this.completionObserver?.completed({ agentRunId: command.agentRunId, sessionId, diagnosisIds });
-      await this.completeRun(command.agentRunId, diagnosisIds, [], 0);
+      await this.completeRun(command.agentRunId, diagnosisIds, [], 0, command.leaseToken);
       return diagnosisIds;
     }
 
-    const batch = await this.invokeBatch(command.agentRunId, pending, gateway, signal);
+    const batch = await this.invokeBatch(command.agentRunId, pending, gateway, signal, command.leaseToken);
     const validBatch: { pending: PendingDiagnosis; output: DiagnosisOutput }[] = [];
     const unresolved: PendingDiagnosis[] = [];
     for (const item of pending) {
@@ -129,7 +135,7 @@ export class RunAiErrorDiagnosis {
     const fallbackInvocationIds: string[] = [];
     for (const item of unresolved) {
       signal?.throwIfAborted();
-      const fallback = await this.invokeSingle(command.agentRunId, item, gateway, signal);
+      const fallback = await this.invokeSingle(command.agentRunId, item, gateway, signal, command.leaseToken);
       fallbackInvocationIds.push(fallback.invocationId);
       diagnosisIds.push(...await this.commit(command.agentRunId, [{
         pending: item,
@@ -142,7 +148,8 @@ export class RunAiErrorDiagnosis {
       command.agentRunId,
       diagnosisIds,
       [batch.invocationId, ...fallbackInvocationIds],
-      unresolved.length
+      unresolved.length,
+      command.leaseToken
     );
     return diagnosisIds;
   }
@@ -151,7 +158,8 @@ export class RunAiErrorDiagnosis {
     agentRunId: AgentRunId,
     pending: readonly PendingDiagnosis[],
     gateway: ProviderGateway,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    leaseToken?: AgentRunLeaseToken
   ): Promise<{ readonly invocationId: string; readonly outputs: ReadonlyMap<ErrorDiagnosisId, DiagnosisOutput> }> {
     const subjects = [...new Set(pending.map((item) => item.item.subject))];
     const compiled = this.compiler.compile(
@@ -170,6 +178,7 @@ export class RunAiErrorDiagnosis {
     );
     const response = await this.invoke.execute({
       agentRunId,
+      leaseToken,
       modelRole: 'error_diagnosis_batch',
       system: compiled.system,
       user: compiled.user,
@@ -187,7 +196,8 @@ export class RunAiErrorDiagnosis {
     agentRunId: AgentRunId,
     pending: PendingDiagnosis,
     gateway: ProviderGateway,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    leaseToken?: AgentRunLeaseToken
   ): Promise<{ readonly invocationId: string; readonly output: DiagnosisOutput }> {
     const compiled = this.compiler.compile(
       errorDiagnosisPromptV1.promptCode,
@@ -200,6 +210,7 @@ export class RunAiErrorDiagnosis {
     );
     const response = await this.invoke.execute({
       agentRunId,
+      leaseToken,
       modelRole: 'error_diagnosis_fallback',
       system: compiled.system,
       user: compiled.user,
@@ -267,7 +278,8 @@ export class RunAiErrorDiagnosis {
     agentRunId: AgentRunId,
     diagnosisIds: readonly ErrorDiagnosisId[],
     invocationIds: readonly string[],
-    fallbackCount: number
+    fallbackCount: number,
+    leaseToken?: AgentRunLeaseToken
   ): Promise<void> {
     await this.transition.execute({
       idempotencyKey: `${agentRunId}:complete`,
@@ -279,7 +291,8 @@ export class RunAiErrorDiagnosis {
         diagnosisCount: diagnosisIds.length,
         fallbackCount,
         invocationIds: [...invocationIds]
-      }
+      },
+      leaseToken
     });
   }
 }

@@ -1,6 +1,6 @@
 import type { UnitOfWork } from '@/capabilities/database/public';
 import type { Clock, IdGenerator, JsonObject } from '@/kernel/public';
-import type { AgentRunRepository } from '../contracts/AgentRunRepository';
+import type { AgentRunLeaseToken, AgentRunRepository } from '../contracts/AgentRunRepository';
 import type { AgentCheckpointStore, AgentLoopCheckpoint } from '../contracts/AgentRuntimePorts';
 import { AgentRunStatus } from '../domain/AgentRunCodes';
 
@@ -13,7 +13,7 @@ export class SaveAgentLoopCheckpoint implements AgentCheckpointStore {
     private readonly ids: IdGenerator
   ) {}
 
-  async save(checkpoint: AgentLoopCheckpoint): Promise<void> {
+  async save(checkpoint: AgentLoopCheckpoint, leaseToken?: AgentRunLeaseToken): Promise<void> {
     const aggregate = await this.repository.findById(checkpoint.agentRunId);
     if (!aggregate) throw new Error(`Agent run does not exist: ${checkpoint.agentRunId}`);
     if (aggregate.run.status !== AgentRunStatus.Running) {
@@ -45,7 +45,13 @@ export class SaveAgentLoopCheckpoint implements AgentCheckpointStore {
       idempotencyKey: `agent-run:${run.id}:checkpoint:${run.version}`
     };
     await this.unitOfWork.run((context) => (
-      this.repository.replace(run, aggregate.run.version, event, context)
+      this.repository.replace(
+        run,
+        aggregate.run.version,
+        event,
+        context,
+        leaseToken ? { leaseToken, now } : undefined
+      )
     ));
   }
 }

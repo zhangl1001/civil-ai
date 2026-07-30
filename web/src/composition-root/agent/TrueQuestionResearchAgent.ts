@@ -6,9 +6,11 @@ import {
   AgentSkillRegistry,
   AgentToolRegistry,
   agentExternalToolCatalog,
+  leaseTokenOf,
   RegisteredAgentToolExecutor,
   tutorToolCatalog,
   type AgentLoopCheckpoint,
+  type AgentRunRecord,
   type AgentRuntimeEvent,
   type AgentSkillManifest,
   type RunAgentLoop
@@ -47,7 +49,7 @@ const compiler = new AgentSkillBundleCompiler(skillRegistry, registry);
 
 export async function runTrueQuestionResearchAgent(
   task: BusinessAgentTask,
-  run: { readonly id: string; readonly examCycleId?: string; readonly checkpoint: JsonObject },
+  run: AgentRunRecord,
   gateway: ProviderGateway,
   context: BusinessAgentExecutionContext,
   dependencies: TrueQuestionResearchAgentDependencies
@@ -178,6 +180,7 @@ export async function runTrueQuestionResearchAgent(
     skills: bundle.activations,
     executionContext: {
       agentRunId: run.id as Parameters<RunAgentLoop['execute']>[0]['agentRunId'],
+      leaseToken: leaseTokenOf(run),
       examCycleId: run.examCycleId,
       sessionId: ownerSessionId,
       signal: context.signal

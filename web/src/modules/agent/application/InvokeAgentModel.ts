@@ -22,10 +22,12 @@ import {
   type PromptVersionId
 } from '@/kernel/public';
 import type { AgentRunRepository } from '../contracts/AgentRunRepository';
+import type { AgentRunLeaseToken } from '../contracts/AgentRunRepository';
 import type { AgentModelInvocation, AgentModelInvoker } from '../contracts/AgentRuntimePorts';
 
 export interface InvokeAgentModelCommand {
   readonly agentRunId: AgentRunId;
+  readonly leaseToken?: AgentRunLeaseToken;
   readonly modelRole: string;
   readonly system: string;
   readonly user?: string;
@@ -62,6 +64,7 @@ export class InvokeAgentModel implements AgentModelInvoker {
   ): Promise<ProviderResponse> {
     const result = await this.execute({
       agentRunId: invocation.agentRunId,
+      leaseToken: invocation.leaseToken,
       modelRole: invocation.modelRole,
       system: invocation.system,
       messages: invocation.messages,
@@ -89,6 +92,12 @@ export class InvokeAgentModel implements AgentModelInvoker {
         : [];
     if (!run || run.run.status !== 'running') {
       throw new Error(`Agent run is not active: ${command.agentRunId}`);
+    }
+    if (
+      command.leaseToken
+      && !await this.repository.hasActiveLease(command.leaseToken, this.clock.now())
+    ) {
+      throw new Error(`Agent run lease conflict: ${command.agentRunId}`);
     }
     if (!command.modelRole.trim() || !command.system.trim() || !messages.length) {
       throw new Error('Agent model invocation requires role and prompt');
@@ -147,6 +156,13 @@ export class InvokeAgentModel implements AgentModelInvoker {
         shouldStream ? command.onDelta : undefined,
         deadline.signal
       );
+      signal?.throwIfAborted();
+      if (
+        command.leaseToken
+        && !await this.repository.hasActiveLease(command.leaseToken, this.clock.now())
+      ) {
+        throw new Error(`Agent run lease conflict: ${command.agentRunId}`);
+      }
       if (command.onDelta && !shouldStream) {
         await command.onDelta(response.text);
       }

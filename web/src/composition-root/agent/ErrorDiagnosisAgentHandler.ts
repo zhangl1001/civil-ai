@@ -1,6 +1,6 @@
 import type { ProviderGateway } from '@/capabilities/ai-runtime/public';
 import type { JsonObject } from '@/kernel/public';
-import type { AgentRunAggregate } from '@/modules/agent/public';
+import { leaseTokenOf, type AgentRunAggregate } from '@/modules/agent/public';
 import type { CandidateRepository } from '@/modules/candidate/public';
 import type { CurriculumRepository } from '@/modules/curriculum/public';
 import type {
@@ -44,6 +44,7 @@ export async function executeErrorDiagnosis(
   });
   await runner.execute({
     agentRunId: run.run.id,
+    leaseToken: leaseTokenOf(run.run),
     items
   }, gateway, signal);
 }
