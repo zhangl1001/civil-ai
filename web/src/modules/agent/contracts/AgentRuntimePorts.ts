@@ -216,6 +216,7 @@ export interface AgentLoopCheckpoint {
   readonly skillWorkflowState?: AgentSkillWorkflowState;
   readonly awaitingCompletionVerification?: boolean;
   readonly pendingCompletionExpectations?: readonly AgentCompletionExpectation[];
+  readonly pauseReason?: 'budget';
 }
 
 export type AgentToolAttemptStatus = 'succeeded' | 'no_progress' | 'failed';

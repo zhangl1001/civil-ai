@@ -4,8 +4,7 @@ import {
   createProviderExecutionDeadline,
   ModelMessageRole,
   type ModelImageContentPart,
-  type ModelMessage,
-  type ModelToolCall
+  type ModelMessage
 } from '@/capabilities/ai-runtime/public';
 import {
   createConfiguredProviderGateway,
@@ -15,7 +14,6 @@ import {
 import type { AIMessage, AISession } from '@/domain/ai';
 import type {
   AgentRunId,
-  JsonObject,
   QuestionImportCandidateId,
   QuestionImportDraftId,
   SubjectCode
@@ -39,7 +37,7 @@ import { aiChatRepository } from './AIChatRepository';
 import { aiConfigService } from './AIConfigService';
 import { AIPracticeLibraryService } from './AIPracticeLibraryService';
 import { aiStudentContextService } from './AIStudentContextService';
-import { agentToolActivityService, type AgentToolActivityStatus } from './AgentToolActivityService';
+import { agentToolActivityService } from './AgentToolActivityService';
 import { isAgentCancellation, isAgentConfirmation } from './AgentConfirmationReply';
 import {
   agentRunCompletionExpectation,
@@ -67,6 +65,23 @@ import { composeGroundedAgentSystem, readDeviceClock } from './AgentSystemTools'
 import { registerQuestionImportRepairTool } from './RegisterQuestionImportRepairTool';
 import { ChatAgentToolAuthorization } from './ChatAgentToolAuthorization';
 import { agentConversationMemoryService, type RememberAgentPreferenceInput } from './AgentConversationMemoryService';
+import {
+  activityStatus,
+  asJsonObject,
+  asJsonRecord,
+  budgetContinuationCheckpoint,
+  compactText,
+  confirmationText,
+  eventStatus,
+  findWaitingRun,
+  isToolActivityEvent,
+  isWeekend,
+  normalizeFreshness,
+  optionalNumber,
+  optionalString,
+  parseCheckpoint,
+  toolLabel
+} from './ChatAgentRuntimeSupport';
 export interface ChatAgentResult {
   readonly handled: boolean;
 }
@@ -135,6 +150,24 @@ export class ChatAgentService {
       active.controller.signal.throwIfAborted();
       const waiting = await findWaitingRun(runtime, session.id);
       if (waiting) {
+        const waitingAggregate = await runtime.agentRunRepository.findById(waiting.id);
+        const waitingCheckpoint = parseCheckpoint(waitingAggregate?.run.checkpoint.agentLoop);
+        if (waitingCheckpoint?.pauseReason === 'budget') {
+          if (isAgentCancellation(text)) {
+            await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
+            await runtime.cancelAgentRun.execute({
+              agentRunId: waiting.id,
+              reason: 'user_cancelled_budget_paused_agent'
+            });
+            return { handled: true };
+          }
+          await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
+          active.runId = waiting.id;
+          runtime.agentRunExecutions.register(waiting.id, active.controller);
+          active.controller.signal.throwIfAborted();
+          await this.resumeBudget(runtime, session, waiting.id, waitingCheckpoint, options, active);
+          return { handled: true };
+        }
         if (isAgentConfirmation(text) || isAgentCancellation(text)) {
           await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
           active.runId = waiting.id; runtime.agentRunExecutions.register(waiting.id, active.controller);
@@ -217,6 +250,32 @@ export class ChatAgentService {
       reasonCode: decision === 'confirm' ? 'chat_agent.confirmed' : 'chat_agent.rejected'
     });
     await this.run(runtime, session, runId, '', checkpoint, decision, options, active);
+  }
+
+  private async resumeBudget(
+    runtime: TutorDatabaseRuntime,
+    session: AISession,
+    runId: Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0],
+    checkpoint: AgentLoopCheckpoint,
+    options: ChatAgentOptions,
+    active: ActiveChatRun
+  ): Promise<void> {
+    await runtime.transitionAgentRun.execute({
+      idempotencyKey: `chat-agent:${runId}:resume:budget:${Date.now()}`,
+      agentRunId: runId,
+      action: AgentRunAction.Resume,
+      reasonCode: 'chat_agent.budget_continued'
+    });
+    await this.run(
+      runtime,
+      session,
+      runId,
+      '',
+      budgetContinuationCheckpoint(checkpoint),
+      undefined,
+      options,
+      active
+    );
   }
 
   private async run(
@@ -390,7 +449,28 @@ export class ChatAgentService {
         return;
       }
       if (result.status === 'budget_exhausted') {
-        throw new Error('本次 Agent 已达到安全执行边界，当前进度已保留。你可以继续当前任务，或缩小范围后重试。');
+        await persistAssistant(streamedText);
+        await aiChatRepository.addMessage({
+          sessionId: session.id,
+          role: 'assistant',
+          content: '这一步已到达本段安全执行边界，进度和工具证据已经保留。你可以直接补充要求或让我继续，我会从当前状态接着处理。'
+        });
+        await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
+        const current = await runtime.agentRunRepository.findById(runId);
+        await runtime.transitionAgentRun.execute({
+          idempotencyKey: `chat-agent:${runId}:waiting:budget:${result.checkpoint.turnCount}`,
+          agentRunId: runId,
+          action: AgentRunAction.WaitForUser,
+          reasonCode: 'chat_agent.budget_paused',
+          checkpoint: {
+            ...(current?.run.checkpoint || {}),
+            agentLoop: asJsonObject({
+              ...result.checkpoint,
+              pauseReason: 'budget'
+            })
+          }
+        });
+        return;
       }
       const latest = await runtime.agentRunRepository.findById(runId);
       if (latest?.run.status === 'cancelled') {
@@ -801,150 +881,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
   });
   return executor;
 }
-function eventStatus(event: AgentRuntimeEvent): {
-  readonly message: string;
-  readonly toolName?: string;
-  readonly taskId?: string;
-  readonly step: Parameters<TutorDatabaseRuntime['updateAgentRunProgress']['execute']>[0]['step'];
-  readonly progress: number;
-} | undefined {
-  if (event.type === 'tool_call_requested') {
-    return { message: `准备执行 · ${toolLabel(event.call.name)}`, toolName: event.call.name, step: TaskCenterStep.ResolvingPlan, progress: 28 };
-  }
-  if (event.type === 'tool_call_started') {
-    return { message: `正在执行 · ${toolLabel(event.call.name)}`, toolName: event.call.name, step: TaskCenterStep.InvokingModel, progress: 46 };
-  }
-  if (event.type === 'tool_call_succeeded') {
-    return { message: `执行完成 · ${toolLabel(event.call.name)}`, toolName: event.call.name, taskId: event.resultRef, step: TaskCenterStep.CommittingResult, progress: 78 };
-  }
-  if (event.type === 'tool_call_failed') {
-    return { message: `执行失败 · ${toolLabel(event.call.name)}`, toolName: event.call.name, step: TaskCenterStep.CommittingResult, progress: 78 };
-  }
-  if (event.type === 'confirmation_required') {
-    return { message: `等待确认 · ${toolLabel(event.call.name)}`, toolName: event.call.name, step: TaskCenterStep.ResolvingPlan, progress: 36 };
-  }
-  return undefined;
-}
-function parseCheckpoint(value: unknown): AgentLoopCheckpoint | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const checkpoint = value as Partial<AgentLoopCheckpoint>;
-  return checkpoint.agentRunId && Array.isArray(checkpoint.messages)
-    ? checkpoint as AgentLoopCheckpoint
-    : undefined;
-}
-async function findWaitingRun(runtime: TutorDatabaseRuntime, sessionId: string) {
-  return (await runtime.getAgentRunViews.execute({ limit: 50 }))
-    .find((run) => run.chatSessionId === sessionId && run.status === 'waiting_user');
-}
-function confirmationText(call?: ModelToolCall): string {
-  if (!call) return '这项操作需要你确认。回复“确认”继续，回复“取消”终止。';
-  if (call.name === 'candidate.change_target') {
-    return `准备把${subjectLabel(String(call.arguments.subject || ''))}目标分改为 ${String(call.arguments.targetScore || '')}。回复“确认”继续，回复“取消”终止。`;
-  }
-  if (call.name === 'question_bank.confirm') {
-    return '准备确认本次扫描结果；这一步只锁定草稿，不会发布正式题组。回复“确认”继续，回复“取消”终止。';
-  }
-  if (call.name === 'question_bank.publish') {
-    return '准备把已确认草稿发布为正式题组。发布后题目会进入题库，回复“确认”继续，回复“取消”终止。';
-  }
-  return `准备执行“${toolLabel(call.name)}”。回复“确认”继续，回复“取消”终止。`;
-}
 function shouldUseAgent(text: string): boolean {
   return Boolean(text.trim());
 }
-function toolLabel(code: string): string {
-  return ({
-    'system.read_clock': '读取设备时间',
-    student_read_profile: '读取学习档案',
-    'student.read_profile': '读取学习档案',
-    'tutor.read_daily_context': '读取今日教学状态',
-    'workspace.discover': '检索本地学习资源',
-    'task.read_status': '核验任务状态',
-    practice_read_library: '读取题库状态',
-    'practice.read_library': '读取题库状态',
-    'practice.read_question_set': '读取题组内容',
-    'learning.review_session': '读取练习复盘',
-    'teaching.request_practice': '创建针对性训练',
-    'file.read_text': '读取导入文件',
-    'question_bank.scan': '扫描题目草稿',
-    'question_bank.repair': '自动修正题目结构',
-    'question_bank.resume': '恢复导入草稿',
-    'question_bank.confirm': '确认题目草稿',
-    'question_bank.publish': '发布正式题组',
-    'planning.propose_daily_plan': '分析今日计划',
-    'candidate.change_target': '修改目标分',
-    'web.search': '搜索公开资料',
-    'web.read_page': '读取网页证据',
-    'memory.remember': '记住个人偏好',
-    'memory.forget': '遗忘个人偏好',
-    generate_practice: '生成专项练习',
-    generate_mock: '生成模拟考试',
-    generate_essay: '生成申论练习',
-    redo_wrongbook: '生成错题重练',
-    generate_digest: '生成每日积累',
-    generate_monthly_digest: '生成月度复盘',
-    research_true_questions: '创建联网真题研究任务',
-    grade_essay: '申论批改',
-    review_interview: '面试点评'
-  } as Record<string, string>)[code] || code;
-}
-function normalizeFreshness(value: unknown): 'day' | 'week' | 'month' | 'year' | 'any' {
-  return value === 'day' || value === 'week' || value === 'month' || value === 'year'
-    ? value
-    : 'any';
-}
-
-function activityStatus(
-  event: ToolActivityEvent
-): AgentToolActivityStatus {
-  if (event.type === 'tool_call_requested') return 'queued';
-  if (event.type === 'tool_call_started') return 'running';
-  if (event.type === 'confirmation_required') return 'waiting_user';
-  if (event.type === 'tool_call_succeeded') return 'completed';
-  return 'failed';
-}
-
-type ToolActivityEvent = Extract<AgentRuntimeEvent, {
-  type: 'tool_call_requested'
-    | 'tool_call_started'
-    | 'tool_call_succeeded'
-    | 'tool_call_failed'
-    | 'confirmation_required';
-}>;
-
-function isToolActivityEvent(event: AgentRuntimeEvent): event is ToolActivityEvent {
-  return event.type === 'tool_call_requested'
-    || event.type === 'tool_call_started'
-    || event.type === 'tool_call_succeeded'
-    || event.type === 'tool_call_failed'
-    || event.type === 'confirmation_required';
-}
-
-function subjectLabel(subject: string): string {
-  return ({ aptitude: '行测', essay: '申论', interview: '面试' } as Record<string, string>)[subject] || subject;
-}
-
-function compactText(value: string): string {
-  return value.length > 80 ? `${value.slice(0, 80)}...` : value;
-}
-
-function asJsonRecord(value: unknown): JsonObject {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('工具参数必须是对象。');
-  }
-  return value as JsonObject;
-}
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function isWeekend(): boolean {
-  const day = new Date().getDay();
-  return day === 0 || day === 6;
-}
-
 export const chatAgentService = new ChatAgentService();
