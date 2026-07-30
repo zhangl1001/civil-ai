@@ -150,8 +150,8 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 ### Provider
 
 - [ ] Provider Adapter 维护模型 capability matrix，按模型决定是否发送 temperature、thinking 和结构化参数。
-- [ ] 建立单一 retry owner，Provider turn 和 AgentRun 共用总尝试次数与绝对 deadline。
-- [ ] 在 deadline 允许时尊重 `Retry-After`，不固定截断到五秒。
+- [x] 建立单一 retry owner：有租约的后台任务由 AgentRun Worker 重试，前台直连调用才使用 Provider 本轮恢复。
+- [x] 在绝对 deadline 允许时尊重完整 `Retry-After`，不再固定截断到五秒。
 - [ ] 预算耗尽进入可恢复状态，不再以 failed 状态承诺“可以继续”。
 
 ### Memory
@@ -253,3 +253,4 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B5 第一部分：异步写入与精确资源状态核验使用类型化合同；运行中任务以 delegated 结束对话，避免持续轮询和假完成。
 - [x] B5 第二部分：Chat 与 Worker 共用根取消注册表，Task Dock 取消可中断 Provider、Agent loop 与工具信号。
 - [ ] B5 剩余：父子任务通知聚合。
+- [x] B6 Provider 第一部分：消除 Worker 与 Provider 的重试叠乘，并让重试等待受根信号和绝对 deadline 约束。
