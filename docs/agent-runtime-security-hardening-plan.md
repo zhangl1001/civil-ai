@@ -128,9 +128,9 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 ### 取消
 
 - [x] Chat、后台 Worker、Task Dock 和页面取消共用 `AgentRunExecutionRegistry`。
-- [ ] Provider、工具、分片生成和派生补全统一接收同一根 signal。
-- [ ] 分片首个不可恢复失败时取消 sibling，并等待全部 invocation 进入终态。
-- [ ] 取消后禁止继续写 assistant 消息、业务事实和完成通知。
+- [x] Provider、工具、分片生成和派生补全统一接收同一根 signal。
+- [x] 分片首个不可恢复失败时取消 sibling，并等待全部 invocation 进入终态。
+- [x] 取消后禁止继续写 assistant 消息、业务事实和完成通知。
 
 ### 验收
 
@@ -238,7 +238,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B2：Lease fencing Runtime 接线。
 - [ ] B3：持久化 receipt 与首个写工具。
 - [ ] B4：其余写工具和 ToolInvocationValidator。
-- [ ] B5：统一取消与完成验证（完成门禁和子任务终态通知聚合已完成，分片取消与取消后写入阻断待完成）。
+- [x] B5：统一取消与完成验证。
 - [ ] B6：Context、Provider 和 Memory。
 - [ ] B7：iOS 原生边界。
 - [ ] B8：真机和发布门禁。
@@ -253,7 +253,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B5 第一部分：异步写入与精确资源状态核验使用类型化合同；运行中任务以 delegated 结束对话，避免持续轮询和假完成。
 - [x] B5 第二部分：Chat 与 Worker 共用根取消注册表，Task Dock 取消可中断 Provider、Agent loop 与工具信号。
 - [x] B5 通知聚合：以统一通知模式替代 `notifyOnTerminal` 魔法布尔值；后台补全运行和重试不弹消息，终态读取最新 checkpoint 后按幂等键只投影一次。
-- [ ] B5 剩余：分片 sibling 取消、等待终态和取消后业务/消息写入阻断。
+- [x] B5 收口：Provider、工具、分片生成和派生补全共用根信号；首个不可恢复失败取消 sibling 并等待清理；生成、补全、错因和消息提交前再次检查取消状态。
 - [x] B6 Provider 第一部分：消除 Worker 与 Provider 的重试叠乘，并让重试等待受根信号和绝对 deadline 约束。
 - [x] B6 Context 第一部分：装配统一上下文预算器，将学生档案、记忆和摘要降为带来源标签的低信任数据消息。
 - [x] B7 网络第一部分：原生模型流式传输接入公开 HTTPS/DNS/逐跳重定向校验，并增加并发、流量、事件和积压硬上限。

@@ -181,6 +181,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
               deadline.signal,
               onProgress
             );
+        deadline.signal.throwIfAborted();
         const parsedWorkflow = this.machine.advance(
           aggregate.workflow,
           GenerationWorkflowStep.ParseStructure,
@@ -188,6 +189,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
           { stagedResult: output.raw }
         );
         await this.unitOfWork.run(async (context) => {
+          deadline.signal.throwIfAborted();
           await this.generationRepository.replaceWorkflow(parsedWorkflow, aggregate.workflow.version, context);
         });
         aggregate = { spec: aggregate.spec, workflow: parsedWorkflow };
@@ -199,6 +201,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
         referenceQuestionIds: difference.referenceQuestionIds
       };
       await onProgress?.('validating_content', '正在校验题量、选项、答案与材料结构');
+      deadline.signal.throwIfAborted();
       aggregate = await this.finishValidationSteps(aggregate, output, difference.metrics);
       aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.StageResult, GenerationWorkflowStep.CommitResult);
       aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.CommitResult, GenerationWorkflowStep.PublishOutbox);
@@ -221,7 +224,9 @@ export class RunStructuredObjectiveGenerationWorkflow {
       );
       const bundle = commit.bundle;
       await onProgress?.('committing_result', '正在保存讲义、题组和学习主线');
+      deadline.signal.throwIfAborted();
       await this.unitOfWork.run(async (context) => {
+        deadline.signal.throwIfAborted();
         await this.contentRepository.commitQuestionSet(bundle, context);
         await this.questionSourceRepository.saveLineages(commit.lineages, context);
         await this.generationRepository.replaceWorkflow(completedWorkflow, aggregate.workflow.version, context);

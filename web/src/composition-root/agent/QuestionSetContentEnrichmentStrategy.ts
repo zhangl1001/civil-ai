@@ -86,11 +86,13 @@ async function executeQuestionSetEnrichment(
             dependencies
           );
           const commit = commitTail.then(async () => {
+            signal?.throwIfAborted();
             await dependencies.applyEnrichment.execute(questionSetId, enrichment);
           });
           commitTail = commit.catch(() => undefined);
           await commit;
         } catch (error) {
+          signal?.throwIfAborted();
           failures.push(error);
         }
       }

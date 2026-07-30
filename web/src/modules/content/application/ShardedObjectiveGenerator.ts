@@ -7,7 +7,12 @@ import {
   type ProviderGateway,
   type ProviderRequest
 } from '@/capabilities/ai-runtime/public';
-import type { AiInvocationId, JsonObject, JsonValue } from '@/kernel/public';
+import {
+  mapWithAbortableConcurrency,
+  type AiInvocationId,
+  type JsonObject,
+  type JsonValue
+} from '@/kernel/public';
 import type { GenerationAggregate } from '../contracts/GenerationRepository';
 import type { TrueQuestionReferencePack } from '../contracts/QuestionReferencePackRepository';
 import {
@@ -72,18 +77,19 @@ export class ShardedObjectiveGenerator {
       `正在以 ${input.plan.shardConcurrency} 路并行生成配套讲义和 ${input.plan.totalCount} 题`
     );
     const contract = teachingContract(input.aggregate, input.plan.totalCount, capability);
-    const jobs: readonly (() => Promise<RawInvocation>)[] = [
-      () => this.invokeLecture({ ...input, capability, contract }),
+    const jobs: readonly ((signal: AbortSignal) => Promise<RawInvocation>)[] = [
+      (signal) => this.invokeLecture({ ...input, signal, capability, contract }),
       ...input.plan.shards.map((shard) => (
-        () => this.invokeShard({ ...input, capability, contract, shard })
+        (signal: AbortSignal) => this.invokeShard({ ...input, signal, capability, contract, shard })
       ))
     ];
     let completedJobs = 0;
-    const rawInvocations = await mapWithConcurrency(
+    const rawInvocations = await mapWithAbortableConcurrency(
       jobs,
       input.plan.shardConcurrency,
-      async (job) => {
-        const result = await job();
+      input.signal,
+      async (job, _index, signal) => {
+        const result = await job(signal);
         completedJobs += 1;
         await input.onProgress?.(
           'invoking_model',
@@ -99,10 +105,16 @@ export class ShardedObjectiveGenerator {
       input,
       capability
     );
-    const questionRoots = await mapWithConcurrency(
+    const questionRoots = await mapWithAbortableConcurrency(
       rawInvocations.filter((item) => item.kind === 'questions'),
       input.plan.shardConcurrency,
-      (item) => this.parseShardOrRepair(item, input, capability, lectureRoot.lecture)
+      input.signal,
+      (item, _index, signal) => this.parseShardOrRepair(
+        item,
+        { ...input, signal },
+        capability,
+        lectureRoot.lecture
+      )
     );
     const output = this.parseAndValidateObject(
       mergeAuthorRoots([
@@ -481,26 +493,4 @@ function capabilityCode(aggregate: GenerationAggregate): string {
     throw new TypeError('Generation capability code is missing');
   }
   return code.trim();
-}
-
-async function mapWithConcurrency<Input, Output>(
-  items: readonly Input[],
-  concurrency: number,
-  worker: (item: Input, index: number) => Promise<Output>
-): Promise<readonly Output[]> {
-  if (!items.length) return [];
-  const results = new Array<Output>(items.length);
-  let cursor = 0;
-  const workers = Array.from(
-    { length: Math.min(Math.max(1, Math.floor(concurrency)), items.length) },
-    async () => {
-      while (cursor < items.length) {
-        const index = cursor;
-        cursor += 1;
-        results[index] = await worker(items[index]!, index);
-      }
-    }
-  );
-  await Promise.all(workers);
-  return results;
 }

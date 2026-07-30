@@ -5,3 +5,4 @@ export * from './result';
 export * from './time';
 export * from './canonicalJson';
 export * from './assessmentRole';
+export * from './abortableConcurrency';

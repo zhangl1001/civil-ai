@@ -129,7 +129,7 @@ export class RunAiErrorDiagnosis {
     }
 
     if (validBatch.length) {
-      diagnosisIds.push(...await this.commit(command.agentRunId, validBatch));
+      diagnosisIds.push(...await this.commit(command.agentRunId, validBatch, signal));
     }
 
     const fallbackInvocationIds: string[] = [];
@@ -140,10 +140,12 @@ export class RunAiErrorDiagnosis {
       diagnosisIds.push(...await this.commit(command.agentRunId, [{
         pending: item,
         output: fallback.output
-      }]));
+      }], signal));
     }
 
+    signal?.throwIfAborted();
     await this.completionObserver?.completed({ agentRunId: command.agentRunId, sessionId, diagnosisIds });
+    signal?.throwIfAborted();
     await this.completeRun(
       command.agentRunId,
       diagnosisIds,
@@ -226,9 +228,11 @@ export class RunAiErrorDiagnosis {
 
   private async commit(
     agentRunId: AgentRunId,
-    values: readonly { readonly pending: PendingDiagnosis; readonly output: DiagnosisOutput }[]
+    values: readonly { readonly pending: PendingDiagnosis; readonly output: DiagnosisOutput }[],
+    signal?: AbortSignal
   ): Promise<readonly ErrorDiagnosisId[]> {
     if (!values.length) return [];
+    signal?.throwIfAborted();
     const now = this.clock.now();
     const records = values.map(({ pending, output }): ErrorDiagnosisRecord => ({
       id: this.ids.next('ErrorDiagnosisId'),
@@ -250,7 +254,9 @@ export class RunAiErrorDiagnosis {
       createdAt: now,
       idempotencyKey: diagnosisIdempotencyKey(pending.provisional.id)
     }));
+    signal?.throwIfAborted();
     await this.unitOfWork.run(async (context) => {
+      signal?.throwIfAborted();
       await this.diagnoses.append(records, context);
       for (let index = 0; index < records.length; index += 1) {
         const record = records[index]!;
