@@ -154,7 +154,8 @@ export class InvokeAgentModel implements AgentModelInvoker {
         gateway,
         request,
         shouldStream ? command.onDelta : undefined,
-        deadline.signal
+        deadline.signal,
+        command.leaseToken ? WORKER_PROVIDER_ATTEMPT_LIMIT : INTERACTIVE_PROVIDER_ATTEMPT_LIMIT
       );
       signal?.throwIfAborted();
       if (
@@ -232,9 +233,10 @@ async function invokeProviderWithRecovery(
   gateway: ProviderGateway,
   request: ProviderRequest,
   onDelta: ((text: string) => void | Promise<void>) | undefined,
-  signal: AbortSignal
+  signal: AbortSignal,
+  attemptLimit: number
 ): Promise<ProviderResponse> {
-  for (let attempt = 0; attempt < PROVIDER_ATTEMPT_LIMIT; attempt += 1) {
+  for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
     signal.throwIfAborted();
     let emittedDelta = false;
     try {
@@ -251,7 +253,7 @@ async function invokeProviderWithRecovery(
         return response;
       }
     } catch (error) {
-      if (!canRetryProviderTurn(error, emittedDelta, signal, attempt)) throw error;
+      if (!canRetryProviderTurn(error, emittedDelta, signal, attempt, attemptLimit)) throw error;
       await waitForProviderRetry(providerRetryDelayMs(error, attempt), signal);
     }
   }
@@ -262,9 +264,10 @@ function canRetryProviderTurn(
   error: unknown,
   emittedDelta: boolean,
   signal: AbortSignal,
-  attempt: number
+  attempt: number,
+  attemptLimit: number
 ): boolean {
-  if (emittedDelta || signal.aborted || attempt >= PROVIDER_ATTEMPT_LIMIT - 1) return false;
+  if (emittedDelta || signal.aborted || attempt >= attemptLimit - 1) return false;
   if (!(error instanceof ProviderGatewayError)) return false;
   return error.kind === ProviderErrorKind.EmptyResponse
     || error.kind === ProviderErrorKind.Transient
@@ -273,7 +276,9 @@ function canRetryProviderTurn(
 
 function providerRetryDelayMs(error: unknown, attempt: number): number {
   const providerDelay = error instanceof ProviderGatewayError ? error.retryAfterMs : undefined;
-  return Math.min(5_000, providerDelay ?? 250 * 2 ** attempt);
+  return providerDelay !== undefined && Number.isFinite(providerDelay)
+    ? Math.max(0, providerDelay)
+    : Math.min(5_000, 250 * 2 ** attempt);
 }
 
 function waitForProviderRetry(delayMs: number, signal: AbortSignal): Promise<void> {
@@ -292,4 +297,5 @@ function waitForProviderRetry(delayMs: number, signal: AbortSignal): Promise<voi
   });
 }
 
-const PROVIDER_ATTEMPT_LIMIT = 4;
+const INTERACTIVE_PROVIDER_ATTEMPT_LIMIT = 4;
+const WORKER_PROVIDER_ATTEMPT_LIMIT = 1;

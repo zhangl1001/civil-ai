@@ -336,6 +336,7 @@ try {
     },
     {
       async findById() { return { run: running, events: [] }; },
+      async hasActiveLease() { return true; },
       async appendInvocation() {},
       async updateInvocationResult() {},
       async updateInvocationValidation() {}
@@ -423,6 +424,30 @@ try {
   assert.equal(emptyStreamCalls, 2);
   assert.equal(emptyCompletionCalls, 2);
   assert.equal(emptyRecoveryResult.text, '已根据工具结果继续完成');
+  let leasedProviderCalls = 0;
+  await assert.rejects(() => streamingInvocation.execute({
+    agentRunId: running.id,
+    leaseToken: {
+      agentRunId: running.id,
+      workerId: 'worker:retry-owner',
+      leaseEpoch: 1
+    },
+    modelRole: 'agent.background',
+    system: 'system',
+    messages: [{ role: 'user', content: '后台任务仅由 Worker 重试' }]
+  }, {
+    provider: 'anthropic',
+    model: 'test-model',
+    async complete() {
+      leasedProviderCalls += 1;
+      throw new ai.ProviderGatewayError('provider busy', ai.ProviderErrorKind.Transient);
+    }
+  }), /provider busy/);
+  assert.equal(
+    leasedProviderCalls,
+    1,
+    'a leased Worker invocation must not multiply Provider retries with AgentRun retries'
+  );
 
   let unsupportedFallbackCalls = 0;
   const unsupportedStreamResult = await streamingInvocation.execute({
