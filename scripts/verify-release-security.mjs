@@ -55,6 +55,63 @@ assert.ok(
   !nativeStreamingSource.includes('call.getObject("headers")?.forEach'),
   'Release security check failed: NativeStreamingHTTP forwards arbitrary request headers'
 );
+
+const documentTextSource = await readFile(
+  path.join(repositoryRoot, 'ios/App/App/NativeDocumentTextPlugin.swift'),
+  'utf8'
+);
+const encodedLimitIndex = documentTextSource.indexOf('encoded.utf8.count <= maximumEncodedCharacters');
+const base64DecodeIndex = documentTextSource.indexOf('Data(base64Encoded: encoded)');
+assert.ok(
+  encodedLimitIndex >= 0 && base64DecodeIndex > encodedLimitIndex,
+  'Release security check failed: document input must be size-checked before Base64 decoding'
+);
+for (const requiredBoundary of [
+  'maximumImagePixels',
+  'maximumExtractionSeconds',
+  'CGImageSourceCreateThumbnailAtIndex',
+  'assertWithinDeadline'
+]) {
+  assert.ok(
+    documentTextSource.includes(requiredBoundary),
+    `Release security check failed: NativeDocumentText is missing ${requiredBoundary}`
+  );
+}
+
+const workspaceSource = await readFile(
+  path.join(repositoryRoot, 'ios/App/App/NativeAgentWorkspacePlugin.swift'),
+  'utf8'
+);
+for (const requiredBoundary of [
+  'maximumKeyBytes',
+  'maximumLineBytes',
+  'maximumFileBytes',
+  'maximumFileCount',
+  'maximumWorkspaceBytes',
+  'workspaceState(for:'
+]) {
+  assert.ok(
+    workspaceSource.includes(requiredBoundary),
+    `Release security check failed: NativeAgentWorkspace is missing ${requiredBoundary}`
+  );
+}
+
+const speechSource = await readFile(
+  path.join(repositoryRoot, 'ios/App/App/SpeechRecognitionPlugin.swift'),
+  'utf8'
+);
+for (const requiredBoundary of [
+  'UIApplication.didEnterBackgroundNotification',
+  'teardownRecognition()',
+  'recognitionRequest?.endAudio()',
+  'recognitionTask?.cancel()',
+  'setActive(false'
+]) {
+  assert.ok(
+    speechSource.includes(requiredBoundary),
+    `Release security check failed: SpeechRecognition is missing ${requiredBoundary}`
+  );
+}
 console.log('Release security verification passed.');
 
 async function filesUnder(directory) {

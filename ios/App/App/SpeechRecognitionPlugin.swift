@@ -20,6 +20,24 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
     private var transcript = ""
     private var startedAt: Date?
+    private var lifecycleObservers: [NSObjectProtocol] = []
+
+    public override func load() {
+        super.load()
+        let center = NotificationCenter.default
+        for name in [
+            UIApplication.willResignActiveNotification,
+            UIApplication.didEnterBackgroundNotification
+        ] {
+            lifecycleObservers.append(center.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.teardownRecognition()
+            })
+        }
+    }
 
     @objc func isAvailable(_ call: CAPPluginCall) {
         call.resolve([
@@ -84,8 +102,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                     self.transcript = text
                 }
                 if error != nil || result?.isFinal == true {
-                    self.audioEngine.stop()
-                    self.audioEngine.inputNode.removeTap(onBus: 0)
+                    self.teardownRecognition()
                 }
             }
         }
@@ -95,7 +112,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             try audioEngine.start()
             call.resolve()
         } catch {
-            stopRecognition()
+            teardownRecognition()
             call.reject("Audio engine start failed", "AUDIO_ENGINE_FAILED", error)
         }
     }
@@ -107,7 +124,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             let duration = self.startedAt.map { Date().timeIntervalSince($0) } ?? 0
-            self.stopRecognition()
+            self.teardownRecognition()
             call.resolve([
                 "transcript": self.transcript,
                 "durationSeconds": Int(duration.rounded())
@@ -116,14 +133,28 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func stopRecognition() {
+        teardownRecognition()
+    }
+
+    private func teardownRecognition() {
         if audioEngine.isRunning {
             audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
         }
+        audioEngine.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
+        startedAt = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    deinit {
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        if Thread.isMainThread {
+            teardownRecognition()
+        } else {
+            DispatchQueue.main.sync { teardownRecognition() }
+        }
     }
 }
