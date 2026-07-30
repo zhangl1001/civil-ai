@@ -1,4 +1,9 @@
-import { ModelMessageRole, type ModelMessage, type ModelToolCall } from '@/capabilities/ai-runtime/public';
+import {
+  ModelMessageRole,
+  type ModelMessage,
+  type ModelToolCall,
+  type ProviderToolDefinition
+} from '@/capabilities/ai-runtime/public';
 import type { AgentCompletionExpectation } from '../contracts/AgentRuntimePorts';
 import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
 
@@ -22,6 +27,42 @@ export interface AgentLoopLimits {
   readonly maxToolResultChars: number;
   readonly maxWallTimeMs: number;
   readonly maxContextTokens: number;
+}
+
+export interface CompiledAgentLoopTurn {
+  readonly system: string;
+  readonly messages: readonly ModelMessage[];
+  readonly tools: readonly ProviderToolDefinition[];
+  readonly estimatedTokens: number;
+}
+
+export function compileAgentLoopTurnContext(input: {
+  readonly system: string;
+  readonly messages: readonly ModelMessage[];
+  readonly tools: readonly ProviderToolDefinition[];
+  readonly maxContextTokens: number;
+  readonly outputReserveTokens: number;
+}): CompiledAgentLoopTurn {
+  const systemTokens = estimateTextTokens(input.system);
+  const toolTokens = estimateTextTokens(stableJson(input.tools));
+  const fixedTokens = systemTokens + toolTokens + input.outputReserveTokens;
+  if (fixedTokens >= input.maxContextTokens) {
+    throw new Error('Agent system, tools and output reserve exceed the model context budget');
+  }
+  const messages = compactAgentLoopMessages(
+    input.messages,
+    input.maxContextTokens - fixedTokens
+  );
+  const estimatedTokens = fixedTokens + estimateAgentMessageTokens(messages);
+  if (estimatedTokens > input.maxContextTokens) {
+    throw new Error('Agent execution evidence exceeds the model context budget');
+  }
+  return {
+    system: input.system,
+    messages,
+    tools: input.tools,
+    estimatedTokens
+  };
 }
 
 export async function consumeAgentGuidance(
@@ -142,14 +183,27 @@ export function compactAgentLoopMessages(
   messages: readonly ModelMessage[],
   maxTokens: number
 ): readonly ModelMessage[] {
-  if (estimateMessageTokens(messages) <= maxTokens || messages.length <= 14) return messages;
+  if (estimateAgentMessageTokens(messages) <= maxTokens) return messages;
   let tailStart = Math.max(1, messages.length - 12);
   while (tailStart < messages.length && messages[tailStart]?.role === ModelMessageRole.Tool) {
     tailStart += 1;
   }
-  if (tailStart >= messages.length) return messages;
-  const removed = messages.slice(0, tailStart);
-  const retained = messages.slice(tailStart);
+  if (tailStart >= messages.length) tailStart = Math.max(0, messages.length - 2);
+  const removed = [...messages.slice(0, tailStart)];
+  let retained = [...messages.slice(tailStart)];
+  while (retained.length > 2 && estimateAgentMessageTokens(retained) > Math.floor(maxTokens * 0.78)) {
+    const removedCount = executionUnitLength(retained);
+    removed.push(...retained.splice(0, removedCount));
+    while (retained[0]?.role === ModelMessageRole.Tool) removed.push(retained.shift() as ModelMessage);
+  }
+  retained = retained.map((message) => clipMessageText(
+    message,
+    Math.max(256, Math.floor(maxTokens * 0.72 / Math.max(1, retained.length)))
+  ));
+  const retainedTokens = estimateAgentMessageTokens(retained);
+  if (retainedTokens >= maxTokens) {
+    throw new Error('Latest Agent tool exchange exceeds the model context budget');
+  }
   const summaryLines = removed.map(summarizeLoopMessage).filter(Boolean);
   const summary: ModelMessage = {
     role: ModelMessageRole.User,
@@ -159,12 +213,8 @@ export function compactAgentLoopMessages(
       ...summaryLines
     ].join('\n')
   };
-  const compacted = [summary, ...retained];
-  if (estimateMessageTokens(compacted) <= maxTokens) return compacted;
-  const clippedSummary: ModelMessage = {
-    ...summary,
-    content: limitToolResult(String(summary.content), Math.max(2_000, Math.floor(maxTokens * 2.2)))
-  };
+  const summaryBudget = Math.max(1, maxTokens - retainedTokens);
+  const clippedSummary = clipMessageText(summary, summaryBudget);
   return [clippedSummary, ...retained];
 }
 
@@ -202,14 +252,73 @@ function summarizeLoopMessage(message: ModelMessage): string {
     : '';
 }
 
-function estimateMessageTokens(messages: readonly ModelMessage[]): number {
+export function estimateAgentMessageTokens(messages: readonly ModelMessage[]): number {
   return messages.reduce((total, message) => {
-    const text = messageContentText(message.content);
-    const ascii = text.replace(/[^\x00-\x7F]/g, '').length;
-    const nonAscii = text.length - ascii;
-    const calls = message.toolCalls ? stableJson(message.toolCalls).length / 4 : 0;
-    return total + Math.ceil(ascii / 4 + nonAscii / 1.6 + calls);
+    const contentTokens = typeof message.content === 'string'
+      ? estimateTextTokens(message.content)
+      : message.content.reduce((sum, part) => (
+          sum + (part.type === 'text' ? estimateTextTokens(part.text) : IMAGE_CONTEXT_TOKENS)
+        ), 0);
+    const calls = message.toolCalls ? estimateTextTokens(stableJson(message.toolCalls)) : 0;
+    return total + contentTokens + calls;
   }, 0);
+}
+
+function estimateTextTokens(text: string): number {
+  const ascii = text.replace(/[^\x00-\x7F]/g, '').length;
+  const nonAscii = text.length - ascii;
+  return Math.max(1, Math.ceil(ascii / 4 + nonAscii / 1.6));
+}
+
+function executionUnitLength(messages: readonly ModelMessage[]): number {
+  const first = messages[0];
+  if (first?.role !== ModelMessageRole.Assistant || !first.toolCalls?.length) return 1;
+  const ids = new Set(first.toolCalls.map((call) => call.id));
+  let count = 1;
+  while (
+    count < messages.length
+    && messages[count]?.role === ModelMessageRole.Tool
+    && ids.has(messages[count]?.toolCallId || '')
+  ) count += 1;
+  return count;
+}
+
+function clipMessageText(message: ModelMessage, maxTokens: number): ModelMessage {
+  const toolCallTokens = message.toolCalls
+    ? estimateTextTokens(stableJson(message.toolCalls))
+    : 0;
+  const contentBudget = Math.max(1, maxTokens - toolCallTokens);
+  if (typeof message.content === 'string') {
+    return { ...message, content: clipTextToTokens(message.content, contentBudget) };
+  }
+  const imageTokens = message.content.filter((part) => part.type === 'image').length
+    * IMAGE_CONTEXT_TOKENS;
+  if (imageTokens >= contentBudget) {
+    throw new Error('Agent media attachments exceed the model context budget');
+  }
+  const textParts = message.content.filter((part) => part.type === 'text');
+  const perTextBudget = Math.max(1, Math.floor(
+    (contentBudget - imageTokens) / Math.max(1, textParts.length)
+  ));
+  return {
+    ...message,
+    content: message.content.map((part) => part.type === 'text'
+      ? { ...part, text: clipTextToTokens(part.text, perTextBudget) }
+      : part)
+  };
+}
+
+function clipTextToTokens(value: string, maxTokens: number): string {
+  if (estimateTextTokens(value) <= maxTokens) return value;
+  const suffix = '\n[内容已截断]';
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (estimateTextTokens(`${value.slice(0, middle)}${suffix}`) <= maxTokens) low = middle;
+    else high = middle - 1;
+  }
+  return `${value.slice(0, low)}${suffix}`;
 }
 
 function clipText(value: string, maxLength: number): string {
@@ -236,3 +345,5 @@ function assertBoundedInteger(value: number, min: number, max: number, label: st
     throw new RangeError(`${label} must be between ${min} and ${max}`);
   }
 }
+
+const IMAGE_CONTEXT_TOKENS = 1_024;

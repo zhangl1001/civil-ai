@@ -143,7 +143,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 ### Context Compiler
 
 - [x] 实现并装配首版生产 `AgentContextCompiler`。
-- [ ] 对 system、tools、skills、memory、history、media、tool results 和 output reserve 统一预算（首轮 system/tools/memory/history/output 已接入，循环内 tool results 与 media 待收口）。
+- [x] 对 system、tools、skills、memory、history、media、tool results 和 output reserve 统一预算；每个模型 turn 在发送前重新编译并保留最新执行单元。
 - [x] 用户文本、历史模型回复、记忆和摘要标记为低信任数据，不再拼入 system 指令。
 - [ ] 只按考试周期、学习主线和当前任务加载最小证据范围。
 
@@ -269,3 +269,4 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B6 Memory 约束：持久记忆必须包含来源与置信度，限制为 16 KB 结构化内容，禁止 working memory 和私有思考字段进入长期存储。
 - [x] B5 生命周期收口：App 进入后台统一中断 Chat 与 Worker 根信号；直连 Chat 进入取消终态，Worker 不伪造终态并由租约恢复；iOS 原生流同步取消并释放网络任务。
 - [x] B6 预算暂停：Chat Agent 达到动态安全预算后进入可恢复 `waiting_user`，保留 checkpoint、工具证据与去重签名；用户下一条指令继续同一 run，并重置本段计数而不是转成不可恢复失败。
+- [x] B6 Context 收口：每个模型 turn 将动态 Skill、工具 schema、历史、图片、工具结果和输出预留统一计入预算；旧执行证据按完整调用单元压缩，最新媒体和工具交换保持配对。
