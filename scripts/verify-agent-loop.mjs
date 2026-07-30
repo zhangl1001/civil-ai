@@ -93,6 +93,32 @@ try {
     name: validationDefinition.name,
     arguments: 'x'
   }).valid, false);
+  const completionTracker = new agent.AgentCompletionTracker([{
+    resourceType: 'agent_run',
+    resourceId: 'task:expected',
+    expectedTerminalState: 'completed'
+  }]);
+  assert.equal(completionTracker.resolve([{
+    resourceType: 'agent_run',
+    resourceId: 'task:other',
+    state: 'completed',
+    terminal: true
+  }]), undefined);
+  assert.equal(completionTracker.requiresVerification, true, 'a different resource must not satisfy completion');
+  assert.equal(completionTracker.resolve([{
+    resourceType: 'agent_run',
+    resourceId: 'task:expected',
+    state: 'running',
+    terminal: false
+  }]).kind, 'delegated');
+  assert.equal(completionTracker.requiresVerification, true, 'a running resource is not business completion');
+  assert.equal(completionTracker.resolve([{
+    resourceType: 'agent_run',
+    resourceId: 'task:expected',
+    state: 'completed',
+    terminal: true
+  }]).kind, 'terminal');
+  assert.equal(completionTracker.requiresVerification, false);
   const practiceLibraryTool = agent.tutorToolCatalog.find((tool) => tool.name === 'practice.read_library');
   const practiceQuestionSetTool = agent.tutorToolCatalog.find((tool) => tool.name === 'practice.read_question_set');
   assert.ok(practiceLibraryTool);
@@ -828,14 +854,25 @@ try {
         if (definition.name === 'generate_digest') {
           return {
             content: '{"accepted":true,"taskId":"AgentRunId:task-digest-1"}',
-            resultRef: 'AgentRunId:task-digest-1'
+            resultRef: 'AgentRunId:task-digest-1',
+            completionExpectation: {
+              resourceType: 'agent_run',
+              resourceId: 'AgentRunId:task-digest-1',
+              expectedTerminalState: 'completed'
+            }
           };
         }
         assert.equal(definition.name, 'task.read_status');
         assert.equal(call.arguments.taskId, 'AgentRunId:task-digest-1');
         return {
           content: '{"found":true,"task":{"status":"running","statusText":"生成中"}}',
-          madeProgress: true
+          madeProgress: true,
+          completionVerification: {
+            resourceType: 'agent_run',
+            resourceId: 'AgentRunId:task-digest-1',
+            state: 'running',
+            terminal: false
+          }
         };
       }
     },
@@ -897,10 +934,12 @@ try {
       return { text: '每日热点任务已受理，目前正在生成。', usage: {} };
     }
   });
+  assert.equal(completionVerificationResult.status, 'delegated');
   assert.equal(completionVerificationResult.text, '每日热点任务已受理，目前正在生成。');
   assert.equal(completionVerificationRequests.length, 6);
   assert.deepEqual(completionVerificationExecutions, ['workspace.discover', 'generate_digest', 'task.read_status']);
   assert.equal(completionVerificationCheckpoints.at(-1).awaitingCompletionVerification, false);
+  assert.equal(completionVerificationCheckpoints.at(-1).pendingCompletionExpectations.length, 1);
   assert.deepEqual(completionVerificationCheckpoints.at(-1).completedToolNames, ['generate_digest']);
 
   const requiredToolRequests = [];

@@ -37,6 +37,11 @@ import { aiConfigService } from './AIConfigService';
 import { AIPracticeLibraryService } from './AIPracticeLibraryService';
 import { aiStudentContextService } from './AIStudentContextService';
 import { agentToolActivityService, type AgentToolActivityStatus } from './AgentToolActivityService';
+import { isAgentCancellation, isAgentConfirmation } from './AgentConfirmationReply';
+import {
+  agentRunCompletionExpectation,
+  agentRunCompletionVerification
+} from './AgentCompletionEvidence';
 import { agentFileReader } from './AgentFileReader';
 import { hasVisibleAssistantContent, visibleAssistantText } from './AgentResponsePresentation';
 import { chatTaskPresentation, publishChatTaskMessage } from './ChatAgentTaskPresentation';
@@ -121,11 +126,11 @@ export class ChatAgentService {
       active.controller.signal.throwIfAborted();
       const waiting = await findWaitingRun(runtime, session.id);
       if (waiting) {
-        if (isConfirm(text) || isCancel(text)) {
+        if (isAgentConfirmation(text) || isAgentCancellation(text)) {
           await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
           active.runId = waiting.id;
           active.controller.signal.throwIfAborted();
-          await this.resume(runtime, session, waiting.id, isConfirm(text) ? 'confirm' : 'reject', options, active);
+          await this.resume(runtime, session, waiting.id, isAgentConfirmation(text) ? 'confirm' : 'reject', options, active);
           return { handled: true };
         }
         await runtime.cancelAgentRun.execute({
@@ -390,16 +395,17 @@ export class ChatAgentService {
       await persistAssistant(finalContent);
       await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
       const current = latest ?? await runtime.agentRunRepository.findById(runId);
+      const delegated = result.status === 'delegated';
       const completed = await runtime.transitionAgentRun.execute({
         idempotencyKey: `chat-agent:${runId}:completed`,
         agentRunId: runId,
         action: AgentRunAction.Complete,
-        reasonCode: 'chat_agent.completed',
+        reasonCode: delegated ? 'chat_agent.delegated' : 'chat_agent.completed',
         checkpoint: {
           ...(current?.run.checkpoint || {}),
           progress: 100,
           step: TaskCenterStep.Completed,
-          message: '已完成'
+          message: delegated ? '任务已受理' : '已完成'
         }
       });
       await publishChatTaskMessage(runtime, completed, 'completed');
@@ -464,7 +470,8 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
       }, { sessionId, idempotencyKey: context.businessIdempotencyKey });
       return {
         content: JSON.stringify({ message: result.reply, taskId: result.taskId ?? null }),
-        resultRef: result.taskId
+        resultRef: result.taskId,
+        ...agentRunCompletionExpectation(result.taskId)
       };
     });
   });
@@ -591,7 +598,8 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
     return {
       content: JSON.stringify(result),
       resultRef: typeof task?.taskId === 'string' ? task.taskId : undefined,
-      madeProgress: true
+      madeProgress: true,
+      completionVerification: agentRunCompletionVerification(result, optionalString(call.arguments.taskId))
     };
   });
   executor.register('practice.read_library', async (call) => {
@@ -668,7 +676,8 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
     }, { sessionId });
     return {
       content: JSON.stringify({ message: result.reply, taskId: result.taskId ?? null }),
-      resultRef: result.taskId
+      resultRef: result.taskId,
+      ...agentRunCompletionExpectation(result.taskId)
     };
   });
   executor.register('file.read_text', (call) => agentFileReader.read(call.arguments));
@@ -828,14 +837,6 @@ function confirmationText(call?: ModelToolCall): string {
 function shouldUseAgent(text: string): boolean {
   return Boolean(text.trim());
 }
-function isConfirm(text: string): boolean {
-  return new Set(['确认', '确定', '开始', '执行', '可以', '好', '好的', '行', '嗯', '是', 'yes', 'ok'])
-    .has(text.trim().toLocaleLowerCase());
-}
-function isCancel(text: string): boolean {
-  return new Set(['取消', '算了', '不要', '停止', '不执行', '否', 'no'])
-    .has(text.trim().toLocaleLowerCase());
-}
 function toolLabel(code: string): string {
   return ({
     'system.read_clock': '读取设备时间',
@@ -872,7 +873,6 @@ function toolLabel(code: string): string {
     review_interview: '面试点评'
   } as Record<string, string>)[code] || code;
 }
-
 function normalizeFreshness(value: unknown): 'day' | 'week' | 'month' | 'year' | 'any' {
   return value === 'day' || value === 'week' || value === 'month' || value === 'year'
     ? value

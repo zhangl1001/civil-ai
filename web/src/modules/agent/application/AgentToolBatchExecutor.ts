@@ -1,6 +1,8 @@
 import type { ModelMessage, ModelToolCall } from '@/capabilities/ai-runtime/public';
 import type { AgentRunId } from '@/kernel/public';
 import type {
+  AgentCompletionExpectation,
+  AgentCompletionVerification,
   AgentRuntimeEvent,
   AgentToolExecutionContext,
   AgentToolExecutor
@@ -26,8 +28,8 @@ export interface AgentToolCallBatch {
   readonly executedOperationalTool: boolean;
   readonly progressCount: number;
   readonly completedWriteToolNames: readonly string[];
-  readonly completedAsyncWrite: boolean;
-  readonly executedCompletionVerifier: boolean;
+  readonly completionExpectations: readonly AgentCompletionExpectation[];
+  readonly completionVerifications: readonly AgentCompletionVerification[];
   readonly observations: readonly AgentToolCallObservation[];
 }
 
@@ -45,6 +47,8 @@ interface ToolCallOutcome {
   readonly activateSkills?: readonly AgentSkillActivation[];
   readonly madeProgress: boolean;
   readonly resultRef?: string;
+  readonly completionExpectation?: AgentCompletionExpectation;
+  readonly completionVerification?: AgentCompletionVerification;
   readonly observation: Omit<AgentToolCallObservation, 'call'>;
 }
 
@@ -67,8 +71,8 @@ export async function executeAgentToolCalls(
   let executedOperationalTool = false;
   let progressCount = 0;
   const completedWriteToolNames = new Set<string>();
-  let completedAsyncWrite = false;
-  let executedCompletionVerifier = false;
+  const completionExpectations: AgentCompletionExpectation[] = [];
+  const completionVerifications: AgentCompletionVerification[] = [];
   const observations: AgentToolCallObservation[] = [];
   let cursor = 0;
   const record = (entry: AgentExecutableToolCall, outcome: ToolCallOutcome) => {
@@ -83,10 +87,14 @@ export async function executeAgentToolCalls(
     if (outcome.madeProgress) progressCount += 1;
     if (entry.definition.risk !== AgentToolRisk.Read && outcome.madeProgress) {
       completedWriteToolNames.add(entry.definition.name);
-      if (outcome.resultRef) completedAsyncWrite = true;
+      if (outcome.completionExpectation) completionExpectations.push(outcome.completionExpectation);
     }
-    if (entry.definition.role === AgentToolRole.CompletionVerifier && outcome.madeProgress) {
-      executedCompletionVerifier = true;
+    if (
+      entry.definition.role === AgentToolRole.CompletionVerifier
+      && outcome.madeProgress
+      && outcome.completionVerification
+    ) {
+      completionVerifications.push(outcome.completionVerification);
     }
   };
 
@@ -134,8 +142,8 @@ export async function executeAgentToolCalls(
     executedOperationalTool,
     progressCount,
     completedWriteToolNames: [...completedWriteToolNames],
-    completedAsyncWrite,
-    executedCompletionVerifier,
+    completionExpectations,
+    completionVerifications,
     observations
   };
 }
@@ -194,6 +202,8 @@ async function executeAgentToolCall(
       activateToolNames: result.activateToolNames,
       activateSkills: result.activateSkills,
       resultRef: result.resultRef,
+      completionExpectation: result.completionExpectation,
+      completionVerification: result.completionVerification,
       madeProgress,
       observation: {
         status,

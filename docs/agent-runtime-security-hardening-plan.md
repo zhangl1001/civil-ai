@@ -120,9 +120,9 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### 完成验证
 
-- [ ] 写工具返回类型化 `resourceType/resourceId/expectedTerminalState`。
-- [ ] Completion Verifier 必须匹配同一资源并读取代码确认的终态。
-- [ ] `queued/running/not_found/failed` 不得解除完成门禁。
+- [x] 异步写工具返回类型化 `resourceType/resourceId/expectedTerminalState`。
+- [x] Completion Verifier 必须匹配同一资源；其他 task 的状态不能满足当前完成验证。
+- [x] `queued/running/not_found` 只能以 delegated 结束本轮并表述为“已受理/执行中”；`failed/cancelled` 只能如实报告，均不得伪装为业务完成。
 - [ ] 子任务进度不单独通知；父任务终态后只发送一次汇总消息。
 
 ### 取消
@@ -250,3 +250,5 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B4 第一部分：统一 `AgentToolInvocationValidator` 在 Policy 和 Executor 前执行；无效参数不进入工具，作为可重试观察交给 Agent 自主修正。
 - [x] B4 回归：覆盖嵌套对象、联合类型、数组、枚举、范围、未声明字段及“模型修正参数后继续执行”。
 - [ ] B4 剩余：资源归属验证、确认参数冻结，以及其余写工具的业务事务幂等收口。
+- [x] B5 第一部分：异步写入与精确资源状态核验使用类型化合同；运行中任务以 delegated 结束对话，避免持续轮询和假完成。
+- [ ] B5 剩余：统一取消根信号，以及父子任务通知聚合。

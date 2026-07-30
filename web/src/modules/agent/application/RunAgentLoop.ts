@@ -21,6 +21,8 @@ import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
 import { AgentExecutionBudget } from '../domain/AgentExecutionBudget';
 import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
+import { AgentCompletionTracker, completionResolutionInstruction } from './AgentCompletionTracker';
+import type { AgentLoopResult, RunAgentLoopCommand } from './AgentLoopContracts';
 import { AgentToolInvocationValidator } from './AgentToolInvocationValidator';
 import {
   blockedRepeatReason,
@@ -45,36 +47,6 @@ import {
   skillContinuationInstruction,
   validateAgentLoopLimits
 } from './AgentLoopSupport';
-export interface RunAgentLoopCommand {
-  readonly agentRunId: AgentRunId;
-  readonly system: string;
-  readonly messages: readonly ModelMessage[];
-  readonly tools: readonly AgentToolDefinition[];
-  /** Superset of tools that may be activated by a catalog-selection tool. */
-  readonly availableTools?: readonly AgentToolDefinition[];
-  /** Preselected UI workflows. Free chat starts empty and lets the model select. */
-  readonly skills?: readonly AgentSkillActivation[];
-  readonly executionContext: AgentToolExecutionContext;
-  readonly checkpoint?: AgentLoopCheckpoint;
-  readonly maxTurns?: number;
-  readonly maxToolCalls?: number;
-  readonly maxToolCallsPerTurn?: number;
-  readonly maxParallelReadToolCalls?: number;
-  readonly maxToolResultChars?: number;
-  readonly maxWallTimeMs?: number;
-  readonly maxContextTokens?: number;
-  readonly confirmationDecision?: 'confirm' | 'reject';
-  readonly preferStream?: boolean;
-  readonly requiredToolName?: string;
-  readonly forceRequiredToolOnFirstTurn?: boolean;
-  readonly consumeGuidance?: () => readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
-}
-
-export interface AgentLoopResult {
-  readonly status: 'completed' | 'waiting_user' | 'budget_exhausted';
-  readonly text: string;
-  readonly checkpoint: AgentLoopCheckpoint;
-}
 /** Provider-neutral, bounded Agent loop. Business writes remain behind typed tool executors. */
 export class RunAgentLoop {
   private observerQueue: Promise<void> = Promise.resolve();
@@ -119,7 +91,9 @@ export class RunAgentLoop {
       ?? (activeSkills.size ? 'selected' : 'idle');
     let awaitingOperationalTool = [...activeSkills.values()].some((skill) => skill.requiresOperationalTool)
       && (skillWorkflowState === 'selected' || skillWorkflowState === 'executing');
-    let awaitingCompletionVerification = command.checkpoint?.awaitingCompletionVerification ?? false;
+    const completionTracker = new AgentCompletionTracker(command.checkpoint?.pendingCompletionExpectations);
+    let awaitingCompletionVerification = completionTracker.requiresVerification;
+    let delegatedCompletion = false;
     let finalizationOnly = false;
     let requiredToolRepairCount = 0;
     let skillContinuationRepairCount = 0;
@@ -137,7 +111,8 @@ export class RunAgentLoop {
         activeToolNames: [...toolSet.names],
         completedToolNames: [...completedToolNames],
         skillWorkflowState,
-        awaitingCompletionVerification
+        awaitingCompletionVerification,
+        pendingCompletionExpectations: completionTracker.list()
       },
       command.executionContext.leaseToken
     );
@@ -207,6 +182,10 @@ export class RunAgentLoop {
           } else {
             budget.recordProgress();
             if (definition.risk !== 'read') completedToolNames.add(definition.name);
+            if (result.completionExpectation) {
+              completionTracker.expect([result.completionExpectation]);
+              awaitingCompletionVerification = true;
+            }
             skillWorkflowState = 'ready_to_finalize';
             awaitingOperationalTool = false;
             await this.emit({
@@ -313,7 +292,7 @@ export class RunAgentLoop {
               : []),
             {
               role: ModelMessageRole.User,
-              content: completionVerificationInstruction(verifierNames)
+              content: completionVerificationInstruction(verifierNames, completionTracker.list())
             }
           );
           await saveCheckpoint();
@@ -356,7 +335,7 @@ export class RunAgentLoop {
           const checkpoint = await saveCheckpoint();
           await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: '操作已执行，但模型没有返回补充说明。' });
           return {
-            status: 'completed',
+            status: delegatedCompletion ? 'delegated' : 'completed',
             text: '操作已执行，但模型没有返回补充说明。',
             checkpoint
           };
@@ -370,7 +349,7 @@ export class RunAgentLoop {
         }
         const checkpoint = await saveCheckpoint();
         await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: response.text });
-        return { status: 'completed', text: response.text, checkpoint };
+        return { status: delegatedCompletion ? 'delegated' : 'completed', text: response.text, checkpoint };
       }
       const toolBudget = budget.allowToolCalls(turnCount, toolCallCount, calls.length);
       if (calls.length > limits.maxToolCallsPerTurn || !toolBudget.allowed) {
@@ -526,16 +505,17 @@ export class RunAgentLoop {
         awaitingOperationalTool = toolBatch.activateSkills.some((skill) => skill.requiresOperationalTool);
       }
       toolBatch.completedWriteToolNames.forEach((name) => completedToolNames.add(name));
-      if (
-        toolBatch.completedAsyncWrite
-        && hasCompletionValidator(activeSkills)
-        && completionVerifierNames(toolSet).length
-      ) {
-        awaitingCompletionVerification = true;
-        skillWorkflowState = 'executing';
+      if (hasCompletionValidator(activeSkills) && completionVerifierNames(toolSet).length) {
+        completionTracker.expect(toolBatch.completionExpectations);
+        awaitingCompletionVerification = completionTracker.requiresVerification;
       }
-      if (toolBatch.executedCompletionVerifier) {
-        awaitingCompletionVerification = false;
+      const completionResolution = completionTracker.resolve(toolBatch.completionVerifications);
+      if (completionResolution) {
+        delegatedCompletion = completionResolution.kind === 'delegated';
+        awaitingCompletionVerification = delegatedCompletion ? false : completionTracker.requiresVerification;
+        messages.push({ role: ModelMessageRole.User, content: completionResolutionInstruction(completionResolution) });
+        skillWorkflowState = 'executing';
+        finalizationOnly = delegatedCompletion || !awaitingCompletionVerification;
       }
       if (toolBatch.executedOperationalTool && !awaitingCompletionVerification) {
         if (hasPendingRequiredWrite(activeSkills, toolSet, completedToolNames)) {
@@ -569,6 +549,7 @@ export class RunAgentLoop {
       readonly completedToolNames: readonly string[];
       readonly skillWorkflowState: AgentSkillWorkflowState;
       readonly awaitingCompletionVerification: boolean;
+      readonly pendingCompletionExpectations: AgentLoopCheckpoint['pendingCompletionExpectations'];
     },
     leaseToken?: AgentToolExecutionContext['leaseToken']
   ): Promise<AgentLoopCheckpoint> {
@@ -584,7 +565,8 @@ export class RunAgentLoop {
       activeToolNames: state.activeToolNames,
       completedToolNames: state.completedToolNames,
       skillWorkflowState: state.skillWorkflowState,
-      awaitingCompletionVerification: state.awaitingCompletionVerification
+      awaitingCompletionVerification: state.awaitingCompletionVerification,
+      pendingCompletionExpectations: state.pendingCompletionExpectations
     };
     await this.checkpoints.save(checkpoint, leaseToken);
     await this.emit({ type: 'checkpoint_saved', agentRunId, turn: turnCount });
