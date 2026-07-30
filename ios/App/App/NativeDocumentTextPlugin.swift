@@ -1,5 +1,6 @@
 import Capacitor
 import Foundation
+import ImageIO
 import PDFKit
 import UIKit
 import Vision
@@ -16,11 +17,21 @@ public final class NativeDocumentTextPlugin: CAPPlugin, CAPBridgedPlugin {
     private let maximumBytes = 25 * 1024 * 1024
     private let maximumPages = 120
     private let maximumCharacters = 500_000
+    private let maximumEncodedCharacters = ((25 * 1024 * 1024 + 2) / 3) * 4
+    private let maximumImagePixels = 100_000_000
+    private let maximumOCRImageEdge = 2_400
+    private let maximumExtractionSeconds: TimeInterval = 180
 
     @objc func extract(_ call: CAPPluginCall) {
-        guard let encoded = call.getString("dataBase64"),
-              let data = Data(base64Encoded: encoded),
-              !data.isEmpty else {
+        guard let encoded = call.getString("dataBase64"), !encoded.isEmpty else {
+            call.reject("文件内容为空或编码无效", "DOCUMENT_DATA_INVALID")
+            return
+        }
+        guard encoded.utf8.count <= maximumEncodedCharacters else {
+            call.reject("文件不能超过 25 MB", "DOCUMENT_TOO_LARGE")
+            return
+        }
+        guard let data = Data(base64Encoded: encoded), !data.isEmpty else {
             call.reject("文件内容为空或编码无效", "DOCUMENT_DATA_INVALID")
             return
         }
@@ -34,10 +45,11 @@ public final class NativeDocumentTextPlugin: CAPPlugin, CAPBridgedPlugin {
         queue.async { [weak self] in
             guard let self else { return }
             do {
+                let deadline = Date().addingTimeInterval(self.maximumExtractionSeconds)
                 let result = if mimeType == "application/pdf" || fileName.hasSuffix(".pdf") {
-                    try self.extractPDF(data)
+                    try self.extractPDF(data, deadline: deadline)
                 } else if mimeType.hasPrefix("image/") {
-                    try self.extractImage(data)
+                    try self.extractImage(data, deadline: deadline)
                 } else {
                     throw DocumentTextError.unsupportedType
                 }
@@ -50,7 +62,7 @@ public final class NativeDocumentTextPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    private func extractPDF(_ data: Data) throws -> [String: Any] {
+    private func extractPDF(_ data: Data, deadline: Date) throws -> [String: Any] {
         guard let document = PDFDocument(data: data) else {
             throw DocumentTextError.invalidPDF
         }
@@ -64,20 +76,38 @@ public final class NativeDocumentTextPlugin: CAPPlugin, CAPBridgedPlugin {
         var pages: [String] = []
         var warnings: [String] = []
         var usedOCR = false
+        var characterCount = 0
         for index in 0..<document.pageCount {
+            try assertWithinDeadline(deadline)
             guard let page = document.page(at: index) else { continue }
             var text = normalize(page.string ?? "")
             if text.count < 12 {
                 usedOCR = true
-                let image = page.thumbnail(of: CGSize(width: 1_800, height: 2_400), for: .mediaBox)
-                if let cgImage = image.cgImage {
-                    text = try recognizeText(cgImage)
+                text = try autoreleasepool {
+                    let image = page.thumbnail(
+                        of: CGSize(width: maximumOCRImageEdge, height: maximumOCRImageEdge),
+                        for: .mediaBox
+                    )
+                    guard let cgImage = image.cgImage else { return "" }
+                    return try recognizeText(cgImage)
                 }
             }
             if text.isEmpty {
                 warnings.append("第 \(index + 1) 页没有识别到文字。")
             } else {
-                pages.append("## 第 \(index + 1) 页\n\n\(text)")
+                let pagePrefix = "## 第 \(index + 1) 页\n\n"
+                let remaining = maximumCharacters - characterCount - pagePrefix.count
+                guard remaining > 0 else {
+                    warnings.append("文件较长，已停止读取剩余页面。")
+                    break
+                }
+                let limitedText = String(text.prefix(remaining))
+                pages.append("\(pagePrefix)\(limitedText)")
+                characterCount += pagePrefix.count + limitedText.count
+                if limitedText.count < text.count {
+                    warnings.append("文件较长，已保留前 50 万字。")
+                    break
+                }
             }
         }
         return try response(
@@ -88,11 +118,32 @@ public final class NativeDocumentTextPlugin: CAPPlugin, CAPBridgedPlugin {
         )
     }
 
-    private func extractImage(_ data: Data) throws -> [String: Any] {
-        let request = recognitionRequest()
-        let handler = VNImageRequestHandler(data: data, options: [:])
-        try handler.perform([request])
-        let text = recognizedLines(request)
+    private func extractImage(_ data: Data, deadline: Date) throws -> [String: Any] {
+        try assertWithinDeadline(deadline)
+        guard
+            let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? Int,
+            let height = properties[kCGImagePropertyPixelHeight] as? Int,
+            width > 0,
+            height > 0
+        else {
+            throw DocumentTextError.invalidImage
+        }
+        guard width <= maximumImagePixels / max(1, height) else {
+            throw DocumentTextError.imagePixelLimit
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maximumOCRImageEdge,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            throw DocumentTextError.invalidImage
+        }
+        let text = try recognizeText(image)
+        try assertWithinDeadline(deadline)
         return try response(text: text, method: "image_ocr", pageCount: 1, warnings: [])
     }
 
@@ -142,6 +193,12 @@ public final class NativeDocumentTextPlugin: CAPPlugin, CAPBridgedPlugin {
         ]
     }
 
+    private func assertWithinDeadline(_ deadline: Date) throws {
+        guard Date() < deadline else {
+            throw DocumentTextError.timeLimit
+        }
+    }
+
     private func normalize(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -156,6 +213,9 @@ private enum DocumentTextError: Error {
     case emptyDocument
     case tooManyPages(Int)
     case noRecognizedText
+    case invalidImage
+    case imagePixelLimit
+    case timeLimit
 
     var code: String {
         switch self {
@@ -164,6 +224,9 @@ private enum DocumentTextError: Error {
         case .emptyDocument: "DOCUMENT_EMPTY"
         case .tooManyPages: "DOCUMENT_PAGE_LIMIT"
         case .noRecognizedText: "DOCUMENT_TEXT_EMPTY"
+        case .invalidImage: "IMAGE_INVALID"
+        case .imagePixelLimit: "IMAGE_PIXEL_LIMIT"
+        case .timeLimit: "DOCUMENT_TIME_LIMIT"
         }
     }
 
@@ -174,6 +237,9 @@ private enum DocumentTextError: Error {
         case .emptyDocument: "文件没有可读取的页面"
         case let .tooManyPages(limit): "PDF 不能超过 \(limit) 页"
         case .noRecognizedText: "没有识别到可读取的文字"
+        case .invalidImage: "图片无效或无法读取"
+        case .imagePixelLimit: "图片像素过大，请缩小后重试"
+        case .timeLimit: "文件处理时间过长，请拆分后重试"
         }
     }
 }
