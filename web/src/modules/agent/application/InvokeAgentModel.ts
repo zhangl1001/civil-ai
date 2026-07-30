@@ -24,6 +24,7 @@ import {
 import type { AgentRunRepository } from '../contracts/AgentRunRepository';
 import type { AgentRunLeaseToken } from '../contracts/AgentRunRepository';
 import type { AgentModelInvocation, AgentModelInvoker } from '../contracts/AgentRuntimePorts';
+import { AgentRunLeaseLostError } from '../domain/AgentRunInterruption';
 
 export interface InvokeAgentModelCommand {
   readonly agentRunId: AgentRunId;
@@ -97,7 +98,7 @@ export class InvokeAgentModel implements AgentModelInvoker {
       command.leaseToken
       && !await this.repository.hasActiveLease(command.leaseToken, this.clock.now())
     ) {
-      throw new Error(`Agent run lease conflict: ${command.agentRunId}`);
+      throw new AgentRunLeaseLostError(command.agentRunId);
     }
     if (!command.modelRole.trim() || !command.system.trim() || !messages.length) {
       throw new Error('Agent model invocation requires role and prompt');
@@ -162,7 +163,7 @@ export class InvokeAgentModel implements AgentModelInvoker {
         command.leaseToken
         && !await this.repository.hasActiveLease(command.leaseToken, this.clock.now())
       ) {
-        throw new Error(`Agent run lease conflict: ${command.agentRunId}`);
+        throw new AgentRunLeaseLostError(command.agentRunId);
       }
       if (command.onDelta && !shouldStream) {
         await command.onDelta(response.text);
