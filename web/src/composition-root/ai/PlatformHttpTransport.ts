@@ -7,24 +7,40 @@ import {
 } from '@/capabilities/ai-runtime/public';
 import {
   isNativeStreamingPluginUnavailable,
-  NativeStreamingHttpAdapter
+  NativeHttpRequestPurpose,
+  NativeStreamingHttpAdapter,
+  type NativeHttpRequestPurpose as NativeHttpRequestPurposeCode
 } from '@/platform/NativeStreamingHttpAdapter';
 
 let warnedAboutNativeTransportFallback = false;
 
 /** Uses native HTTP on iOS so every AI request has the same CORS-free transport. */
 export class PlatformHttpTransport implements HttpTransport {
-  private readonly streaming = new NativeStreamingHttpAdapter();
+  private readonly streaming: NativeStreamingHttpAdapter;
+
+  constructor(
+    private readonly purpose: NativeHttpRequestPurposeCode = NativeHttpRequestPurpose.Model
+  ) {
+    this.streaming = new NativeStreamingHttpAdapter(purpose);
+  }
 
   async send(request: HttpTransportRequest): Promise<Response> {
     request.signal?.throwIfAborted();
     if (!Capacitor.isNativePlatform()) return this.sendWithFetch(request);
-    if (request.method === 'POST' && request.body !== undefined) {
+    if (
+      this.purpose === NativeHttpRequestPurpose.PublicWeb
+      || (request.method === 'POST' && request.body !== undefined)
+    ) {
       try {
         return await this.streaming.send(request);
       } catch (error) {
         if (request.signal?.aborted) throw request.signal.reason;
         if (!isNativeStreamingPluginUnavailable(error)) throw networkError(error);
+        if (this.purpose === NativeHttpRequestPurpose.PublicWeb) {
+          throw networkError(new Error(
+            '公开网页请求需要受保护的原生网络插件，请更新并重新安装当前 App 版本。'
+          ));
+        }
         if (!warnedAboutNativeTransportFallback) {
           warnedAboutNativeTransportFallback = true;
           console.warn(

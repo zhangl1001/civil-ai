@@ -12,11 +12,18 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         CAPPluginMethod(name: "cancelStream", returnType: CAPPluginReturnPromise)
     ]
 
+    private enum RequestPurpose: String {
+        case model
+        case publicWeb
+    }
+
     private final class StreamContext {
         let requestId: String
         let session: URLSession
         let task: URLSessionDataTask
         let originalHost: String
+        let method: String
+        let purpose: RequestPurpose
         var receivedByteCount = 0
         var receivedEventCount = 0
         var pendingEventCount = 0
@@ -26,12 +33,16 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             requestId: String,
             session: URLSession,
             task: URLSessionDataTask,
-            originalHost: String
+            originalHost: String,
+            method: String,
+            purpose: RequestPurpose
         ) {
             self.requestId = requestId
             self.session = session
             self.task = task
             self.originalHost = originalHost
+            self.method = method
+            self.purpose = purpose
         }
     }
 
@@ -43,7 +54,7 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
     private static let maximumPendingEvents = 64
     private static let requestTimeout: TimeInterval = 300
     private static let resourceTimeout: TimeInterval = 900
-    private static let allowedHeaders: Set<String> = [
+    private static let modelHeaders: Set<String> = [
         "accept",
         "anthropic-beta",
         "anthropic-version",
@@ -55,6 +66,18 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         "x-api-key",
         "x-client-request-id"
     ]
+    private static let publicWebHeaders: Set<String> = [
+        "accept",
+        "accept-language",
+        "authorization",
+        "x-respond-with",
+        "x-subscription-token"
+    ]
+    private static let sensitiveHeaders: Set<String> = [
+        "authorization",
+        "x-api-key",
+        "x-subscription-token"
+    ]
 
     private let lock = NSLock()
     private var streams: [ObjectIdentifier: StreamContext] = [:]
@@ -65,7 +88,7 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         lock.unlock()
         call.resolve([
             "available": true,
-            "version": 2,
+            "version": 3,
             "activeStreamCount": activeStreamCount,
             "maximumConcurrentStreams": Self.maximumConcurrentStreams
         ])
@@ -81,9 +104,14 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             return
         }
 
+        guard let purpose = RequestPurpose(rawValue: call.getString("purpose") ?? RequestPurpose.model.rawValue) else {
+            call.reject("Native HTTP request has an unsupported purpose")
+            return
+        }
         let method = (call.getString("method") ?? "POST").uppercased()
-        guard method == "POST" else {
-            call.reject("Native model transport only allows POST requests")
+        let expectedMethod = purpose == .model ? "POST" : "GET"
+        guard method == expectedMethod else {
+            call.reject("Native HTTP \(purpose.rawValue) requests only allow \(expectedMethod)")
             return
         }
 
@@ -91,14 +119,14 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         do {
             validatedHost = try NativeNetworkTargetPolicy.validate(url)
         } catch {
-            call.reject("Native model endpoint rejected: \(error.localizedDescription)")
+            call.reject("Native HTTP endpoint rejected: \(error.localizedDescription)")
             return
         }
 
         let rawHeaders = call.getObject("headers") ?? [:]
         let headers: [String: String]
         do {
-            headers = try validateHeaders(rawHeaders)
+            headers = try validateHeaders(rawHeaders, purpose: purpose)
         } catch {
             call.reject(error.localizedDescription)
             return
@@ -106,7 +134,7 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
 
         let body = call.getString("body") ?? ""
         guard body.utf8.count <= Self.maximumRequestBodyBytes else {
-            call.reject("Native model request body exceeds the 8 MB limit")
+            call.reject("Native HTTP request body exceeds the 8 MB limit")
             return
         }
 
@@ -129,7 +157,9 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         headers.forEach { key, value in
             request.setValue(value, forHTTPHeaderField: key)
         }
-        request.httpBody = Data(body.utf8)
+        if method == "POST" {
+            request.httpBody = Data(body.utf8)
+        }
         request.httpShouldHandleCookies = false
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -146,7 +176,9 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             requestId: requestId,
             session: session,
             task: task,
-            originalHost: validatedHost
+            originalHost: validatedHost,
+            method: method,
+            purpose: purpose
         )
         lock.lock()
         guard streams.count < Self.maximumConcurrentStreams else {
@@ -194,7 +226,8 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             "requestId": context.requestId,
             "type": "response",
             "status": http?.statusCode ?? 200,
-            "headers": jsHeaders
+            "headers": jsHeaders,
+            "url": response.url?.absoluteString ?? NSNull()
         ])
         NSLog(
             "[NativeStreamingHTTP] response request=%@ status=%d",
@@ -241,17 +274,23 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         }
         do {
             let redirectHost = try NativeNetworkTargetPolicy.validate(redirectURL)
-            guard redirectHost == context.originalHost else {
-                throw NativeNetworkTargetPolicy.ValidationError.crossHostRedirect
-            }
-            guard request.httpMethod?.uppercased() == "POST" else {
+            guard request.httpMethod?.uppercased() == context.method else {
                 throw NativeNetworkTargetPolicy.ValidationError.redirectChangedMethod
             }
-            completionHandler(request)
+            if context.purpose == .model, redirectHost != context.originalHost {
+                throw NativeNetworkTargetPolicy.ValidationError.crossHostRedirect
+            }
+            var safeRequest = request
+            if context.purpose == .publicWeb, redirectHost != context.originalHost {
+                Self.sensitiveHeaders.forEach {
+                    safeRequest.setValue(nil, forHTTPHeaderField: $0)
+                }
+            }
+            completionHandler(safeRequest)
         } catch {
             setTerminalError(
                 for: dataTask,
-                message: "Native model redirect rejected: \(error.localizedDescription)"
+                message: "Native HTTP redirect rejected: \(error.localizedDescription)"
             )
             completionHandler(nil)
             dataTask.cancel()
@@ -307,16 +346,16 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         defer { lock.unlock() }
         guard let context = streams[ObjectIdentifier(task)] else { return .missing }
         if byteCount > Self.maximumChunkBytes {
-            return .failure("Native model response chunk exceeds the 1 MB limit")
+            return .failure("Native HTTP response chunk exceeds the 1 MB limit")
         }
         if context.receivedByteCount + byteCount > Self.maximumResponseBytes {
-            return .failure("Native model response exceeds the 32 MB limit")
+            return .failure("Native HTTP response exceeds the 32 MB limit")
         }
         if context.receivedEventCount + 1 > Self.maximumDataEvents {
-            return .failure("Native model response exceeds the 4096-event limit")
+            return .failure("Native HTTP response exceeds the 4096-event limit")
         }
         if context.pendingEventCount + 1 > Self.maximumPendingEvents {
-            return .failure("Native model stream consumer cannot keep up with the response")
+            return .failure("Native HTTP stream consumer cannot keep up with the response")
         }
         context.receivedByteCount += byteCount
         context.receivedEventCount += 1
@@ -337,14 +376,15 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         lock.unlock()
     }
 
-    private func validateHeaders(_ input: JSObject) throws -> [String: String] {
-        guard input.count <= Self.allowedHeaders.count else {
+    private func validateHeaders(_ input: JSObject, purpose: RequestPurpose) throws -> [String: String] {
+        let allowedHeaders = purpose == .model ? Self.modelHeaders : Self.publicWebHeaders
+        guard input.count <= allowedHeaders.count else {
             throw NativeNetworkTargetPolicy.ValidationError.tooManyHeaders
         }
         var result: [String: String] = [:]
         for (key, rawValue) in input {
             let normalizedKey = key.lowercased()
-            guard Self.allowedHeaders.contains(normalizedKey) else {
+            guard allowedHeaders.contains(normalizedKey) else {
                 throw NativeNetworkTargetPolicy.ValidationError.disallowedHeader(key)
             }
             let value = String(describing: rawValue)
@@ -409,13 +449,13 @@ private enum NativeNetworkTargetPolicy {
             case .crossHostRedirect:
                 return "cross-host redirects are not allowed"
             case .redirectChangedMethod:
-                return "redirects may not change the POST method"
+                return "redirects may not change the original HTTP method"
             case .tooManyHeaders:
-                return "native model request contains too many headers"
+                return "native HTTP request contains too many headers"
             case let .disallowedHeader(name):
-                return "native model request header is not allowed: \(name)"
+                return "native HTTP request header is not allowed: \(name)"
             case let .invalidHeader(name):
-                return "native model request header is invalid: \(name)"
+                return "native HTTP request header is invalid: \(name)"
             }
         }
     }

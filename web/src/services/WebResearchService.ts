@@ -8,6 +8,7 @@ import {
   type WebSearchResponse
 } from '@/capabilities/web-research/public';
 import { PlatformHttpTransport } from '@/composition-root/ai/PlatformHttpTransport';
+import { NativeHttpRequestPurpose } from '@/platform/NativeStreamingHttpAdapter';
 import { webResearchConfigService } from './WebResearchConfigService';
 
 const SESSION_TTL_MS = 15 * 60_000;
@@ -162,7 +163,10 @@ export class WebResearchService {
     if (config.provider !== WebSearchProvider.BuiltIn && !config.apiKey) {
       throw new Error('网络搜索尚未配置 API Key，请在“我的 → AI 配置”中填写。');
     }
-    return new ConfiguredWebResearchGateway(config, new PlatformHttpTransport());
+    return new ConfiguredWebResearchGateway(
+      config,
+      new PlatformHttpTransport(NativeHttpRequestPurpose.PublicWeb)
+    );
   }
 
   private pruneSessions(): void {

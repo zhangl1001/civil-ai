@@ -33,14 +33,16 @@ const nativeStreamingSource = await readFile(
 );
 for (const requiredBoundary of [
   'NativeNetworkTargetPolicy.validate(url)',
-  'method == "POST"',
+  'purpose == .model ? "POST" : "GET"',
   'maximumConcurrentStreams',
   'maximumRequestBodyBytes',
   'maximumResponseBytes',
   'maximumDataEvents',
   'maximumPendingEvents',
   'willPerformHTTPRedirection',
-  'redirectHost == context.originalHost',
+  'context.purpose == .model, redirectHost != context.originalHost',
+  'context.purpose == .publicWeb, redirectHost != context.originalHost',
+  'sensitiveHeaders',
   'getaddrinfo(host',
   'isPublicIPv4',
   'isPublicIPv6',

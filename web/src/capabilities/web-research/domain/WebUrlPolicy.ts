@@ -14,8 +14,8 @@ export function requirePublicWebUrl(value: string): URL {
   } catch {
     throw new Error('网页地址格式不正确。');
   }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('只允许读取 HTTP 或 HTTPS 网页。');
+  if (url.protocol !== 'https:') {
+    throw new Error('只允许读取 HTTPS 网页。');
   }
   if (url.username || url.password) throw new Error('网页地址不能包含账号信息。');
   if (url.port) throw new Error('网页地址不能使用非标准端口。');
