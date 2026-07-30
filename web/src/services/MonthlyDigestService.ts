@@ -144,9 +144,14 @@ export class MonthlyDigestService {
     };
   }
 
-  async enqueueReport(year: number, month: number): Promise<AgentTaskEnqueueResult> {
+  async enqueueReport(
+    year: number,
+    month: number,
+    idempotencyKey?: string
+  ): Promise<AgentTaskEnqueueResult> {
     const dashboard = await this.dashboard(year, month);
     return generationTaskService.enqueue({
+      idempotencyKey,
       intent: 'monthlyDigest',
       title: '时政月报',
       detail: `${dashboard.monthKey} · ${dashboard.itemCount} 条热点`,

@@ -194,10 +194,11 @@ export class ExamFlowService {
     };
   }
 
-  async startMock(context: ExamStartContext): Promise<AgentTaskEnqueueResult> {
+  async startMock(context: ExamStartContext, idempotencyKey?: string): Promise<AgentTaskEnqueueResult> {
     const normalized = this.writeContext(context);
     if (normalized.subject === '行测') {
       const result = await generationTaskService.enqueue({
+        idempotencyKey,
         intent: 'mock',
         title: '行测模考',
         detail: `${normalized.questionCount} 题 · ${normalized.durationMinutes} 分钟`,
@@ -222,6 +223,7 @@ export class ExamFlowService {
       type: normalized.essayType
     });
     return generationTaskService.enqueue({
+      idempotencyKey,
       intent: 'mock',
       title: '申论模考',
       detail: `${topic} · ${normalized.date}`,

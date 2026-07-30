@@ -39,10 +39,14 @@ export {
   type AgentToolReceiptStatus as AgentToolReceiptStatusCode
 } from './contracts/AgentToolReceiptRepository';
 export {
+  AgentToolCostTier,
+  AgentToolNetworkScope,
+  AgentToolPersistence,
   AgentToolRisk,
   AgentToolRole,
   AgentToolRegistry,
   type AgentToolDefinition,
+  type AgentToolImpact,
   type AgentToolRole as AgentToolRoleCode,
   type AgentToolRisk as AgentToolRiskCode
 } from './domain/AgentToolRegistry';

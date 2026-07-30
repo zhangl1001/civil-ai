@@ -15,6 +15,7 @@ try {
   const taskToast = await server.ssrLoadModule('/src/components/TaskToastLifecycle.ts');
   const taskMessages = await server.ssrLoadModule('/src/composition-root/agent/TaskMessageProjector.ts');
   const toolBatch = await server.ssrLoadModule('/src/modules/agent/application/AgentToolBatchExecutor.ts');
+  const toolCallIdentity = await server.ssrLoadModule('/src/modules/agent/application/AgentToolCallIdentity.ts');
   const abortableConcurrency = await server.ssrLoadModule('/src/kernel/abortableConcurrency.ts');
   const clock = { value: 1000, now() { return ++this.value; } };
   const machine = new agent.AgentRunMachine();
@@ -33,6 +34,56 @@ try {
   assert.equal(completed.status, 'completed');
   assert.throws(() => machine.transition(completed, agent.AgentRunAction.Resume, clock));
   assert.equal(agent.DEFAULT_MAX_CONCURRENT_AGENT_RUNS, 3);
+  const impactPolicy = new agent.DefaultAgentToolPolicy();
+  const mediumGenerationTool = {
+    name: 'practice.generate',
+    description: 'Generate bounded practice.',
+    inputSchema: { type: 'object', properties: {} },
+    risk: agent.AgentToolRisk.Write,
+    impact: {
+      cost: agent.AgentToolCostTier.Medium,
+      network: agent.AgentToolNetworkScope.None,
+      persistence: agent.AgentToolPersistence.Reversible,
+      confirmAbove: { argument: 'questionCount', value: 25 }
+    },
+    requiresConfirmation: false,
+    enabledFor: [agent.AgentRunType.TutorTurn]
+  };
+  assert.equal(
+    (await impactPolicy.evaluate(
+      mediumGenerationTool,
+      { id: 'call:small', name: mediumGenerationTool.name, arguments: { questionCount: 10 } },
+      { agentRunId: 'run:impact-small' }
+    )).decision,
+    agent.AgentToolPolicyDecision.Allow,
+    'routine bounded generation remains autonomous'
+  );
+  assert.equal(
+    (await impactPolicy.evaluate(
+      mediumGenerationTool,
+      { id: 'call:large', name: mediumGenerationTool.name, arguments: { questionCount: 30 } },
+      { agentRunId: 'run:impact-large' }
+    )).decision,
+    agent.AgentToolPolicyDecision.Confirm,
+    'generation above its declared cost threshold requires confirmation'
+  );
+  assert.equal(
+    (await impactPolicy.evaluate(
+      {
+        ...mediumGenerationTool,
+        name: 'research.web',
+        impact: {
+          cost: agent.AgentToolCostTier.Medium,
+          network: agent.AgentToolNetworkScope.Broad,
+          persistence: agent.AgentToolPersistence.Reversible
+        }
+      },
+      { id: 'call:web', name: 'research.web', arguments: {} },
+      { agentRunId: 'run:impact-web' }
+    )).decision,
+    agent.AgentToolPolicyDecision.Confirm,
+    'broad network research requires confirmation before spending resources'
+  );
   const executionRegistry = new agent.AgentRunExecutionRegistry();
   const chatController = new AbortController();
   executionRegistry.register('run:chat', chatController);
@@ -258,6 +309,65 @@ try {
   );
   assert.equal(readExecutions, 1);
   assert.equal(receiptValues.size, 1, 'read Tool calls remain ephemeral');
+
+  const recoveredReceiptKey = 'run:recovered-receipt:tool-call:recovered';
+  receiptValues.set(recoveredReceiptKey, {
+    agentRunId: 'run:recovered-receipt',
+    toolCallId: 'tool-call:recovered',
+    toolName: writeDefinition.name,
+    argumentsHash: toolCallIdentity.agentToolArgumentsHash({
+      id: 'tool-call:recovered',
+      name: writeDefinition.name,
+      arguments: { count: 5 }
+    }),
+    businessIdempotencyKey: 'agent-tool:run:recovered-receipt:tool-call:recovered',
+    status: agent.AgentToolReceiptStatus.Running,
+    retryable: true,
+    attemptCount: 1,
+    leaseEpoch: 1,
+    createdAt: clock.now(),
+    updatedAt: clock.now(),
+    version: 1
+  });
+  const recoveredTransitions = [];
+  const recoveringExecutor = new agent.DurableAgentToolExecutor({
+    async execute(_definition, _call, context) {
+      assert.equal(
+        context.businessIdempotencyKey,
+        'agent-tool:run:recovered-receipt:tool-call:recovered'
+      );
+      return { content: 'recovered-result', resultRef: 'QuestionSetId:recovered' };
+    }
+  }, {
+    async claim(receipt) {
+      return receiptValues.get(`${receipt.agentRunId}:${receipt.toolCallId}`) ?? receipt;
+    },
+    async replace(receipt, expectedVersion) {
+      const key = `${receipt.agentRunId}:${receipt.toolCallId}`;
+      assert.equal(receiptValues.get(key)?.version, expectedVersion);
+      receiptValues.set(key, receipt);
+      recoveredTransitions.push(receipt.status);
+    }
+  }, clock);
+  const recoveredResult = await recoveringExecutor.execute(
+    writeDefinition,
+    {
+      id: 'tool-call:recovered',
+      name: writeDefinition.name,
+      arguments: { count: 5 }
+    },
+    { agentRunId: 'run:recovered-receipt' }
+  );
+  assert.equal(recoveredResult.resultRef, 'QuestionSetId:recovered');
+  assert.deepEqual(
+    recoveredTransitions,
+    [
+      agent.AgentToolReceiptStatus.Unknown,
+      agent.AgentToolReceiptStatus.Running,
+      agent.AgentToolReceiptStatus.Succeeded
+    ],
+    'a crash-left running receipt must enter unknown before idempotent recovery'
+  );
 
   let agentTurn = 0;
   let activeReadTools = 0;

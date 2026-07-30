@@ -36,8 +36,13 @@ export class EssayFlowService {
     return next;
   }
 
-  async enqueueGrading(content: string, context = this.readContext()): Promise<AgentTaskEnqueueResult> {
+  async enqueueGrading(
+    content: string,
+    context = this.readContext(),
+    idempotencyKey?: string
+  ): Promise<AgentTaskEnqueueResult> {
     return generationTaskService.enqueue({
+      idempotencyKey,
       intent: 'essayGrade',
       title: '申论批改',
       detail: `${context.topic} · ${context.date}`,
@@ -53,10 +58,11 @@ export class EssayFlowService {
 
   async enqueueQuestionGeneration(
     context = this.readContext(),
-    options: { questionCount?: number; title?: string } = {}
+    options: { questionCount?: number; title?: string; idempotencyKey?: string } = {}
   ): Promise<AgentTaskEnqueueResult> {
     const count = Math.max(1, Math.min(3, Number(options.questionCount || 1)));
     return generationTaskService.enqueue({
+      idempotencyKey: options.idempotencyKey,
       intent: 'mock',
       title: options.title || '生成申论题目',
       detail: `${context.topic} · ${count} 题 · ${context.date}`,

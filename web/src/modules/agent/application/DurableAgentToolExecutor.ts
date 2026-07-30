@@ -68,16 +68,19 @@ export class DurableAgentToolExecutor implements AgentToolExecutor {
     const replay = replayResult(claimed);
     if (replay) return replay;
 
-    const running = transitionReceipt(claimed, {
+    const recoverable = claimed.status === AgentToolReceiptStatus.Running
+      ? await this.markUnknown(claimed)
+      : claimed;
+    const running = transitionReceipt(recoverable, {
       status: AgentToolReceiptStatus.Running,
       retryable: true,
-      attemptCount: claimed.attemptCount + 1,
-      leaseEpoch: context.leaseToken?.leaseEpoch ?? claimed.leaseEpoch,
+      attemptCount: recoverable.attemptCount + 1,
+      leaseEpoch: context.leaseToken?.leaseEpoch ?? recoverable.leaseEpoch,
       updatedAt: this.clock.now(),
       completedAt: undefined,
       failureCode: undefined
     });
-    await this.receipts.replace(running, claimed.version);
+    await this.receipts.replace(running, recoverable.version);
 
     activeWriteCalls.add(key);
     try {
@@ -112,6 +115,18 @@ export class DurableAgentToolExecutor implements AgentToolExecutor {
     } finally {
       activeWriteCalls.delete(key);
     }
+  }
+
+  private async markUnknown(receipt: AgentToolReceipt): Promise<AgentToolReceipt> {
+    const unknown = transitionReceipt(receipt, {
+      status: AgentToolReceiptStatus.Unknown,
+      failureCode: 'agent.tool_outcome_unknown',
+      retryable: true,
+      updatedAt: this.clock.now(),
+      completedAt: undefined
+    });
+    await this.receipts.replace(unknown, receipt.version);
+    return unknown;
   }
 }
 

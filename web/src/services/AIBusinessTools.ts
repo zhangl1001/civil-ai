@@ -106,7 +106,7 @@ export class AIBusinessTools {
         durationMinutes: 120,
         tags: [],
         essayType: 'short'
-      });
+      }, meta.idempotencyKey);
       return { taskId: result.task.id, reply: taskReply(result, '行测模考') };
     }
 
@@ -119,20 +119,21 @@ export class AIBusinessTools {
         type: essayType
       });
       const result = await essayFlowService.enqueueQuestionGeneration(context, {
-        questionCount: asNumber(args.questionCount, 1)
+        questionCount: asNumber(args.questionCount, 1),
+        idempotencyKey: meta.idempotencyKey
       });
       return { taskId: result.task.id, reply: taskReply(result, `${context.topic}申论题`) };
     }
 
     if (call.name === 'generate_digest') {
       const tab = args.digestTab === 'tips' ? 'tips' : 'news';
-      const result = await digestService.enqueueGenerate(tab, today());
+      const result = await digestService.enqueueGenerate(tab, today(), meta.idempotencyKey);
       return { taskId: result.task.id, reply: taskReply(result, tab === 'tips' ? '每日知识点' : '每日热点') };
     }
 
     if (call.name === 'generate_monthly_digest') {
       const { year, month } = monthlyDigestService.currentMonth();
-      const result = await monthlyDigestService.enqueueReport(year, month);
+      const result = await monthlyDigestService.enqueueReport(year, month, meta.idempotencyKey);
       return { taskId: result.task.id, reply: taskReply(result, '时政月报') };
     }
 
@@ -141,6 +142,7 @@ export class AIBusinessTools {
       if (!scope) throw new Error('请先明确真题的年份、地区、考试类型或模块范围。');
       const maxQuestions = Math.min(10, Math.max(1, Math.round(asNumber(args.maxQuestions, 5))));
       const result = await generationTaskService.enqueue({
+        idempotencyKey: meta.idempotencyKey,
         intent: 'trueQuestionResearch',
         title: '联网真题研究',
         detail: scope,

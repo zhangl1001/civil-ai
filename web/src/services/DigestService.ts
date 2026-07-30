@@ -124,7 +124,11 @@ export class DigestService {
     });
   }
 
-  async enqueueGenerate(tab: DigestTab, date = today()): Promise<AgentTaskEnqueueResult> {
+  async enqueueGenerate(
+    tab: DigestTab,
+    date = today(),
+    idempotencyKey?: string
+  ): Promise<AgentTaskEnqueueResult> {
     this.writeActiveTab(tab);
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
@@ -146,6 +150,7 @@ export class DigestService {
       priorityTracks: tracks
     });
     return generationTaskService.enqueue({
+      idempotencyKey,
       intent: 'daily',
       title: TITLE_BY_TAB[tab],
       detail: tab === 'news' ? '生成今日时政热点积累' : '生成今日公考知识点积累',
