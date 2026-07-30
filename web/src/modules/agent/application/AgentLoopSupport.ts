@@ -1,4 +1,5 @@
 import { ModelMessageRole, type ModelMessage, type ModelToolCall } from '@/capabilities/ai-runtime/public';
+import type { AgentCompletionExpectation } from '../contracts/AgentRuntimePorts';
 import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
 
 export type AgentGuidanceConsumer = () => readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
@@ -111,14 +112,19 @@ export function skillContinuationInstruction(skills: readonly AgentSkillActivati
   ].filter(Boolean).join('\n');
 }
 
-export function completionVerificationInstruction(verifierNames: readonly string[]): string {
+export function completionVerificationInstruction(
+  verifierNames: readonly string[],
+  expectations: readonly AgentCompletionExpectation[] = []
+): string {
+  const targets = expectations.map((item) => `${item.resourceType}:${item.resourceId}`);
   return [
     '刚才的写工具只返回了异步任务标识，这表示请求可能已受理，不表示任务已经执行或内容已经生成。',
+    targets.length ? `必须核验这些精确资源，禁止改查其他任务：${targets.join('、')}。` : '',
     verifierNames.length
       ? `现在必须调用状态核验工具读取真实状态：${verifierNames.join('、')}。`
       : '现在必须读取真实任务状态。',
     '如果精确 taskId 查询无结果，请改用 active 或 today 的最小范围查询；仍无结果时如实说明，不得直接生成一份聊天正文冒充业务结果。'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function limitToolResult(content: string, maxChars: number): string {

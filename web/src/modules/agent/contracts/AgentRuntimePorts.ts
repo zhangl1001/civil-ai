@@ -109,9 +109,26 @@ export interface AgentToolExecutionContext {
   readonly signal?: AbortSignal;
 }
 
+export interface AgentCompletionExpectation {
+  readonly resourceType: string;
+  readonly resourceId: string;
+  readonly expectedTerminalState: string;
+}
+
+export interface AgentCompletionVerification {
+  readonly resourceType: string;
+  readonly resourceId: string;
+  readonly state: string;
+  readonly terminal: boolean;
+}
+
 export interface AgentToolExecutionResult {
   readonly content: string;
   readonly resultRef?: string;
+  /** Explicit async resource whose real state must be verified before final narration. */
+  readonly completionExpectation?: AgentCompletionExpectation;
+  /** Exact resource state returned by a completion-verifier Tool. */
+  readonly completionVerification?: AgentCompletionVerification;
   readonly isError?: boolean;
   /** Stable machine-readable reason. Business details remain in content. */
   readonly failureCode?: string;
@@ -183,6 +200,7 @@ export interface AgentLoopCheckpoint {
   readonly completedToolNames?: readonly string[];
   readonly skillWorkflowState?: AgentSkillWorkflowState;
   readonly awaitingCompletionVerification?: boolean;
+  readonly pendingCompletionExpectations?: readonly AgentCompletionExpectation[];
 }
 
 export type AgentToolAttemptStatus = 'succeeded' | 'no_progress' | 'failed';

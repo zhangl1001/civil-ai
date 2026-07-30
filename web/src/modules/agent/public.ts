@@ -15,6 +15,11 @@ export { AgentRunMachine } from './domain/AgentRunMachine';
 export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';
 export { createDurableAgentLoopFactory } from './application/CreateDurableAgentLoop';
 export {
+  AgentCompletionTracker,
+  completionResolutionInstruction,
+  type AgentCompletionResolution
+} from './application/AgentCompletionTracker';
+export {
   AgentToolInvocationValidator,
   type AgentToolValidationResult
 } from './application/AgentToolInvocationValidator';
@@ -84,6 +89,8 @@ export {
   AgentMemoryLayer,
   AgentToolPolicyDecision,
   type AgentCheckpointStore,
+  type AgentCompletionExpectation,
+  type AgentCompletionVerification,
   type AgentContextCompiler,
   type AgentContextRequest,
   type AgentContextSection,
@@ -121,7 +128,8 @@ export { DefaultAgentToolPolicy } from './application/DefaultAgentToolPolicy';
 export { RegisteredAgentToolExecutor, type AgentToolHandler } from './application/RegisteredAgentToolExecutor';
 export { ActiveAgentToolSet } from './application/ActiveAgentToolSet';
 export { SaveAgentLoopCheckpoint } from './application/SaveAgentLoopCheckpoint';
-export { RunAgentLoop, type AgentLoopResult, type RunAgentLoopCommand } from './application/RunAgentLoop';
+export { RunAgentLoop } from './application/RunAgentLoop';
+export type { AgentLoopResult, RunAgentLoopCommand } from './application/AgentLoopContracts';
 export {
   RunTutorAgentBatch,
   type RunTutorAgentBatchCommand,
