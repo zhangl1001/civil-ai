@@ -21,7 +21,9 @@ export {
 } from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
 export {
+  AgentRunLeaseLostError,
   AgentRunSuspendedError,
+  isAgentRunLeaseLost,
   isAgentRunSuspended
 } from './domain/AgentRunInterruption';
 export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';

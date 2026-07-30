@@ -1,4 +1,4 @@
-import type { SqlDatabase, SqlRow } from '@/capabilities/database/contracts/SqlDatabase';
+import type { SqlDatabase, SqlRow, SqlTransaction } from '@/capabilities/database/contracts/SqlDatabase';
 import type { SqlTransactionScope } from '@/capabilities/database/adapters/sqlite/SqlTransactionScope';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type { AiInvocationId, AgentRunId, ExamCycleId, InstantMs, LearningThreadId, PromptVersionId } from '@/kernel/public';
@@ -23,6 +23,7 @@ import {
   type AgentRunType,
   type AgentWorkPool as AgentWorkPoolValue
 } from '../domain/AgentRunCodes';
+import { AgentRunLeaseLostError } from '../domain/AgentRunInterruption';
 import type { InvocationValidationStatus } from '@/capabilities/ai-runtime/public';
 
 interface RunRow extends SqlRow {
@@ -63,7 +64,10 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
     const result = await tx.run(`UPDATE tutor_agent_runs SET status=?, checkpoint_json=?, attempt_count=?, next_run_at=?, lease_owner=?, lease_expires_at=?, lease_epoch=?, error_code=?, cancellation_reason=?, updated_at=?, completed_at=?, version=? WHERE id=? AND version=?${guardSql}`,
       [run.status, JSON.stringify(run.checkpoint), run.attemptCount, run.nextRunAt ?? null, run.leaseOwner ?? null, run.leaseExpiresAt ?? null, run.leaseEpoch, run.errorCode ?? null, run.cancellationReason ?? null, run.updatedAt, run.completedAt ?? null, run.version, run.id, expectedVersion, ...guardValues]);
     if (result.changes !== 1) {
-      throw new Error(`${guard ? 'Agent run lease conflict' : 'Agent run version conflict'}: ${run.id}`);
+      if (guard && !await hasActiveLeaseInTransaction(tx, guard.leaseToken, guard.now)) {
+        throw new AgentRunLeaseLostError(run.id);
+      }
+      throw new Error(`Agent run version conflict: ${run.id}`);
     }
     await insertEvent(tx, event);
   }
@@ -219,4 +223,19 @@ function assertMutationGuard(runId: AgentRunId, guard?: AgentRunMutationGuard): 
   if (token.agentRunId !== runId || !token.workerId.trim() || token.leaseEpoch < 1) {
     throw new Error(`Invalid agent run lease token: ${runId}`);
   }
+}
+
+async function hasActiveLeaseInTransaction(
+  transaction: SqlTransaction,
+  token: AgentRunLeaseToken,
+  now: InstantMs
+): Promise<boolean> {
+  const rows = await transaction.query<{ active: number }>(
+    `SELECT 1 AS active
+     FROM tutor_agent_runs
+     WHERE id=? AND status='running' AND lease_owner=? AND lease_epoch=? AND lease_expires_at>?
+     LIMIT 1`,
+    [token.agentRunId, token.workerId, token.leaseEpoch, now]
+  );
+  return rows.length === 1;
 }

@@ -12,7 +12,11 @@ import {
   AgentRunNotificationMode,
   resolveAgentRunNotificationMode
 } from '../domain/TaskCenterCodes';
-import { isAgentRunSuspended } from '../domain/AgentRunInterruption';
+import {
+  AgentRunLeaseLostError,
+  isAgentRunLeaseLost,
+  isAgentRunSuspended
+} from '../domain/AgentRunInterruption';
 import { ClaimAgentRuns } from './ClaimAgentRuns';
 import { RecoverExpiredAgentRuns } from './RecoverExpiredAgentRuns';
 import { TransitionAgentRun } from './TransitionAgentRun';
@@ -237,15 +241,6 @@ export class RunTutorAgentBatch {
   }
 }
 
-class AgentRunLeaseLostError extends Error {
-  readonly code = 'agent_run.lease_lost';
-
-  constructor(runId: string) {
-    super(`Agent run lease lost: ${runId}`);
-    this.name = 'AgentRunLeaseLostError';
-  }
-}
-
 function combineSignals(...signals: readonly (AbortSignal | undefined)[]): AbortSignal | undefined {
   const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   if (!active.length) return undefined;
@@ -255,7 +250,7 @@ function combineSignals(...signals: readonly (AbortSignal | undefined)[]): Abort
 
 function isLeaseLostSignal(signal?: AbortSignal): boolean {
   return signal?.aborted === true
-    && signal.reason instanceof AgentRunLeaseLostError;
+    && isAgentRunLeaseLost(signal.reason);
 }
 
 function isRecoverableInterruption(signal?: AbortSignal): boolean {

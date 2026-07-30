@@ -66,7 +66,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] 校验条件包含 `workerId + leaseEpoch + status=running + leaseExpiresAt>now`。
 - [x] heartbeat 返回任意失败时立即 abort 对应 run，禁止继续模型和 AgentRun 状态写入。
 - [ ] 业务资源最终写入与工具 receipt 在同一最小事务校验租约（随 R2 完成）。
-- [ ] 恢复器只能创建新 epoch；旧 epoch 的写入统一返回稳定错误码。
+- [x] 恢复器只能创建新 epoch；旧 epoch 的写入统一返回 `agent_run.lease_lost`。
 - [x] Worker 完成、失败、取消的终态转换原子清空租约；生命周期暂停保留可恢复 run，由新 epoch 接管。
 
 ### 验收

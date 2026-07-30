@@ -18,6 +18,8 @@ try {
   const toolCallIdentity = await server.ssrLoadModule('/src/modules/agent/application/AgentToolCallIdentity.ts');
   const abortableConcurrency = await server.ssrLoadModule('/src/kernel/abortableConcurrency.ts');
   const workerLeadership = await server.ssrLoadModule('/src/composition-root/agent/AgentWorkerLeadership.ts');
+  const sqliteAgentRuns = await server.ssrLoadModule('/src/modules/agent/adapters/SqliteAgentRunRepository.ts');
+  const indexedDbAgentRuns = await server.ssrLoadModule('/src/modules/agent/adapters/IndexedDbAgentRunRepository.ts');
   const { WebAgentWorkspaceStorage } = await server.ssrLoadModule('/src/modules/agent/adapters/WebAgentWorkspaceStorage.ts');
   const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const workspaceLocalStorage = fakeLocalStorage();
@@ -54,6 +56,10 @@ try {
   const running = machine.transition(queued, agent.AgentRunAction.Start, clock);
   assert.equal(running.status, 'running');
   assert.equal(running.attemptCount, 1);
+  const leaseLostError = new agent.AgentRunLeaseLostError(running.id);
+  assert.equal(leaseLostError.code, 'agent_run.lease_lost');
+  assert.equal(agent.isAgentRunLeaseLost(leaseLostError), true);
+  assert.equal(agent.isAgentRunLeaseLost({ code: 'agent_run.lease_lost' }), true);
   const retried = machine.transition(running, agent.AgentRunAction.Retry, clock, { errorCode: 'provider.rate_limited', nextRunAt: 10_000 });
   assert.equal(retried.status, 'queued');
   assert.equal(retried.errorCode, 'provider.rate_limited');
@@ -155,6 +161,78 @@ try {
     sqliteAgentRunRepositorySource,
     /lease_owner=\? AND lease_epoch=\? AND lease_expires_at>\?/,
     'worker writes and renewals must fence stale leases'
+  );
+  assert.match(
+    sqliteAgentRunRepositorySource,
+    /throw new AgentRunLeaseLostError\(run\.id\)/,
+    'SQLite stale worker writes must use the stable lease-lost error'
+  );
+  const fencedRun = {
+    ...running,
+    leaseOwner: 'worker:new',
+    leaseExpiresAt: 10_000,
+    leaseEpoch: 2,
+    version: 4
+  };
+  const fencedEvent = {
+    id: 'event:fenced',
+    agentRunId: fencedRun.id,
+    eventType: 'progressed',
+    fromStatus: fencedRun.status,
+    toStatus: fencedRun.status,
+    reasonCode: 'agent_run.test',
+    payload: {},
+    occurredAt: 2_000,
+    idempotencyKey: 'event:fenced'
+  };
+  const staleLeaseToken = {
+    agentRunId: fencedRun.id,
+    workerId: 'worker:old',
+    leaseEpoch: 1
+  };
+  const sqliteFencedRepository = new sqliteAgentRuns.SqliteAgentRunRepository({}, {
+    resolve() {
+      return {
+        async run() { return { changes: 0 }; },
+        async query() { return []; }
+      };
+    }
+  });
+  await assert.rejects(
+    () => sqliteFencedRepository.replace(
+      { ...fencedRun, version: 5 },
+      4,
+      fencedEvent,
+      {},
+      { leaseToken: staleLeaseToken, now: 2_000 }
+    ),
+    (error) => error?.code === 'agent_run.lease_lost',
+    'SQLite must reject an old lease epoch with the stable fencing code'
+  );
+  const storedFencedRun = {
+    runId: fencedRun.id,
+    idempotencyKey: fencedRun.idempotencyKey,
+    run: fencedRun,
+    events: [],
+    invocations: []
+  };
+  const indexedDbFencedRepository = new indexedDbAgentRuns.IndexedDbAgentRunRepository({
+    async get() { return storedFencedRun; }
+  }, {
+    stage() {
+      throw new Error('A stale IndexedDB worker must not stage writes');
+    }
+  });
+  await assert.rejects(
+    () => indexedDbFencedRepository.replace(
+      { ...fencedRun, version: 5 },
+      4,
+      fencedEvent,
+      {},
+      { leaseToken: staleLeaseToken, now: 2_000 }
+    ),
+    (error) => error?.code === 'agent_run.lease_lost',
+    'IndexedDB must reject an old lease epoch with the stable fencing code'
   );
   assert.doesNotMatch(
     workerCoordinatorSource,

@@ -20,6 +20,7 @@ import {
   resolveAgentWorkPool,
   type AgentWorkPool as AgentWorkPoolValue
 } from '../domain/AgentRunCodes';
+import { AgentRunLeaseLostError } from '../domain/AgentRunInterruption';
 
 interface StoredRun extends AgentRunAggregate { readonly runId: string; readonly idempotencyKey: string; readonly invocations: readonly AgentInvocationRecord[]; }
 interface StoredRunIdempotency { readonly idempotencyKey: string; readonly runId: AgentRunId; }
@@ -36,10 +37,10 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
   }
   async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext, guard?: AgentRunMutationGuard): Promise<void> {
     const current=await this.findById(run.id);
-    if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new Error(`Agent run version conflict: ${run.id}`);
-    if (guard && !matchesActiveLease(current.run, guard.leaseToken, guard.now)) {
-      throw new Error(`Agent run lease conflict: ${run.id}`);
+    if (guard && (!current || !matchesActiveLease(current.run, guard.leaseToken, guard.now))) {
+      throw new AgentRunLeaseLostError(run.id);
     }
+    if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new Error(`Agent run version conflict: ${run.id}`);
     this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...current.events,event],(await this.get(run.id))!.invocations)});
   }
   async findById(id: AgentRunId): Promise<AgentRunAggregate|undefined> { const item=await this.get(id); return item&&{run:item.run,events:item.events}; }
