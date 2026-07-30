@@ -56,6 +56,7 @@ export interface AgentMemoryRepository {
 export interface AgentContextSection {
   readonly code: string;
   readonly content: string;
+  readonly trust: 'system' | 'data';
   readonly priority: number;
   readonly required: boolean;
   readonly maxTokens: number;
@@ -71,12 +72,11 @@ export interface CompiledAgentContext {
 
 export interface AgentContextRequest {
   readonly agentRunId: AgentRunId;
-  readonly audience: string;
-  readonly goal: string;
-  readonly skillNames: readonly string[];
-  readonly input: JsonObject;
+  readonly sections: readonly AgentContextSection[];
   readonly history: readonly ModelMessage[];
+  readonly tools: readonly ProviderToolDefinition[];
   readonly tokenBudget: number;
+  readonly outputReserveTokens: number;
 }
 
 export interface AgentContextCompiler {

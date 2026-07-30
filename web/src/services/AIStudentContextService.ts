@@ -1,7 +1,7 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 
 export class AIStudentContextService {
-  async buildSystemContext(): Promise<string> {
+  async buildContextData(): Promise<string> {
     try {
       const runtime = await initializeTutorRuntime();
       const home = await runtime.getCandidateHome.execute();
