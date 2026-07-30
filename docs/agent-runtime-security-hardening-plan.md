@@ -1,6 +1,6 @@
 # Agent Runtime 安全与可靠性加固计划
 
-> 状态：实施中（R0 代码止血、R1 AgentRun fencing、R2 receipt 基础、R3 结构参数校验、R4 会话/记忆物理压缩和 R5 原生模型网络边界已完成）
+> 状态：暂停交接（R0 代码止血、R1 AgentRun fencing、R3 Runtime 控制面、R4 主要能力和 R5 原生边界已完成；R2 业务幂等恢复与 R6 真机发布门禁待继续）
 > 建立日期：2026-07-30
 > 输入：`G6.code-review-report.md` 及 2026-07-30 独立复核
 > 目标：在不改变现有产品功能和页面入口的前提下，补齐 Agent 一致性、安全、恢复和发布门禁。
@@ -244,11 +244,11 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] 建立分阶段修复计划。
 - [ ] B1：凭据止血与 Lease fencing 数据合同（代码完成，待吊销旧证书）。
 - [x] B2：Lease fencing Runtime 接线。
-- [ ] B3：持久化 receipt 与首个写工具。
-- [ ] B4：其余写工具和 ToolInvocationValidator。
+- [ ] B3：持久化 receipt 与写工具业务幂等恢复（receipt 基础已完成，目标资源核验待收口）。
+- [ ] B4：其余写工具和 ToolInvocationValidator（Validator、授权、风险矩阵已完成，逐工具幂等待收口）。
 - [x] B5：统一取消与完成验证。
-- [ ] B6：Context、Provider 和 Memory。
-- [ ] B7：iOS 原生边界。
+- [ ] B6：Context、Provider 和 Memory（主要运行时能力已完成，最小证据范围与 TTL 待收口）。
+- [x] B7：iOS 原生边界。
 - [ ] B8：真机和发布门禁。
 
 ### 2026-07-30 实施记录
@@ -279,3 +279,24 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B6 预算暂停：Chat Agent 达到动态安全预算后进入可恢复 `waiting_user`，保留 checkpoint、工具证据与去重签名；用户下一条指令继续同一 run，并重置本段计数而不是转成不可恢复失败。
 - [x] B6 Context 收口：每个模型 turn 将动态 Skill、工具 schema、历史、图片、工具结果和输出预留统一计入预算；旧执行证据按完整调用单元压缩，最新媒体和工具交换保持配对。
 - [x] B6 Web 工作区配额：OPFS 与 localStorage fallback 对齐 Native 限额，读取前检查文件大小，并用全局写队列防止不同 logKey 并发绕过总量限制。
+
+### 2026-07-30 暂停交接
+
+- 当前分支：`fix/agent-runtime-hardening`
+- 当前续接点：`3f368d2 fix(agent): standardize stale lease fencing`
+- 已完成 21 个独立加固提交；P0 失租约旧 Worker 继续提交的问题已通过统一 `agent_run.lease_lost`、`leaseEpoch` 和 SQLite/IndexedDB fencing 收口。
+- 当前主任务：完成 R2 的 unknown receipt 业务结果核验。发生“业务已提交、receipt 尚未标记成功”崩溃时，应先按 `businessIdempotencyKey` 查询真实目标资源，命中后复用结果，确认不存在后才允许重新执行。
+- 第一批接入范围：专项练习、模考、申论、每日积累、月报、联网真题、教学练习和 `question_bank.scan`。
+- 第二批接入范围：为 `question_bank.confirm`、`question_bank.repair` 增加事务内 `CommandReceipt`，再审计 Memory 写工具和其他写工具的幂等边界。
+- 推荐实现入口：`DurableAgentToolExecutor.ts` 增加 outcome recovery 协议；`RegisteredAgentToolExecutor.ts` 注册按工具的 recovery handler；生成任务按 AgentRun 幂等键恢复，真题扫描按草稿幂等键恢复。
+- 必补回归：遗留 `running/unknown` receipt 命中既有业务结果时不得再次调用工具；核验异常时保持 unknown，不得盲目重放；强杀恢复后业务资源只能存在一份。
+- 最近一轮已通过：`npm run typecheck`、`npm run check:code-quality`、`verify-agent-runtime`、`verify-agent-loop`、`verify-ios-lifecycle-recovery`、`git diff --check`。
+- 暂停时未启动构建、开发服务器或长时间运行任务。
+
+以下工作区改动不属于本加固任务，后续提交不得暂存、覆盖或回滚：
+
+- `web/src/features/practice/QuestionSwipeNavigation.ts`
+- `web/src/features/practice/TutorPracticeCenterView.vue`
+- `web/src/features/practice/PracticeModePresentation.ts`
+- `web/src/features/practice/PracticeModeSwipe.ts`
+- `G6.code-review-report.md`
