@@ -556,6 +556,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     buildAbilityCalibration,
     createAgentRun,
     transitionAgentRun,
+    agentRunExecutions,
     cancelAgentRun,
     claimAgentRuns,
     recoverExpiredAgentRuns,

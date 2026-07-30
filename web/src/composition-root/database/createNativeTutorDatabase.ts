@@ -554,6 +554,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     buildAbilityCalibration,
     createAgentRun,
     transitionAgentRun,
+    agentRunExecutions,
     cancelAgentRun,
     claimAgentRuns,
     recoverExpiredAgentRuns,

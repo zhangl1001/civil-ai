@@ -127,7 +127,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### 取消
 
-- [ ] Chat、后台 Worker、Task Dock 和页面取消共用 `AgentRunExecutionRegistry`。
+- [x] Chat、后台 Worker、Task Dock 和页面取消共用 `AgentRunExecutionRegistry`。
 - [ ] Provider、工具、分片生成和派生补全统一接收同一根 signal。
 - [ ] 分片首个不可恢复失败时取消 sibling，并等待全部 invocation 进入终态。
 - [ ] 取消后禁止继续写 assistant 消息、业务事实和完成通知。
@@ -238,7 +238,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B2：Lease fencing Runtime 接线。
 - [ ] B3：持久化 receipt 与首个写工具。
 - [ ] B4：其余写工具和 ToolInvocationValidator。
-- [ ] B5：统一取消与完成验证。
+- [ ] B5：统一取消与完成验证（根取消信号与完成门禁已完成，父子任务聚合待完成）。
 - [ ] B6：Context、Provider 和 Memory。
 - [ ] B7：iOS 原生边界。
 - [ ] B8：真机和发布门禁。
@@ -251,4 +251,5 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B4 回归：覆盖嵌套对象、联合类型、数组、枚举、范围、未声明字段及“模型修正参数后继续执行”。
 - [ ] B4 剩余：资源归属验证、确认参数冻结，以及其余写工具的业务事务幂等收口。
 - [x] B5 第一部分：异步写入与精确资源状态核验使用类型化合同；运行中任务以 delegated 结束对话，避免持续轮询和假完成。
-- [ ] B5 剩余：统一取消根信号，以及父子任务通知聚合。
+- [x] B5 第二部分：Chat 与 Worker 共用根取消注册表，Task Dock 取消可中断 Provider、Agent loop 与工具信号。
+- [ ] B5 剩余：父子任务通知聚合。

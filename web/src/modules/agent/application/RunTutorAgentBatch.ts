@@ -184,7 +184,7 @@ export class RunTutorAgentBatch {
       await this.notify(() => this.lifecycle?.failed(run, code));
       return 'failed';
     } finally {
-      this.executions?.finish(run.run.id);
+      this.executions?.finish(run.run.id, executionSignal);
     }
   }
 
