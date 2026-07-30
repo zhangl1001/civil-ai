@@ -22,11 +22,16 @@ import {
 } from '../domain/AgentRunCodes';
 
 interface StoredRun extends AgentRunAggregate { readonly runId: string; readonly idempotencyKey: string; readonly invocations: readonly AgentInvocationRecord[]; }
+interface StoredRunIdempotency { readonly idempotencyKey: string; readonly runId: AgentRunId; }
 
 export class IndexedDbAgentRunRepository implements AgentRunRepository {
   constructor(private readonly database: TutorIndexedDb, private readonly scope: IndexedDbTransactionScope) {}
   async create(run: AgentRunRecord, created: AgentRunEventRecord, context: TransactionContext): Promise<void> {
-    if (await this.findByIdempotencyKey(run.idempotencyKey)) throw new Error(`Agent run already exists: ${run.idempotencyKey}`);
+    this.scope.stage(context, {
+      type: 'add',
+      store: TutorIndexedDbStore.AgentRunIdempotency,
+      value: { idempotencyKey: run.idempotencyKey, runId: run.id } satisfies StoredRunIdempotency
+    });
     this.scope.stage(context, { type:'add', store:TutorIndexedDbStore.AgentRunAggregates, value:stored(run,[created],[]) });
   }
   async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext, guard?: AgentRunMutationGuard): Promise<void> {
@@ -38,7 +43,10 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
     this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...current.events,event],(await this.get(run.id))!.invocations)});
   }
   async findById(id: AgentRunId): Promise<AgentRunAggregate|undefined> { const item=await this.get(id); return item&&{run:item.run,events:item.events}; }
-  async findByIdempotencyKey(key:string): Promise<AgentRunAggregate|undefined> { const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates); const item=all.find(v=>v.idempotencyKey===key); return item&&{run:item.run,events:item.events}; }
+  async findByIdempotencyKey(key:string): Promise<AgentRunAggregate|undefined> {
+    const reservation=await this.database.get<StoredRunIdempotency>(TutorIndexedDbStore.AgentRunIdempotency,key);
+    return reservation ? this.findById(reservation.runId) : undefined;
+  }
   async findLatestByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{const all=await this.targetRuns(type,id);const item=[...all].sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id)))[0];return item&&{run:item.run,events:item.events};}
   async findActiveByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{const all=await this.targetRuns(type,id);const item=all.filter(value=>active(value.run.status)).sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id)))[0];return item&&{run:item.run,events:item.events};}
   async appendInvocation(invocation:AgentInvocationRecord, context:TransactionContext):Promise<void> { const current=await this.get(invocation.agentRunId); if(!current) throw new Error(`Agent run not found: ${invocation.agentRunId}`); this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(current.run,current.events,[...current.invocations,invocation])}); }

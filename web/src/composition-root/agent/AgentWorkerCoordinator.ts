@@ -14,6 +14,8 @@ import {
   createConfiguredProviderGateway,
   ProviderConfigurationError
 } from '../ai/createConfiguredProviderGateway';
+import { Capacitor } from '@capacitor/core';
+import { runWithAgentWorkerLeadership } from './AgentWorkerLeadership';
 
 const WORKER_POLL_INTERVAL_MS = 1_000;
 const WORKER_LEASE_MS = 60_000;
@@ -91,6 +93,25 @@ export class AgentWorkerCoordinator {
   }
 
   private async run(runtime: TutorDatabaseRuntime): Promise<void> {
+    const controller = new AbortController();
+    this.activeController = controller;
+    const execute = () => this.runAsLeader(runtime, controller);
+    try {
+      if (Capacitor.isNativePlatform()) {
+        await execute();
+      } else {
+        await runWithAgentWorkerLeadership(execute, controller.signal);
+      }
+    } catch (error) {
+      controller.abort(error);
+      throw error;
+    } finally {
+      if (this.activeController === controller) this.activeController = undefined;
+    }
+  }
+
+  private async runAsLeader(runtime: TutorDatabaseRuntime, controller: AbortController): Promise<void> {
+    const signal = controller.signal;
     await tutorDatabaseLifecycleCoordinator.waitUntilReady();
     await this.refreshConcurrency();
     let gatewayPromise: ReturnType<typeof createConfiguredProviderGateway> | undefined;
@@ -99,20 +120,16 @@ export class AgentWorkerCoordinator {
       return gatewayPromise;
     };
     const workerSessionId = crypto.randomUUID();
-    const controller = new AbortController();
-    this.activeController = controller;
     const lanes = Array.from(
       { length: DEFAULT_MAX_CONCURRENT_AGENT_RUNS },
-      (_, laneIndex) => this.runLane(runtime, laneIndex, workerSessionId, getGateway, controller.signal)
+      (_, laneIndex) => this.runLane(runtime, laneIndex, workerSessionId, getGateway, signal)
     );
     try {
       await Promise.all(lanes);
     } catch (error) {
-      controller.abort();
+      controller.abort(error);
       await Promise.allSettled(lanes);
       throw error;
-    } finally {
-      if (this.activeController === controller) this.activeController = undefined;
     }
   }
 

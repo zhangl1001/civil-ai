@@ -48,6 +48,16 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
       rows.filter((row) => matchesCycle(row, examCycleId)).forEach((row) => {
         const key = keyOf(store, row);
         if (key) operations.push({ type: 'delete', store, key });
+        if (store === TutorIndexedDbStore.AgentRunAggregates) {
+          const idempotencyKey = text(row.idempotencyKey);
+          if (idempotencyKey) {
+            operations.push({
+              type: 'delete',
+              store: TutorIndexedDbStore.AgentRunIdempotency,
+              key: idempotencyKey
+            });
+          }
+        }
       });
     }
     await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.ErrorDiagnosisProjections, (row) => (

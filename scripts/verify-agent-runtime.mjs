@@ -17,6 +17,7 @@ try {
   const toolBatch = await server.ssrLoadModule('/src/modules/agent/application/AgentToolBatchExecutor.ts');
   const toolCallIdentity = await server.ssrLoadModule('/src/modules/agent/application/AgentToolCallIdentity.ts');
   const abortableConcurrency = await server.ssrLoadModule('/src/kernel/abortableConcurrency.ts');
+  const workerLeadership = await server.ssrLoadModule('/src/composition-root/agent/AgentWorkerLeadership.ts');
   const { WebAgentWorkspaceStorage } = await server.ssrLoadModule('/src/modules/agent/adapters/WebAgentWorkspaceStorage.ts');
   const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const workspaceLocalStorage = fakeLocalStorage();
@@ -1108,6 +1109,49 @@ try {
   );
   assert.equal(siblingCancelled, true, 'one failed shard must cancel in-flight siblings');
   assert.equal(siblingSettled, true, 'the concurrency boundary must await sibling cleanup before returning');
+
+  const leadershipGate = deferred();
+  const leadershipOrder = [];
+  let lockTail = Promise.resolve();
+  const lockManager = {
+    async request(_name, _options, callback) {
+      const previous = lockTail;
+      const release = deferred();
+      lockTail = release.promise;
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release.resolve();
+      }
+    }
+  };
+  const leadershipController = new AbortController();
+  const firstLeader = workerLeadership.runWithAgentWorkerLeadership(async () => {
+    leadershipOrder.push('first-start');
+    await leadershipGate.promise;
+    leadershipOrder.push('first-end');
+  }, leadershipController.signal, lockManager);
+  const secondLeader = workerLeadership.runWithAgentWorkerLeadership(async () => {
+    leadershipOrder.push('second-start');
+  }, leadershipController.signal, lockManager);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(leadershipOrder, ['first-start']);
+  leadershipGate.resolve();
+  await Promise.all([firstLeader, secondLeader]);
+  assert.deepEqual(leadershipOrder, ['first-start', 'first-end', 'second-start']);
+
+  const indexedDbSource = await readFile(
+    path.join(root, 'src/capabilities/database/adapters/indexeddb/TutorIndexedDb.ts'),
+    'utf8'
+  );
+  const indexedRunSource = await readFile(
+    path.join(root, 'src/modules/agent/adapters/IndexedDbAgentRunRepository.ts'),
+    'utf8'
+  );
+  assert.match(indexedDbSource, /AgentRunIdempotency:\s*'agent_run_idempotency'/);
+  assert.match(indexedRunSource, /type:\s*'add',\s*store:\s*TutorIndexedDbStore\.AgentRunIdempotency/);
+  assert.match(indexedRunSource, /mutateStore<StoredRun,readonly AgentRunAggregate\[\]>/);
   console.log('Agent runtime verification passed.');
 } finally { await server.close(); }
 

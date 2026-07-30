@@ -161,6 +161,12 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [ ] 按数据类别定义 TTL；用户主动保留的会话和长期记忆不能被通用日志 TTL 误删。
 - [x] Memory 只保存结构化结论、来源和置信度；工作记忆留在 checkpoint，持久层拒绝私有思考字段。
 
+### Web 多上下文一致性
+
+- [x] AgentRun claim/recover/renew 使用 IndexedDB 单个 read-write transaction 完成。
+- [x] AgentRun 幂等键使用独立持久化唯一占位表，与 Run 聚合在同一事务提交。
+- [x] 支持 Web Locks 的浏览器只允许一个标签页持有 Agent Worker 调度权；任务租约仍作为最终一致性边界。
+
 ### 验收
 
 - 固定提示注入语料不能改变工具权限和确认策略。
