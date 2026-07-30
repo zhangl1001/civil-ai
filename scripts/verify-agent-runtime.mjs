@@ -13,6 +13,7 @@ try {
   const aiConfig = await server.ssrLoadModule('/src/services/AIConfigService.ts');
   const systemTools = await server.ssrLoadModule('/src/services/AgentSystemTools.ts');
   const taskToast = await server.ssrLoadModule('/src/components/TaskToastLifecycle.ts');
+  const taskMessages = await server.ssrLoadModule('/src/composition-root/agent/TaskMessageProjector.ts');
   const clock = { value: 1000, now() { return ++this.value; } };
   const machine = new agent.AgentRunMachine();
   const queued = { id: 'run:1', runType: agent.AgentRunType.ErrorDiagnosis, status: agent.AgentRunStatus.Queued, inputSnapshot: {}, checkpoint: {}, attemptCount: 0, idempotencyKey: 'run:1', createdAt: 1000, updatedAt: 1000, version: 1 };
@@ -735,7 +736,11 @@ try {
   assert.equal(retryTransitions[0].errorCode, 'generation.json_invalid');
 
   const toastLifecycle = new taskToast.TaskToastLifecycle();
-  const historicalRun = { id: 'run:historical', status: agent.AgentRunStatus.Completed };
+  const historicalRun = {
+    id: 'run:historical',
+    status: agent.AgentRunStatus.Completed,
+    notificationMode: agent.AgentRunNotificationMode.Lifecycle
+  };
   assert.deepEqual(toastLifecycle.observe(false, [historicalRun]), []);
   assert.deepEqual(
     toastLifecycle.observe(true, [historicalRun]),
@@ -743,13 +748,18 @@ try {
     'initial task snapshot must not replay historical completion toasts'
   );
   assert.deepEqual(toastLifecycle.observe(true, [historicalRun]), []);
-  const newRun = { id: 'run:new', status: agent.AgentRunStatus.Running };
+  const newRun = {
+    id: 'run:new',
+    status: agent.AgentRunStatus.Running,
+    notificationMode: agent.AgentRunNotificationMode.Lifecycle
+  };
   assert.deepEqual(toastLifecycle.observe(true, [historicalRun, newRun]), [newRun]);
   const finishedRun = { ...newRun, status: agent.AgentRunStatus.Completed };
   assert.deepEqual(toastLifecycle.observe(true, [historicalRun, finishedRun]), [finishedRun]);
   const silentRun = {
     id: 'run:silent-enrichment',
     status: agent.AgentRunStatus.Running,
+    notificationMode: agent.AgentRunNotificationMode.Terminal,
     taskCenterVisible: false
   };
   assert.deepEqual(
@@ -767,5 +777,77 @@ try {
     [silentRunCompleted],
     'the parent enrichment run may notify once after its final result is committed'
   );
+  const terminalOnlyVisibleRun = {
+    id: 'run:terminal-only',
+    status: agent.AgentRunStatus.Running,
+    notificationMode: agent.AgentRunNotificationMode.Terminal,
+    taskCenterVisible: true
+  };
+  assert.deepEqual(
+    toastLifecycle.observe(true, [historicalRun, terminalOnlyVisibleRun]),
+    [],
+    'terminal-only child work must not toast while running'
+  );
+  const terminalOnlyCompleted = {
+    ...terminalOnlyVisibleRun,
+    status: agent.AgentRunStatus.Completed
+  };
+  assert.deepEqual(
+    toastLifecycle.observe(true, [historicalRun, terminalOnlyCompleted]),
+    [terminalOnlyCompleted],
+    'terminal-only child work emits exactly its final status'
+  );
+
+  const projectedMessages = [];
+  const terminalProjection = {
+    run: {
+      id: 'run:terminal-projection',
+      runType: agent.AgentRunType.Review,
+      status: agent.AgentRunStatus.Completed,
+      inputSnapshot: {
+        title: '补全逐题解析',
+        taskCenterVisible: false,
+        notificationMode: agent.AgentRunNotificationMode.Terminal
+      },
+      checkpoint: {
+        taskCenterVisible: true,
+        message: '逐题解析已经补全'
+      },
+      attemptCount: 1,
+      idempotencyKey: 'run:terminal-projection',
+      createdAt: 1,
+      updatedAt: 2,
+      version: 2
+    },
+    events: []
+  };
+  const projector = new taskMessages.TaskMessageProjector({
+    async publish(message) {
+      projectedMessages.push(message);
+      return message;
+    }
+  }, {
+    async findById() {
+      return terminalProjection;
+    }
+  });
+  await projector.retrying({
+    ...terminalProjection,
+    run: {
+      ...terminalProjection.run,
+      status: agent.AgentRunStatus.Running,
+      checkpoint: {}
+    }
+  });
+  assert.equal(projectedMessages.length, 0, 'terminal-only retries remain silent');
+  await projector.completed({
+    ...terminalProjection,
+    run: {
+      ...terminalProjection.run,
+      checkpoint: {}
+    }
+  });
+  assert.equal(projectedMessages.length, 1);
+  assert.equal(projectedMessages[0].dedupKey, 'agent-run:run:terminal-projection:task.completed');
   console.log('Agent runtime verification passed.');
 } finally { await server.close(); }

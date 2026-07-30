@@ -123,7 +123,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] 异步写工具返回类型化 `resourceType/resourceId/expectedTerminalState`。
 - [x] Completion Verifier 必须匹配同一资源；其他 task 的状态不能满足当前完成验证。
 - [x] `queued/running/not_found` 只能以 delegated 结束本轮并表述为“已受理/执行中”；`failed/cancelled` 只能如实报告，均不得伪装为业务完成。
-- [ ] 子任务进度不单独通知；父任务终态后只发送一次汇总消息。
+- [x] 子任务通知使用统一 `lifecycle/terminal/silent` 策略；内容补全运行和重试保持无感，只在最终终态发送一次结果。
 
 ### 取消
 
@@ -238,7 +238,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B2：Lease fencing Runtime 接线。
 - [ ] B3：持久化 receipt 与首个写工具。
 - [ ] B4：其余写工具和 ToolInvocationValidator。
-- [ ] B5：统一取消与完成验证（根取消信号与完成门禁已完成，父子任务聚合待完成）。
+- [ ] B5：统一取消与完成验证（完成门禁和子任务终态通知聚合已完成，分片取消与取消后写入阻断待完成）。
 - [ ] B6：Context、Provider 和 Memory。
 - [ ] B7：iOS 原生边界。
 - [ ] B8：真机和发布门禁。
@@ -252,7 +252,8 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [ ] B4 剩余：其余写工具的业务事务幂等收口；资源归属验证和确认参数冻结已完成。
 - [x] B5 第一部分：异步写入与精确资源状态核验使用类型化合同；运行中任务以 delegated 结束对话，避免持续轮询和假完成。
 - [x] B5 第二部分：Chat 与 Worker 共用根取消注册表，Task Dock 取消可中断 Provider、Agent loop 与工具信号。
-- [ ] B5 剩余：父子任务通知聚合。
+- [x] B5 通知聚合：以统一通知模式替代 `notifyOnTerminal` 魔法布尔值；后台补全运行和重试不弹消息，终态读取最新 checkpoint 后按幂等键只投影一次。
+- [ ] B5 剩余：分片 sibling 取消、等待终态和取消后业务/消息写入阻断。
 - [x] B6 Provider 第一部分：消除 Worker 与 Provider 的重试叠乘，并让重试等待受根信号和绝对 deadline 约束。
 - [x] B6 Context 第一部分：装配统一上下文预算器，将学生档案、记忆和摘要降为带来源标签的低信任数据消息。
 - [x] B7 网络第一部分：原生模型流式传输接入公开 HTTPS/DNS/逐跳重定向校验，并增加并发、流量、事件和积压硬上限。

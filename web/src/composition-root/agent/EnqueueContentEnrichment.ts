@@ -4,6 +4,7 @@ import type {
   LearningThreadId
 } from '@/kernel/public';
 import {
+  AgentRunNotificationMode,
   AgentRunType,
   AgentWorkPool,
   TaskTargetType,
@@ -59,7 +60,7 @@ export class EnqueueContentEnrichment {
         title: command.title ?? '后台补全内容',
         detail: command.detail ?? '内容主体已可使用，系统正在补齐辅助内容',
         taskCenterVisible: false,
-        notifyOnTerminal: true
+        notificationMode: AgentRunNotificationMode.Terminal
       }
     });
   }

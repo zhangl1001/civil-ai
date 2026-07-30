@@ -21,3 +21,24 @@ export const TaskTargetType = {
 } as const;
 
 export type TaskTargetType = typeof TaskTargetType[keyof typeof TaskTargetType];
+
+export const AgentRunNotificationMode = {
+  Lifecycle: 'lifecycle',
+  Terminal: 'terminal',
+  Silent: 'silent'
+} as const;
+
+export type AgentRunNotificationMode =
+  typeof AgentRunNotificationMode[keyof typeof AgentRunNotificationMode];
+
+export function resolveAgentRunNotificationMode(
+  inputSnapshot: Readonly<Record<string, unknown>>
+): AgentRunNotificationMode {
+  const explicit = inputSnapshot.notificationMode;
+  if (Object.values(AgentRunNotificationMode).includes(explicit as AgentRunNotificationMode)) {
+    return explicit as AgentRunNotificationMode;
+  }
+  // Keep runs created by older app versions readable during an in-place upgrade.
+  if (inputSnapshot.notifyOnTerminal === true) return AgentRunNotificationMode.Terminal;
+  return AgentRunNotificationMode.Lifecycle;
+}
