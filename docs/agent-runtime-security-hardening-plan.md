@@ -213,6 +213,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [ ] 同步 App Store Connect 隐私标签、模型数据说明和权限文案。
 - [x] 统一 SwiftPM 声明与 lock 版本；对 SQLite 插件的上游分支约束使用可重复安装补丁。
 - [ ] App Store/TestFlight export 使用独立 CI 配置；development 导出配置已进入版本控制。
+- [x] Development/OTA archive 从归档后的 App 元数据自动生成 manifest，Bundle ID 与版本不再人工同步。
 
 ### 发布门槛
 

@@ -40,7 +40,23 @@ fi
 
 node "$ROOT_DIR/scripts/verify-ios-ipa.js" "$IPA_PATH"
 
+APP_INFO_PLIST="$ARCHIVE_PATH/Products/Applications/App.app/Info.plist"
+if [ ! -f "$APP_INFO_PLIST" ]; then
+  echo "Archived App Info.plist is missing: $APP_INFO_PLIST" >&2
+  exit 1
+fi
+
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_INFO_PLIST")"
+BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_INFO_PLIST")"
+OTA_IPA_URL="${OTA_IPA_URL:-https://192.168.3.30:8443/App.ipa}"
+OTA_MANIFEST_PATH="$EXPORT_DIR/manifest.plist"
+cp "$ROOT_DIR/ios/App/ota/manifest.plist" "$OTA_MANIFEST_PATH"
+/usr/libexec/PlistBuddy -c "Set :items:0:assets:0:url $OTA_IPA_URL" "$OTA_MANIFEST_PATH"
+/usr/libexec/PlistBuddy -c "Set :items:0:metadata:bundle-identifier $BUNDLE_ID" "$OTA_MANIFEST_PATH"
+/usr/libexec/PlistBuddy -c "Set :items:0:metadata:bundle-version $BUNDLE_VERSION" "$OTA_MANIFEST_PATH"
+
 rm -rf "$ARCHIVE_PATH" "$BUILD_DIR/DerivedData"
-find "$EXPORT_DIR" -mindepth 1 -maxdepth 1 -type f ! -name 'App.ipa' -delete
+find "$EXPORT_DIR" -mindepth 1 -maxdepth 1 -type f ! -name 'App.ipa' ! -name 'manifest.plist' -delete
 
 echo "Vue release IPA: $IPA_PATH"
+echo "OTA manifest: $OTA_MANIFEST_PATH"

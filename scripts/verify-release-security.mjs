@@ -115,6 +115,25 @@ for (const requiredBoundary of [
   );
 }
 
+const learningNotificationSource = await readFile(
+  path.join(repositoryRoot, 'ios/App/App/LearningNotificationPlugin.swift'),
+  'utf8'
+);
+for (const requiredBoundary of [
+  'center.add(request) { error in',
+  'group.notify(queue: .main)',
+  '"failed": failures.count'
+]) {
+  assert.ok(
+    learningNotificationSource.includes(requiredBoundary),
+    `Release security check failed: LearningNotification is missing ${requiredBoundary}`
+  );
+}
+assert.ok(
+  !learningNotificationSource.includes('center.add(request)\n'),
+  'Release security check failed: LearningNotification reports success before iOS accepts the request'
+);
+
 const privacyManifest = await readFile(
   path.join(repositoryRoot, 'ios/App/App/PrivacyInfo.xcprivacy'),
   'utf8'
@@ -152,6 +171,17 @@ assert.ok(
   !archiveScript.includes('build/ios/ExportOptions.plist'),
   'Release security check failed: archive script still relies on an ignored export configuration'
 );
+for (const generatedManifestBoundary of [
+  'CFBundleIdentifier',
+  'CFBundleShortVersionString',
+  'OTA_IPA_URL',
+  'OTA_MANIFEST_PATH'
+]) {
+  assert.ok(
+    archiveScript.includes(generatedManifestBoundary),
+    `Release security check failed: OTA manifest generation is missing ${generatedManifestBoundary}`
+  );
+}
 
 const capacitorPackage = await readFile(
   path.join(repositoryRoot, 'ios/App/CapApp-SPM/Package.swift'),
