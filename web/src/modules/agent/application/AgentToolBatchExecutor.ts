@@ -212,6 +212,15 @@ async function executeAgentToolCall(
       }
     };
   } catch (error) {
+    if (signal?.aborted) {
+      await emit({
+        type: 'tool_call_failed',
+        agentRunId: command.agentRunId,
+        call,
+        reasonCode: 'agent.tool_cancelled'
+      });
+      throw signal.reason ?? error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     await emit({
       type: 'tool_call_failed',

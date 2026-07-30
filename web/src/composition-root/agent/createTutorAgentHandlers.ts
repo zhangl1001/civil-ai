@@ -1,8 +1,4 @@
-import {
-  ModelMessageRole,
-  type PromptCompiler,
-  type ProviderGateway
-} from '@/capabilities/ai-runtime/public';
+import type { PromptCompiler, ProviderGateway } from '@/capabilities/ai-runtime/public';
 import { AssessmentRole, type CapabilityNodeId, type JsonObject } from '@/kernel/public';
 import {
   AgentRunAction,
@@ -60,6 +56,7 @@ import {
   type BusinessAgentTask,
   type BusinessAgentTaskType
 } from './BusinessAgentExecutors';
+import { invokeBusinessAgentModel } from './BusinessAgentModelBridge';
 import {
   runTrueQuestionResearchAgent,
   type TrueQuestionResearchAgentDependencies
@@ -243,8 +240,9 @@ async function executeBusinessOperation(
     payload
   };
   let resultData: JsonObject = {};
+  const executionSignal = signal ?? new AbortController().signal;
   const context: BusinessAgentExecutionContext = {
-    signal: signal ?? new AbortController().signal,
+    signal: executionSignal,
     compilePrompt: (promptCode, payload) => {
       const compiled = dependencies.promptCompiler.compile(promptCode, {}, payload);
       return {
@@ -254,6 +252,7 @@ async function executeBusinessOperation(
       };
     },
     update: async (progress, progressText = '执行中') => {
+      executionSignal.throwIfAborted();
       await dependencies.updateAgentRunProgress.execute({
         agentRunId: run.run.id,
         step: stepForProgress(progress),
@@ -263,6 +262,7 @@ async function executeBusinessOperation(
       });
     },
     log: async (message) => {
+      executionSignal.throwIfAborted();
       await dependencies.updateAgentRunProgress.execute({
         agentRunId: run.run.id,
         step: TaskCenterStep.InvokingModel,
@@ -272,6 +272,7 @@ async function executeBusinessOperation(
       });
     },
     setResult: async (result) => {
+      executionSignal.throwIfAborted();
       resultData = {
         ...resultData,
         ...(result.payload ? { result: toJsonObject(result.payload) } : {}),
@@ -279,50 +280,19 @@ async function executeBusinessOperation(
       };
     },
     complete: async (messages, options = {}) => {
-      const response = await dependencies.invokeAgentModel.execute({
-        agentRunId: run.run.id,
-        leaseToken: leaseTokenOf(run.run),
-        modelRole: `business.${intent}`,
-        system: messages
-          .filter((message) => message.role === 'system')
-          .map((message) => message.content)
-          .join('\n\n') || '你是个人公考 AI 私教。',
-        messages: messages
-          .filter((message) => message.role !== 'system')
-          .map((message) => ({
-            role: message.role === 'assistant' ? ModelMessageRole.Assistant : ModelMessageRole.User,
-            content: message.content
-          })),
-        temperature: options.temperature,
-        maxOutputTokens: options.maxOutputTokens,
-        responseSchema: options.responseSchema
-      }, gateway, signal);
-      return response.text;
+      return invokeBusinessAgentModel({
+        run, intent, messages, options, gateway, signal: executionSignal,
+        invoke: dependencies.invokeAgentModel
+      });
     },
     stream: async (messages, onDelta, options = {}) => {
-      const response = await dependencies.invokeAgentModel.execute({
-        agentRunId: run.run.id,
-        leaseToken: leaseTokenOf(run.run),
-        modelRole: `business.${intent}`,
-        system: messages
-          .filter((message) => message.role === 'system')
-          .map((message) => message.content)
-          .join('\n\n') || '你是个人公考 AI 私教。',
-        messages: messages
-          .filter((message) => message.role !== 'system')
-          .map((message) => ({
-            role: message.role === 'assistant' ? ModelMessageRole.Assistant : ModelMessageRole.User,
-            content: message.content
-          })),
-        temperature: options.temperature,
-        maxOutputTokens: options.maxOutputTokens,
-        responseSchema: options.responseSchema,
-        preferStream: !options.responseSchema,
-        onDelta
-      }, gateway, signal);
-      return response.text;
+      return invokeBusinessAgentModel({
+        run, intent, messages, options, gateway, signal: executionSignal,
+        invoke: dependencies.invokeAgentModel, onDelta
+      });
     },
     generatePractice: async (input) => {
+      executionSignal.throwIfAborted();
       const cycle = await dependencies.candidates.findCurrentCycle();
       if (!cycle) throw new Error('请先完成备考档案。');
       const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
@@ -369,8 +339,9 @@ async function executeBusinessOperation(
       const result = await dependencies.runStructuredObjectiveGenerationWorkflow.execute(
         aggregate.workflow.id,
         gateway,
-        signal
+        executionSignal
       );
+      executionSignal.throwIfAborted();
       if (!result.questionSetId || !aggregate.spec.learningThreadId) {
         throw new Error('结构化题组生成失败：缺少题组或学习主线');
       }
@@ -388,6 +359,7 @@ async function executeBusinessOperation(
       };
     },
     saveLearningAsset: async (input) => {
+      executionSignal.throwIfAborted();
       const cycle = await dependencies.candidates.findCurrentCycle();
       if (!cycle) throw new Error('请先完成备考档案。');
       const asset = await dependencies.learningAssetStore.save({
@@ -398,6 +370,7 @@ async function executeBusinessOperation(
         payload: toJsonObject(input.payload),
         sourceAgentRunId: run.run.id
       });
+      executionSignal.throwIfAborted();
       return { id: asset.id, version: asset.version };
     },
     findLatestLearningAsset: async (input) => {
@@ -429,6 +402,7 @@ async function executeBusinessOperation(
       }));
     },
     recordSubjectiveAssessment: async (input) => {
+      executionSignal.throwIfAborted();
       const cycle = await dependencies.candidates.findCurrentCycle();
       if (!cycle) throw new Error('请先完成备考档案。');
       const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
@@ -451,6 +425,7 @@ async function executeBusinessOperation(
         rubricVersion: input.rubricVersion,
         dimensions
       });
+      executionSignal.throwIfAborted();
     }
   };
   if (intent === 'trueQuestionResearch') {
@@ -479,6 +454,7 @@ async function executeBusinessOperation(
   } else {
     await executorFor(intent)(task, context);
   }
+  executionSignal.throwIfAborted();
   const navigation = completedNavigation(intent, run.run.inputSnapshot, resultData);
   const completionMessage = intent === 'trueQuestionResearch'
     ? `已形成 ${String(objectValue(resultData.result).totalCount || 0)} 道待确认真题`

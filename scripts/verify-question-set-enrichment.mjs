@@ -101,6 +101,61 @@ try {
     0,
     'all question explanations must be complete after parallel enrichment'
   );
+
+  const cancellationController = new AbortController();
+  let appliedAfterCancellation = 0;
+  const cancelledStrategy = strategyModule.createQuestionSetContentEnrichmentStrategy({
+    contentRepository: {
+      findQuestionSet: async () => questionSetBundle(3)
+    },
+    promptCompiler: {
+      compile: (_code, _variables, payload) => ({
+        system: 'Return the requested structured explanation.',
+        user: JSON.stringify(payload),
+        responseSchema: {}
+      })
+    },
+    invokeAgentModel: {
+      execute: async (command, _gateway, signal) => {
+        await abortableDelay(100, signal);
+        const payload = JSON.parse(command.messages[0].content);
+        const questionId = payload.missingBlocks.explanationQuestionIds[0];
+        return {
+          text: JSON.stringify({
+            explanations: [{
+              questionId,
+              explanation: fullExplanation(questionId)
+            }]
+          })
+        };
+      }
+    },
+    applyEnrichment: {
+      execute: async () => {
+        appliedAfterCancellation += 1;
+      }
+    },
+    updateProgress: { execute: async () => undefined }
+  });
+  const cancelled = cancelledStrategy.execute({
+    run: {
+      id: 'AgentRunId:cancelled-enrichment',
+      targetResourceId: 'QuestionSetId:enrichment-test',
+      inputSnapshot: {},
+      checkpoint: {}
+    },
+    events: []
+  }, {
+    provider: 'anthropic',
+    model: 'test',
+    capabilities: { multimodalInput: false },
+    complete: async () => {
+      throw new Error('The invocation stub should own model execution');
+    }
+  }, cancellationController.signal);
+  cancellationController.abort(new Error('user cancelled'));
+  await assert.rejects(cancelled, /user cancelled/);
+  assert.equal(appliedAfterCancellation, 0, 'cancelled enrichment must not commit late shard results');
   console.log('Question-set enrichment verification passed (5 questions, peak concurrency 3).');
 } finally {
   await server.close();
@@ -195,4 +250,15 @@ function textBlock(id, source) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function abortableDelay(ms, signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
+  });
 }

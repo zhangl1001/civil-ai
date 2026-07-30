@@ -14,6 +14,8 @@ try {
   const systemTools = await server.ssrLoadModule('/src/services/AgentSystemTools.ts');
   const taskToast = await server.ssrLoadModule('/src/components/TaskToastLifecycle.ts');
   const taskMessages = await server.ssrLoadModule('/src/composition-root/agent/TaskMessageProjector.ts');
+  const toolBatch = await server.ssrLoadModule('/src/modules/agent/application/AgentToolBatchExecutor.ts');
+  const abortableConcurrency = await server.ssrLoadModule('/src/kernel/abortableConcurrency.ts');
   const clock = { value: 1000, now() { return ++this.value; } };
   const machine = new agent.AgentRunMachine();
   const queued = { id: 'run:1', runType: agent.AgentRunType.ErrorDiagnosis, status: agent.AgentRunStatus.Queued, inputSnapshot: {}, checkpoint: {}, attemptCount: 0, idempotencyKey: 'run:1', createdAt: 1000, updatedAt: 1000, version: 1 };
@@ -849,5 +851,70 @@ try {
   });
   assert.equal(projectedMessages.length, 1);
   assert.equal(projectedMessages[0].dedupKey, 'agent-run:run:terminal-projection:task.completed');
+
+  const cancelledToolController = new AbortController();
+  let cancelledToolFinished = false;
+  const cancelledToolPromise = toolBatch.executeAgentToolCalls({
+    async execute(_definition, _call, context) {
+      context.signal.throwIfAborted();
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 100);
+        context.signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(context.signal.reason);
+        }, { once: true });
+      });
+      cancelledToolFinished = true;
+      return { content: 'must not complete after cancellation' };
+    }
+  }, async () => undefined, {
+    agentRunId: 'run:cancelled-tool',
+    executionContext: { agentRunId: 'run:cancelled-tool' }
+  }, [{
+    definition: {
+      name: 'test.cancel',
+      description: 'Cancellation boundary test.',
+      inputSchema: { type: 'object', properties: {} },
+      risk: agent.AgentToolRisk.Read,
+      requiresConfirmation: false,
+      enabledFor: [agent.AgentRunType.TutorTurn]
+    },
+    call: { id: 'call:cancel', name: 'test.cancel', arguments: {} }
+  }], 1, 1_000, cancelledToolController.signal);
+  cancelledToolController.abort(new Error('user cancelled'));
+  await assert.rejects(cancelledToolPromise, /user cancelled/);
+  assert.equal(cancelledToolFinished, false, 'cancelled tools must not be converted into retryable observations');
+
+  let siblingCancelled = false;
+  let siblingSettled = false;
+  await assert.rejects(
+    abortableConcurrency.mapWithAbortableConcurrency(
+      ['failing', 'sibling'],
+      2,
+      new AbortController().signal,
+      async (item, _index, signal) => {
+        if (item === 'failing') {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          throw new Error('shard failed');
+        }
+        try {
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, 500);
+            signal.addEventListener('abort', () => {
+              siblingCancelled = true;
+              clearTimeout(timer);
+              reject(signal.reason);
+            }, { once: true });
+          });
+          return item;
+        } finally {
+          siblingSettled = true;
+        }
+      }
+    ),
+    /shard failed/
+  );
+  assert.equal(siblingCancelled, true, 'one failed shard must cancel in-flight siblings');
+  assert.equal(siblingSettled, true, 'the concurrency boundary must await sibling cleanup before returning');
   console.log('Agent runtime verification passed.');
 } finally { await server.close(); }

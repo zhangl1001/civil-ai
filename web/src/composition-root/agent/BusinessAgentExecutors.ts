@@ -2,7 +2,7 @@ import { buildCompanionChatPrompt } from '@/ai/prompts';
 import { buildEssayRepairPrompt, validateEssayQuestion } from '@/ai/QuestionValidation';
 import { BusinessTutorPromptCode, parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
-import type { JsonObject } from '@/kernel/public';
+import { abortableDelay, mapWithAbortableConcurrency, type JsonObject } from '@/kernel/public';
 import type { DigestTab } from '@/domain/digest';
 import { aiChatRepository } from '@/services/AIChatRepository';
 import { webResearchService } from '@/services/WebResearchService'; import { buildDailyDigestRequest } from '@/services/DailyDigestGenerationPolicy';
@@ -622,7 +622,7 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
   const focusTags = Array.isArray(task.payload?.focusTags) ? task.payload.focusTags.map(String).filter(Boolean) : ['高频考点'];
   const batches = buildMockBatches(modules, requestedCount);
   await context.update(18, `拆分 ${batches.length} 个稳定题组`);
-  const sections = await mapWithConcurrency(batches, 3, async (batch, batchIndex) => {
+  const sections = await mapWithAbortableConcurrency(batches, 3, context.signal, async (batch, batchIndex, signal) => {
     const result = await retryTransiently(() => context.generatePractice({
         module: batch.module,
         requestedCount: batch.count,
@@ -632,7 +632,8 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
         review: false,
         capabilityIndex: batch.moduleBatchIndex
       }),
-      batchIndex
+      batchIndex,
+      signal
     );
     await context.update(
       Math.min(88, 20 + Math.round(((batchIndex + 1) / batches.length) * 66)),
@@ -687,37 +688,20 @@ function buildMockBatches(modules: readonly string[], total: number): MockBatch[
   });
 }
 
-async function mapWithConcurrency<Input, Output>(
-  items: readonly Input[],
-  concurrency: number,
-  work: (item: Input, index: number) => Promise<Output>
-): Promise<Output[]> {
-  const results = new Array<Output>(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await work(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-async function retryTransiently<Output>(work: () => Promise<Output>, ordinal: number): Promise<Output> {
+async function retryTransiently<Output>(
+  work: () => Promise<Output>,
+  ordinal: number,
+  signal: AbortSignal
+): Promise<Output> {
   try {
     return await work();
   } catch (error) {
+    signal.throwIfAborted();
     const message = error instanceof Error ? error.message : String(error);
     if (!/429|rate|limit|限流|timeout|network|transient|暂时|网络/i.test(message)) throw error;
-    await delay(1200 + (ordinal % 3) * 700);
+    await abortableDelay(1200 + (ordinal % 3) * 700, signal);
     return work();
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 export const digestExecutor: BusinessAgentExecutor = async (task, context) => {
