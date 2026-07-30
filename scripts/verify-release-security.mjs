@@ -112,6 +112,71 @@ for (const requiredBoundary of [
     `Release security check failed: SpeechRecognition is missing ${requiredBoundary}`
   );
 }
+
+const privacyManifest = await readFile(
+  path.join(repositoryRoot, 'ios/App/App/PrivacyInfo.xcprivacy'),
+  'utf8'
+);
+for (const requiredPrivacyEntry of [
+  'NSPrivacyAccessedAPICategoryUserDefaults',
+  'CA92.1',
+  'NSPrivacyAccessedAPICategoryFileTimestamp',
+  'C617.1'
+]) {
+  assert.ok(
+    privacyManifest.includes(requiredPrivacyEntry),
+    `Release security check failed: PrivacyInfo.xcprivacy is missing ${requiredPrivacyEntry}`
+  );
+}
+
+const xcodeProject = await readFile(
+  path.join(repositoryRoot, 'ios/App/App.xcodeproj/project.pbxproj'),
+  'utf8'
+);
+assert.ok(
+  xcodeProject.includes('PrivacyInfo.xcprivacy in Resources'),
+  'Release security check failed: PrivacyInfo.xcprivacy is not in the App resource phase'
+);
+
+const archiveScript = await readFile(
+  path.join(repositoryRoot, 'scripts/archive-ios-web.sh'),
+  'utf8'
+);
+assert.ok(
+  archiveScript.includes('ios/export-options/Development.plist'),
+  'Release security check failed: archive script does not use the tracked development export configuration'
+);
+assert.ok(
+  !archiveScript.includes('build/ios/ExportOptions.plist'),
+  'Release security check failed: archive script still relies on an ignored export configuration'
+);
+
+const capacitorPackage = await readFile(
+  path.join(repositoryRoot, 'ios/App/CapApp-SPM/Package.swift'),
+  'utf8'
+);
+const sqlitePatch = await readFile(
+  path.join(repositoryRoot, 'patches/@capacitor-community+sqlite+8.1.0.patch'),
+  'utf8'
+);
+const swiftPackageLock = JSON.parse(await readFile(
+  path.join(repositoryRoot, 'ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'),
+  'utf8'
+));
+assert.ok(
+  capacitorPackage.includes('exact: "8.4.1"'),
+  'Release security check failed: CapApp-SPM must pin capacitor-swift-pm 8.4.1'
+);
+assert.ok(
+  sqlitePatch.includes('from: "8.0.0"') && !sqlitePatch.includes('+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", branch: "8.0.0")'),
+  'Release security check failed: SQLite SwiftPM compatibility patch is missing'
+);
+const capacitorPin = swiftPackageLock.pins.find((pin) => pin.identity === 'capacitor-swift-pm');
+assert.equal(
+  capacitorPin?.state?.version,
+  '8.4.1',
+  'Release security check failed: SwiftPM lock does not resolve capacitor-swift-pm 8.4.1'
+);
 console.log('Release security verification passed.');
 
 async function filesUnder(directory) {

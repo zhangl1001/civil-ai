@@ -30,7 +30,7 @@ xcodebuild \
   -exportArchive \
   -archivePath "$ARCHIVE_PATH" \
   -exportPath "$EXPORT_DIR" \
-  -exportOptionsPlist "$ROOT_DIR/build/ios/ExportOptions.plist"
+  -exportOptionsPlist "$ROOT_DIR/ios/export-options/Development.plist"
 
 IPA_PATH="$EXPORT_DIR/App.ipa"
 if [ ! -f "$IPA_PATH" ]; then

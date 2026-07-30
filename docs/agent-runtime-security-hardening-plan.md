@@ -39,7 +39,7 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] 从当前版本控制中移除私钥和匹配证书，补充 `.gitignore` 与构建私钥扫描。
 - [ ] 评估并处理 Git 历史中的旧私钥；记录旧证书失效时间。
 - [ ] 区分 development、内部 OTA、TestFlight/App Store 三套导出配置。
-- [ ] Archive 脚本禁止读取被 `.gitignore` 排除的唯一配置文件。
+- [x] Archive 脚本不再读取被 `.gitignore` 排除的唯一配置文件，development 导出配置进入版本控制。
 
 ### 验收
 
@@ -202,10 +202,10 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### App Store
 
-- [ ] 对照实际 Required Reason API 生成并校验 app-owned `PrivacyInfo.xcprivacy`。
+- [x] 对照实际 Required Reason API 生成并校验 app-owned `PrivacyInfo.xcprivacy`。
 - [ ] 同步 App Store Connect 隐私标签、模型数据说明和权限文案。
-- [ ] 统一 SwiftPM 声明与 lock 版本。
-- [ ] App Store/TestFlight export 使用独立、版本控制或 CI 生成的配置。
+- [x] 统一 SwiftPM 声明与 lock 版本；对 SQLite 插件的上游分支约束使用可重复安装补丁。
+- [ ] App Store/TestFlight export 使用独立 CI 配置；development 导出配置已进入版本控制。
 
 ### 发布门槛
 
@@ -257,3 +257,5 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [x] B6 Context 第一部分：装配统一上下文预算器，将学生档案、记忆和摘要降为带来源标签的低信任数据消息。
 - [x] B7 网络第一部分：原生模型流式传输接入公开 HTTPS/DNS/逐跳重定向校验，并增加并发、流量、事件和积压硬上限。
 - [x] B7 资源第二部分：文档在 Base64 解码前限额，图片 OCR 使用像素预算和降采样；Agent 工作区接入容量配额；语音生命周期统一释放。
+- [x] B8 发布第一部分：增加 App 自有 Privacy Manifest，并将 development 导出配置从被忽略的构建目录迁入版本控制。
+- [x] B8 发布第二部分：SwiftPM 根声明与 Xcode lock 统一到 Capacitor 8.4.1，并通过 `postinstall` 自动修正 SQLite 插件的上游 branch 约束。
