@@ -15,6 +15,10 @@ export { AgentRunMachine } from './domain/AgentRunMachine';
 export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';
 export { createDurableAgentLoopFactory } from './application/CreateDurableAgentLoop';
 export {
+  AgentToolInvocationValidator,
+  type AgentToolValidationResult
+} from './application/AgentToolInvocationValidator';
+export {
   AgentToolReceiptStatus,
   type AgentToolReceipt,
   type AgentToolReceiptRepository,

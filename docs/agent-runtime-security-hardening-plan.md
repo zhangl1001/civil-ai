@@ -1,6 +1,6 @@
 # Agent Runtime 安全与可靠性加固计划
 
-> 状态：实施中（R0 代码止血、R1 AgentRun 状态 fencing 已完成）
+> 状态：实施中（R0 代码止血、R1 AgentRun fencing、R2 receipt 基础和 R3 结构参数校验已完成）
 > 建立日期：2026-07-30
 > 输入：`G6.code-review-report.md` 及 2026-07-30 独立复核
 > 目标：在不改变现有产品功能和页面入口的前提下，补齐 Agent 一致性、安全、恢复和发布门禁。
@@ -107,8 +107,8 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 
 ### ToolInvocationValidator
 
-- [ ] 在 Policy 和 Executor 之前统一执行 JSON Schema。
-- [ ] 强制校验 required、类型、enum、数值范围和 `additionalProperties`。
+- [x] 在 Policy 和 Executor 之前统一执行 JSON Schema。
+- [x] 强制校验 required、单一/联合类型、enum、数值与长度范围、数组边界和 `additionalProperties`。
 - [ ] 校验 branded ID、session、examCycle、learningThread 和目标资源归属。
 - [ ] 参数验证后生成不可变参数哈希；用户确认和执行时必须一致。
 
@@ -242,3 +242,11 @@ R1 是 R2、R3 和后台恢复测试的前置条件。R6 只能在 R1-R5 验收�
 - [ ] B6：Context、Provider 和 Memory。
 - [ ] B7：iOS 原生边界。
 - [ ] B8：真机和发布门禁。
+
+### 2026-07-30 实施记录
+
+- [x] B1/B2：AgentRun 增加 `leaseEpoch`，checkpoint、transition、heartbeat 与恢复路径接入 fencing。
+- [x] B3 基础：新增 SQLite/IndexedDB `agent_tool_receipts`，写工具执行前持久化 receipt，并向业务 Use Case 传递稳定幂等键。
+- [x] B4 第一部分：统一 `AgentToolInvocationValidator` 在 Policy 和 Executor 前执行；无效参数不进入工具，作为可重试观察交给 Agent 自主修正。
+- [x] B4 回归：覆盖嵌套对象、联合类型、数组、枚举、范围、未声明字段及“模型修正参数后继续执行”。
+- [ ] B4 剩余：资源归属验证、确认参数冻结，以及其余写工具的业务事务幂等收口。

@@ -94,6 +94,8 @@ export type AgentToolPolicyDecision = typeof AgentToolPolicyDecision[keyof typeo
 export interface AgentToolPolicyResult {
   readonly decision: AgentToolPolicyDecision;
   readonly reasonCode: string;
+  readonly message?: string;
+  readonly retryable?: boolean;
 }
 
 export interface AgentToolExecutionContext {

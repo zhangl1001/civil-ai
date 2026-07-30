@@ -13,6 +13,7 @@ import {
   type AgentToolReceiptRepository
 } from '../contracts/AgentToolReceiptRepository';
 import { AgentToolRisk, type AgentToolDefinition } from '../domain/AgentToolRegistry';
+import { AgentToolInvocationValidator } from './AgentToolInvocationValidator';
 
 const activeWriteCalls = new Set<string>();
 const MAX_RECEIPT_CONTENT_CHARS = 120_000;
@@ -22,7 +23,8 @@ export class DurableAgentToolExecutor implements AgentToolExecutor {
   constructor(
     private readonly executor: AgentToolExecutor,
     private readonly receipts: AgentToolReceiptRepository,
-    private readonly clock: Clock
+    private readonly clock: Clock,
+    private readonly validator = new AgentToolInvocationValidator()
   ) {}
 
   async execute(
@@ -30,6 +32,10 @@ export class DurableAgentToolExecutor implements AgentToolExecutor {
     call: ModelToolCall,
     context: AgentToolExecutionContext
   ): Promise<AgentToolExecutionResult> {
+    const validation = this.validator.validate(definition, call);
+    if (!validation.valid) {
+      throw new Error(`Agent tool arguments are invalid: ${validation.errors.join('; ')}`);
+    }
     if (definition.risk === AgentToolRisk.Read) {
       return this.executor.execute(definition, call, context);
     }

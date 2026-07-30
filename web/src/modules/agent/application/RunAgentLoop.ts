@@ -5,22 +5,23 @@ import {
   type ProviderGateway
 } from '@/capabilities/ai-runtime/public';
 import type { AgentRunId } from '@/kernel/public';
-import type {
-  AgentCheckpointStore,
-  AgentLoopCheckpoint,
-  AgentModelInvoker,
-  AgentRuntimeObserver,
-  AgentToolAttemptState,
-  AgentToolExecutionContext,
-  AgentToolExecutor,
-  AgentToolPolicy
+import {
+  AgentToolPolicyDecision,
+  type AgentCheckpointStore,
+  type AgentLoopCheckpoint,
+  type AgentModelInvoker,
+  type AgentRuntimeObserver,
+  type AgentToolAttemptState,
+  type AgentToolExecutionContext,
+  type AgentToolExecutor,
+  type AgentToolPolicy,
+  type AgentSkillWorkflowState
 } from '../contracts/AgentRuntimePorts';
-import { AgentToolPolicyDecision } from '../contracts/AgentRuntimePorts';
-import type { AgentSkillWorkflowState } from '../contracts/AgentRuntimePorts';
 import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
 import { AgentExecutionBudget } from '../domain/AgentExecutionBudget';
 import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
+import { AgentToolInvocationValidator } from './AgentToolInvocationValidator';
 import {
   blockedRepeatReason,
   completionVerifierNames,
@@ -44,7 +45,6 @@ import {
   skillContinuationInstruction,
   validateAgentLoopLimits
 } from './AgentLoopSupport';
-
 export interface RunAgentLoopCommand {
   readonly agentRunId: AgentRunId;
   readonly system: string;
@@ -75,7 +75,6 @@ export interface AgentLoopResult {
   readonly text: string;
   readonly checkpoint: AgentLoopCheckpoint;
 }
-
 /** Provider-neutral, bounded Agent loop. Business writes remain behind typed tool executors. */
 export class RunAgentLoop {
   private observerQueue: Promise<void> = Promise.resolve();
@@ -85,7 +84,8 @@ export class RunAgentLoop {
     private readonly policy: AgentToolPolicy,
     private readonly executor: AgentToolExecutor,
     private readonly checkpoints: AgentCheckpointStore,
-    private readonly observer?: AgentRuntimeObserver
+    private readonly observer?: AgentRuntimeObserver,
+    private readonly validator = new AgentToolInvocationValidator()
   ) {}
 
   async execute(
@@ -432,7 +432,7 @@ export class RunAgentLoop {
           continue;
         }
         signatures[signature] = (signatures[signature] ?? 0) + 1;
-        const decision = await this.policy.evaluate(definition, call, command.executionContext);
+        const decision = await this.validator.evaluate(this.policy, definition, call, command.executionContext);
         if (decision.decision === AgentToolPolicyDecision.Confirm) {
           for (const deferred of executableCalls) {
             decrementToolSignature(signatures, agentToolSignature(deferred.call));
@@ -480,14 +480,14 @@ export class RunAgentLoop {
         if (decision.decision === AgentToolPolicyDecision.Reject) {
           messages.push(createToolObservationMessage(call, {
             status: 'failed',
-            content: `工具调用已拒绝：${decision.reasonCode}`,
-            retryable: false,
+            content: decision.message ?? `工具调用已拒绝：${decision.reasonCode}`,
+            retryable: decision.retryable === true,
             failureCode: decision.reasonCode
           }));
           toolAttempts[signature] = {
             attempts: signatures[signature],
             status: 'failed',
-            retryable: false,
+            retryable: decision.retryable === true,
             failureCode: decision.reasonCode
           };
           await this.emit({ type: 'tool_call_failed', agentRunId: command.agentRunId, call, reasonCode: decision.reasonCode });
