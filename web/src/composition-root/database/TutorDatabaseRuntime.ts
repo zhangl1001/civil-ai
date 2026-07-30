@@ -11,6 +11,7 @@ import type {
 import type { CurriculumVersionId } from '@/kernel/public';
 import type {
   AgentMemoryRepository,
+  AgentRunExecutionRegistry,
   AgentRunRepository,
   AgentRuntimeObserver,
   AgentToolReceiptRepository,
@@ -178,6 +179,7 @@ export interface TutorDatabaseRuntime {
   readonly buildAbilityCalibration: BuildAbilityCalibration;
   readonly createAgentRun: CreateAgentRun;
   readonly transitionAgentRun: TransitionAgentRun;
+  readonly agentRunExecutions: AgentRunExecutionRegistry;
   readonly cancelAgentRun: CancelAgentRun;
   readonly claimAgentRuns: ClaimAgentRuns;
   readonly recoverExpiredAgentRuns: RecoverExpiredAgentRuns;

@@ -128,7 +128,7 @@ export class ChatAgentService {
       if (waiting) {
         if (isAgentConfirmation(text) || isAgentCancellation(text)) {
           await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
-          active.runId = waiting.id;
+          active.runId = waiting.id; runtime.agentRunExecutions.register(waiting.id, active.controller);
           active.controller.signal.throwIfAborted();
           await this.resume(runtime, session, waiting.id, isAgentConfirmation(text) ? 'confirm' : 'reject', options, active);
           return { handled: true };
@@ -160,7 +160,7 @@ export class ChatAgentService {
           actionParams: {}
         }
       });
-      active.runId = aggregate.run.id;
+      active.runId = aggregate.run.id; runtime.agentRunExecutions.register(aggregate.run.id, active.controller);
       active.controller.signal.throwIfAborted();
       await runtime.transitionAgentRun.execute({
         idempotencyKey: `chat-agent:${aggregate.run.id}:started`,
@@ -183,12 +183,12 @@ export class ChatAgentService {
       }
       return { handled: true };
     } finally {
+      if (runtime && active.runId) runtime.agentRunExecutions.finish(active.runId, active.controller.signal);
       if (this.activeRuns.get(session.id) === active) {
         this.activeRuns.delete(session.id);
       }
     }
   }
-
   private async resume(
     runtime: TutorDatabaseRuntime,
     session: AISession,

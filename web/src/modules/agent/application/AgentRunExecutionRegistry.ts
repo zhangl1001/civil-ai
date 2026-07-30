@@ -1,25 +1,50 @@
 import type { AgentRunId } from '@/kernel/public';
 
+interface AgentRunExecution {
+  readonly controller: AbortController;
+  readonly detachParent?: () => void;
+}
+
 /** Owns in-memory cancellation signals; persisted status remains in AgentRunRepository. */
 export class AgentRunExecutionRegistry {
-  private readonly controllers = new Map<AgentRunId, AbortController>();
+  private readonly executions = new Map<AgentRunId, AgentRunExecution>();
 
   begin(runId: AgentRunId, parent?: AbortSignal): AbortSignal {
-    this.cancel(runId);
     const controller = new AbortController();
+    let detachParent: (() => void) | undefined;
     if (parent) {
       if (parent.aborted) controller.abort(parent.reason);
-      else parent.addEventListener('abort', () => controller.abort(parent.reason), { once: true });
+      else {
+        const abortFromParent = () => controller.abort(parent.reason);
+        parent.addEventListener('abort', abortFromParent, { once: true });
+        detachParent = () => parent.removeEventListener('abort', abortFromParent);
+      }
     }
-    this.controllers.set(runId, controller);
+    return this.register(runId, controller, detachParent);
+  }
+
+  register(
+    runId: AgentRunId,
+    controller: AbortController,
+    detachParent?: () => void
+  ): AbortSignal {
+    const previous = this.executions.get(runId);
+    if (previous?.controller !== controller) {
+      previous?.controller.abort('agent_run.replaced');
+      previous?.detachParent?.();
+    }
+    this.executions.set(runId, { controller, detachParent });
     return controller.signal;
   }
 
   cancel(runId: AgentRunId): void {
-    this.controllers.get(runId)?.abort('agent_run.cancelled');
+    this.executions.get(runId)?.controller.abort('agent_run.cancelled');
   }
 
-  finish(runId: AgentRunId): void {
-    this.controllers.delete(runId);
+  finish(runId: AgentRunId, owner?: AbortSignal): void {
+    const current = this.executions.get(runId);
+    if (!current || (owner && current.controller.signal !== owner)) return;
+    current.detachParent?.();
+    this.executions.delete(runId);
   }
 }

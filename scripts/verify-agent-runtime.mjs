@@ -30,6 +30,20 @@ try {
   assert.equal(completed.status, 'completed');
   assert.throws(() => machine.transition(completed, agent.AgentRunAction.Resume, clock));
   assert.equal(agent.DEFAULT_MAX_CONCURRENT_AGENT_RUNS, 3);
+  const executionRegistry = new agent.AgentRunExecutionRegistry();
+  const chatController = new AbortController();
+  executionRegistry.register('run:chat', chatController);
+  executionRegistry.cancel('run:chat');
+  assert.equal(chatController.signal.aborted, true, 'shared cancellation must abort a registered chat run');
+  const staleSignal = executionRegistry.begin('run:replacement');
+  const replacementSignal = executionRegistry.begin('run:replacement');
+  executionRegistry.finish('run:replacement', staleSignal);
+  executionRegistry.cancel('run:replacement');
+  assert.equal(
+    replacementSignal.aborted,
+    true,
+    'a stale execution must not unregister its replacement'
+  );
   const workerCoordinatorSource = await readFile(path.join(
     root,
     'src/composition-root/agent/AgentWorkerCoordinator.ts'
