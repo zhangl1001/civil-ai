@@ -1,4 +1,5 @@
 import type {
+  AgentMemoryLayer,
   AgentMemoryQuery,
   AgentMemoryRecord,
   AgentMemoryRepository
@@ -33,13 +34,25 @@ interface MemoryForgetEntry {
 type MemoryEntry = MemoryPutEntry | MemorySupersedeEntry | MemoryForgetEntry | MemoryForgetSessionEntry;
 
 const MEMORY_LOG_KEY = '__agent_memory__';
+const MAX_MEMORY_CONTENT_BYTES = 16 * 1_024;
+const FORBIDDEN_MEMORY_KEYS = new Set([
+  'chainofthought',
+  'internalreasoning',
+  'reasoning',
+  'thinking',
+  'thought',
+  '思考过程',
+  '推理过程'
+]);
 
 export class FileAgentMemoryRepository implements AgentMemoryRepository {
   private statePromise?: Promise<MemoryReplayState>;
+  private mutation: Promise<void> = Promise.resolve();
 
   constructor(private readonly storage: AgentWorkspaceStorage) {}
 
   async recall(query: AgentMemoryQuery): Promise<readonly AgentMemoryRecord[]> {
+    await this.mutation;
     return [...(await this.state()).records.values()]
       .filter((record) => !record.supersededBy)
       .filter((record) => record.expiresAt === undefined || record.expiresAt > query.now)
@@ -53,8 +66,17 @@ export class FileAgentMemoryRepository implements AgentMemoryRepository {
   }
 
   async append(record: AgentMemoryRecord): Promise<void> {
-    const entry: MemoryPutEntry = { version: 1, operation: 'memory.put', record };
-    await this.write(entry);
+    assertDurableMemory(record);
+    return this.mutate(async () => {
+      const state = await this.state();
+      if (
+        state.forgottenMemoryIds.has(record.id)
+        || (record.sessionId && state.forgottenSessions.has(record.sessionId))
+      ) return;
+      const entry: MemoryPutEntry = { version: 1, operation: 'memory.put', record };
+      await this.storage.append(MEMORY_LOG_KEY, JSON.stringify(entry));
+      applyEntry(state, entry);
+    });
   }
 
   async supersede(memoryId: string, replacementId: string): Promise<void> {
@@ -64,7 +86,7 @@ export class FileAgentMemoryRepository implements AgentMemoryRepository {
       memoryId,
       replacementId
     };
-    await this.write(entry);
+    await this.rewrite(entry);
   }
 
   async forget(memoryId: string): Promise<void> {
@@ -73,7 +95,7 @@ export class FileAgentMemoryRepository implements AgentMemoryRepository {
       operation: 'memory.forget',
       memoryId
     };
-    await this.write(entry);
+    await this.rewrite(entry);
   }
 
   async forgetSession(sessionId: string): Promise<void> {
@@ -82,7 +104,7 @@ export class FileAgentMemoryRepository implements AgentMemoryRepository {
       operation: 'memory.forget_session',
       sessionId
     };
-    await this.write(entry);
+    await this.rewrite(entry);
   }
 
   private async state(): Promise<MemoryReplayState> {
@@ -90,9 +112,20 @@ export class FileAgentMemoryRepository implements AgentMemoryRepository {
     return this.statePromise;
   }
 
-  private async write(entry: MemoryEntry): Promise<void> {
-    await this.storage.append(MEMORY_LOG_KEY, JSON.stringify(entry));
-    applyEntry(await this.state(), entry);
+  private rewrite(entry: MemoryEntry): Promise<void> {
+    return this.mutate(async () => {
+      const next = cloneState(await this.state());
+      applyEntry(next, entry);
+      const compacted = compactState(next, Date.now());
+      await this.storage.replace(MEMORY_LOG_KEY, serializeState(compacted));
+      this.statePromise = Promise.resolve(compacted);
+    });
+  }
+
+  private mutate(operation: () => Promise<void>): Promise<void> {
+    const next = this.mutation.catch(() => undefined).then(operation);
+    this.mutation = next;
+    return next;
   }
 
   private async replay(): Promise<MemoryReplayState> {
@@ -108,6 +141,57 @@ export class FileAgentMemoryRepository implements AgentMemoryRepository {
     });
     return state;
   }
+}
+
+function cloneState(state: MemoryReplayState): MemoryReplayState {
+  return {
+    records: new Map(state.records),
+    superseded: new Map(state.superseded),
+    forgottenMemoryIds: new Set(state.forgottenMemoryIds),
+    forgottenSessions: new Set(state.forgottenSessions)
+  };
+}
+
+function compactState(state: MemoryReplayState, now: number): MemoryReplayState {
+  const records = new Map(
+    [...state.records.entries()].filter(([, record]) => (
+      !record.supersededBy
+      && (record.expiresAt === undefined || record.expiresAt > now)
+    ))
+  );
+  return {
+    records,
+    superseded: new Map(state.superseded),
+    forgottenMemoryIds: new Set(state.forgottenMemoryIds),
+    forgottenSessions: new Set(state.forgottenSessions)
+  };
+}
+
+function serializeState(state: MemoryReplayState): string {
+  const entries: MemoryEntry[] = [
+    ...[...state.forgottenSessions].map((sessionId): MemoryForgetSessionEntry => ({
+      version: 1,
+      operation: 'memory.forget_session',
+      sessionId
+    })),
+    ...[...state.forgottenMemoryIds].map((memoryId): MemoryForgetEntry => ({
+      version: 1,
+      operation: 'memory.forget',
+      memoryId
+    })),
+    ...[...state.superseded].map(([memoryId, replacementId]): MemorySupersedeEntry => ({
+      version: 1,
+      operation: 'memory.supersede',
+      memoryId,
+      replacementId
+    })),
+    ...[...state.records.values()].map((record): MemoryPutEntry => ({
+      version: 1,
+      operation: 'memory.put',
+      record
+    }))
+  ];
+  return entries.length ? `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n` : '';
 }
 
 interface MemoryReplayState {
@@ -189,4 +273,41 @@ function isMemoryRecord(value: unknown): value is AgentMemoryRecord {
     && typeof record.content === 'object'
     && !Array.isArray(record.content)
     && typeof record.validFrom === 'number';
+}
+
+function assertDurableMemory(record: AgentMemoryRecord): void {
+  if ((record.layer as AgentMemoryLayer) === 'working') {
+    throw new Error('Working memory must remain in the Agent checkpoint, not durable memory storage.');
+  }
+  if (!record.sourceRef?.trim()) {
+    throw new Error('Durable Agent memory requires a source reference.');
+  }
+  if (
+    typeof record.confidence !== 'number'
+    || !Number.isFinite(record.confidence)
+    || record.confidence < 0
+    || record.confidence > 1
+  ) {
+    throw new Error('Durable Agent memory confidence must be between 0 and 1.');
+  }
+  const serialized = JSON.stringify(record.content);
+  if (new TextEncoder().encode(serialized).byteLength > MAX_MEMORY_CONTENT_BYTES) {
+    throw new Error('Durable Agent memory content exceeds the 16 KB limit.');
+  }
+  assertNoPrivateReasoning(record.content);
+}
+
+function assertNoPrivateReasoning(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach(assertNoPrivateReasoning);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  Object.entries(value).forEach(([key, child]) => {
+    const normalized = key.replace(/[_\-\s]/g, '').toLocaleLowerCase();
+    if (FORBIDDEN_MEMORY_KEYS.has(normalized)) {
+      throw new Error(`Durable Agent memory may not store private reasoning field: ${key}`);
+    }
+    assertNoPrivateReasoning(child);
+  });
 }

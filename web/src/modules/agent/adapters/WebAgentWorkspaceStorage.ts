@@ -44,6 +44,21 @@ export class WebAgentWorkspaceStorage implements AgentWorkspaceStorage {
     });
   }
 
+  replace(logKey: string, content: string): Promise<void> {
+    return this.enqueue(logKey, async () => {
+      const directory = await this.directory();
+      if (!directory) {
+        if (content) localStorage.setItem(localKey(logKey), content);
+        else localStorage.removeItem(localKey(logKey));
+        return;
+      }
+      const handle = await directory.getFileHandle(fileName(logKey), { create: true });
+      const writable = await handle.createWritable({ keepExistingData: false });
+      await writable.write(content);
+      await writable.close();
+    });
+  }
+
   async read(logKey: string): Promise<string> {
     await this.pending.get(logKey);
     const directory = await this.directory();

@@ -8,9 +8,16 @@ interface ConversationMessageLogEntry {
 }
 
 export class ConversationMessageLog {
+  private readonly pending = new Map<string, Promise<void>>();
+
   constructor(private readonly storage: AgentWorkspaceStorage) {}
 
   async list(sessionId: string): Promise<readonly ConversationMessage[]> {
+    await this.pending.get(sessionId);
+    return this.readMessages(sessionId);
+  }
+
+  private async readMessages(sessionId: string): Promise<readonly ConversationMessage[]> {
     const messages = new Map<string, ConversationMessage>();
     (await this.entries(sessionId)).forEach((entry) => {
       if (entry.message.sessionId !== sessionId) return;
@@ -34,16 +41,45 @@ export class ConversationMessageLog {
   }
 
   append(message: ConversationMessage): Promise<void> {
-    return this.storage.append(message.sessionId, serialize(message));
+    return this.enqueue(message.sessionId, () => (
+      this.storage.append(message.sessionId, serialize(message))
+    ));
   }
 
   replace(message: ConversationMessage): Promise<void> {
-    return this.storage.append(message.sessionId, serialize(message));
+    return this.enqueue(message.sessionId, async () => {
+      const messages = new Map(
+        (await this.readMessages(message.sessionId)).map((item) => [item.id, item])
+      );
+      messages.set(message.id, message);
+      await this.storage.replace(
+        message.sessionId,
+        serializeMessages([...messages.values()])
+      );
+    });
   }
 
   deleteSession(sessionId: string): Promise<void> {
-    return this.storage.delete(sessionId);
+    return this.enqueue(sessionId, () => this.storage.delete(sessionId));
   }
+
+  private enqueue(sessionId: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.pending.get(sessionId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    const tracked = next.finally(() => {
+      if (this.pending.get(sessionId) === tracked) this.pending.delete(sessionId);
+    });
+    this.pending.set(sessionId, tracked);
+    return tracked;
+  }
+}
+
+function serializeMessages(messages: readonly ConversationMessage[]): string {
+  const content = [...messages]
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+    .map(serialize)
+    .join('\n');
+  return content ? `${content}\n` : '';
 }
 
 function serialize(message: ConversationMessage): string {

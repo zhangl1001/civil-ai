@@ -589,6 +589,10 @@ try {
     async append(logKey, line) {
       workspaceLogs.set(logKey, `${workspaceLogs.get(logKey) || ''}${line}\n`);
     },
+    async replace(logKey, content) {
+      if (content) workspaceLogs.set(logKey, content);
+      else workspaceLogs.delete(logKey);
+    },
     async read(logKey) {
       return workspaceLogs.get(logKey) || '';
     },
@@ -635,7 +639,9 @@ try {
     layer: agent.AgentMemoryLayer.Semantic,
     memoryCode: 'tutor.response_preference',
     content: { style: 'socratic' },
-    validFrom: 2_000
+    validFrom: 2_000,
+    sourceRef: 'test:global-preference',
+    confidence: 1
   });
   await memories.append({
     id: 'memory:session-1',
@@ -643,7 +649,9 @@ try {
     layer: agent.AgentMemoryLayer.Session,
     memoryCode: 'conversation.summary',
     content: { summary: '第一轮' },
-    validFrom: 2_100
+    validFrom: 2_100,
+    sourceRef: 'test:session-1',
+    confidence: 1
   });
   await memories.append({
     id: 'memory:session-2',
@@ -651,7 +659,9 @@ try {
     layer: agent.AgentMemoryLayer.Session,
     memoryCode: 'conversation.summary',
     content: { summary: '第二轮' },
-    validFrom: 2_200
+    validFrom: 2_200,
+    sourceRef: 'test:session-2',
+    confidence: 1
   });
   const sessionOneMemories = await memories.recall({
     sessionId: 'session:1',
@@ -666,9 +676,12 @@ try {
     layer: agent.AgentMemoryLayer.Session,
     memoryCode: 'conversation.summary',
     content: { summary: '更新后的第一轮' },
-    validFrom: 2_300
+    validFrom: 2_300,
+    sourceRef: 'test:session-1-replacement',
+    confidence: 1
   });
   await memories.supersede('memory:session-1', 'memory:session-1-replacement');
+  assert(!workspaceLogs.get('__agent_memory__').includes('"id":"memory:session-1"'));
   assert.deepEqual(
     (await memories.recall({
       sessionId: 'session:1',
@@ -679,6 +692,7 @@ try {
     ['memory:session-1-replacement']
   );
   await memories.forget('memory:session-1-replacement');
+  assert(!workspaceLogs.get('__agent_memory__').includes('更新后的第一轮'));
   assert.equal((await memories.recall({
     sessionId: 'session:1',
     layers: [agent.AgentMemoryLayer.Session],
@@ -692,8 +706,11 @@ try {
     layer: agent.AgentMemoryLayer.Session,
     memoryCode: 'conversation.late_write',
     content: { summary: '迟到写入' },
-    validFrom: 2_400
+    validFrom: 2_400,
+    sourceRef: 'test:late-session-1',
+    confidence: 1
   });
+  assert(!workspaceLogs.get('__agent_memory__').includes('迟到写入'));
   assert.equal((await memories.recall({
     sessionId: 'session:1',
     layers: [agent.AgentMemoryLayer.Session],

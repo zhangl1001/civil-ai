@@ -4,6 +4,7 @@ import { WebAgentWorkspaceStorage } from './WebAgentWorkspaceStorage';
 
 interface NativeAgentWorkspacePlugin {
   append(options: { readonly logKey: string; readonly line: string }): Promise<void>;
+  replace(options: { readonly logKey: string; readonly content: string }): Promise<void>;
   read(options: { readonly logKey: string }): Promise<{ readonly content?: string }>;
   delete(options: { readonly logKey: string }): Promise<void>;
 }
@@ -43,6 +44,21 @@ export class NativeAgentWorkspaceStorage implements AgentWorkspaceStorage {
       if (!isPluginUnavailable(error)) throw error;
       this.disableNativeWorkspace(error);
       return this.fallback.read(logKey);
+    }
+  }
+
+  async replace(logKey: string, content: string): Promise<void> {
+    if (this.nativeUnavailable) {
+      await this.fallback.replace(logKey, content);
+      return;
+    }
+    try {
+      await nativeAgentWorkspace.replace({ logKey, content });
+      await this.fallback.delete(logKey);
+    } catch (error) {
+      if (!isPluginUnavailable(error)) throw error;
+      this.disableNativeWorkspace(error);
+      await this.fallback.replace(logKey, content);
     }
   }
 

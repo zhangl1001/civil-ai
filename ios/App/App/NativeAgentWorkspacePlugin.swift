@@ -7,6 +7,7 @@ public final class NativeAgentWorkspacePlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "NativeAgentWorkspace"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "append", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "replace", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "read", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "delete", returnType: CAPPluginReturnPromise)
     ]
@@ -38,8 +39,10 @@ public final class NativeAgentWorkspacePlugin: CAPPlugin, CAPBridgedPlugin {
                 guard state.totalBytes + data.count <= self.maximumWorkspaceBytes else {
                     throw WorkspaceError.totalLimit
                 }
-                guard state.fileExists || state.fileCount < self.maximumFileCount else {
-                    throw WorkspaceError.fileCountLimit
+                if !data.isEmpty {
+                    guard state.fileExists || state.fileCount < self.maximumFileCount else {
+                        throw WorkspaceError.fileCountLimit
+                    }
                 }
                 if state.fileExists {
                     let handle = try FileHandle(forWritingTo: url)
@@ -80,6 +83,41 @@ public final class NativeAgentWorkspacePlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(["content": content])
             } catch {
                 call.reject("Unable to read Agent workspace log", nil, error)
+            }
+        }
+    }
+
+    @objc func replace(_ call: CAPPluginCall) {
+        guard let logKey = call.getString("logKey"), let content = call.getString("content") else {
+            call.reject("Agent workspace replace requires logKey and content")
+            return
+        }
+        guard content.utf8.count <= maximumFileBytes else {
+            call.reject("Agent workspace replacement exceeds the 4 MB file limit")
+            return
+        }
+        queue.async {
+            do {
+                let url = try self.logURL(logKey: logKey)
+                let data = Data(content.utf8)
+                let state = try self.workspaceState(for: url)
+                let nextTotalBytes = state.totalBytes - state.fileBytes + data.count
+                guard nextTotalBytes <= self.maximumWorkspaceBytes else {
+                    throw WorkspaceError.totalLimit
+                }
+                guard state.fileExists || state.fileCount < self.maximumFileCount else {
+                    throw WorkspaceError.fileCountLimit
+                }
+                if data.isEmpty {
+                    if state.fileExists {
+                        try FileManager.default.removeItem(at: url)
+                    }
+                } else {
+                    try data.write(to: url, options: .atomic)
+                }
+                call.resolve()
+            } catch {
+                call.reject("Unable to replace Agent workspace log", nil, error)
             }
         }
     }

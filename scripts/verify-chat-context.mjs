@@ -162,6 +162,10 @@ try {
     async append(logKey, line) {
       workspaceLogs.set(logKey, `${workspaceLogs.get(logKey) || ''}${line}\n`);
     },
+    async replace(logKey, content) {
+      if (content) workspaceLogs.set(logKey, content);
+      else workspaceLogs.delete(logKey);
+    },
     async read(logKey) {
       return workspaceLogs.get(logKey) || '';
     },
