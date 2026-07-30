@@ -1,7 +1,7 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
-export const TUTOR_INDEXEDDB_VERSION = 29;
+export const TUTOR_INDEXEDDB_VERSION = 30;
 
 export const TutorIndexedDbStore = {
   CandidateCycleBundles: 'candidate_cycle_bundles',
@@ -20,6 +20,7 @@ export const TutorIndexedDbStore = {
   ErrorDiagnosisConfirmations: 'error_diagnosis_confirmations',
   ErrorDiagnosisProjections: 'error_diagnosis_projections',
   AgentRunAggregates: 'agent_run_aggregates',
+  AgentRunIdempotency: 'agent_run_idempotency',
   AgentToolReceipts: 'agent_tool_receipts',
   MasteryTracks: 'mastery_tracks',
   MasterySnapshots: 'mastery_snapshots',
@@ -227,6 +228,11 @@ export class TutorIndexedDb {
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.AgentRunAggregates)) {
           database.createObjectStore(TutorIndexedDbStore.AgentRunAggregates, { keyPath: 'runId' });
         }
+        const agentRunIdempotencyStore = database.objectStoreNames.contains(TutorIndexedDbStore.AgentRunIdempotency)
+          ? request.transaction?.objectStore(TutorIndexedDbStore.AgentRunIdempotency)
+          : database.createObjectStore(TutorIndexedDbStore.AgentRunIdempotency, {
+              keyPath: 'idempotencyKey'
+            });
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.AgentToolReceipts)) {
           database.createObjectStore(TutorIndexedDbStore.AgentToolReceipts, {
             keyPath: ['agentRunId', 'toolCallId']
@@ -235,6 +241,24 @@ export class TutorIndexedDb {
         const agentRunStore = request.transaction?.objectStore(TutorIndexedDbStore.AgentRunAggregates);
         if (agentRunStore && !agentRunStore.indexNames.contains('by_target')) {
           agentRunStore.createIndex('by_target', ['run.targetResourceType', 'run.targetResourceId'], { unique: false });
+        }
+        if (event.oldVersion < 30 && agentRunStore && agentRunIdempotencyStore) {
+          const cursorRequest = agentRunStore.openCursor();
+          cursorRequest.onsuccess = () => {
+            const cursor = cursorRequest.result;
+            if (!cursor) return;
+            const value = cursor.value as {
+              readonly runId?: string;
+              readonly idempotencyKey?: string;
+            };
+            if (value.runId && value.idempotencyKey) {
+              agentRunIdempotencyStore.put({
+                idempotencyKey: value.idempotencyKey,
+                runId: value.runId
+              });
+            }
+            cursor.continue();
+          };
         }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.MasteryTracks)) database.createObjectStore(TutorIndexedDbStore.MasteryTracks, { keyPath: 'id' });
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.MasterySnapshots)) database.createObjectStore(TutorIndexedDbStore.MasterySnapshots, { keyPath: 'id' });
