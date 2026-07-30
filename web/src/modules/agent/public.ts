@@ -10,7 +10,15 @@ export {
   type AgentWorkPool as AgentWorkPoolCode,
   type AgentExecutionClass as AgentExecutionClassCode
 } from './domain/AgentRunCodes';
-export { TaskCenterStep, TaskTargetType, type TaskCenterStep as TaskCenterStepCode, type TaskTargetType as TaskTargetTypeCode } from './domain/TaskCenterCodes';
+export {
+  AgentRunNotificationMode,
+  TaskCenterStep,
+  TaskTargetType,
+  resolveAgentRunNotificationMode,
+  type AgentRunNotificationMode as AgentRunNotificationModeCode,
+  type TaskCenterStep as TaskCenterStepCode,
+  type TaskTargetType as TaskTargetTypeCode
+} from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
 export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';
 export { AuthorizedAgentToolExecutor } from './application/AuthorizedAgentToolExecutor';

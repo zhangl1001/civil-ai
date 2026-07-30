@@ -4,7 +4,13 @@ import type {
   AgentRunRepository,
   TutorAgentLifecycleObserver
 } from '@/modules/agent/public';
-import { AgentRunType, TaskTargetType, invalidProviderRequestText } from '@/modules/agent/public';
+import {
+  AgentRunNotificationMode,
+  AgentRunType,
+  TaskTargetType,
+  invalidProviderRequestText,
+  resolveAgentRunNotificationMode
+} from '@/modules/agent/public';
 import {
   MessageBusinessLine,
   MessageCategory,
@@ -22,7 +28,7 @@ export class TaskMessageProjector implements TutorAgentLifecycleObserver {
   ) {}
 
   queued(run: AgentRunAggregate): Promise<unknown> {
-    if (!shouldProject(run)) return Promise.resolve();
+    if (!shouldProject(run, 'lifecycle')) return Promise.resolve();
     return this.messages.publish({
       businessLine: businessLine(run.run.inputSnapshot),
       category: MessageCategory.Task,
@@ -39,29 +45,30 @@ export class TaskMessageProjector implements TutorAgentLifecycleObserver {
   }
 
   completed(run: AgentRunAggregate): Promise<void> {
-    return this.publishTerminal(run, MessageEventCode.TaskCompleted, MessageSeverity.Success, '任务已完成');
+    return this.publish(run, 'terminal', MessageEventCode.TaskCompleted, MessageSeverity.Success, '任务已完成');
   }
 
   retrying(run: AgentRunAggregate): Promise<void> {
-    return this.publishTerminal(run, MessageEventCode.TaskRetrying, MessageSeverity.Warning, '服务暂时繁忙，任务将自动重试');
+    return this.publish(run, 'lifecycle', MessageEventCode.TaskRetrying, MessageSeverity.Warning, '服务暂时繁忙，任务将自动重试');
   }
 
   failed(run: AgentRunAggregate): Promise<void> {
-    return this.publishTerminal(run, MessageEventCode.TaskFailed, MessageSeverity.Error, '任务执行失败，可进入对应页面重试');
+    return this.publish(run, 'terminal', MessageEventCode.TaskFailed, MessageSeverity.Error, '任务执行失败，可进入对应页面重试');
   }
 
   cancelled(run: AgentRunAggregate): Promise<void> {
-    return this.publishTerminal(run, MessageEventCode.TaskCancelled, MessageSeverity.Warning, '任务已取消');
+    return this.publish(run, 'terminal', MessageEventCode.TaskCancelled, MessageSeverity.Warning, '任务已取消');
   }
 
-  private async publishTerminal(
+  private async publish(
     run: AgentRunAggregate,
+    phase: 'lifecycle' | 'terminal',
     eventCode: string,
     severity: typeof MessageSeverity[keyof typeof MessageSeverity],
     fallback: string
   ): Promise<void> {
-    if (!shouldProject(run)) return;
     const current = await this.runs.findById(run.run.id) ?? run;
+    if (!shouldProject(current, phase)) return;
     await this.messages.publish({
       businessLine: businessLine(current.run.inputSnapshot),
       category: MessageCategory.Task,
@@ -78,7 +85,16 @@ export class TaskMessageProjector implements TutorAgentLifecycleObserver {
   }
 }
 
-function shouldProject(run: AgentRunAggregate): boolean {
+function shouldProject(
+  run: AgentRunAggregate,
+  phase: 'lifecycle' | 'terminal'
+): boolean {
+  const notificationMode = resolveAgentRunNotificationMode(run.run.inputSnapshot);
+  if (notificationMode === AgentRunNotificationMode.Silent) return false;
+  if (
+    notificationMode === AgentRunNotificationMode.Terminal
+    && phase !== 'terminal'
+  ) return false;
   const visibleAtTerminal = run.run.checkpoint.taskCenterVisible === true;
   if (!visibleAtTerminal && run.run.inputSnapshot.taskCenterVisible === false) return false;
   return visibleAtTerminal || run.run.targetResourceType !== TaskTargetType.ChatTool;

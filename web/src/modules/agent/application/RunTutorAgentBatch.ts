@@ -8,6 +8,10 @@ import {
   type AgentWorkPool,
   DEFAULT_MAX_CONCURRENT_AGENT_RUNS
 } from '../domain/AgentRunCodes';
+import {
+  AgentRunNotificationMode,
+  resolveAgentRunNotificationMode
+} from '../domain/TaskCenterCodes';
 import { ClaimAgentRuns } from './ClaimAgentRuns';
 import { RecoverExpiredAgentRuns } from './RecoverExpiredAgentRuns';
 import { TransitionAgentRun } from './TransitionAgentRun';
@@ -203,7 +207,7 @@ export class RunTutorAgentBatch {
           errorCode: code,
           errorMessage: message,
           message,
-          ...(run.run.inputSnapshot.notifyOnTerminal === true
+          ...(resolveAgentRunNotificationMode(run.run.inputSnapshot) === AgentRunNotificationMode.Terminal
             ? { taskCenterVisible: true }
             : {})
         },

@@ -1,6 +1,10 @@
 import type { AgentRunId, InstantMs, JsonObject } from '@/kernel/public';
 import type { AgentRunAggregate, AgentRunRepository } from '../contracts/AgentRunRepository';
 import { AgentRunStatus, AgentRunType, type AgentRunStatus as AgentRunStatusValue, type AgentRunType as AgentRunTypeValue } from '../domain/AgentRunCodes';
+import {
+  resolveAgentRunNotificationMode,
+  type AgentRunNotificationMode
+} from '../domain/TaskCenterCodes';
 import { invalidProviderRequestText } from './AgentRunErrorPresentation';
 
 export interface AgentRunView {
@@ -29,6 +33,7 @@ export interface AgentRunView {
   readonly linkedTaskId?: string;
   readonly toolName?: string;
   readonly chatSessionId?: string;
+  readonly notificationMode: AgentRunNotificationMode;
   readonly taskCenterVisible: boolean;
   readonly isActive: boolean;
   readonly canCancel: boolean;
@@ -97,6 +102,7 @@ export class GetAgentRunViews {
       linkedTaskId: linkedTaskId(aggregate),
       toolName: textField(aggregate.run.checkpoint.toolName) || textField(aggregate.run.inputSnapshot.toolName),
       chatSessionId: textField(aggregate.run.inputSnapshot.chatSessionId),
+      notificationMode: resolveAgentRunNotificationMode(aggregate.run.inputSnapshot),
       taskCenterVisible: (
         terminalVisibility
         || (
