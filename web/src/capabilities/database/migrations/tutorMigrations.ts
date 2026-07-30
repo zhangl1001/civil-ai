@@ -29,6 +29,7 @@ import referencePackComparisonQuestionsSql from './028_reference_pack_comparison
 import questionSetLibraryPaginationSql from './029_question_set_library_pagination.sql?raw';
 import agentExecutionClassesSql from './030_agent_execution_classes.sql?raw';
 import agentRunLeaseFencingSql from './031_agent_run_lease_fencing.sql?raw';
+import agentToolReceiptsSql from './032_agent_tool_receipts.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -217,5 +218,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'agent_run_lease_fencing',
     checksum: 'sha256:4cb69b3df9f2afc6ef874668e15635692dcf5aa9a1c0cbd6b9105ea541ed4396',
     sql: agentRunLeaseFencingSql
+  },
+  {
+    version: 32,
+    name: 'agent_tool_receipts',
+    checksum: 'sha256:74dc729fd6e5eea81efe49317ca2c239cab2efca8b0885a705cf704653a1b503',
+    sql: agentToolReceiptsSql
   }
 ];

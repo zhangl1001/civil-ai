@@ -457,11 +457,11 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
   });
   registerChatAgentSkillSelector(executor);
   chatAgentBusinessTools.forEach((definition) => {
-    executor.register(definition.name, async (call) => {
+    executor.register(definition.name, async (call, context) => {
       const result = await aiBusinessTools.execute({
         name: call.name as AIBusinessToolName,
         arguments: call.arguments
-      }, { sessionId });
+      }, { sessionId, idempotencyKey: context.businessIdempotencyKey });
       return {
         content: JSON.stringify({ message: result.reply, taskId: result.taskId ?? null }),
         resultRef: result.taskId
@@ -737,7 +737,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
     const result = await runtime.publishQuestionImportDraft.execute({
       draftId: String(call.arguments.draftId || '') as QuestionImportDraftId,
       expectedVersion: Number(call.arguments.expectedVersion),
-      idempotencyKey: `chat-agent:${context.agentRunId}:${call.id}:question-publish`
+      idempotencyKey: context.businessIdempotencyKey ?? `chat-agent:${context.agentRunId}:${call.id}:question-publish`
     });
     return { content: JSON.stringify(result), resultRef: result.questionSetId };
   });
@@ -753,7 +753,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
     });
     return { content: JSON.stringify(proposal), resultRef: cycle.examCycle.id };
   });
-  executor.register('candidate.change_target', async (call) => {
+  executor.register('candidate.change_target', async (call, context) => {
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先建立备考档案。');
     const subject = String(call.arguments.subject || '') as SubjectCode;
@@ -761,7 +761,7 @@ function createExecutor(runtime: TutorDatabaseRuntime, sessionId: string): Regis
     if (!previous) throw new Error('没有找到对应科目的当前目标。');
     const targetScore = Number(call.arguments.targetScore);
     await runtime.updateScoreTargets.execute({
-      idempotencyKey: `chat-agent:${sessionId}:target:${subject}:${targetScore}`,
+      idempotencyKey: context.businessIdempotencyKey ?? `chat-agent:${sessionId}:target:${subject}:${targetScore}`,
       examCycleId: cycle.examCycle.id,
       changes: [{
         subject,

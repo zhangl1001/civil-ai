@@ -1,7 +1,7 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
-export const TUTOR_INDEXEDDB_VERSION = 28;
+export const TUTOR_INDEXEDDB_VERSION = 29;
 
 export const TutorIndexedDbStore = {
   CandidateCycleBundles: 'candidate_cycle_bundles',
@@ -20,6 +20,7 @@ export const TutorIndexedDbStore = {
   ErrorDiagnosisConfirmations: 'error_diagnosis_confirmations',
   ErrorDiagnosisProjections: 'error_diagnosis_projections',
   AgentRunAggregates: 'agent_run_aggregates',
+  AgentToolReceipts: 'agent_tool_receipts',
   MasteryTracks: 'mastery_tracks',
   MasterySnapshots: 'mastery_snapshots',
   ReviewQueue: 'review_queue',
@@ -225,6 +226,11 @@ export class TutorIndexedDb {
         }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.AgentRunAggregates)) {
           database.createObjectStore(TutorIndexedDbStore.AgentRunAggregates, { keyPath: 'runId' });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.AgentToolReceipts)) {
+          database.createObjectStore(TutorIndexedDbStore.AgentToolReceipts, {
+            keyPath: ['agentRunId', 'toolCallId']
+          });
         }
         const agentRunStore = request.transaction?.objectStore(TutorIndexedDbStore.AgentRunAggregates);
         if (agentRunStore && !agentRunStore.indexNames.contains('by_target')) {

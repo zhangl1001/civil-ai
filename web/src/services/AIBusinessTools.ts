@@ -75,7 +75,7 @@ export class AIBusinessTools {
       const count = Math.min(20, Math.max(1, Math.round(asNumber(args.questionCount, review ? 6 : 8))));
       const scopeKey = `practice:${review ? 'review' : 'chat'}:${capability.id}`;
       const task = await new StructuredPracticeTaskCenter(runtime).start({
-        idempotencyKey: `${scopeKey}:${crypto.randomUUID()}`,
+        idempotencyKey: meta.idempotencyKey ?? `${scopeKey}:${crypto.randomUUID()}`,
         scopeKey,
         title: review ? `${capability.name}错题变式训练` : `${capability.name}专项练习`,
         detail: `${moduleLabel} · ${count}题 · ${asString(args.difficulty) || '标准'}`,

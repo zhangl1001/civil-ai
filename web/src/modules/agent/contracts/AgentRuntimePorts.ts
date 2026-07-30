@@ -99,6 +99,8 @@ export interface AgentToolPolicyResult {
 export interface AgentToolExecutionContext {
   readonly agentRunId: AgentRunId;
   readonly leaseToken?: AgentRunLeaseToken;
+  /** Stable across crash recovery and retries of the same write Tool call. */
+  readonly businessIdempotencyKey?: string;
   readonly examCycleId?: string;
   readonly learningThreadId?: string;
   readonly sessionId?: string;

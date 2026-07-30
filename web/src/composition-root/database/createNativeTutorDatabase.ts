@@ -62,23 +62,22 @@ import {
 } from '@/modules/content/public';
 import { SqliteLearningThreadRepository } from '@/modules/teaching/adapters/SqliteLearningThreadRepository';
 import { SqliteAgentRunRepository } from '@/modules/agent/adapters/SqliteAgentRunRepository';
+import { SqliteAgentToolReceiptRepository } from '@/modules/agent/adapters/SqliteAgentToolReceiptRepository';
 import {
   AgentRunExecutionRegistry,
   CancelAgentRun,
   ClaimAgentRuns,
   CreateAgentRun,
+  createDurableAgentLoopFactory,
   DefaultAgentToolPolicy,
   FileAgentMemoryRepository,
   GetAgentRunViews,
   InvokeAgentModel,
   RecoverExpiredAgentRuns,
-  RunAgentLoop,
   RunTutorAgentBatch,
   SaveAgentLoopCheckpoint,
   TransitionAgentRun,
-  UpdateAgentRunProgress,
-  type AgentRuntimeObserver,
-  type AgentToolExecutor
+  UpdateAgentRunProgress
 } from '@/modules/agent/public';
 import { SqliteMessageCenterRepository } from '@/modules/message-center/adapters/SqliteMessageCenterRepository';
 import { MessageCenter } from '@/modules/message-center/public';
@@ -197,6 +196,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const errorDiagnosisRepository = new SqliteErrorDiagnosisRepository(database, transactionScope);
   const learningEvidenceRepository = new SqliteLearningEvidenceRepository(database, transactionScope);
   const agentRunRepository = new SqliteAgentRunRepository(database, transactionScope);
+  const agentToolReceiptRepository = new SqliteAgentToolReceiptRepository(database);
   const messageCenterRepository = new SqliteMessageCenterRepository(database, transactionScope);
   const proactiveSignalRepository = new SqliteProactiveSignalRepository(database, transactionScope);
   const messageCenter = new MessageCenter(
@@ -328,9 +328,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const invokeAgentModel = new InvokeAgentModel(unitOfWork, agentRunRepository, clock, new UuidV7IdGenerator(clock));
   const saveAgentLoopCheckpoint = new SaveAgentLoopCheckpoint(unitOfWork, agentRunRepository, clock, new UuidV7IdGenerator(clock));
   const defaultAgentToolPolicy = new DefaultAgentToolPolicy();
-  const createAgentLoop = (executor: AgentToolExecutor, observer?: AgentRuntimeObserver) => (
-    new RunAgentLoop(invokeAgentModel, defaultAgentToolPolicy, executor, saveAgentLoopCheckpoint, observer)
-  );
+  const createAgentLoop = createDurableAgentLoopFactory({ invoker: invokeAgentModel, policy: defaultAgentToolPolicy, receipts: agentToolReceiptRepository, checkpoints: saveAgentLoopCheckpoint, clock });
   const finalizeObjectiveTutorConclusion = new FinalizeObjectiveTutorConclusion(
     unitOfWork,
     tutorCycleRepository,
@@ -516,6 +514,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     errorDiagnosisRepository,
     learningEvidenceRepository,
     agentRunRepository,
+    agentToolReceiptRepository,
     messageCenterRepository,
     messageCenter,
     proactiveSignalRepository,
