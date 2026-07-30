@@ -1,9 +1,4 @@
-import {
-  ModelMessageRole,
-  type ModelMessage,
-  type ModelToolCall,
-  type ProviderGateway
-} from '@/capabilities/ai-runtime/public';
+import { ModelMessageRole, type ModelMessage, type ModelToolCall, type ProviderGateway } from '@/capabilities/ai-runtime/public';
 import type { AgentRunId } from '@/kernel/public';
 import {
   AgentToolPolicyDecision,
@@ -36,6 +31,7 @@ import { executeAgentToolCalls } from './AgentToolBatchExecutor';
 import {
   agentToolSignature,
   attemptedToolNames,
+  compileAgentLoopTurnContext,
   composeActiveSkillSystem,
   compactAgentLoopMessages,
   completionVerificationInstruction,
@@ -250,14 +246,18 @@ export class RunAgentLoop {
       turnCount += 1;
       if (skillWorkflowState === 'selected') skillWorkflowState = 'executing';
       await this.emit({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: turnCount });
+      const turnContext = compileAgentLoopTurnContext({
+        system: composeActiveSkillSystem(command.system, [...activeSkills.values()]),
+        messages, tools: finalizationOnly ? [] : toolSet.providerTools,
+        maxContextTokens: limits.maxContextTokens,
+        outputReserveTokens: 4_096
+      });
+      messages = [...turnContext.messages];
       const response = await this.modelInvoker.invoke({
         agentRunId: command.agentRunId, leaseToken: command.executionContext.leaseToken,
-        modelRole: 'agent.tutor_turn',
-        system: composeActiveSkillSystem(command.system, [...activeSkills.values()]),
-        messages: [...messages],
-        temperature: 0.2,
-        maxOutputTokens: 4_096,
-        tools: finalizationOnly ? [] : toolSet.providerTools,
+        modelRole: 'agent.tutor_turn', system: turnContext.system,
+        messages: [...turnContext.messages], temperature: 0.2,
+        maxOutputTokens: 4_096, tools: turnContext.tools,
         toolChoice: finalizationOnly
           ? 'none'
           : forceRequiredTool && requiredTool
