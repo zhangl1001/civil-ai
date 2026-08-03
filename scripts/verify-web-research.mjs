@@ -15,6 +15,12 @@ const server = await createServer({
 try {
   const research = await server.ssrLoadModule('/src/capabilities/web-research/public.ts');
   const researchService = await server.ssrLoadModule('/src/services/WebResearchService.ts');
+  const researchConfigService = await server.ssrLoadModule('/src/services/WebResearchConfigService.ts');
+  const currentAffairsPolicy = await server.ssrLoadModule('/src/services/CurrentAffairsResearchPolicy.ts');
+  const trueQuestionPrefetch = await server.ssrLoadModule('/src/composition-root/agent/TrueQuestionResearchPrefetch.ts');
+  const configuredGateway = await server.ssrLoadModule(
+    '/src/capabilities/web-research/adapters/ConfiguredWebResearchGateway.ts'
+  );
   assert.throws(() => research.requirePublicWebUrl('https://127.0.0.1/private'), /本机或内网/);
   assert.throws(() => research.requirePublicWebUrl('https://[::ffff:127.0.0.1]/private'), /本机或内网/);
   assert.throws(() => research.requirePublicWebUrl('https://user:secret@example.com/private'), /账号信息/);
@@ -29,6 +35,146 @@ try {
   );
   assert.equal(recentUrls.has('https://example.com/exam'), true, 'chunked page must remain authorized after child-link discovery');
   assert.equal(recentUrls.size, 32);
+  assert.equal(
+    researchConfigService.normalizeWebResearchConfig({
+      enabled: true,
+      provider: research.WebSearchProvider.BuiltIn,
+      apiKey: '',
+      updatedAt: 1
+    }).provider,
+    research.WebSearchProvider.Auto,
+    'installed built-in configurations must upgrade to orchestrated provider fallback'
+  );
+  assert.equal(currentAffairsPolicy.buildDailyCurrentAffairsQueries('2026-08-02').length, 5);
+  const currentAffairs = currentAffairsPolicy.selectDailyCurrentAffairs([
+    [
+      {
+        title: '暑期明星综艺热搜盘点',
+        url: 'https://ent.example.com/hot',
+        domain: 'ent.example.com',
+        snippet: '娱乐明星和综艺资讯'
+      },
+      {
+        title: '国务院部署推进公共服务改革',
+        url: 'https://www.gov.cn/zhengce/latest',
+        domain: 'www.gov.cn',
+        snippet: '会议研究就业、教育和公共服务政策',
+        publishedAt: '2026-08-02T02:00:00Z'
+      }
+    ],
+    [
+      {
+        title: '推进公共服务改革取得新进展',
+        url: 'https://www.gov.cn/zhengce/latest?utm_source=test',
+        domain: 'www.gov.cn',
+        snippet: '国家治理和民生政策持续完善'
+      },
+      {
+        title: '科技创新与产业发展观察',
+        url: 'https://www.news.cn/politics/innovation',
+        domain: 'www.news.cn',
+        snippet: '科技创新政策和经济高质量发展'
+      },
+      {
+        title: '强降雨防汛救灾与城市应急治理',
+        url: 'https://www.news.cn/politics/emergency',
+        domain: 'www.news.cn',
+        snippet: '公共安全、基层治理和应急能力建设'
+      }
+    ]
+  ], 5, Date.parse('2026-08-02T12:00:00Z'));
+  assert.equal(currentAffairs.length, 3, 'daily hotspots must retain public-interest events and exclude entertainment noise');
+  assert.equal(currentAffairs[0].domain, 'www.gov.cn', 'official sources repeated across queries must rank first');
+  assert.ok((currentAffairs[0].rankScore ?? 0) > (currentAffairs[1].rankScore ?? 0));
+  let activeSearches = 0;
+  let peakSearches = 0;
+  let activeReads = 0;
+  let peakReads = 0;
+  let cancelledReads = 0;
+  const prefetchStartedAt = Date.now();
+  const prefetched = await trueQuestionPrefetch.prefetchTrueQuestionResearch({
+    agentRunId: 'AgentRunId:prefetch-test',
+    scope: '江苏公务员考试；最近三年；行测判断推理',
+    maxQuestions: 10,
+    signal: new AbortController().signal,
+    research: {
+      async searchForAgentRun(input) {
+        activeSearches += 1;
+        peakSearches = Math.max(peakSearches, activeSearches);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        activeSearches -= 1;
+        const suffix = input.query.includes('PDF') ? 'pdf' : 'paper';
+        return {
+          query: input.query,
+          fetchedAt: Date.now(),
+          hits: Array.from({ length: 3 }, (_, index) => ({
+            title: `真题候选 ${suffix}-${index + 1}`,
+            url: `https://example.com/${suffix}-${index + 1}`,
+            domain: 'example.com',
+            snippet: '完整试卷与答案'
+          }))
+        };
+      },
+      async readPageForAgentRun(input) {
+        activeReads += 1;
+        peakReads = Math.max(peakReads, activeReads);
+        try {
+          await new Promise((resolve, reject) => {
+            const onAbort = () => {
+              clearTimeout(timer);
+              cancelledReads += 1;
+              reject(input.signal.reason);
+            };
+            const timer = setTimeout(() => {
+              input.signal.removeEventListener('abort', onAbort);
+              resolve();
+            }, input.url.endsWith('paper-3') ? 5_000 : 15);
+            input.signal.addEventListener('abort', onAbort, { once: true });
+          });
+          return {
+            title: '江苏省考真题',
+            url: input.url,
+            domain: 'example.com',
+            content: '1. 完整题干\nA. 甲\nB. 乙\nC. 丙\nD. 丁\n答案：A',
+            fetchedAt: Date.now()
+          };
+        } finally {
+          activeReads -= 1;
+        }
+      }
+    }
+  });
+  assert.equal(peakSearches, 2, 'true-question discovery queries must run concurrently');
+  assert.equal(peakReads, 3, 'top true-question pages must be read concurrently');
+  assert.equal(prefetched.pages.length, 2, 'prefetch must enter extraction once enough pages are ready');
+  assert.equal(cancelledReads, 1, 'slower surplus page reads must be cancelled');
+  assert.ok(Date.now() - prefetchStartedAt < 500, 'a slow surplus page must not delay true-question extraction');
+  assert.match(prefetched.promptEvidence, /系统并行预取的候选正文/);
+
+  const boundedStartedAt = Date.now();
+  await assert.rejects(
+    () => configuredGateway.runBoundedWebResearchAttempt(
+      undefined,
+      25,
+      () => new Promise(() => {})
+    ),
+    /搜索源响应超时/
+  );
+  assert.ok(
+    Date.now() - boundedStartedAt < 500,
+    'a stalled public search source must stop at its own deadline'
+  );
+
+  const parentController = new AbortController();
+  const parentCancellation = configuredGateway.runBoundedWebResearchAttempt(
+    parentController.signal,
+    5_000,
+    (signal) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    })
+  );
+  parentController.abort(new Error('agent run cancelled'));
+  await assert.rejects(() => parentCancellation, /agent run cancelled/);
 
   const builtInRequests = [];
   const builtIn = new research.ConfiguredWebResearchGateway({
@@ -297,6 +443,29 @@ try {
   assert.equal(braveRequests[0].headers['X-Subscription-Token'], 'brave-test');
   assert.match(braveRequests[0].url, /freshness=pw/);
 
+  const providerFallbackRequests = [];
+  const providerFallback = new research.ConfiguredWebResearchGateway({
+    enabled: true,
+    provider: research.WebSearchProvider.Brave,
+    apiKey: 'invalid-brave-key',
+    updatedAt: 1
+  }, {
+    async send(request) {
+      providerFallbackRequests.push(request);
+      if (request.url.includes('api.search.brave.com')) return new Response('unavailable', { status: 503 });
+      if (request.url.includes('format=rss')) {
+        return new Response(`<?xml version="1.0"?><rss><channel>
+          <item><title>近期时政政策</title><link>https://www.gov.cn/policy/fallback</link><description>公务员考试时政资料</description></item>
+        </channel></rss>`, { status: 200, headers: { 'content-type': 'text/xml' } });
+      }
+      return new Response('unavailable', { status: 503 });
+    }
+  });
+  const providerFallbackResult = await providerFallback.search({ query: '近期时政政策', freshness: 'week', limit: 3 });
+  assert.equal(providerFallbackResult.hits[0].url, 'https://www.gov.cn/policy/fallback');
+  assert.equal(providerFallbackRequests[0].url.includes('api.search.brave.com'), true);
+  assert.equal(providerFallbackRequests.some((request) => request.url.includes('format=rss')), true);
+
   const jina = new research.ConfiguredWebResearchGateway({
     enabled: true,
     provider: research.WebSearchProvider.Jina,
@@ -317,6 +486,77 @@ try {
   assert.equal(jinaResult.hits[0].title, '省考公告');
   assert.equal(jinaResult.hits[0].content, '公告正文摘要');
   await assert.rejects(() => jina.readPage('https://192.168.1.10/private'), /本机或内网/);
+
+  const orchestratedRequests = [];
+  const orchestrated = new research.ConfiguredWebResearchGateway({
+    enabled: true,
+    provider: research.WebSearchProvider.Auto,
+    apiKey: '',
+    jinaApiKey: 'jina-key',
+    braveApiKey: 'brave-key',
+    firecrawlApiKey: 'firecrawl-key',
+    firecrawlBaseUrl: 'https://api.firecrawl.dev',
+    searxngBaseUrl: 'https://search.example.com',
+    updatedAt: 1
+  }, {
+    async send(request) {
+      orchestratedRequests.push(request);
+      const shared = { title: '江苏省公务员考试公告', url: 'https://www.jiangsu.gov.cn/exam', description: '江苏省考公告与考试范围' };
+      if (request.url.startsWith('https://s.jina.ai/')) {
+        return new Response(JSON.stringify({ data: [shared, { title: 'Jina 独有', url: 'https://example.com/jina', description: '江苏省考资料' }] }), { status: 200 });
+      }
+      if (request.url.includes('api.search.brave.com')) {
+        return new Response(JSON.stringify({ web: { results: [shared, { title: 'Brave 独有', url: 'https://example.com/brave', description: '江苏省考资料' }] } }), { status: 200 });
+      }
+      if (request.url.includes('/v2/search')) {
+        return new Response(JSON.stringify({ success: true, data: { web: [shared] } }), { status: 200 });
+      }
+      if (request.url.startsWith('https://search.example.com/')) {
+        return new Response(JSON.stringify({ results: [{ ...shared, content: shared.description }] }), { status: 200 });
+      }
+      return new Response('unavailable', { status: 503 });
+    }
+  });
+  const orchestratedResult = await orchestrated.search({
+    query: '江苏省公务员考试公告',
+    freshness: 'year',
+    limit: 5
+  });
+  assert.equal(orchestratedResult.hits[0].url, 'https://www.jiangsu.gov.cn/exam');
+  assert.deepEqual(
+    new Set(orchestratedResult.hits[0].providers),
+    new Set(['jina', 'brave', 'firecrawl', 'searxng']),
+    'duplicate URLs from providers must be fused with provider provenance'
+  );
+  assert.equal(orchestratedRequests.some((request) => request.url.includes('/v2/search') && request.method === 'POST'), true);
+  assert.equal(orchestratedRequests.some((request) => request.url.includes('/search?') && request.url.includes('format=json')), true);
+
+  const firecrawlReader = new research.ConfiguredWebResearchGateway({
+    enabled: true,
+    provider: research.WebSearchProvider.Auto,
+    apiKey: '',
+    firecrawlApiKey: 'firecrawl-key',
+    firecrawlBaseUrl: 'https://api.firecrawl.dev',
+    updatedAt: 1
+  }, {
+    async send(request) {
+      if (request.url.startsWith('https://r.jina.ai/')) return new Response('unavailable', { status: 503 });
+      if (request.url.includes('/v2/scrape')) {
+        assert.equal(request.method, 'POST');
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            markdown: '# 江苏省考公告\n\n这里是考试公告正文和报名要求。'.repeat(30),
+            metadata: { title: '江苏省考公告', sourceURL: 'https://www.jiangsu.gov.cn/exam' }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('unavailable', { status: 503 });
+    }
+  });
+  const firecrawlPage = await firecrawlReader.readPage('https://www.jiangsu.gov.cn/exam');
+  assert.equal(firecrawlPage.provider, 'firecrawl');
+  assert.match(firecrawlPage.content, /报名要求/);
 
   console.log('Web research verification passed.');
 } finally {

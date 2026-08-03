@@ -1,10 +1,11 @@
 import type { ProviderGateway } from '@/capabilities/ai-runtime/public';
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
-import type { AssessmentRole, CapabilityNodeId, JsonObject, WorkflowId } from '@/kernel/public';
+import type { AgentRunId, AssessmentRole, CapabilityNodeId, JsonObject, WorkflowId } from '@/kernel/public';
 import type { ObjectiveAnswerInput } from '@/modules/evidence/public';
 
 export interface StructuredPracticeRequest {
   readonly idempotencyKey: string;
+  readonly sourceAgentRunId?: AgentRunId;
   readonly requestedCount: number;
   readonly difficultyMin: number;
   readonly difficultyMax: number;

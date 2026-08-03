@@ -9,6 +9,8 @@ import { invalidProviderRequestText } from './AgentRunErrorPresentation';
 
 export interface AgentRunView {
   readonly id: AgentRunId;
+  readonly rootAgentRunId: AgentRunId;
+  readonly parentAgentRunId?: AgentRunId;
   readonly runType: AgentRunTypeValue;
   readonly status: AgentRunStatusValue;
   readonly examCycleId?: string;
@@ -78,6 +80,8 @@ export class GetAgentRunViews {
     const terminalVisibility = aggregate.run.checkpoint.taskCenterVisible === true;
     return {
       id: aggregate.run.id,
+      rootAgentRunId: aggregate.run.rootAgentRunId ?? aggregate.run.id,
+      parentAgentRunId: aggregate.run.parentAgentRunId,
       runType: aggregate.run.runType,
       status: aggregate.run.status,
       examCycleId: aggregate.run.examCycleId,

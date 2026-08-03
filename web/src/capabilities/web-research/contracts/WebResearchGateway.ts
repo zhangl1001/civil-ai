@@ -14,14 +14,18 @@ export interface WebSearchRequest {
   readonly signal?: AbortSignal;
 }
 
-export interface WebSearchHit {
+export interface SearchResult {
   readonly title: string;
   readonly url: string;
   readonly domain: string;
   readonly snippet: string;
   readonly content?: string;
   readonly publishedAt?: string;
+  readonly providers?: readonly string[];
+  readonly rankScore?: number;
 }
+
+export type WebSearchHit = SearchResult;
 
 export interface WebSearchResponse {
   readonly query: string;
@@ -29,13 +33,16 @@ export interface WebSearchResponse {
   readonly fetchedAt: number;
 }
 
-export interface WebPageResponse {
+export interface WebDocument {
   readonly title: string;
   readonly url: string;
   readonly domain: string;
   readonly content: string;
   readonly fetchedAt: number;
+  readonly provider?: string;
 }
+
+export type WebPageResponse = WebDocument;
 
 export interface WebPageReadOptions {
   readonly focus?: string;

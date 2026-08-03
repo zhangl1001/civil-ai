@@ -1,4 +1,4 @@
-import type { QuestionSetId } from '@/kernel/public';
+import type { AgentRunId, QuestionSetId } from '@/kernel/public';
 import {
   AgentRunStatus,
   TaskTargetType,
@@ -15,7 +15,7 @@ import { EnqueueContentEnrichment } from './EnqueueContentEnrichment';
 
 export interface EnsureQuestionSetEnrichmentCommand {
   readonly questionSetId: string;
-  readonly parentAgentRunId?: string;
+  readonly parentAgentRunId?: AgentRunId;
   readonly title?: string;
   readonly detail?: string;
 }

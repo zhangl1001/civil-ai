@@ -1,5 +1,10 @@
-import type { ErrorDiagnosisId, JsonObject, LearningSessionId } from '@/kernel/public';
-import { CreateAgentRun, TaskTargetType, type AgentRunAggregate } from '@/modules/agent/public';
+import type { AgentRunId, ErrorDiagnosisId, JsonObject, LearningSessionId } from '@/kernel/public';
+import {
+  AgentRunNotificationMode,
+  CreateAgentRun,
+  TaskTargetType,
+  type AgentRunAggregate
+} from '@/modules/agent/public';
 import type { ErrorDiagnosisRepository } from '../contracts/LearningRepositories';
 import { AgentRunType } from '@/modules/agent/public';
 
@@ -12,6 +17,7 @@ export class RequestAiErrorDiagnosis {
   async execute(command: {
     readonly idempotencyKey: string;
     readonly sessionId: LearningSessionId;
+    readonly parentAgentRunId?: AgentRunId;
     readonly items: readonly {
       readonly provisionalDiagnosisId: ErrorDiagnosisId;
       readonly evidenceContext: JsonObject;
@@ -38,6 +44,7 @@ export class RequestAiErrorDiagnosis {
     return this.createAgentRun.execute({
       idempotencyKey: command.idempotencyKey,
       runType: AgentRunType.ErrorDiagnosis,
+      parentAgentRunId: command.parentAgentRunId,
       examCycleId,
       learningThreadId: undefined,
       targetResourceType: TaskTargetType.ErrorDiagnosisBatch,
@@ -45,6 +52,8 @@ export class RequestAiErrorDiagnosis {
       inputSnapshot: {
         title: 'AI 错因分析',
         detail: `分析本组 ${command.items.length} 道错题`,
+        taskCenterVisible: false,
+        notificationMode: AgentRunNotificationMode.Terminal,
         diagnosisCount: command.items.length,
         items: command.items.map((item) => ({
           provisionalDiagnosisId: item.provisionalDiagnosisId,

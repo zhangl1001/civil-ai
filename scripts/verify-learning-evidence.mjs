@@ -128,6 +128,7 @@ try {
     }]
   };
   const result = await submit.execute(command);
+  assert.equal(result.rootAgentRunId, 'AgentRunId:generation-root');
   assert.deepEqual(
     { total: result.total, answered: result.answered, correct: result.correct, incorrect: result.incorrect, unanswered: result.unanswered, diagnosisCount: result.diagnosisCount },
     { total: 1, answered: 1, correct: 0, incorrect: 1, unanswered: 0, diagnosisCount: 1 }
@@ -173,6 +174,7 @@ try {
   ), 0.29);
   const repeatedSubmission = await submit.execute(command);
   assert.equal(repeatedSubmission.sessionId, result.sessionId, 'objective submission must be idempotent');
+  assert.equal(repeatedSubmission.rootAgentRunId, result.rootAgentRunId);
   assert.equal(repeatedSubmission.diagnosisCount, 1);
   let diagnosisModelInvocations = 0;
   const diagnosisTransitions = [];
@@ -345,6 +347,11 @@ try {
   });
   assert.equal((await evidenceRepository.findValidity(correctnessEvidence.id)).validityStatus, evidence.EvidenceValidity.Invalid);
   assert.equal(outboxRepository.events.filter((item) => item.eventType === 'learning_session.objective_submitted').length, 1);
+  assert.equal(
+    outboxRepository.events.find((item) => item.eventType === 'learning_session.objective_submitted')?.payload.rootAgentRunId,
+    'AgentRunId:generation-root',
+    'submission post-processing must remain correlated with the question-generation root task'
+  );
   assert.equal(outboxRepository.events.filter((item) => item.eventType === 'error_diagnosis.confirmed').length, 1);
   const retentionSubset = await submit.execute({
     idempotencyKey: 'session:weakening:retention-subset',
@@ -485,6 +492,10 @@ function questionSet() {
       capabilityNodeId: 'capability:aptitude:judgment:weaken',
       assessmentRole: 'practice',
       status: 'ready'
+    },
+    generationSpec: {
+      sourceAgentRunId: 'AgentRunId:generation-root',
+      constraints: {}
     },
     questions: [{
       id: 'question:test:1',

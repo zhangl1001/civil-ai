@@ -1,6 +1,7 @@
 import type { UnitOfWork } from '@/capabilities/database/public';
 import {
   sha256Json,
+  type AgentRunId,
   type CapabilityNodeId,
   type Clock,
   type ExamCycleId,
@@ -28,6 +29,7 @@ import { QuestionGenerationIntent } from '../domain/QuestionSourceCodes';
 
 export interface CreateGenerationWorkflowCommand {
   readonly idempotencyKey: string;
+  readonly sourceAgentRunId?: AgentRunId;
   readonly examCycleId: ExamCycleId;
   readonly learningThreadId?: LearningThreadId;
   readonly teachingBlueprintId?: TeachingBlueprintId;
@@ -73,6 +75,7 @@ export class CreateGenerationWorkflow {
     const difficulty: JsonObject = { min: command.difficultyMin, max: command.difficultyMax };
     const constraints: JsonObject = command.constraints ?? {};
     const hashPayload: JsonObject = {
+      sourceAgentRunId: command.sourceAgentRunId ?? null,
       examCycleId: command.examCycleId,
       learningThreadId: command.learningThreadId ?? null,
       teachingBlueprintId: command.teachingBlueprintId ?? null,
@@ -95,6 +98,7 @@ export class CreateGenerationWorkflow {
     };
     const spec: GenerationSpecRecord = {
       id: generationSpecId,
+      sourceAgentRunId: command.sourceAgentRunId,
       examCycleId: command.examCycleId,
       learningThreadId: command.learningThreadId,
       teachingBlueprintId: command.teachingBlueprintId,
@@ -143,6 +147,7 @@ export class CreateGenerationWorkflow {
           payload: {
             workflowId: workflow.id,
             generationSpecId: spec.id,
+            rootAgentRunId: spec.sourceAgentRunId ?? null,
             examCycleId: spec.examCycleId,
             capabilityNodeId: spec.capabilityNodeId
           },

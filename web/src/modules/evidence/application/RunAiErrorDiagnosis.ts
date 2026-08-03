@@ -70,6 +70,8 @@ interface PendingDiagnosis {
   readonly provisional: ErrorDiagnosisRecord;
 }
 
+const MAX_PARALLEL_DIAGNOSIS_FALLBACKS = 3;
+
 export class RunAiErrorDiagnosis {
   constructor(
     private readonly unitOfWork: UnitOfWork,
@@ -132,16 +134,34 @@ export class RunAiErrorDiagnosis {
       diagnosisIds.push(...await this.commit(command.agentRunId, validBatch, signal));
     }
 
-    const fallbackInvocationIds: string[] = [];
-    for (const item of unresolved) {
-      signal?.throwIfAborted();
-      const fallback = await this.invokeSingle(command.agentRunId, item, gateway, signal, command.leaseToken);
-      fallbackInvocationIds.push(fallback.invocationId);
-      diagnosisIds.push(...await this.commit(command.agentRunId, [{
-        pending: item,
-        output: fallback.output
-      }], signal));
+    const fallbackResults = await mapSettledWithConcurrency(
+      unresolved,
+      MAX_PARALLEL_DIAGNOSIS_FALLBACKS,
+      (item) => this.invokeSingle(
+        command.agentRunId,
+        item,
+        gateway,
+        signal,
+        command.leaseToken
+      )
+    );
+    const fallbackValues = fallbackResults.flatMap((result, index) => (
+      result.status === 'fulfilled'
+        ? [{ pending: unresolved[index]!, output: result.value.output }]
+        : []
+    ));
+    if (fallbackValues.length) {
+      diagnosisIds.push(...await this.commit(command.agentRunId, fallbackValues, signal));
     }
+    const failedFallback = fallbackResults.find((result) => result.status === 'rejected');
+    if (failedFallback?.status === 'rejected') {
+      // Successful siblings are already durable. The next AgentRun attempt only
+      // retries unresolved provisional diagnoses through their idempotency keys.
+      throw failedFallback.reason;
+    }
+    const fallbackInvocationIds = fallbackResults.flatMap((result) => (
+      result.status === 'fulfilled' ? [result.value.invocationId] : []
+    ));
 
     signal?.throwIfAborted();
     await this.completionObserver?.completed({ agentRunId: command.agentRunId, sessionId, diagnosisIds });
@@ -450,4 +470,29 @@ function diagnosisIdempotencyKey(provisionalDiagnosisId: ErrorDiagnosisId): stri
 
 function diagnosisOutputError(message: string): Error & { readonly code: string } {
   return Object.assign(new Error(message), { code: 'generation.error_diagnosis_invalid' });
+}
+
+async function mapSettledWithConcurrency<Input, Output>(
+  values: readonly Input[],
+  concurrency: number,
+  action: (value: Input) => Promise<Output>
+): Promise<readonly PromiseSettledResult<Output>[]> {
+  const results: PromiseSettledResult<Output>[] = new Array(values.length);
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, concurrency), values.length) },
+    async () => {
+      while (cursor < values.length) {
+        const index = cursor;
+        cursor += 1;
+        try {
+          results[index] = { status: 'fulfilled', value: await action(values[index]!) };
+        } catch (reason) {
+          results[index] = { status: 'rejected', reason };
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
+  return results;
 }

@@ -17,7 +17,7 @@ import { AgentExecutionBudget } from '../domain/AgentExecutionBudget';
 import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
 import { AgentCompletionTracker, completionResolutionInstruction } from './AgentCompletionTracker';
-import type { AgentLoopResult, RunAgentLoopCommand } from './AgentLoopContracts';
+import type { AgentLoopResult, AgentLoopRuntime, RunAgentLoopCommand } from './AgentLoopContracts';
 import { agentToolArgumentsHash, cloneAgentToolCall } from './AgentToolCallIdentity';
 import { AgentToolInvocationValidator } from './AgentToolInvocationValidator';
 import {
@@ -45,7 +45,7 @@ import {
   validateAgentLoopLimits
 } from './AgentLoopSupport';
 /** Provider-neutral, bounded Agent loop. Business writes remain behind typed tool executors. */
-export class RunAgentLoop {
+export class RunAgentLoop implements AgentLoopRuntime {
   private observerQueue: Promise<void> = Promise.resolve();
 
   constructor(

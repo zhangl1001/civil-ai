@@ -8,7 +8,6 @@ import {
   type ProviderRequest
 } from '@/capabilities/ai-runtime/public';
 import {
-  mapWithAbortableConcurrency,
   type AiInvocationId,
   type JsonObject,
   type JsonValue
@@ -31,7 +30,8 @@ import {
   type PracticeGenerationShard
 } from './PracticeCoreGenerationPolicy';
 import {
-  generationPromptPayload,
+  generationLecturePromptPayload,
+  generationShardPromptPayload,
   generationPromptVariables
 } from './StructuredObjectivePromptContext';
 
@@ -83,21 +83,21 @@ export class ShardedObjectiveGenerator {
         (signal: AbortSignal) => this.invokeShard({ ...input, signal, capability, contract, shard })
       ))
     ];
-    let completedJobs = 0;
-    const rawInvocations = await mapWithAbortableConcurrency(
+    const invocationOutcomes = await mapSettledWithConcurrency(
       jobs,
       input.plan.shardConcurrency,
       input.signal,
       async (job, _index, signal) => {
-        const result = await job(signal);
-        completedJobs += 1;
-        await input.onProgress?.(
-          'invoking_model',
-          `已完成 ${completedJobs}/${jobs.length} 个并行生成请求`
-        );
-        return result;
+        // Per-shard progress writes used to serialize otherwise independent
+        // provider calls and could leave the task UI parked at 4/6 while a
+        // database update was slow. The workflow-level stage is the durable
+        // progress boundary; shard completion stays in invocation telemetry.
+        return job(signal);
       }
     );
+    const rawInvocations = invocationOutcomes.flatMap((outcome) => (
+      outcome.status === 'fulfilled' ? [outcome.value] : []
+    ));
     const lectureInvocation = rawInvocations.find((item) => item.kind === 'lecture');
     if (!lectureInvocation) throw new Error('Lecture generation invocation is missing');
     const lectureRoot = await this.parseLectureOrRepair(
@@ -105,7 +105,7 @@ export class ShardedObjectiveGenerator {
       input,
       capability
     );
-    const questionRoots = await mapWithAbortableConcurrency(
+    const questionOutcomes = await mapSettledWithConcurrency(
       rawInvocations.filter((item) => item.kind === 'questions'),
       input.plan.shardConcurrency,
       input.signal,
@@ -116,6 +116,9 @@ export class ShardedObjectiveGenerator {
         lectureRoot.lecture
       )
     );
+    const questionRoots = questionOutcomes.flatMap((outcome) => (
+      outcome.status === 'fulfilled' ? [outcome.value] : []
+    ));
     const output = this.parseAndValidateObject(
       mergeAuthorRoots([
         {
@@ -140,12 +143,15 @@ export class ShardedObjectiveGenerator {
     promptBundle: PromptBundle,
     referencePack: TrueQuestionReferencePack | undefined,
     shard: PracticeGenerationShard,
-    totalCount: number
+    totalCount: number,
+    purpose: 'lecture' | 'questions'
   ): CompiledPrompt {
     return this.promptCompiler.compile(
       promptBundle.promptCode,
       generationPromptVariables(aggregate, shard.count),
-      generationPromptPayload(aggregate, referencePack, shard, totalCount),
+      purpose === 'lecture'
+        ? generationLecturePromptPayload(aggregate, referencePack, totalCount)
+        : generationShardPromptPayload(aggregate, referencePack, shard, totalCount),
       promptBundle.version
     );
   }
@@ -165,7 +171,8 @@ export class ShardedObjectiveGenerator {
       input.promptBundle,
       input.referencePack,
       { index: 0, offset: 0, count: 1 },
-      input.plan.totalCount
+      input.plan.totalCount,
+      'lecture'
     );
     const system = practiceLectureSystem(compiled.system, input.capability);
     const responseSchema = practiceLectureResponseSchema(compiled.responseSchema);
@@ -175,9 +182,10 @@ export class ShardedObjectiveGenerator {
       messages: [{ role: ModelMessageRole.User, content: user }],
       temperature: 0.2,
       maxOutputTokens: lectureGenerationTokenBudget(input.capability),
-      responseSchema
+      responseSchema,
+      structuredOutputMode: 'prompt'
     };
-    const invocation = await this.invoker.invoke(
+    const invocation = await this.invoker.invokeWithRetry(
       input.aggregate,
       input.gateway,
       request,
@@ -209,15 +217,17 @@ export class ShardedObjectiveGenerator {
       input.promptBundle,
       input.referencePack,
       input.shard,
-      input.plan.totalCount
+      input.plan.totalCount,
+      'questions'
     );
     const system = practiceQuestionShardSystem(compiled.system, input.capability);
     const responseSchema = practiceQuestionShardResponseSchema(
       compiled.responseSchema,
-      input.shard.count
+      input.shard.count,
+      input.capability
     );
     const user = shardUserMessage(compiled.user, input);
-    const invocation = await this.invoker.invoke(
+    const invocation = await this.invoker.invokeWithRetry(
       input.aggregate,
       input.gateway,
       {
@@ -225,7 +235,8 @@ export class ShardedObjectiveGenerator {
         messages: [{ role: ModelMessageRole.User, content: user }],
         temperature: 0.2,
         maxOutputTokens: questionShardTokenBudget(input.shard.count, input.capability),
-        responseSchema
+        responseSchema,
+        structuredOutputMode: 'prompt'
       },
       'content_generation_question_shard',
       input.signal
@@ -260,7 +271,7 @@ export class ShardedObjectiveGenerator {
     } catch (error) {
       if (!(error instanceof GeneratedContentParseError)) throw error;
       await this.invoker.markInvalid(invocation.invocationId, error.code);
-      const repaired = await this.invoker.invoke(
+      const repaired = await this.invoker.invokeWithRetry(
         input.aggregate,
         input.gateway,
         {
@@ -272,10 +283,12 @@ export class ShardedObjectiveGenerator {
           ],
           temperature: 0.1,
           maxOutputTokens: lectureGenerationTokenBudget(capability),
-          responseSchema: invocation.responseSchema
+          responseSchema: invocation.responseSchema,
+          structuredOutputMode: 'prompt'
         },
         'content_generation_lecture_repair',
-        input.signal
+        input.signal,
+        1
       );
       return parseAuthorRoot(repaired.response.text);
     }
@@ -310,7 +323,7 @@ export class ShardedObjectiveGenerator {
     } catch (error) {
       if (!(error instanceof GeneratedContentParseError)) throw error;
       await this.invoker.markInvalid(invocation.invocationId, error.code);
-      const repaired = await this.invoker.invoke(
+      const repaired = await this.invoker.invokeWithRetry(
         input.aggregate,
         input.gateway,
         {
@@ -322,10 +335,12 @@ export class ShardedObjectiveGenerator {
           ],
           temperature: 0.1,
           maxOutputTokens: questionShardTokenBudget(shard.count, capability),
-          responseSchema: invocation.responseSchema
+          responseSchema: invocation.responseSchema,
+          structuredOutputMode: 'prompt'
         },
         'content_generation_question_shard_repair',
-        input.signal
+        input.signal,
+        1
       );
       const root = namespaceAuthorRoot(parseAuthorRoot(repaired.response.text), shard.index);
       this.parseAndValidateObject({
@@ -336,6 +351,41 @@ export class ShardedObjectiveGenerator {
       return root;
     }
   }
+}
+
+type SettledResult<T> =
+  | { readonly status: 'fulfilled'; readonly value: T }
+  | { readonly status: 'rejected'; readonly reason: unknown };
+
+async function mapSettledWithConcurrency<Input, Output>(
+  items: readonly Input[],
+  concurrency: number,
+  parentSignal: AbortSignal,
+  work: (item: Input, index: number, signal: AbortSignal) => Promise<Output>
+): Promise<readonly SettledResult<Output>[]> {
+  if (!items.length) return [];
+  const results = new Array<SettledResult<Output>>(items.length);
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, Math.floor(concurrency)), items.length) },
+    async () => {
+      while (cursor < items.length && !parentSignal.aborted) {
+        const index = cursor;
+        cursor += 1;
+        try {
+          results[index] = {
+            status: 'fulfilled',
+            value: await work(items[index]!, index, parentSignal)
+          };
+        } catch (reason) {
+          results[index] = { status: 'rejected', reason };
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
+  if (parentSignal.aborted) throw parentSignal.reason;
+  return results;
 }
 
 function shardUserMessage(

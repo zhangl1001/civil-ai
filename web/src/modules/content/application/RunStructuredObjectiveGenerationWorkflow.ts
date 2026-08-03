@@ -46,7 +46,8 @@ import {
   createPracticeGenerationPlan,
   coreGenerationTokenBudget,
   practiceCoreResponseSchema,
-  practiceCoreSystem
+  practiceCoreSystem,
+  shouldGeneratePracticeBlocksInParallel
 } from './PracticeCoreGenerationPolicy';
 import {
   ShardedObjectiveGenerator,
@@ -159,7 +160,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
           aggregate.spec.requestedCount ?? 0,
           capabilityCode(aggregate)
         );
-        output = plan.shards.length > 1
+        output = shouldGeneratePracticeBlocksInParallel(plan)
           ? await this.shardedGenerator.generate({
               aggregate,
               promptBundle,
@@ -340,9 +341,12 @@ export class RunStructuredObjectiveGenerationWorkflow {
         input.expectedCount,
         capabilityCode(input.aggregate)
       ),
-      responseSchema: input.responseSchema
+      responseSchema: input.responseSchema,
+      // Use the same portable structured protocol as sharded generation.
+      // Tool-forced output is inconsistent across Anthropic-compatible APIs.
+      structuredOutputMode: 'prompt'
     };
-    let invocationResult = await this.modelInvoker.invoke(
+    let invocationResult = await this.modelInvoker.invokeWithRetry(
       input.aggregate,
       input.gateway,
       request,
@@ -399,7 +403,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
       );
       const repairMessages = localizedRepair?.messages
         ?? structuredRepairMessages(input.compiled.user, invocationResult.response.text, error);
-      invocationResult = await this.modelInvoker.invoke(
+      invocationResult = await this.modelInvoker.invokeWithRetry(
         input.aggregate,
         input.gateway,
         {

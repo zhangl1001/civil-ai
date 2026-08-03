@@ -47,7 +47,7 @@
       <p v-if="isSharedMaterialQuestion" class="material-group-meta">
         共用材料 · 第 {{ materialGroupPosition }} / {{ materialGroupSize }} 小题
       </p>
-      <QuestionContentTemplate
+      <QuestionContentTemplate :key="`${question.id}:${question.contentVersion}`"
         :question="question.content"
         :presentation="questionPresentation"
         :selected-option-id="answers[question.id]"
@@ -92,10 +92,10 @@
       </section>
         </template>
       </QuestionContentTemplate>
+      <p v-if="submitted && currentExplanationPending" class="explanation-pending" role="status"><LoaderCircleIcon />本题完整解析正在后台补全，完成后会自动显示</p>
       <p v-if="error" class="session-error">{{ error }}</p>
     </main>
     <main v-else class="app-page-scroll session-scroll session-loading" aria-busy="true"><div class="session-loading-block" aria-hidden="true"></div><p class="session-loading-label">{{ error || '正在读取题目...' }}</p></main>
-
     <footer v-if="bundle && activeTab === 'questions' && (!isSharedMaterialQuestion || index === bundle.questions.length - 1)" class="session-actions">
       <button v-if="!isSharedMaterialQuestion" :disabled="submitting || index === 0" @click="changeQuestion(index - 1)">上一题</button>
       <button v-if="!isSharedMaterialQuestion && index < bundle.questions.length - 1" :disabled="submitting || (!submitted && !answers[question?.id || ''])" @click="changeQuestion(index + 1)">下一题</button>
@@ -104,7 +104,6 @@
         {{ submitting ? submissionProgressText : submissionPersisted ? '继续整理解析' : '交卷' }}
       </button>
     </footer>
-
     <CenterDialog v-model="showAnswerCard" title="答题卡" subtitle="点击题号可直接跳转" variant="content">
       <QuestionAnswerCard
         :questions="cardQuestions"
@@ -140,7 +139,6 @@
     </CenterDialog>
   </div>
 </template>
-
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
@@ -157,7 +155,7 @@ import { agentWorkerCoordinator, initializeTutorRuntime } from '@/composition-ro
 import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evidence/ObjectiveSubmissionRecoveryCoordinator';
 import { practiceModuleLabel } from '@/domain/labels';
 import type { AssessmentRole } from '@/kernel/public';
-import { contentDocumentText, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
+import { contentDocumentText, hasCompleteExplanation, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
 import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
 import { useAIChatStore } from '@/stores/aiChat';
 import { PracticeSessionFeature } from './PracticeSessionFeature';
@@ -165,7 +163,6 @@ import { PracticeSessionDraftService, type PracticeSessionDraftIdentity } from '
 import { resolveQuestionSwipe } from './QuestionSwipeNavigation';
 import { submitPracticeBundle } from './SubmitPracticeBundle';
 import { usePracticeContentCompletion } from './usePracticeContentCompletion';
-
 const route = useRoute();
 const chat = useAIChatStore();
 const bundle = ref<CommittedQuestionSetBundle>();
@@ -213,6 +210,9 @@ const { contentCompleting, submissionPersisted, needsCompletion: loadedContentNe
   }
 });
 const question = computed(() => bundle.value?.questions[index.value]);
+const currentExplanationPending = computed(() => Boolean(question.value && !hasCompleteExplanation(
+  question.value.content.explanation, question.value.content.options.map((option) => option.id)
+)));
 const questionPresentation = computed(() => question.value
   ? resolveQuestionPresentation(question.value.content)
   : 'standard_choice');
@@ -718,5 +718,7 @@ function sessionFeature(): Promise<PracticeSessionFeature> {
 .question-material-region,.question-answer-region { display:flex; flex-direction:column; gap:14px; min-width:0; }.question-presentation-data_material_choice .question-material-region,.question-presentation-shared_material_choice .question-material-region,.question-presentation-long_reading_choice .question-material-region { padding-bottom:4px; border-bottom:1px solid rgba(var(--color-ink-rgb),.06); }
 .content-completion-status { align-self:center; display:flex; align-items:center; gap:6px; margin:7px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-micro); }
 .content-completion-status svg { width:13px; height:13px; color:var(--primary-color); animation:content-completion-spin .9s linear infinite; }
+.explanation-pending { display:flex; align-items:center; gap:7px; margin:2px 0 0; padding:9px 10px; border-radius:8px; color:var(--text-secondary-color); background:rgba(var(--color-brand-rgb),.055); font-size:var(--type-size-caption); }
+.explanation-pending svg { width:14px; height:14px; flex:0 0 auto; color:var(--primary-color); animation:content-completion-spin .9s linear infinite; }
 @keyframes content-completion-spin { to { transform:rotate(360deg); } }
 </style>

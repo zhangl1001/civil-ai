@@ -1,5 +1,6 @@
 import type {
   ExamCycleId,
+  AgentRunId,
   JsonObject,
   LearningThreadId
 } from '@/kernel/public';
@@ -23,7 +24,7 @@ export interface EnqueueContentEnrichmentCommand {
   readonly missingBlocks: readonly string[];
   readonly examCycleId?: ExamCycleId;
   readonly learningThreadId?: LearningThreadId;
-  readonly parentAgentRunId?: string;
+  readonly parentAgentRunId?: AgentRunId;
   readonly title?: string;
   readonly detail?: string;
   readonly strategyInput?: JsonObject;
@@ -44,6 +45,7 @@ export class EnqueueContentEnrichment {
     return this.createAgentRun.execute({
       idempotencyKey: `content-enrichment:${command.kind}:${resourceId}:${scope}`,
       runType: AgentRunType.Review,
+      parentAgentRunId: command.parentAgentRunId,
       workPool: command.kind === ContentEnrichmentKind.QuestionSet
         ? AgentWorkPool.Assessment
         : AgentWorkPool.Background,
@@ -55,7 +57,6 @@ export class EnqueueContentEnrichment {
         ...(command.strategyInput ?? {}),
         enrichmentKind: command.kind,
         resourceId,
-        parentAgentRunId: command.parentAgentRunId ?? null,
         missingBlocks,
         title: command.title ?? '后台补全内容',
         detail: command.detail ?? '内容主体已可使用，系统正在补齐辅助内容',

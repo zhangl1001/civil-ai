@@ -30,6 +30,8 @@ import questionSetLibraryPaginationSql from './029_question_set_library_paginati
 import agentExecutionClassesSql from './030_agent_execution_classes.sql?raw';
 import agentRunLeaseFencingSql from './031_agent_run_lease_fencing.sql?raw';
 import agentToolReceiptsSql from './032_agent_tool_receipts.sql?raw';
+import agentRunHierarchySql from './033_agent_run_hierarchy.sql?raw';
+import generationSpecAgentRunSourceSql from './034_generation_spec_agent_run_source.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -224,5 +226,17 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'agent_tool_receipts',
     checksum: 'sha256:74dc729fd6e5eea81efe49317ca2c239cab2efca8b0885a705cf704653a1b503',
     sql: agentToolReceiptsSql
+  },
+  {
+    version: 33,
+    name: 'agent_run_hierarchy',
+    checksum: 'sha256:f2e71671980255ca3497fa58e1d250ba37cd9168d64ec361191b225ec8636520',
+    sql: agentRunHierarchySql
+  },
+  {
+    version: 34,
+    name: 'generation_spec_agent_run_source',
+    checksum: 'sha256:0925442e658efb0b8ce8292ebca9809d0c62dde70c2d3b360f473ab319d07af7',
+    sql: generationSpecAgentRunSourceSql
   }
 ];

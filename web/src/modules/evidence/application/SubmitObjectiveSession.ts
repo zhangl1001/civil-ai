@@ -1,6 +1,6 @@
 import type { UnitOfWork } from '@/capabilities/database/public';
 import type {
-  CapabilityNodeId, Clock, IdGenerator, InstantMs, JsonObject, LearningSessionId, LearningThreadId, QuestionSetId, ReviewQueueItemId
+  AgentRunId, CapabilityNodeId, Clock, IdGenerator, InstantMs, JsonObject, LearningSessionId, LearningThreadId, QuestionSetId, ReviewQueueItemId
 } from '@/kernel/public';
 import {
   QuestionSetPracticeStatus,
@@ -63,6 +63,7 @@ export interface SubmitObjectiveSessionCommand {
 
 export interface ObjectiveSessionSubmissionResult {
   readonly sessionId: LearningSessionId;
+  readonly rootAgentRunId?: AgentRunId;
   readonly examCycleId: string;
   readonly capabilityNodeId: CapabilityNodeId;
   readonly total: number;
@@ -90,8 +91,17 @@ export class SubmitObjectiveSession {
     this.assertCommand(command);
     const existing = await this.sessionRepository.findByIdempotencyKey(command.idempotencyKey);
     if (existing) {
-      const diagnoses = await this.diagnosisRepository.listBySession(existing.session.id);
-      return summary(existing.session, existing.attempts.length, diagnoses.length, existing.attempts[0]?.capabilityNodeId);
+      const [diagnoses, sourceSet] = await Promise.all([
+        this.diagnosisRepository.listBySession(existing.session.id),
+        this.contentRepository.findQuestionSet(existing.session.questionSetId)
+      ]);
+      return summary(
+        existing.session,
+        existing.attempts.length,
+        diagnoses.length,
+        existing.attempts[0]?.capabilityNodeId,
+        sourceSet?.generationSpec?.sourceAgentRunId
+      );
     }
     const [thread, questionSet] = await Promise.all([
       this.threadRepository.findById(command.learningThreadId),
@@ -105,6 +115,7 @@ export class SubmitObjectiveSession {
       throw new Error('Reference slice only accepts question sets bound to the learning thread primary capability');
     }
     const selectedQuestions = selectQuestions(questionSet.questions, command.questionIds);
+    const rootAgentRunId = questionSet.generationSpec?.sourceAgentRunId;
     const bundle = this.buildBundle(
       command,
       thread.thread,
@@ -131,6 +142,7 @@ export class SubmitObjectiveSession {
             sessionId: bundle.session.id,
             learningThreadId: bundle.session.learningThreadId,
             questionSetId: bundle.session.questionSetId,
+            rootAgentRunId: rootAgentRunId ?? null,
             capabilityNodeId: bundle.attempts[0]?.capabilityNodeId ?? null,
             reviewQueueItemId: command.reviewQueueItemId ?? null,
             dailyPlanItemId: command.dailyPlanItemId ?? null,
@@ -143,12 +155,21 @@ export class SubmitObjectiveSession {
           idempotencyKey: `${command.idempotencyKey}:submitted`
         }, context);
       });
-      return summary(bundle.session, bundle.attempts.length, bundle.diagnoses.length, bundle.attempts[0]?.capabilityNodeId);
+      return summary(bundle.session, bundle.attempts.length, bundle.diagnoses.length, bundle.attempts[0]?.capabilityNodeId, rootAgentRunId);
     } catch (error) {
       const concurrent = await this.sessionRepository.findByIdempotencyKey(command.idempotencyKey);
       if (concurrent) {
-        const diagnoses = await this.diagnosisRepository.listBySession(concurrent.session.id);
-        return summary(concurrent.session, concurrent.attempts.length, diagnoses.length, concurrent.attempts[0]?.capabilityNodeId);
+        const [diagnoses, sourceSet] = await Promise.all([
+          this.diagnosisRepository.listBySession(concurrent.session.id),
+          this.contentRepository.findQuestionSet(concurrent.session.questionSetId)
+        ]);
+        return summary(
+          concurrent.session,
+          concurrent.attempts.length,
+          diagnoses.length,
+          concurrent.attempts[0]?.capabilityNodeId,
+          sourceSet?.generationSpec?.sourceAgentRunId
+        );
       }
       throw error;
     }
@@ -445,11 +466,13 @@ function summary(
   session: { readonly id: LearningSessionId; readonly examCycleId: string; readonly questionCount: number; readonly answeredCount: number; readonly correctCount: number },
   attemptCount: number,
   diagnosisCount: number,
-  capabilityNodeId: CapabilityNodeId | undefined
+  capabilityNodeId: CapabilityNodeId | undefined,
+  rootAgentRunId?: AgentRunId
 ): ObjectiveSessionSubmissionResult {
   if (!capabilityNodeId) throw new Error('Submitted objective session contains no capability evidence');
   return {
     sessionId: session.id,
+    rootAgentRunId,
     examCycleId: session.examCycleId,
     capabilityNodeId,
     total: session.questionCount,

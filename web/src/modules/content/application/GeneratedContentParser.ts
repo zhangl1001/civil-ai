@@ -241,16 +241,12 @@ function authoringQuestion(
   if (!id || !capabilityCode || !prompt || !explanation || !correctOptionId || options.some((option) => !option)) return undefined;
   const requestedMaterialGroupId = optionalAuthorTextValue(question.materialGroupId);
   const groupedMaterial = requestedMaterialGroupId ? materialGroups.get(requestedMaterialGroupId) : undefined;
-  if (requestedMaterialGroupId && !groupedMaterial) {
-    issues.push({
-      code: 'generation.material_group_missing',
-      path: `${path}.materialGroupId`,
-      message: `Question references unknown material group ${requestedMaterialGroupId}`
-    });
-  }
   // A one-question "shared" group is semantically just independent material.
-  // Normalize it locally instead of spending a second model request to move the same text.
+  // A dangling group id is also deterministic metadata noise: clear it locally
+  // and let the quality validator decide whether the prompt still lacks actual
+  // answering context. This avoids a model repair when inline material exists.
   const materialGroupId = requestedMaterialGroupId
+    && groupedMaterial
     && (materialGroupUseCounts.get(requestedMaterialGroupId) ?? 0) >= 2
     ? requestedMaterialGroupId
     : undefined;

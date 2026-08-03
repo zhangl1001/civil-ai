@@ -60,6 +60,12 @@ export interface ProviderRequest {
   readonly temperature: number;
   readonly maxOutputTokens: number;
   readonly responseSchema?: JsonObject;
+  /**
+   * Content pipelines can prefer schema-in-prompt JSON so parallel shards do
+   * not serialize behind a full-response capability probe. Agent tool calls
+   * remain independent and continue to use the provider tool protocol.
+   */
+  readonly structuredOutputMode?: 'auto' | 'prompt';
   readonly tools?: readonly ProviderToolDefinition[];
   readonly toolChoice?: 'auto' | 'none' | 'required' | { readonly name: string };
   readonly requestId: string;
@@ -91,6 +97,12 @@ export interface ProviderGateway {
     readonly multimodalInput: boolean;
   };
   complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse>;
+  /**
+   * Resolves the endpoint/model structured-output mode with a tiny probe.
+   * Large parallel content requests can then start together instead of using
+   * the first full generation response as a capability probe.
+   */
+  prepareStructuredOutput?(signal?: AbortSignal): Promise<void>;
   stream?(
     request: ProviderRequest,
     onEvent: (event: ProviderTextDelta) => void | Promise<void>,

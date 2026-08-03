@@ -265,31 +265,16 @@
                   </div>
                   <small>同时最多执行 {{ aiForm.maxConcurrentTasks }} 个 AI 任务，遇到限流会自动降速</small>
                 </label>
-                <button class="toggle-row toggle-button" type="button" @click="webResearchForm.enabled = !webResearchForm.enabled">
-                  <span>网络研究</span>
-                  <i :class="['switch-control', { active: webResearchForm.enabled }]" aria-hidden="true"></i>
-                </button>
-                <template v-if="webResearchForm.enabled">
-                  <label>
-                    <span>搜索服务</span>
-                    <div class="option-group provider-options">
-                      <button
-                        v-for="item in webSearchProviderOptions"
-                        :key="item.value"
-                        type="button"
-                        :class="{ active: webResearchForm.provider === item.value }"
-                        @click="webResearchForm.provider = item.value"
-                      >
-                        {{ item.label }}
-                      </button>
-                    </div>
-                    <small>每日热点、真题和考试大纲按需联网，普通聊天不会加载搜索工具</small>
-                  </label>
-                  <label v-if="webResearchForm.provider !== WebSearchProvider.BuiltIn">
-                    <span>搜索 API Key</span>
-                    <input v-model="webResearchForm.apiKey" type="password" placeholder="搜索服务密钥" autocomplete="off" />
-                  </label>
-                </template>
+                <WebResearchSettingsFields
+                  v-model:enabled="webResearchForm.enabled"
+                  v-model:provider="webResearchForm.provider"
+                  v-model:api-key="webResearchForm.apiKey"
+                  v-model:jina-api-key="webResearchForm.jinaApiKey"
+                  v-model:brave-api-key="webResearchForm.braveApiKey"
+                  v-model:firecrawl-api-key="webResearchForm.firecrawlApiKey"
+                  v-model:searxng-base-url="webResearchForm.searxngBaseUrl"
+                  :provider-options="webSearchProviderOptions"
+                />
                 <div class="config-actions">
                   <button type="button" @click="saveAIConfig" :disabled="isSavingConfig">
                     {{ isSavingConfig ? '保存中...' : '保存配置' }}
@@ -318,6 +303,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import WebResearchSettingsFields from '@/components/settings/WebResearchSettingsFields.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import AppearanceSettings from '@/components/settings/AppearanceSettings.vue';
@@ -365,7 +351,6 @@ import {
   CandidateProfileFeature,
   peekCandidateProfileSnapshot
 } from '@/features/profile/CandidateProfileFeature';
-
 const router = useRouter();
 let candidateProfileFeaturePromise: Promise<CandidateProfileFeature> | undefined;
 const cachedCandidateSnapshot = peekCandidateProfileSnapshot();
@@ -393,9 +378,11 @@ const aiProviderOptions: Array<{ value: AIProviderType; label: string }> = [
   { value: 'anthropic', label: 'Anthropic 原生协议' }
 ];
 const webSearchProviderOptions: Array<{ value: WebSearchProviderCode; label: string }> = [
-  { value: WebSearchProvider.BuiltIn, label: '内置免费搜索' },
+  { value: WebSearchProvider.Auto, label: '智能自动' },
   { value: WebSearchProvider.Jina, label: 'Jina Search' },
-  { value: WebSearchProvider.Brave, label: 'Brave Search' }
+  { value: WebSearchProvider.Brave, label: 'Brave Search' },
+  { value: WebSearchProvider.Firecrawl, label: 'Firecrawl' },
+  { value: WebSearchProvider.SearXNG, label: 'SearXNG' }
 ];
 const aiForm = reactive<Omit<AIConfig, 'updatedAt'>>({
   provider: 'openai',
@@ -407,8 +394,13 @@ const aiForm = reactive<Omit<AIConfig, 'updatedAt'>>({
 });
 const webResearchForm = reactive({
   enabled: true,
-  provider: WebSearchProvider.BuiltIn as WebSearchProviderCode,
-  apiKey: ''
+  provider: WebSearchProvider.Auto as WebSearchProviderCode,
+  apiKey: '',
+  jinaApiKey: '',
+  braveApiKey: '',
+  firecrawlApiKey: '',
+  firecrawlBaseUrl: 'https://api.firecrawl.dev',
+  searxngBaseUrl: ''
 });
 const reminderForm = reactive(learningNotificationAdapter.loadSettings());
 const proactiveLevel = ref<typeof ProactiveLevel[keyof typeof ProactiveLevel]>(
@@ -526,14 +518,15 @@ async function loadAIConfig() {
   webResearchForm.enabled = webConfig.enabled;
   webResearchForm.provider = webConfig.provider;
   webResearchForm.apiKey = webConfig.apiKey;
+  webResearchForm.jinaApiKey = webConfig.jinaApiKey || '';
+  webResearchForm.braveApiKey = webConfig.braveApiKey || '';
+  webResearchForm.firecrawlApiKey = webConfig.firecrawlApiKey || '';
+  webResearchForm.firecrawlBaseUrl = webConfig.firecrawlBaseUrl || 'https://api.firecrawl.dev';
+  webResearchForm.searxngBaseUrl = webConfig.searxngBaseUrl || '';
 }
 
 async function saveAIConfig() {
   if (isSavingConfig.value) return;
-  if (requiresWebSearchKey(webResearchForm.provider) && !webResearchForm.apiKey.trim()) {
-    configMessage.value = '开启网络研究后需要填写搜索 API Key';
-    return;
-  }
   isSavingConfig.value = true;
   configMessage.value = '';
   try {
@@ -549,7 +542,12 @@ async function saveAIConfig() {
       webResearchConfigService.save({
         enabled: webResearchForm.enabled,
         provider: webResearchForm.provider,
-        apiKey: webResearchForm.apiKey.trim()
+        apiKey: webResearchForm.apiKey.trim(),
+        jinaApiKey: webResearchForm.jinaApiKey.trim(),
+        braveApiKey: webResearchForm.braveApiKey.trim(),
+        firecrawlApiKey: webResearchForm.firecrawlApiKey.trim(),
+        firecrawlBaseUrl: webResearchForm.firecrawlBaseUrl.trim(),
+        searxngBaseUrl: webResearchForm.searxngBaseUrl.trim()
       })
     ]);
     configMessage.value = aiConfigService.isNativeSecure() ? '已保存到 iOS Keychain' : '已保存到本地开发存储';
@@ -560,10 +558,6 @@ async function saveAIConfig() {
 
 async function testAIConfig() {
   if (isTestingConfig.value) return;
-  if (requiresWebSearchKey(webResearchForm.provider) && !webResearchForm.apiKey.trim()) {
-    configMessage.value = '开启网络研究后需要填写搜索 API Key';
-    return;
-  }
   isTestingConfig.value = true;
   configMessage.value = '';
   try {
@@ -579,7 +573,12 @@ async function testAIConfig() {
       webResearchConfigService.save({
         enabled: webResearchForm.enabled,
         provider: webResearchForm.provider,
-        apiKey: webResearchForm.apiKey.trim()
+        apiKey: webResearchForm.apiKey.trim(),
+        jinaApiKey: webResearchForm.jinaApiKey.trim(),
+        braveApiKey: webResearchForm.braveApiKey.trim(),
+        firecrawlApiKey: webResearchForm.firecrawlApiKey.trim(),
+        firecrawlBaseUrl: webResearchForm.firecrawlBaseUrl.trim(),
+        searxngBaseUrl: webResearchForm.searxngBaseUrl.trim()
       })
     ]);
     const result = await configuredAIClient.testConnection();
@@ -605,13 +604,14 @@ async function clearAIConfig() {
   await Promise.all([aiConfigService.clear(), webResearchConfigService.clear()]);
   aiForm.apiKey = '';
   webResearchForm.enabled = true;
-  webResearchForm.provider = WebSearchProvider.BuiltIn;
+  webResearchForm.provider = WebSearchProvider.Auto;
   webResearchForm.apiKey = '';
+  webResearchForm.jinaApiKey = '';
+  webResearchForm.braveApiKey = '';
+  webResearchForm.firecrawlApiKey = '';
+  webResearchForm.firecrawlBaseUrl = 'https://api.firecrawl.dev';
+  webResearchForm.searxngBaseUrl = '';
   configMessage.value = '已清空 AI 配置';
-}
-
-function requiresWebSearchKey(provider: WebSearchProviderCode): boolean {
-  return webResearchForm.enabled && provider !== WebSearchProvider.BuiltIn;
 }
 
 function openAISheet() {

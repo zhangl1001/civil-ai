@@ -45,6 +45,54 @@ export function generationPromptPayload(
   };
 }
 
+/**
+ * Parallel shards only need the current teaching boundary and one calibrated
+ * example. Sending the complete student history and every representative true
+ * question to every shard multiplies input tokens without improving the item.
+ */
+export function generationShardPromptPayload(
+  aggregate: GenerationAggregate,
+  referencePack: TrueQuestionReferencePack | undefined,
+  shard: PracticeGenerationShard,
+  totalCount: number
+): JsonObject {
+  return {
+    capabilityNodeId: aggregate.spec.capabilityNodeId,
+    assessmentRole: aggregate.spec.assessmentRole,
+    requestedCount: shard.count,
+    batch: {
+      totalCount,
+      shardIndex: shard.index,
+      offset: shard.offset,
+      count: shard.count
+    },
+    difficulty: aggregate.spec.difficulty,
+    constraints: aggregate.spec.constraints,
+    studentContext: compactStudentContext(aggregate.spec.contextSnapshot),
+    trueQuestionReference: referencePack
+      ? compactReferencePayload(referencePack, shard.index, 1)
+      : null
+  };
+}
+
+export function generationLecturePromptPayload(
+  aggregate: GenerationAggregate,
+  referencePack: TrueQuestionReferencePack | undefined,
+  totalCount: number
+): JsonObject {
+  return {
+    capabilityNodeId: aggregate.spec.capabilityNodeId,
+    assessmentRole: aggregate.spec.assessmentRole,
+    requestedCount: totalCount,
+    difficulty: aggregate.spec.difficulty,
+    constraints: aggregate.spec.constraints,
+    studentContext: compactStudentContext(aggregate.spec.contextSnapshot),
+    trueQuestionReference: referencePack
+      ? compactReferencePayload(referencePack, 0, 2)
+      : null
+  };
+}
+
 function referencePayload(referencePack: TrueQuestionReferencePack): JsonObject {
   return {
     referencePackId: referencePack.id,
@@ -67,4 +115,76 @@ function referencePayload(referencePack: TrueQuestionReferencePack): JsonObject 
       structuralSignature: question.structuralSignature
     }))
   };
+}
+
+function compactReferencePayload(
+  referencePack: TrueQuestionReferencePack,
+  offset: number,
+  limit: number
+): JsonObject {
+  const examples = referencePack.representativeQuestions;
+  const selected = examples.length
+    ? Array.from({ length: Math.min(limit, examples.length) }, (_, index) => (
+        examples[(offset + index) % examples.length]!
+      ))
+    : [];
+  return {
+    referencePackId: referencePack.id,
+    policyVersion: referencePack.policyVersion,
+    module: referencePack.module,
+    examScope: referencePack.examScope,
+    questionTypeDistribution: referencePack.questionTypeDistribution,
+    difficultyDistribution: referencePack.difficultyDistribution,
+    structuralDistribution: referencePack.structuralDistribution,
+    distractorPatterns: [...referencePack.distractorPatterns],
+    representativeQuestions: selected.map((question) => ({
+      questionId: question.questionId,
+      difficulty: question.difficulty,
+      material: question.material ?? null,
+      prompt: question.prompt,
+      options: question.options.map((option) => ({ ...option })),
+      correctOptionId: question.correctOptionId,
+      structuralSignature: question.structuralSignature
+    }))
+  };
+}
+
+function compactStudentContext(context: JsonObject): JsonObject {
+  return compactObject({
+    schemaVersion: context.schemaVersion,
+    examCycle: compactRecord(context.examCycle, [
+      'examType', 'examName', 'examDate', 'phase', 'timeZone'
+    ]),
+    target: compactRecord(context.target, [
+      'subject', 'targetScore', 'currentScore', 'scoreGap', 'evidenceLevel', 'evidenceConfidence'
+    ]),
+    capability: context.capability,
+    teachingPreferences: context.teachingPreferences,
+    learningEvidence: compactLearningEvidence(context.learningEvidence)
+  });
+}
+
+function compactLearningEvidence(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return compactObject({
+    hasMasteryProjection: value.hasMasteryProjection,
+    mastery: value.mastery,
+    recentErrors: Array.isArray(value.recentErrors) ? value.recentErrors.slice(0, 3) : value.recentErrors,
+    recentSessions: Array.isArray(value.recentSessions) ? value.recentSessions.slice(0, 3) : value.recentSessions
+  });
+}
+
+function compactRecord(value: unknown, keys: readonly string[]): JsonObject | undefined {
+  if (!isRecord(value)) return undefined;
+  return compactObject(Object.fromEntries(keys.map((key) => [key, value[key]])));
+}
+
+function compactObject(value: Record<string, unknown>): JsonObject {
+  return JSON.parse(JSON.stringify(Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined)
+  ))) as JsonObject;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

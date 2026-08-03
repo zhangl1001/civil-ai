@@ -2,13 +2,14 @@ import {
   ConfiguredWebResearchGateway,
   requirePublicWebUrl,
   WebSearchFreshness,
-  WebSearchProvider,
   type WebPageResponse,
+  type SearchResult,
   type WebSearchFreshnessCode,
   type WebSearchResponse
 } from '@/capabilities/web-research/public';
 import { PlatformHttpTransport } from '@/composition-root/ai/PlatformHttpTransport';
 import { NativeHttpRequestPurpose } from '@/platform/NativeStreamingHttpAdapter';
+import { buildDailyCurrentAffairsQueries, selectDailyCurrentAffairs } from './CurrentAffairsResearchPolicy';
 import { webResearchConfigService } from './WebResearchConfigService';
 
 const SESSION_TTL_MS = 15 * 60_000;
@@ -46,9 +47,7 @@ export class WebResearchService {
 
   async isConfigured(): Promise<boolean> {
     const config = await webResearchConfigService.load();
-    return config.enabled && (
-      config.provider === WebSearchProvider.BuiltIn || Boolean(config.apiKey)
-    );
+    return config.enabled;
   }
 
   async search(input: {
@@ -130,23 +129,36 @@ export class WebResearchService {
     readonly evidence: string;
     readonly sources: readonly WebResearchSource[];
   }> {
-    const query = `${date} 中国 时政 政策 治理 公务员考试 申论 热点 新华社 国务院 人民日报`;
-    const result = await this.search({
+    const queries = buildDailyCurrentAffairsQueries(date);
+    const searches = await Promise.allSettled(queries.map((query) => this.search({
       query,
       freshness: WebSearchFreshness.Week,
       limit: 5,
       signal
-    });
-    const sources = result.hits.map((hit) => ({
+    })));
+    signal?.throwIfAborted();
+    const successful = searches
+      .filter((result): result is PromiseFulfilledResult<WebSearchResponse> => result.status === 'fulfilled')
+      .map((result) => result.value);
+    const selected = selectDailyCurrentAffairs(successful.map((result) => result.hits), 5);
+    if (!selected.length) {
+      const firstFailure = searches.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      throw firstFailure?.reason instanceof Error
+        ? firstFailure.reason
+        : new Error('近期没有检索到可核实的公考时政来源，请稍后重试。');
+    }
+    const detailed = await enrichCurrentAffairsEvidence(selected, await this.gateway(), signal);
+    const fetchedAt = Math.max(...successful.map((result) => result.fetchedAt), Date.now());
+    const sources = detailed.map((hit) => ({
       title: hit.title,
       url: hit.url,
       domain: hit.domain,
       snippet: compact(hit.content || hit.snippet, 2_400),
       ...(hit.publishedAt ? { publishedAt: hit.publishedAt } : {}),
-      fetchedAt: result.fetchedAt
+      fetchedAt
     }));
     return {
-      query,
+      query: queries.join(' | '),
       evidence: sources.map((source, index) => [
         `[来源${index + 1}] ${source.title}`,
         `网址：${source.url}`,
@@ -160,9 +172,6 @@ export class WebResearchService {
   private async gateway(): Promise<ConfiguredWebResearchGateway> {
     const config = await webResearchConfigService.load();
     if (!config.enabled) throw new Error('网络搜索尚未开启，请在“我的 → AI 配置”中开启。');
-    if (config.provider !== WebSearchProvider.BuiltIn && !config.apiKey) {
-      throw new Error('网络搜索尚未配置 API Key，请在“我的 → AI 配置”中填写。');
-    }
     return new ConfiguredWebResearchGateway(
       config,
       new PlatformHttpTransport(NativeHttpRequestPurpose.PublicWeb)
@@ -264,6 +273,27 @@ function clampLimit(value?: number): number {
 function compact(value: string, max: number): string {
   const text = value.trim();
   return text.length > max ? `${text.slice(0, max)}\n[内容已截断]` : text;
+}
+
+async function enrichCurrentAffairsEvidence(
+  hits: readonly SearchResult[],
+  gateway: ConfiguredWebResearchGateway,
+  signal?: AbortSignal
+): Promise<SearchResult[]> {
+  return Promise.all(hits.map(async (hit, index) => {
+    if (index >= 3 || (hit.content?.trim().length ?? 0) >= 800) return hit;
+    try {
+      const page = await gateway.readPage(hit.url, signal);
+      return {
+        ...hit,
+        title: page.title || hit.title,
+        content: compact(page.content, 2_400)
+      };
+    } catch {
+      signal?.throwIfAborted();
+      return hit;
+    }
+  }));
 }
 
 function extractPublicPageLinks(content: string): string[] {

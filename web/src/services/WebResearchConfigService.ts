@@ -10,8 +10,13 @@ export const WEB_RESEARCH_CONFIG_CHANGED_EVENT = 'zhangl-web-research-config-cha
 
 const DEFAULT_CONFIG: WebResearchConfig = {
   enabled: true,
-  provider: WebSearchProvider.BuiltIn,
+  provider: WebSearchProvider.Auto,
   apiKey: '',
+  jinaApiKey: '',
+  braveApiKey: '',
+  firecrawlApiKey: '',
+  firecrawlBaseUrl: 'https://api.firecrawl.dev',
+  searxngBaseUrl: '',
   updatedAt: 0
 };
 
@@ -44,12 +49,26 @@ export function normalizeWebResearchConfig(input: Partial<WebResearchConfig>): W
     enabled: input.enabled === true,
     provider: normalizeProvider(input.provider),
     apiKey: typeof input.apiKey === 'string' ? input.apiKey.trim() : '',
+    jinaApiKey: clean(input.jinaApiKey),
+    braveApiKey: clean(input.braveApiKey),
+    firecrawlApiKey: clean(input.firecrawlApiKey),
+    firecrawlBaseUrl: clean(input.firecrawlBaseUrl) || 'https://api.firecrawl.dev',
+    searxngBaseUrl: clean(input.searxngBaseUrl),
     updatedAt: typeof input.updatedAt === 'number' ? input.updatedAt : 0
   };
 }
 
 function normalizeProvider(value: unknown): WebSearchProviderCode {
+  if (value === WebSearchProvider.Auto) return WebSearchProvider.Auto;
   if (value === WebSearchProvider.Brave) return WebSearchProvider.Brave;
   if (value === WebSearchProvider.Jina) return WebSearchProvider.Jina;
-  return WebSearchProvider.BuiltIn;
+  if (value === WebSearchProvider.Firecrawl) return WebSearchProvider.Firecrawl;
+  if (value === WebSearchProvider.SearXNG) return WebSearchProvider.SearXNG;
+  // Previous releases persisted built_in. Upgrade it to the orchestrated mode
+  // so installed apps gain bounded provider fallback without reinstalling.
+  return WebSearchProvider.Auto;
+}
+
+function clean(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }

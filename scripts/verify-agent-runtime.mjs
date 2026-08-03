@@ -70,6 +70,36 @@ try {
   const completed = machine.transition(resumed, agent.AgentRunAction.Complete, clock);
   assert.equal(completed.status, 'completed');
   assert.throws(() => machine.transition(completed, agent.AgentRunAction.Resume, clock));
+  const rootRun = {
+    ...completed,
+    id: 'AgentRunId:root',
+    rootAgentRunId: 'AgentRunId:root',
+    idempotencyKey: 'root-run'
+  };
+  let createdChild;
+  const createChildRun = new agent.CreateAgentRun(
+    { async run(work) { return work({}); } },
+    {
+      async findByIdempotencyKey() { return undefined; },
+      async findById(id) { return id === rootRun.id ? { run: rootRun, events: [] } : undefined; },
+      async create(run) { createdChild = run; }
+    },
+    { async append() {} },
+    { now() { return 2_000; } },
+    { next(namespace) { return `${namespace}:child`; } }
+  );
+  await createChildRun.execute({
+    idempotencyKey: 'child-run',
+    runType: agent.AgentRunType.Review,
+    parentAgentRunId: rootRun.id,
+    inputSnapshot: { taskCenterVisible: false }
+  });
+  assert.equal(createdChild.parentAgentRunId, rootRun.id);
+  assert.equal(
+    createdChild.rootAgentRunId,
+    rootRun.id,
+    'a background execution must inherit the visible task root instead of becoming another task'
+  );
   assert.equal(agent.DEFAULT_MAX_CONCURRENT_AGENT_RUNS, 3);
   const impactPolicy = new agent.DefaultAgentToolPolicy();
   const mediumGenerationTool = {
@@ -144,14 +174,17 @@ try {
     'src/modules/agent/adapters/SqliteAgentRunRepository.ts'
   ), 'utf8');
   const agentRunInsert = sqliteAgentRunRepositorySource.match(
-    /INSERT INTO tutor_agent_runs[\s\S]*?VALUES\s*\(([^)]*)\)/
+    /INSERT INTO tutor_agent_runs\(([^)]*)\)\s*VALUES\s*\(([^)]*)\)/
   );
   assert.ok(agentRunInsert, 'SQLite Agent run INSERT must be present');
+  const insertColumnCount = agentRunInsert[1].split(',').length;
+  const insertBindingCount = (agentRunInsert[2].match(/\?/g) || []).length;
   assert.equal(
-    (agentRunInsert[1].match(/\?/g) || []).length,
-    23,
-    'SQLite Agent run INSERT must bind exactly the 23 tutor_agent_runs columns'
+    insertBindingCount,
+    insertColumnCount,
+    'SQLite Agent run INSERT must bind exactly one value for every declared column'
   );
+  assert.equal(insertColumnCount, 25, 'Agent run hierarchy must persist root and parent IDs');
   assert.match(
     sqliteAgentRunRepositorySource,
     /lease_epoch=lease_epoch\+1/,
@@ -670,6 +703,31 @@ try {
     1,
     'a leased Worker invocation must not multiply Provider retries with AgentRun retries'
   );
+
+  let leasedEmptyProviderCalls = 0;
+  const leasedEmptyRecovery = await streamingInvocation.execute({
+    agentRunId: running.id,
+    leaseToken: {
+      agentRunId: running.id,
+      workerId: 'worker:empty-recovery-owner',
+      leaseEpoch: 1
+    },
+    modelRole: 'agent.background',
+    system: 'system',
+    messages: [{ role: 'user', content: '后台结构化内容补全' }]
+  }, {
+    provider: 'anthropic',
+    model: 'test-model',
+    async complete() {
+      leasedEmptyProviderCalls += 1;
+      if (leasedEmptyProviderCalls < 3) {
+        throw new ai.ProviderGatewayError('empty worker response', ai.ProviderErrorKind.EmptyResponse);
+      }
+      return { text: '{"ok":true}', usage: {} };
+    }
+  });
+  assert.equal(leasedEmptyProviderCalls, 3);
+  assert.equal(leasedEmptyRecovery.text, '{"ok":true}');
 
   let unsupportedFallbackCalls = 0;
   const unsupportedStreamResult = await streamingInvocation.execute({

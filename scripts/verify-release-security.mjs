@@ -31,9 +31,18 @@ const nativeStreamingSource = await readFile(
   path.join(repositoryRoot, 'ios/App/App/NativeStreamingHTTPPlugin.swift'),
   'utf8'
 );
+const generationSchedulerSource = await readFile(
+  path.join(repositoryRoot, 'web/src/modules/content/application/GenerationRequestScheduler.ts'),
+  'utf8'
+);
+const nativeTransportAdapterSource = await readFile(
+  path.join(repositoryRoot, 'web/src/platform/NativeStreamingHttpAdapter.ts'),
+  'utf8'
+);
 for (const requiredBoundary of [
   'NativeNetworkTargetPolicy.validate(url)',
-  'purpose == .model ? "POST" : "GET"',
+  'purpose == .model ? ["POST"] : ["GET", "POST"]',
+  'validatedHost != "api.firecrawl.dev"',
   'maximumConcurrentStreams',
   'maximumRequestBodyBytes',
   'maximumResponseBytes',
@@ -56,6 +65,31 @@ for (const requiredBoundary of [
 assert.ok(
   !nativeStreamingSource.includes('call.getObject("headers")?.forEach'),
   'Release security check failed: NativeStreamingHTTP forwards arbitrary request headers'
+);
+const nativeConcurrency = Number(
+  nativeStreamingSource.match(/maximumConcurrentStreams\s*=\s*(\d+)/)?.[1]
+);
+const generationConcurrency = Number(
+  generationSchedulerSource.match(/new GenerationRequestScheduler\((\d+)\)/)?.[1]
+);
+const nativeAdapterConcurrency = Number(
+  nativeTransportAdapterSource.match(/NATIVE_TRANSPORT_CONCURRENCY\s*=\s*(\d+)/)?.[1]
+);
+assert.ok(
+  Number.isInteger(nativeConcurrency)
+    && Number.isInteger(generationConcurrency)
+    && Number.isInteger(nativeAdapterConcurrency),
+  'Release security check failed: generation transport concurrency cannot be verified'
+);
+assert.equal(
+  nativeConcurrency,
+  generationConcurrency,
+  `Release security check failed: iOS transport concurrency ${nativeConcurrency} does not match generation scheduler ${generationConcurrency}`
+);
+assert.equal(
+  nativeConcurrency,
+  nativeAdapterConcurrency,
+  `Release security check failed: iOS transport concurrency ${nativeConcurrency} does not match native adapter queue ${nativeAdapterConcurrency}`
 );
 
 const documentTextSource = await readFile(

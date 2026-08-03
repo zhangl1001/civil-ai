@@ -2,6 +2,7 @@ import type { SqlDatabase, SqlRow, SqlTransaction } from '@/capabilities/databas
 import type { SqlTransactionScope } from '@/capabilities/database/adapters/sqlite/SqlTransactionScope';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type {
+  AgentRunId,
   CapabilityNodeId,
   ContentDocumentId,
   ContentSchemaVersionId,
@@ -74,7 +75,7 @@ interface TemplateRow extends SqlRow {
   status: PublishedAssetStatus; created_at: number;
 }
 interface SpecRow extends SqlRow {
-  id: string; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; content_kind: GenerationSpecRecord['contentKind'];
+  id: string; source_agent_run_id: string | null; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; content_kind: GenerationSpecRecord['contentKind'];
   assessment_role: AssessmentRole; question_template_version_id: string | null; content_schema_version_id: string;
   prompt_version_id: string;
   reference_pack_id: string | null; reference_policy_version: string | null;
@@ -505,6 +506,7 @@ export class SqliteContentRepository implements ContentRepository {
   private mapSpec(row: SpecRow): GenerationSpecRecord {
     return {
       id: row.id as GenerationSpecId,
+      sourceAgentRunId: row.source_agent_run_id as AgentRunId | null ?? undefined,
       examCycleId: row.exam_cycle_id as ExamCycleId,
       learningThreadId: row.learning_thread_id as LearningThreadId | null ?? undefined,
       teachingBlueprintId: row.teaching_blueprint_id as TeachingBlueprintId | null ?? undefined,

@@ -42,7 +42,7 @@ export class AnthropicGateway implements ProviderGateway {
   readonly capabilities = { multimodalInput: true } as const;
   readonly model: string;
   private readonly config: AnthropicGatewayConfig;
-  private readonly structuredOutput = new StructuredOutputCapability();
+  private readonly structuredOutput: StructuredOutputCapability;
   private readonly modelCapabilities: ModelCapabilityMatrix;
 
   constructor(
@@ -52,6 +52,9 @@ export class AnthropicGateway implements ProviderGateway {
   ) {
     this.model = normalizeAnthropicModelName(config.baseUrl, config.model);
     this.config = { ...config, model: this.model };
+    this.structuredOutput = new StructuredOutputCapability(
+      `anthropic:${normalizedCapabilityEndpoint(config.baseUrl)}:${this.model}`
+    );
     this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides);
   }
 
@@ -64,27 +67,28 @@ export class AnthropicGateway implements ProviderGateway {
     }
   }
 
+  async prepareStructuredOutput(signal?: AbortSignal): Promise<void> {
+    const request = structuredOutputProbeRequest();
+    await this.structuredOutput.execute({
+      invoke: (mode) => this.sendCompletion(request, mode, signal),
+      acceptsToolResult: (result) => hasRequiredStructuredRoot(result.text, request.responseSchema!),
+      isToolModeUnsupported: isUnsupportedStructuredRequest
+    });
+  }
+
   private async completeWithCurrentCapabilities(
     request: ProviderRequest,
     signal?: AbortSignal
   ): Promise<ProviderResponse> {
-    const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
-    try {
-      const result = await this.sendCompletion(request, mode, signal);
-      if (
-        mode === 'tool'
-        && request.responseSchema
-        && !hasRequiredStructuredRoot(result.text, request.responseSchema)
-      ) {
-        this.structuredOutput.markToolModeUnsupported();
-        return this.sendCompletion(request, 'prompt', signal);
-      }
-      return result;
-    } catch (error) {
-      if (mode !== 'tool' || !request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
-      this.structuredOutput.markToolModeUnsupported();
+    if (!request.responseSchema) return this.sendCompletion(request, 'tool', signal);
+    if (request.structuredOutputMode === 'prompt') {
       return this.sendCompletion(request, 'prompt', signal);
     }
+    return this.structuredOutput.execute({
+      invoke: (mode) => this.sendCompletion(request, mode, signal),
+      acceptsToolResult: (result) => hasRequiredStructuredRoot(result.text, request.responseSchema!),
+      isToolModeUnsupported: isUnsupportedStructuredRequest
+    });
   }
 
   async stream(
@@ -133,6 +137,7 @@ export class AnthropicGateway implements ProviderGateway {
     try {
       return assertNonEmptyProviderResult(parseAnthropicResponse(await response.json()));
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
       throw new ProviderGatewayError(
         'Anthropic-compatible provider returned an invalid response format',
@@ -176,7 +181,8 @@ export class AnthropicGateway implements ProviderGateway {
     // thinking disabled for the whole tool chain on those providers.
     const usesTools = structuredMode === 'tool' && Boolean(request.responseSchema)
       || Boolean(request.tools?.length);
-    const thinkingCompatibility = usesTools
+    const requiresDeterministicStructuredBody = Boolean(request.responseSchema);
+    const thinkingCompatibility = (usesTools || requiresDeterministicStructuredBody)
       && requiresDisabledThinkingForToolUse(this.config.baseUrl)
       ? { type: 'disabled' }
       : undefined;
@@ -202,6 +208,26 @@ export class AnthropicGateway implements ProviderGateway {
       signal
     };
   }
+}
+
+function structuredOutputProbeRequest(): ProviderRequest {
+  return {
+    system: 'Return the requested structured result.',
+    messages: [{ role: 'user', content: 'Set ok to true.' }],
+    temperature: 0,
+    maxOutputTokens: 64,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: `structured-probe-${Date.now()}`
+  };
+}
+
+function normalizedCapabilityEndpoint(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 }
 
 function toAnthropicMessages(messages: ProviderRequest['messages']): Array<Record<string, unknown>> {
@@ -263,7 +289,10 @@ function anthropicToolChoice(choice: ProviderRequest['toolChoice']): unknown {
 }
 
 function isUnsupportedStructuredRequest(error: unknown): boolean {
-  return error instanceof ProviderGatewayError && error.kind === ProviderErrorKind.InvalidRequest;
+  return error instanceof ProviderGatewayError && (
+    error.kind === ProviderErrorKind.InvalidRequest
+    || error.kind === ProviderErrorKind.EmptyResponse
+  );
 }
 
 function structuredJsonInstruction(system: string, schema: object): string {

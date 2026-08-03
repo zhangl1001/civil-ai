@@ -22,6 +22,7 @@ export class GenerationRequestScheduler {
   private activeLimit: number;
   private readonly configuredLimit: number;
   private successesSinceBackpressure = 0;
+  private lastBackpressureAt = Number.NEGATIVE_INFINITY;
   private readonly queue: QueueEntry<unknown>[] = [];
 
   constructor(configuredLimit = 6) {
@@ -67,6 +68,12 @@ export class GenerationRequestScheduler {
   }
 
   private recordBackpressure(): void {
+    const now = Date.now();
+    // Several shards or retries can observe the same provider throttle. Treat
+    // them as one pressure event; otherwise a single incident permanently
+    // collapses six-way generation to one-way execution.
+    if (now - this.lastBackpressureAt < 5_000) return;
+    this.lastBackpressureAt = now;
     this.activeLimit = Math.max(1, this.activeLimit - 1);
     this.successesSinceBackpressure = 0;
   }
@@ -74,7 +81,8 @@ export class GenerationRequestScheduler {
   private recordSuccess(): void {
     if (this.activeLimit >= this.configuredLimit) return;
     this.successesSinceBackpressure += 1;
-    if (this.successesSinceBackpressure < this.activeLimit * 3) return;
+    // One clean wave is enough evidence to cautiously restore one slot.
+    if (this.successesSinceBackpressure < this.activeLimit) return;
     this.activeLimit += 1;
     this.successesSinceBackpressure = 0;
   }
@@ -93,4 +101,7 @@ function isBackpressure(error: unknown): boolean {
     );
 }
 
+// Six short calls let a normal 25-question set (five shards plus its lecture)
+// finish in one provider wave. The adaptive limiter still backs off on actual
+// rate-limit/transient responses instead of permanently serializing every user.
 export const generationRequestScheduler = new GenerationRequestScheduler(6);
