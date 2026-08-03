@@ -20,10 +20,10 @@ try {
   ]);
   assert.equal(ai.AI_EXECUTION_BUDGET.modelTurnMs, 180_000);
   assert.equal(ai.AI_EXECUTION_BUDGET.chatRunMs, 900_000);
-  assert.equal(ai.generationExecutionBudgetMs(1), 128_000);
-  assert.equal(ai.generationExecutionBudgetMs(5), 160_000);
-  assert.equal(ai.generationExecutionBudgetMs(10), 200_000);
-  assert.equal(ai.generationExecutionBudgetMs(25), 300_000);
+  assert.equal(ai.generationExecutionBudgetMs(1), 45_600);
+  assert.equal(ai.generationExecutionBudgetMs(5), 48_000);
+  assert.equal(ai.generationExecutionBudgetMs(10), 51_000);
+  assert.equal(ai.generationExecutionBudgetMs(25), 60_000);
   const parentDeadlineController = new AbortController();
   const parentDeadline = ai.createProviderExecutionDeadline(
     parentDeadlineController.signal,
@@ -330,10 +330,134 @@ try {
   assert.equal(anthropicFallbackBodies.length, 3);
   assert.equal('tools' in anthropicFallbackBodies[2], false, 'unsupported structured tool mode must stay disabled');
 
+  const sharedFallbackBodies = [];
+  const sharedFallbackGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://anthropic-compatible.test/v1',
+    model: 'compatible-model'
+  }, {
+    async send(request) {
+      sharedFallbackBodies.push(JSON.parse(request.body));
+      return new Response(JSON.stringify({
+        id: 'request-shared-prompt-capability',
+        content: [{ type: 'text', text: '{"ok":true}' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  await sharedFallbackGateway.complete({
+    system: 'system',
+    messages: [{ role: 'user', content: 'reuse learned capability' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: 'anthropic-shared-fallback-request-id'
+  });
+  assert.equal(
+    'tools' in sharedFallbackBodies[0],
+    false,
+    'new gateways for the same endpoint and model must reuse learned prompt mode'
+  );
+
+  const concurrentFallbackBodies = [];
+  const concurrentFallbackGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://concurrent-capability-probe.test/v1',
+    model: 'concurrent-compatible-model'
+  }, {
+    async send(request) {
+      const body = JSON.parse(request.body);
+      concurrentFallbackBodies.push(body);
+      if ('tools' in body) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return new Response(JSON.stringify({
+          error: { message: 'forced tool_choice is unavailable for this model' }
+        }), { status: 400, headers: { 'content-type': 'application/json' } });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return new Response(JSON.stringify({
+        id: `request-concurrent-prompt-${concurrentFallbackBodies.length}`,
+        content: [{ type: 'text', text: '{"ok":true}' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const concurrentResults = await Promise.all(Array.from({ length: 6 }, (_, index) => (
+    concurrentFallbackGateway.complete({
+      system: 'system',
+      messages: [{ role: 'user', content: `generate shard ${index + 1}` }],
+      temperature: 0.2,
+      maxOutputTokens: 1000,
+      responseSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['ok'],
+        properties: { ok: { type: 'boolean' } }
+      },
+      requestId: `concurrent-fallback-request-${index + 1}`
+    })
+  )));
+  assert.equal(concurrentResults.length, 6);
+  assert.equal(
+    concurrentFallbackBodies.filter((body) => 'tools' in body).length,
+    1,
+    'concurrent structured requests must share one capability probe'
+  );
+  assert.equal(
+    concurrentFallbackBodies.filter((body) => !('tools' in body)).length,
+    6,
+    'all concurrent requests must use the learned prompt fallback without repeating tool mode'
+  );
+
+  const forcedPromptBodies = [];
+  const forcedPromptGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://forced-prompt-generation.test/v1',
+    model: 'generation-model'
+  }, {
+    async send(request) {
+      const body = JSON.parse(request.body);
+      forcedPromptBodies.push(body);
+      return new Response(JSON.stringify({
+        id: `request-forced-prompt-${forcedPromptBodies.length}`,
+        content: [{ type: 'text', text: '{"ok":true}' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  await Promise.all(Array.from({ length: 6 }, (_, index) => forcedPromptGateway.complete({
+    system: 'system',
+    messages: [{ role: 'user', content: `generate content shard ${index + 1}` }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    structuredOutputMode: 'prompt',
+    requestId: `forced-prompt-request-${index + 1}`
+  })));
+  assert.equal(forcedPromptBodies.length, 6);
+  assert(
+    forcedPromptBodies.every((body) => !('tools' in body)),
+    'generation prompt mode must start all shards without a tool-capability probe'
+  );
+  assert(
+    forcedPromptBodies.every((body) => String(body.system).includes('structured_output')),
+    'generation prompt mode must retain the structured JSON contract'
+  );
+
   const malformedToolBodies = [];
   const malformedToolGateway = new ai.AnthropicGateway({
     apiKey: 'test-key',
-    baseUrl: 'https://anthropic-compatible.test/v1',
+    baseUrl: 'https://malformed-anthropic-compatible.test/v1',
     model: 'compatible-model'
   }, {
     async send(request) {
@@ -393,6 +517,47 @@ try {
     false,
     'malformed structured tool output must disable tool mode for the gateway lifetime'
   );
+
+  const emptyStructuredBodies = [];
+  const emptyStructuredGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://empty-anthropic-compatible.test/v1',
+    model: 'compatible-model'
+  }, {
+    async send(request) {
+      const body = JSON.parse(request.body);
+      emptyStructuredBodies.push(body);
+      if (emptyStructuredBodies.length === 1) {
+        return new Response(JSON.stringify({
+          id: 'request-empty-structured-tool',
+          content: [],
+          stop_reason: 'end_turn'
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'request-prompt-after-empty-structured-tool',
+        content: [{ type: 'text', text: '{"ok":true}' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const emptyStructuredResult = await emptyStructuredGateway.complete({
+    system: 'system',
+    messages: [{ role: 'user', content: 'generate' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: 'empty-structured-request-id'
+  });
+  assert.equal(emptyStructuredResult.text, '{"ok":true}');
+  assert.equal(emptyStructuredBodies.length, 2);
+  assert.equal(emptyStructuredBodies[0].tools[0].name, 'submit_structured_result');
+  assert.equal('tools' in emptyStructuredBodies[1], false);
 
   let deepSeekRequest;
   const deepSeekGateway = new ai.AnthropicGateway({

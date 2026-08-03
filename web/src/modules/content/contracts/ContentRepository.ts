@@ -1,5 +1,6 @@
 import type { TransactionContext } from '@/capabilities/database/public';
 import type {
+  AgentRunId,
   CapabilityNodeId,
   ContentDocumentId,
   ContentSchemaVersionId,
@@ -73,6 +74,7 @@ export interface ContentMetadataBundle {
 
 export interface GenerationSpecRecord {
   readonly id: GenerationSpecId;
+  readonly sourceAgentRunId?: AgentRunId;
   readonly examCycleId: ExamCycleId;
   readonly learningThreadId?: LearningThreadId;
   readonly teachingBlueprintId?: TeachingBlueprintId;

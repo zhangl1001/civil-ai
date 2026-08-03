@@ -22,7 +22,7 @@ import type {
   GetAgentRunViews,
   InvokeAgentModel,
   RecoverExpiredAgentRuns,
-  RunAgentLoop,
+  AgentLoopRuntime,
   RunTutorAgentBatch,
   TransitionAgentRun,
   UpdateAgentRunProgress
@@ -187,7 +187,7 @@ export interface TutorDatabaseRuntime {
   readonly updateAgentRunProgress: UpdateAgentRunProgress;
   readonly runTutorAgentBatch: RunTutorAgentBatch;
   readonly invokeAgentModel: InvokeAgentModel;
-  readonly createAgentLoop: (executor: AgentToolExecutor, observer?: AgentRuntimeObserver) => RunAgentLoop;
+  readonly createAgentLoop: (executor: AgentToolExecutor, observer?: AgentRuntimeObserver) => AgentLoopRuntime;
   readonly outboxRepository: OutboxRepository;
   readonly commandReceiptRepository: CommandReceiptRepository;
   readonly createCandidateCycle: CreateCandidateCycle;

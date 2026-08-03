@@ -12,8 +12,8 @@ import {
   type AgentLoopCheckpoint,
   type AgentRunRecord,
   type AgentRuntimeEvent,
-  type AgentSkillManifest,
-  type RunAgentLoop
+  type AgentLoopRuntime,
+  type AgentSkillManifest
 } from '@/modules/agent/public';
 import type { CandidateRepository } from '@/modules/candidate/public';
 import type { QuestionImportDraftRepository, ScanQuestionImportDraft } from '@/modules/content/public';
@@ -21,13 +21,14 @@ import type { CurriculumRepository } from '@/modules/curriculum/public';
 import type { BusinessAgentExecutionContext, BusinessAgentTask } from './BusinessAgentExecutors';
 import { QuestionImportAgentService } from '@/services/QuestionImportAgentService';
 import { webResearchService } from '@/services/WebResearchService';
+import { prefetchTrueQuestionResearch } from './TrueQuestionResearchPrefetch';
 
 export interface TrueQuestionResearchAgentDependencies {
   readonly candidates: CandidateRepository;
   readonly curriculums: CurriculumRepository;
   readonly scanDraft: ScanQuestionImportDraft;
   readonly drafts: QuestionImportDraftRepository;
-  readonly createAgentLoop: (executor: RegisteredAgentToolExecutor, observer?: { onEvent(event: AgentRuntimeEvent): Promise<void> | void }) => RunAgentLoop;
+  readonly createAgentLoop: (executor: RegisteredAgentToolExecutor, observer?: { onEvent(event: AgentRuntimeEvent): Promise<void> | void }) => AgentLoopRuntime;
 }
 
 export interface TrueQuestionResearchResult {
@@ -143,14 +144,30 @@ export async function runTrueQuestionResearchAgent(
         throw new Error(`本次扫描没有可入库题目：${summarizeImportIssues(view.issues, view.candidates)}。请根据缺失项继续核验其他来源。`);
       }
       latestDraft = scannedDraft;
-      return { content: JSON.stringify(view), resultRef: view.draftId };
+      return {
+        content: JSON.stringify(view),
+        resultRef: view.draftId,
+        terminalText: `已形成 ${scannedDraft.totalCount} 道待确认真题草稿。`
+      };
     } catch (error) {
       diagnostics.toolError(call.id, 'question_bank.scan', error);
       throw error;
     }
   });
 
-  await context.update(12, '分析检索范围');
+  await context.update(12, '并行检索真题来源');
+  const prefetched = await prefetchTrueQuestionResearch({
+    agentRunId: run.id,
+    scope,
+    maxQuestions,
+    signal: context.signal,
+    research: webResearchService
+  });
+  prefetched.searches.forEach((search, index) => {
+    diagnostics.searchCompleted(`prefetch-search-${index + 1}`, search.query, search.hits);
+  });
+  prefetched.pages.forEach((page, index) => diagnostics.pageRead(`prefetch-page-${index + 1}`, page));
+  await context.update(prefetched.pages.length ? 44 : 28, prefetched.pages.length ? '分析已读取的真题正文' : '调整真题检索策略');
   const loop = dependencies.createAgentLoop(executor, {
     onEvent: (event) => {
       diagnostics.observe(event);
@@ -158,7 +175,7 @@ export async function runTrueQuestionResearchAgent(
     }
   });
   const result = await loop.execute({
-    agentRunId: run.id as Parameters<RunAgentLoop['execute']>[0]['agentRunId'],
+    agentRunId: run.id as Parameters<AgentLoopRuntime['execute']>[0]['agentRunId'],
     system: [
       '你是独立运行的公务员考试真题研究 Agent。当前任务不依赖聊天窗口，也不能向用户输出内部工具名。',
       '目标是从公开网页中找到可核验的真实题目正文，形成待用户确认的导入草稿。搜索摘要只用于发现来源，不能直接当题目。',
@@ -174,12 +191,16 @@ export async function runTrueQuestionResearchAgent(
     ].join('\n'),
     messages: [{
       role: ModelMessageRole.User,
-      content: `研究范围：${scope}\n请自主制定和调整检索策略，核验网页后把不超过 ${maxQuestions} 道真实题目整理为待确认草稿。`
+      content: [
+        `研究范围：${scope}`,
+        `请核验网页后把不超过 ${maxQuestions} 道真实题目整理为待确认草稿。`,
+        prefetched.promptEvidence
+      ].join('\n\n')
     }],
     tools: bundle.tools,
     skills: bundle.activations,
     executionContext: {
-      agentRunId: run.id as Parameters<RunAgentLoop['execute']>[0]['agentRunId'],
+      agentRunId: run.id as Parameters<AgentLoopRuntime['execute']>[0]['agentRunId'],
       leaseToken: leaseTokenOf(run),
       examCycleId: run.examCycleId,
       sessionId: ownerSessionId,
@@ -188,7 +209,11 @@ export async function runTrueQuestionResearchAgent(
     checkpoint: parseCheckpoint(run.checkpoint.agentLoop),
     maxToolCallsPerTurn: 4,
     maxParallelReadToolCalls: 3,
-    maxToolResultChars: 12_000,
+    maxToolResultChars: 8_000,
+    maxTurns: 8,
+    maxToolCalls: 18,
+    maxWallTimeMs: 120_000,
+    maxContextTokens: 20_000,
     preferStream: false,
     requiredToolName: 'question_bank.scan'
   }, gateway, context.signal);

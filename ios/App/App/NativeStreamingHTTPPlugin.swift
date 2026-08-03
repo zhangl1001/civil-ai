@@ -47,7 +47,10 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         }
     }
 
-    private static let maximumConcurrentStreams = 4
+    // Keep this aligned with the Web generation request scheduler. A normal
+    // 25-question set is five question shards plus one paired lecture, so six
+    // short requests must be able to start in the same provider wave.
+    private static let maximumConcurrentStreams = 6
     private static let maximumRequestBodyBytes = 8 * 1_024 * 1_024
     private static let maximumResponseBytes = 32 * 1_024 * 1_024
     private static let maximumChunkBytes = 1 * 1_024 * 1_024
@@ -71,6 +74,7 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         "accept",
         "accept-language",
         "authorization",
+        "content-type",
         "x-respond-with",
         "x-subscription-token"
     ]
@@ -124,9 +128,9 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             return
         }
         let method = (call.getString("method") ?? "POST").uppercased()
-        let expectedMethod = purpose == .model ? "POST" : "GET"
-        guard method == expectedMethod else {
-            call.reject("Native HTTP \(purpose.rawValue) requests only allow \(expectedMethod)")
+        let allowedMethods: Set<String> = purpose == .model ? ["POST"] : ["GET", "POST"]
+        guard allowedMethods.contains(method) else {
+            call.reject("Native HTTP \(purpose.rawValue) request method is not allowed")
             return
         }
 
@@ -135,6 +139,10 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             validatedHost = try NativeNetworkTargetPolicy.validate(url)
         } catch {
             call.reject("Native HTTP endpoint rejected: \(error.localizedDescription)")
+            return
+        }
+        if purpose == .publicWeb, method == "POST", validatedHost != "api.firecrawl.dev" {
+            call.reject("Native public web POST is only allowed for the Firecrawl API")
             return
         }
 
@@ -162,7 +170,9 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
             return
         }
         guard !atCapacity else {
-            call.reject("Native model transport is at its 4-request concurrency limit")
+            call.reject(
+                "Native model transport is at its \(Self.maximumConcurrentStreams)-request concurrency limit"
+            )
             return
         }
 
@@ -199,7 +209,9 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         guard streams.count < Self.maximumConcurrentStreams else {
             lock.unlock()
             session.invalidateAndCancel()
-            call.reject("Native model transport is at its 4-request concurrency limit")
+            call.reject(
+                "Native model transport is at its \(Self.maximumConcurrentStreams)-request concurrency limit"
+            )
             return
         }
         streams[key] = context
@@ -504,6 +516,7 @@ private enum NativeNetworkTargetPolicy {
         }
 
         let host = rawHost.hasSuffix(".") ? String(rawHost.dropLast()) : rawHost
+        let hostIsIPAddressLiteral = isIPAddressLiteral(host)
         let blockedSuffixes = [".local", ".localhost", ".internal", ".lan", ".home", ".arpa"]
         guard
             host != "localhost",
@@ -536,7 +549,9 @@ private enum NativeNetworkTargetPolicy {
                     to: sockaddr_in.self,
                     capacity: 1
                 ) { $0.pointee.sin_addr }
-                guard isPublicIPv4(UInt32(bigEndian: address.s_addr)) else {
+                let value = UInt32(bigEndian: address.s_addr)
+                guard isPublicIPv4(value)
+                    || (!hostIsIPAddressLiteral && isProxySyntheticIPv4(value)) else {
                     throw ValidationError.nonPublicAddress
                 }
             case AF_INET6:
@@ -572,6 +587,24 @@ private enum NativeNetworkTargetPolicy {
         if first == 198, second == 51 { return false }
         if first == 203, second == 0 { return false }
         return true
+    }
+
+    private static func isProxySyntheticIPv4(_ value: UInt32) -> Bool {
+        let first = value >> 24
+        let second = (value >> 16) & 0xff
+        // RFC 2544's benchmarking range is commonly used by iOS VPN clients as a
+        // synthetic DNS target. It is accepted only after resolving a hostname;
+        // direct requests to a 198.18.0.0/15 literal remain blocked.
+        return first == 198 && (second == 18 || second == 19)
+    }
+
+    private static func isIPAddressLiteral(_ host: String) -> Bool {
+        var ipv4 = in_addr()
+        if host.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+            return true
+        }
+        var ipv6 = in6_addr()
+        return host.withCString { inet_pton(AF_INET6, $0, &ipv6) } == 1
     }
 
     private static func isPublicIPv6(_ bytes: [UInt8]) -> Bool {

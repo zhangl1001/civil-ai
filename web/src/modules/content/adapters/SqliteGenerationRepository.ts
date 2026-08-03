@@ -2,6 +2,7 @@ import type { SqlDatabase, SqlRow, SqlTransaction } from '@/capabilities/databas
 import type { SqlTransactionScope } from '@/capabilities/database/adapters/sqlite/SqlTransactionScope';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type {
+  AgentRunId,
   CapabilityNodeId,
   ContentSchemaVersionId,
   ExamCycleId,
@@ -22,7 +23,7 @@ import type { GenerationWorkflowStatus, GenerationWorkflowStep } from '../domain
 import type { QuestionGenerationIntent } from '../domain/QuestionSourceCodes';
 
 interface JoinedGenerationRow extends SqlRow {
-  spec_id: string; spec_exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string;
+  spec_id: string; source_agent_run_id: string | null; spec_exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string;
   content_kind: GenerationSpecRecord['contentKind']; assessment_role: AssessmentRole;
   question_template_version_id: string | null; content_schema_version_id: string; prompt_version_id: string;
   reference_pack_id: string | null; reference_policy_version: string | null;
@@ -80,7 +81,7 @@ export class SqliteGenerationRepository implements GenerationRepository {
   private queryJoined(where: string, parameters: readonly string[]): Promise<readonly JoinedGenerationRow[]> {
     return this.database.query<JoinedGenerationRow>(
       `SELECT
-        spec.id AS spec_id, spec.exam_cycle_id AS spec_exam_cycle_id, spec.learning_thread_id, spec.teaching_blueprint_id, spec.capability_node_id,
+        spec.id AS spec_id, spec.source_agent_run_id, spec.exam_cycle_id AS spec_exam_cycle_id, spec.learning_thread_id, spec.teaching_blueprint_id, spec.capability_node_id,
         spec.content_kind, spec.assessment_role, spec.question_template_version_id,
         spec.content_schema_version_id, spec.prompt_version_id, spec.reference_pack_id,
         spec.reference_policy_version, spec.generation_intent, spec.calibration_target,
@@ -104,12 +105,12 @@ export class SqliteGenerationRepository implements GenerationRepository {
 function insertSpec(transaction: SqlTransaction, value: GenerationSpecRecord): Promise<unknown> {
   return transaction.run(
     `INSERT INTO generation_specs(
-      id, exam_cycle_id, learning_thread_id, teaching_blueprint_id, capability_node_id, content_kind, assessment_role,
+      id, source_agent_run_id, exam_cycle_id, learning_thread_id, teaching_blueprint_id, capability_node_id, content_kind, assessment_role,
       question_template_version_id, content_schema_version_id, prompt_version_id, reference_pack_id,
       reference_policy_version, generation_intent, calibration_target, requested_count,
       difficulty_json, constraints_json, context_snapshot_json, content_hash, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.id, value.examCycleId, value.learningThreadId ?? null, value.teachingBlueprintId ?? null, value.capabilityNodeId, value.contentKind, value.assessmentRole,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [value.id, value.sourceAgentRunId ?? null, value.examCycleId, value.learningThreadId ?? null, value.teachingBlueprintId ?? null, value.capabilityNodeId, value.contentKind, value.assessmentRole,
       value.questionTemplateVersionId ?? null, value.contentSchemaVersionId, value.promptVersionId,
       value.referencePackId ?? null, value.referencePolicyVersion ?? null, value.generationIntent ?? null,
       value.calibrationTarget ?? null, value.requestedCount ?? null,
@@ -135,6 +136,7 @@ function mapAggregate(row: JoinedGenerationRow): GenerationAggregate {
   return {
     spec: {
       id: row.spec_id as GenerationSpecId,
+      sourceAgentRunId: row.source_agent_run_id as AgentRunId | null ?? undefined,
       examCycleId: row.spec_exam_cycle_id as ExamCycleId,
       learningThreadId: row.learning_thread_id as LearningThreadId | null ?? undefined,
       teachingBlueprintId: row.teaching_blueprint_id as TeachingBlueprintId | null ?? undefined,

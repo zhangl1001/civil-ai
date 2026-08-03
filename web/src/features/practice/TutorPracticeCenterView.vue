@@ -2,22 +2,29 @@
   <div class="practice-center app-page">
     <PageHeader title="刷题中心" :meta="cycleName" />
 
-    <PullToRefresh class="practice-scroll" :on-refresh="load">
+    <PullToRefresh
+      class="practice-scroll"
+      :on-refresh="load"
+      @touchstart.passive="handleModeTouchStart"
+      @touchmove="handleModeTouchMove"
+      @touchend="handleModeTouchEnd"
+      @touchcancel="resetModeTouch"
+    >
       <section class="section-block">
         <div :class="['mode-intro', `mode-${activeMode}`]">
           <div class="mode-intro-copy">
-            <small>{{ modeIntroEyebrow }}</small>
-            <strong>{{ modeIntroTitle }}</strong>
-            <p>{{ modeIntroDescription }}</p>
+            <small>{{ modeCopy.eyebrow }}</small>
+            <strong>{{ modeCopy.title }}</strong>
+            <p>{{ modeCopy.description }}</p>
           </div>
           <nav class="practice-tabs" aria-label="刷题模式">
-            <button type="button" :class="{ active: activeMode === 'tutor' }" @click="activeMode = 'tutor'">
+            <button type="button" :class="{ active: activeMode === 'tutor' }" @click="selectMode('tutor')">
               <SparklesIcon />私教学习
             </button>
-            <button type="button" :class="{ active: activeMode === 'self' }" @click="activeMode = 'self'">
+            <button type="button" :class="{ active: activeMode === 'self' }" @click="selectMode('self')">
               <SlidersHorizontalIcon />自主刷题
             </button>
-            <button type="button" :class="{ active: activeMode === 'true' }" @click="activeMode = 'true'">
+            <button type="button" :class="{ active: activeMode === 'true' }" @click="selectMode('true')">
               <LandmarkIcon />真题练习
             </button>
           </nav>
@@ -100,8 +107,8 @@
       <section class="section-block">
         <div class="section-heading">
           <div>
-            <strong>{{ listHeading }}</strong>
-            <span>{{ listDescription }}</span>
+            <strong>{{ modeCopy.listHeading }}</strong>
+            <span>{{ modeCopy.listDescription }}</span>
           </div>
           <button type="button" class="text-action" @click="router.push('/vue/wrongbook')">错题本</button>
         </div>
@@ -109,8 +116,8 @@
         <AppStateView
           v-else-if="!visibleSets.length"
           compact
-          :title="emptyTitle"
-          :description="emptyDescription"
+          :title="modeCopy.emptyTitle"
+          :description="modeCopy.emptyDescription"
         />
         <PracticeQuestionSetList
           v-else
@@ -285,6 +292,8 @@ import { useTrueQuestionImport } from './useTrueQuestionImport';
 import { useTrueQuestionResearchDraft } from './useTrueQuestionResearchDraft';
 import { usePracticeQuestionSetPagination, type PracticeCenterMode } from './usePracticeQuestionSetPagination';
 import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteria';
+import { usePracticeModeSwipe } from './PracticeModeSwipe';
+import { practiceModeCopy } from './PracticeModePresentation';
 
 type PracticeMode = PracticeCenterMode;
 
@@ -395,47 +404,11 @@ const tutorDescription = computed(() => {
   if (!prescription) return '根据计划、薄弱点和复习节奏生成';
   return `${prescription.requestedCount}题 · ${roleLabel(prescription.assessmentRole)} · ${prescription.description}`;
 });
-const modeIntroTitle = computed(() => {
-  if (activeMode.value === 'true') return '用真实试题校准能力与训练方向';
-  if (activeMode.value === QuestionSetEntryMode.Self) return '按自己的节奏选择训练内容';
-  return tutorPrescription.value?.title || '正在读取今日私教安排';
-});
-const modeIntroDescription = computed(() => {
-  if (activeMode.value === 'true') {
-    return '按年份、地区和来源练习已导入真题，作答结果进入同一套批改、错因与能力证据链。';
-  }
-  if (activeMode.value === QuestionSetEntryMode.Self) {
-    return '自主选择模块、细分考点和题量，生成的题组只保存在自主刷题分类中。';
-  }
-  return tutorPrescription.value
-    ? `根据计划、薄弱点和复习节奏安排：${tutorDescription.value}`
-    : '私教会结合当前计划、能力证据和待复习知识点确定训练内容。';
-});
-const modeIntroEyebrow = computed(() => ({
-  tutor: '当前私教主线',
-  self: '自主加练',
-  true: '真题校准'
-})[activeMode.value]);
-const listHeading = computed(() => ({
-  tutor: '私教题组',
-  self: '自主题组',
-  true: '真题题库'
-})[activeMode.value]);
-const listDescription = computed(() => ({
-  tutor: '由计划、薄弱点和复习任务生成',
-  self: '由你主动选择条件生成',
-  true: '官方真题、导入题与自建题独立归档'
-})[activeMode.value]);
-const emptyTitle = computed(() => ({
-  tutor: '还没有私教题组',
-  self: '还没有自主题组',
-  true: '还没有可练习的真题'
-})[activeMode.value]);
-const emptyDescription = computed(() => ({
-  tutor: '开始今日教学动作后，私教题组会保存在这里。',
-  self: '设置模块、考点和题量后，自主题组会保存在这里。',
-  true: '导入文件或创建联网研究任务，确认草稿后真题会按来源归档在这里。'
-})[activeMode.value]);
+const modeCopy = computed(() => practiceModeCopy(
+  activeMode.value,
+  tutorPrescription.value,
+  tutorDescription.value
+));
 const trueQuestionFilterSummary = computed(() => {
   const filters = [
     trueOriginFilter.value === 'all' ? '' : questionOriginLabel(trueOriginFilter.value),
@@ -744,6 +717,18 @@ function resetTrueQuestionFilters() {
   trueModuleFilter.value = '';
   trueStatusFilter.value = 'all';
 }
+
+function selectMode(mode: PracticeMode) {
+  if (mode === activeMode.value) return;
+  activeMode.value = mode;
+}
+
+const {
+  handleTouchStart: handleModeTouchStart,
+  handleTouchMove: handleModeTouchMove,
+  handleTouchEnd: handleModeTouchEnd,
+  resetTouch: resetModeTouch
+} = usePracticeModeSwipe(() => activeMode.value, selectMode);
 
 function openEssayPractice() {
   void router.push({

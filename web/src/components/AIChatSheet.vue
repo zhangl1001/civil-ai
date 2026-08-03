@@ -331,9 +331,17 @@ onBeforeUnmount(() => {
 let stopToolActivitySubscription: (() => void) | undefined;
 
 const taskRows = computed<ProcessItem[]>(() => {
-  return agentRuns.value
-    .filter((run) => run.taskCenterVisible)
-    .sort((left, right) => Number(right.isActive) - Number(left.isActive) || right.updatedAt - left.updatedAt)
+  const byRoot = new Map<string, AgentRunView>();
+  agentRuns.value
+    .filter((run) => run.taskCenterVisible && run.isActive)
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .forEach((run) => {
+      const rootId = run.rootAgentRunId || run.id;
+      const current = byRoot.get(rootId);
+      if (!current || run.id === rootId) byRoot.set(rootId, run);
+    });
+  return [...byRoot.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
     .slice(0, 2)
     .map(agentRunToProcessItem);
 });

@@ -1,4 +1,4 @@
-import type { ExamCycleId, JsonObject, LearningSessionId } from '@/kernel/public';
+import type { AgentRunId, ExamCycleId, JsonObject, LearningSessionId } from '@/kernel/public';
 import { contentDocumentText } from '@/modules/content/public';
 import { ErrorCauseCode } from '../domain/EvidenceCodes';
 import type { GetObjectiveSessionReview, ObjectiveSessionReviewItem } from './GetObjectiveSessionReview';
@@ -49,6 +49,7 @@ export interface ObjectiveSubmissionPostProcessCommand {
   readonly reviewQueueItemId?: string;
   readonly dailyPlanItemId?: string;
   readonly elapsedMs: number;
+  readonly rootAgentRunId?: AgentRunId;
 }
 
 export interface ObjectiveSubmissionPostProcessResult {
@@ -158,6 +159,7 @@ export class ObjectiveSubmissionPostProcessor {
       const run = await attempt('error_diagnosis.enqueue', pendingSteps, () => this.requestDiagnosis.execute({
         idempotencyKey: `${command.idempotencyKey}:ai-diagnosis-batch:v1`,
         sessionId: sessionReview.session.id,
+        parentAgentRunId: command.rootAgentRunId,
         items: diagnosisItems
       }));
       if (run) diagnosisRunIds.push(run.run.id);

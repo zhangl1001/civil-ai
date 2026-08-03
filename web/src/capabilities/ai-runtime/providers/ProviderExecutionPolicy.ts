@@ -3,9 +3,13 @@ import { ProviderErrorKind, ProviderGatewayError } from '../contracts/ProviderGa
 export const AI_EXECUTION_BUDGET = {
   modelTurnMs: 180_000,
   chatRunMs: 900_000,
-  generationBaseMs: 120_000,
-  generationPerQuestionMs: 8_000,
-  generationMaxMs: 300_000
+  // This is a recovery ceiling, not the interactive latency target. Small
+  // tutor drills still target 10-15 seconds, but iOS connection setup and one
+  // provider retry must not consume their entire lifetime budget. A shorter
+  // hard deadline made three-question drills less reliable than large batches.
+  generationBaseMs: 45_000,
+  generationPerQuestionMs: 600,
+  generationMaxMs: 60_000
 } as const;
 
 export interface ProviderExecutionDeadline {

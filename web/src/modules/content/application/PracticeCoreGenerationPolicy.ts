@@ -12,7 +12,10 @@ export interface PracticeGenerationPlan {
   readonly shards: readonly PracticeGenerationShard[];
 }
 
-const LARGE_BATCH_THRESHOLD = 12;
+// A single structured response becomes output-token bound well before twelve
+// questions. Keep the one-call path for genuinely small drills and shard every
+// larger set so provider decoding happens in parallel.
+const LARGE_BATCH_THRESHOLD = 5;
 const DEFAULT_SHARD_SIZE = 5;
 const COMPLEX_SHARD_SIZE = 4;
 // Large batches use short independent provider calls. This is separate from
@@ -21,19 +24,19 @@ const DEFAULT_SHARD_CONCURRENCY = 6;
 const COMPLEX_SHARD_CONCURRENCY = 4;
 
 export function coreGenerationTokenBudget(questionCount: number, capabilityCode = ''): number {
-  const base = Math.max(4_000, 2_800 + Math.max(1, questionCount) * 750);
-  const structuralAllowance = isComplexVisualStructure(capabilityCode) ? 1_600 : 0;
-  return Math.min(9_000, base + structuralAllowance);
+  const base = Math.max(2_600, 1_400 + Math.max(1, questionCount) * 480);
+  const structuralAllowance = isComplexVisualStructure(capabilityCode) ? 1_400 : 0;
+  return Math.min(5_800, base + structuralAllowance);
 }
 
 export function lectureGenerationTokenBudget(capabilityCode = ''): number {
-  return isComplexVisualStructure(capabilityCode) ? 4_200 : 3_600;
+  return isComplexVisualStructure(capabilityCode) ? 3_200 : 2_600;
 }
 
 export function questionShardTokenBudget(questionCount: number, capabilityCode = ''): number {
-  const base = 1_400 + Math.max(1, questionCount) * 500;
-  const structuralAllowance = isComplexVisualStructure(capabilityCode) ? 1_400 : 0;
-  return Math.min(6_000, Math.max(2_800, base + structuralAllowance));
+  const base = 800 + Math.max(1, questionCount) * 320;
+  const structuralAllowance = isComplexVisualStructure(capabilityCode) ? 1_500 : 0;
+  return Math.min(5_000, Math.max(1_800, base + structuralAllowance));
 }
 
 export function createPracticeGenerationPlan(
@@ -44,7 +47,10 @@ export function createPracticeGenerationPlan(
   if (totalCount <= LARGE_BATCH_THRESHOLD) {
     return {
       totalCount,
-      shardConcurrency: 1,
+      // Three- and four-question tutor drills are the latency-sensitive path.
+      // The caller may split lecture/questions into one provider wave while
+      // one-, two- and five-question compatibility flows retain one response.
+      shardConcurrency: totalCount >= 3 && totalCount <= 4 ? 2 : 1,
       shards: [{ index: 0, offset: 0, count: totalCount }]
     };
   }
@@ -63,6 +69,13 @@ export function createPracticeGenerationPlan(
     shardConcurrency: complex ? COMPLEX_SHARD_CONCURRENCY : DEFAULT_SHARD_CONCURRENCY,
     shards
   };
+}
+
+export function shouldGeneratePracticeBlocksInParallel(
+  plan: PracticeGenerationPlan
+): boolean {
+  return (plan.totalCount >= 3 && plan.totalCount <= 4)
+    || plan.totalCount > LARGE_BATCH_THRESHOLD;
 }
 
 export function practiceCoreSystem(system: string, capabilityCode = ''): string {
@@ -132,6 +145,7 @@ export function practiceQuestionShardSystem(
   capabilityCode = ''
 ): string {
   const structuralContract = capabilityStructuralContract(capabilityCode);
+  const latencyContract = questionShardLatencyContract(capabilityCode);
   return [
     system,
     '# 配套题目分片',
@@ -139,6 +153,7 @@ export function practiceQuestionShardSystem(
     '用户消息中的 teachingContract 是本套题唯一的教学契约，必须围绕其中的知识、方法、边界和难度生成本分片题目。',
     '不得改变教学目标，不得输出与 teachingContract 无关的泛题。',
     '每道题必须提供可立即作答的材料、题干、选项、正确答案和 knowledgePoint；详细解析由后续无感补全。',
+    latencyContract,
     'batch.existingQuestionSummaries 是其他分片已占用的设问方向，只用于去重，不得照抄。',
     ...(structuralContract ? ['# 当前题型必要结构', structuralContract] : [])
   ].join('\n\n');
@@ -146,13 +161,15 @@ export function practiceQuestionShardSystem(
 
 export function practiceQuestionShardResponseSchema(
   schema: JsonObject,
-  exactQuestionCount: number
+  exactQuestionCount: number,
+  capabilityCode = ''
 ): JsonObject {
   const cloned = practiceCoreResponseSchema(schema, exactQuestionCount) as Record<string, unknown>;
   const properties = schemaRecord(cloned.properties, '$.properties');
   delete properties.lecture;
   cloned.required = (Array.isArray(cloned.required) ? cloned.required : [])
     .filter((item) => item !== 'lecture');
+  applyQuestionShardLatencyBounds(properties, capabilityCode);
   return cloned as JsonObject;
 }
 
@@ -204,4 +221,54 @@ function capabilityStructuralContract(capabilityCode: string): string {
 function isComplexVisualStructure(capabilityCode: string): boolean {
   return capabilityCode.startsWith('aptitude.data_analysis.')
     || capabilityCode.startsWith('aptitude.judgment.graphical.');
+}
+
+function questionShardLatencyContract(capabilityCode: string): string {
+  if (capabilityCode.startsWith('aptitude.data_analysis.')) {
+    return '首轮只交付作答核心块。公共资料集中放入一个 materialGroup，题目不得重复资料；每个小题设问与选项保持简洁。';
+  }
+  if (capabilityCode.startsWith('aptitude.judgment.graphical.')) {
+    return '首轮只交付作答核心块。SVG 仅保留表达规律所需的图元和属性，不添加装饰、注释、元数据或重复图层。';
+  }
+  if (capabilityCode.startsWith('aptitude.verbal.')) {
+    return '首轮只交付作答核心块。独立材料控制在 420 个字符内，设问控制在 100 个字符内，每个选项控制在 100 个字符内，考点名称控制在 40 个字符内。';
+  }
+  return '首轮只交付作答核心块。独立材料控制在 280 个字符内，设问控制在 80 个字符内，每个选项控制在 80 个字符内，考点名称控制在 40 个字符内；不得输出详细解析。';
+}
+
+function applyQuestionShardLatencyBounds(
+  rootProperties: Record<string, unknown>,
+  capabilityCode: string
+): void {
+  const questions = schemaRecord(rootProperties.questions, '$.properties.questions');
+  const question = schemaRecord(questions.items, '$.properties.questions.items');
+  const questionProperties = schemaRecord(
+    question.properties,
+    '$.properties.questions.items.properties'
+  );
+  const verbal = capabilityCode.startsWith('aptitude.verbal.');
+  const complex = isComplexVisualStructure(capabilityCode);
+  if (!complex) {
+    Object.assign(schemaRecord(questionProperties.material, '$.questions.items.material'), {
+      maxLength: verbal ? 420 : 280
+    });
+  }
+  Object.assign(schemaRecord(questionProperties.prompt, '$.questions.items.prompt'), {
+    maxLength: verbal ? 100 : 80
+  });
+  const options = schemaRecord(questionProperties.options, '$.questions.items.options');
+  const option = schemaRecord(options.items, '$.questions.items.options.items');
+  const optionProperties = schemaRecord(option.properties, '$.questions.items.options.items.properties');
+  Object.assign(schemaRecord(optionProperties.text, '$.questions.items.options.items.text'), {
+    maxLength: verbal ? 100 : 80
+  });
+  const explanation = schemaRecord(questionProperties.explanation, '$.questions.items.explanation');
+  const explanationProperties = schemaRecord(
+    explanation.properties,
+    '$.questions.items.explanation.properties'
+  );
+  Object.assign(
+    schemaRecord(explanationProperties.knowledgePoint, '$.questions.items.explanation.knowledgePoint'),
+    { maxLength: 40 }
+  );
 }

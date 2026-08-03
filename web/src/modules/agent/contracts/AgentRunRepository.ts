@@ -10,6 +10,8 @@ import type {
 
 export interface AgentRunRecord {
   readonly id: AgentRunId;
+  readonly rootAgentRunId?: AgentRunId;
+  readonly parentAgentRunId?: AgentRunId;
   readonly runType: AgentRunType;
   readonly workPool?: AgentWorkPool;
   readonly executionClass?: AgentExecutionClass;

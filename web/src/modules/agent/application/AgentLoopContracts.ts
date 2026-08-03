@@ -1,4 +1,4 @@
-import type { ModelMessage } from '@/capabilities/ai-runtime/public';
+import type { ModelMessage, ProviderGateway } from '@/capabilities/ai-runtime/public';
 import type { AgentRunId } from '@/kernel/public';
 import type {
   AgentLoopCheckpoint,
@@ -34,4 +34,13 @@ export interface AgentLoopResult {
   readonly status: 'completed' | 'delegated' | 'waiting_user' | 'budget_exhausted';
   readonly text: string;
   readonly checkpoint: AgentLoopCheckpoint;
+}
+
+/** Stable application boundary for interchangeable Agent loop engines. */
+export interface AgentLoopRuntime {
+  execute(
+    command: RunAgentLoopCommand,
+    gateway: ProviderGateway,
+    signal?: AbortSignal
+  ): Promise<AgentLoopResult>;
 }

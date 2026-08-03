@@ -10,6 +10,7 @@ import {
 } from '../domain/AgentRunCodes';
 import {
   AgentRunNotificationMode,
+  TaskTargetType,
   resolveAgentRunNotificationMode
 } from '../domain/TaskCenterCodes';
 import {
@@ -175,7 +176,7 @@ export class RunTutorAgentBatch {
         await this.notify(() => this.lifecycle?.cancelled(run, 'agent_run.worker_aborted'));
         return 'cancelled';
       }
-      const retryAfterMs = retryDelay(error, run.run.attemptCount);
+      const retryAfterMs = retryDelay(error, run.run.attemptCount, run);
       if (retryAfterMs !== undefined && run.run.attemptCount < 4) {
         const code = errorCode(error);
         await this.transition.execute({
@@ -258,7 +259,11 @@ function isRecoverableInterruption(signal?: AbortSignal): boolean {
     || (signal?.aborted === true && isAgentRunSuspended(signal.reason));
 }
 
-function retryDelay(error: unknown, attemptCount: number): number | undefined {
+function retryDelay(
+  error: unknown,
+  attemptCount: number,
+  run: AgentRunAggregate
+): number | undefined {
   const code = codedError(error);
   if (code === 'content.enrichment_incomplete' || code === 'content.enrichment_invalid') {
     return Math.min(60_000, 2_000 * 2 ** Math.max(0, attemptCount - 1));
@@ -271,6 +276,10 @@ function retryDelay(error: unknown, attemptCount: number): number | undefined {
   }
   if (!(error instanceof ProviderGatewayError)) return undefined;
   if (error.kind !== 'rate_limited' && error.kind !== 'transient' && error.kind !== 'empty_response') return undefined;
+  // Structured practice already retries only the failed provider shard. A
+  // second Agent-run attempt would regenerate every successful shard and turn
+  // one provider miss into minutes of repeated work.
+  if (run.run.targetResourceType === TaskTargetType.StructuredPractice) return undefined;
   return error.retryAfterMs ?? Math.min(120_000, 1_000 * 2 ** Math.max(0, attemptCount - 1));
 }
 

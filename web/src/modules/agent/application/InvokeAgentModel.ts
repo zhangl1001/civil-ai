@@ -156,7 +156,7 @@ export class InvokeAgentModel implements AgentModelInvoker {
         request,
         shouldStream ? command.onDelta : undefined,
         deadline.signal,
-        command.leaseToken ? WORKER_PROVIDER_ATTEMPT_LIMIT : INTERACTIVE_PROVIDER_ATTEMPT_LIMIT
+        command.leaseToken ? ProviderRecoveryProfile.Worker : ProviderRecoveryProfile.Interactive
       );
       signal?.throwIfAborted();
       if (
@@ -235,9 +235,9 @@ async function invokeProviderWithRecovery(
   request: ProviderRequest,
   onDelta: ((text: string) => void | Promise<void>) | undefined,
   signal: AbortSignal,
-  attemptLimit: number
+  profile: ProviderRecoveryProfile
 ): Promise<ProviderResponse> {
-  for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_PROVIDER_ATTEMPTS; attempt += 1) {
     signal.throwIfAborted();
     let emittedDelta = false;
     try {
@@ -254,7 +254,7 @@ async function invokeProviderWithRecovery(
         return response;
       }
     } catch (error) {
-      if (!canRetryProviderTurn(error, emittedDelta, signal, attempt, attemptLimit)) throw error;
+      if (!canRetryProviderTurn(error, emittedDelta, signal, attempt, profile)) throw error;
       await waitForProviderRetry(providerRetryDelayMs(error, attempt), signal);
     }
   }
@@ -266,13 +266,31 @@ function canRetryProviderTurn(
   emittedDelta: boolean,
   signal: AbortSignal,
   attempt: number,
-  attemptLimit: number
+  profile: ProviderRecoveryProfile
 ): boolean {
-  if (emittedDelta || signal.aborted || attempt >= attemptLimit - 1) return false;
+  if (emittedDelta || signal.aborted) return false;
   if (!(error instanceof ProviderGatewayError)) return false;
-  return error.kind === ProviderErrorKind.EmptyResponse
-    || error.kind === ProviderErrorKind.Transient
-    || error.kind === ProviderErrorKind.RateLimited;
+  return attempt < providerAttemptLimit(profile, error.kind) - 1;
+}
+
+function providerAttemptLimit(
+  profile: ProviderRecoveryProfile,
+  kind: ProviderErrorKind
+): number {
+  if (profile === ProviderRecoveryProfile.Worker) {
+    if (kind === ProviderErrorKind.EmptyResponse) return 3;
+    if (kind === ProviderErrorKind.Protocol) return 2;
+    // AgentRun owns delayed retries for network and rate-limit failures. Keeping
+    // those out of this inner loop prevents multiplicative retry storms.
+    return 1;
+  }
+  if (
+    kind === ProviderErrorKind.EmptyResponse
+    || kind === ProviderErrorKind.Transient
+    || kind === ProviderErrorKind.RateLimited
+  ) return 4;
+  if (kind === ProviderErrorKind.Protocol) return 2;
+  return 1;
 }
 
 function providerRetryDelayMs(error: unknown, attempt: number): number {
@@ -298,5 +316,9 @@ function waitForProviderRetry(delayMs: number, signal: AbortSignal): Promise<voi
   });
 }
 
-const INTERACTIVE_PROVIDER_ATTEMPT_LIMIT = 4;
-const WORKER_PROVIDER_ATTEMPT_LIMIT = 1;
+enum ProviderRecoveryProfile {
+  Interactive = 'interactive',
+  Worker = 'worker'
+}
+
+const MAX_PROVIDER_ATTEMPTS = 4;

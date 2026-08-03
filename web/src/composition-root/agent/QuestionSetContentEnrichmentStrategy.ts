@@ -37,6 +37,8 @@ export interface QuestionSetContentEnrichmentDependencies {
 }
 
 const MAX_PARALLEL_EXPLANATION_REQUESTS = 3;
+const MAX_PARALLEL_EXPLANATION_RECOVERY_REQUESTS = 2;
+const EXPLANATION_QUESTIONS_PER_REQUEST = 3;
 
 export function createQuestionSetContentEnrichmentStrategy(
   dependencies: QuestionSetContentEnrichmentDependencies
@@ -99,6 +101,49 @@ async function executeQuestionSetEnrichment(
     );
     await commitTail;
     signal?.throwIfAborted();
+    bundle = await requireQuestionSet(dependencies.contentRepository, questionSetId);
+    needs = findQuestionSetEnrichmentNeeds(bundle);
+    if (needs.explanationQuestionIds.length) {
+      await dependencies.updateProgress.execute({
+        agentRunId: run.run.id,
+        step: TaskCenterStep.InvokingModel,
+        progress: 72,
+        message: `正在补齐 ${needs.explanationQuestionIds.length} 道未返回的解析`,
+        leaseToken: leaseTokenOf(run.run)
+      });
+      const recoveryFailures: unknown[] = [];
+      await mapWithConcurrency(
+        needs.explanationQuestionIds.map((questionId) => ({
+          lecture: false,
+          explanationQuestionIds: [questionId]
+        })),
+        MAX_PARALLEL_EXPLANATION_RECOVERY_REQUESTS,
+        async (shard) => {
+          try {
+            const enrichment = await requestEnrichmentShard(
+              run,
+              gateway,
+              signal,
+              bundle,
+              shard,
+              dependencies
+            );
+            const commit = commitTail.then(async () => {
+              signal?.throwIfAborted();
+              await dependencies.applyEnrichment.execute(questionSetId, enrichment);
+            });
+            commitTail = commit.catch(() => undefined);
+            await commit;
+          } catch (error) {
+            signal?.throwIfAborted();
+            recoveryFailures.push(error);
+          }
+        }
+      );
+      failures.push(...recoveryFailures);
+      await commitTail;
+      signal?.throwIfAborted();
+    }
     await dependencies.updateProgress.execute({
       agentRunId: run.run.id,
       step: TaskCenterStep.CommittingResult,
@@ -125,7 +170,7 @@ class ContentEnrichmentIncompleteError extends Error {
   readonly code = 'content.enrichment_incomplete';
 
   constructor(needs: ReturnType<typeof findQuestionSetEnrichmentNeeds>, failedShards = 0) {
-    super(`Content enrichment remains incomplete: lecture=${needs.lecture}, explanations=${needs.explanationQuestionIds.length}, failedShards=${failedShards}`);
+    super(`解析补全未完成：讲义=${needs.lecture ? '缺失' : '完整'}，待补解析=${needs.explanationQuestionIds.length}，失败分片=${failedShards}`);
     this.name = 'ContentEnrichmentIncompleteError';
   }
 }
@@ -166,12 +211,23 @@ async function requestEnrichmentShard(
 }
 
 function enrichmentShards(needs: QuestionSetEnrichmentNeeds): readonly QuestionSetEnrichmentNeeds[] {
+  const explanationShards: QuestionSetEnrichmentNeeds[] = [];
+  for (
+    let offset = 0;
+    offset < needs.explanationQuestionIds.length;
+    offset += EXPLANATION_QUESTIONS_PER_REQUEST
+  ) {
+    explanationShards.push({
+      lecture: false,
+      explanationQuestionIds: needs.explanationQuestionIds.slice(
+        offset,
+        offset + EXPLANATION_QUESTIONS_PER_REQUEST
+      )
+    });
+  }
   return [
     ...(needs.lecture ? [{ lecture: true, explanationQuestionIds: [] }] : []),
-    ...needs.explanationQuestionIds.map((questionId) => ({
-      lecture: false,
-      explanationQuestionIds: [questionId]
-    }))
+    ...explanationShards
   ];
 }
 

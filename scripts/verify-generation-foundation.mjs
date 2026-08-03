@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
 
@@ -112,6 +113,11 @@ try {
     ['knowledgePoint'],
     'the foreground turn must publish the question knowledge point without expanding the detailed explanation'
   );
+  assert.equal(
+    validGateway.requests[0].structuredOutputMode,
+    'prompt',
+    'small generation must use the same provider-compatible structured protocol as sharded generation'
+  );
   assert.match(
     validGateway.requests[0].system,
     /本轮必须同时生成配套 lecture 和可立即作答的核心题目包/,
@@ -189,9 +195,9 @@ try {
     'pedagogical quality warnings must never trigger a second provider request'
   );
 
-  const mostlyValid = await createWorkflow.execute(generationCommand('generation:test:mostly-valid', 10));
-  const mostlyValidSource = validGeneratedContent(10);
-  mostlyValidSource.questions[7].options.splice(1);
+  const mostlyValid = await createWorkflow.execute(generationCommand('generation:test:mostly-valid', 5));
+  const mostlyValidSource = validGeneratedContent(5);
+  mostlyValidSource.questions[4].options.splice(1);
   const mostlyValidGateway = new StubGateway(
     ai.ProviderCode.Anthropic,
     JSON.stringify(mostlyValidSource)
@@ -199,8 +205,8 @@ try {
   const mostlyValidResult = await runWorkflow.execute(mostlyValid.workflow.id, mostlyValidGateway);
   assert.equal(mostlyValidResult.workflow.status, content.GenerationWorkflowStatus.Committed);
   assert.equal(mostlyValidGateway.callCount, 1, 'a batch above 80% validity must commit without repair');
-  assert.equal(contentRepository.bundles.at(-1).questions.length, 9);
-  assert.equal(contentRepository.bundles.at(-1).questionSet.questionCount, 9);
+  assert.equal(contentRepository.bundles.at(-1).questions.length, 4);
+  assert.equal(contentRepository.bundles.at(-1).questionSet.questionCount, 4);
 
   const exactlyEightyPercent = await createWorkflow.execute(generationCommand('generation:test:eighty-percent', 5));
   const exactlyEightyPercentSource = validGeneratedContent(5);
@@ -267,6 +273,25 @@ try {
   const singletonMaterialResult = await runWorkflow.execute(singletonMaterial.workflow.id, singletonMaterialGateway);
   assert.equal(singletonMaterialResult.workflow.status, content.GenerationWorkflowStatus.Committed);
   assert.equal(singletonMaterialGateway.callCount, 1, 'a singleton material group must normalize without model repair');
+  assert.equal(contentRepository.bundles.at(-1).questions[0].content.materialGroupId, undefined);
+  assert.ok(contentRepository.bundles.at(-1).questions[0].content.material);
+
+  const danglingMaterial = await createWorkflow.execute(generationCommand('generation:test:dangling-material'));
+  const danglingMaterialSource = authorGeneratedContentWithSingletonMaterial();
+  danglingMaterialSource.materialGroups = [];
+  danglingMaterialSource.questions[0].materialGroupId = 'missing-material-group';
+  danglingMaterialSource.questions[0].material = '某市上线公交换乘提醒功能后三个月，公共交通通勤比例明显上升。同期市中心停车收费大幅上涨。';
+  const danglingMaterialGateway = new StubGateway(
+    ai.ProviderCode.Anthropic,
+    JSON.stringify(danglingMaterialSource)
+  );
+  const danglingMaterialResult = await runWorkflow.execute(danglingMaterial.workflow.id, danglingMaterialGateway);
+  assert.equal(danglingMaterialResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    danglingMaterialGateway.callCount,
+    1,
+    'a dangling material-group id with complete inline material must normalize without model repair'
+  );
   assert.equal(contentRepository.bundles.at(-1).questions[0].content.materialGroupId, undefined);
   assert.ok(contentRepository.bundles.at(-1).questions[0].content.material);
 
@@ -562,6 +587,71 @@ try {
     'localized repair must replace the invalid question'
   );
 
+  const fastTutorBatch = await createWorkflow.execute(
+    generationCommand('generation:test:fast-tutor-3', 3)
+  );
+  const fastTutorGateway = new ParallelShardGateway(ai.ProviderCode.Anthropic);
+  const fastTutorStartedAt = performance.now();
+  const fastTutorResult = await runWorkflow.execute(fastTutorBatch.workflow.id, fastTutorGateway);
+  const fastTutorElapsedMs = performance.now() - fastTutorStartedAt;
+  assert.equal(fastTutorResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    fastTutorGateway.callCount,
+    2,
+    'a three-question drill must generate one lecture block and one question block'
+  );
+  assert.equal(
+    fastTutorGateway.peakActive,
+    2,
+    'a three-question drill must generate its paired blocks in one provider wave'
+  );
+  assert(
+    fastTutorElapsedMs < 90,
+    `parallel three-question fixture exceeded its latency budget: ${fastTutorElapsedMs}ms`
+  );
+  assert.equal(contentRepository.bundles.at(-1).questions.length, 3);
+
+  const mediumBatch = await createWorkflow.execute(
+    generationCommand('generation:test:parallel-10', 10)
+  );
+  const mediumGateway = new ParallelShardGateway(ai.ProviderCode.Anthropic);
+  const mediumResult = await runWorkflow.execute(mediumBatch.workflow.id, mediumGateway);
+  assert.equal(mediumResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    mediumGateway.callCount,
+    3,
+    '10 questions must use two short question shards plus one paired lecture'
+  );
+  assert.equal(
+    mediumGateway.peakActive,
+    3,
+    '10-question generation must finish its core provider work in one wave'
+  );
+  const mediumQuestionRequests = mediumGateway.requests.filter(
+    (request) => !request.responseSchema.properties.lecture
+  );
+  assert(
+    mediumQuestionRequests.every((request) => request.maxOutputTokens <= 2_400),
+    'normal five-question shards must keep a short output budget'
+  );
+  assert(
+    mediumQuestionRequests.every((request) => request.structuredOutputMode === 'prompt'),
+    'interactive generation must not spend its foreground deadline probing structured-output capabilities'
+  );
+  assert(
+    mediumQuestionRequests.every((request) => (
+      request.responseSchema.properties.questions.items.properties.material.maxLength === 280
+      && request.responseSchema.properties.questions.items.properties.prompt.maxLength === 80
+      && request.responseSchema.properties.questions.items.properties.options.items.properties.text.maxLength === 80
+    )),
+    'normal objective shards must keep bounded foreground material, prompt, and option fields'
+  );
+  assert(
+    mediumQuestionRequests.every((request) => !String(request.messages[0].content).includes('generationSpecId')),
+    'question shards must not repeat workflow metadata that does not affect teaching content'
+  );
+  assert.equal(contentRepository.bundles.at(-1).questions.length, 10);
+
   const largeBatch = await createWorkflow.execute(
     generationCommand('generation:test:parallel-25', 25)
   );
@@ -572,7 +662,11 @@ try {
   assert.equal(
     parallelGateway.peakActive,
     6,
-    'lecture and question shards must respect the per-workflow concurrency ceiling'
+    '25-question generation must finish five question shards and its lecture in one provider wave'
+  );
+  assert(
+    parallelGateway.requests.every((request) => request.structuredOutputMode === 'prompt'),
+    'all 25-question foreground calls must start immediately without a serialized capability probe'
   );
   assert.equal(
     parallelGateway.requests.filter((request) => request.responseSchema.properties.lecture).length,
@@ -591,6 +685,60 @@ try {
       .filter((item) => item.workflowId === largeBatch.workflow.id)
       .every((item) => item.validationStatus === ai.InvocationValidationStatus.Valid),
     'every successful shard invocation must leave the pending state'
+  );
+
+  const transientLargeBatch = await createWorkflow.execute(
+    generationCommand('generation:test:parallel-25-transient-recovery', 25)
+  );
+  const transientParallelGateway = new ParallelShardGateway(
+    ai.ProviderCode.Anthropic,
+    undefined,
+    2,
+    () => new ai.ProviderGatewayError(
+      'temporary provider failure',
+      ai.ProviderErrorKind.Transient
+    )
+  );
+  let shardProgressWrites = 0;
+  const transientLargeBatchResult = await runWorkflow.execute(
+    transientLargeBatch.workflow.id,
+    transientParallelGateway,
+    undefined,
+    async (step, message) => {
+      if (step !== 'invoking_model' || !message.startsWith('已完成')) return;
+      shardProgressWrites += 1;
+    }
+  );
+  assert.equal(transientLargeBatchResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    transientParallelGateway.callCount,
+    7,
+    'a transient shard failure must retry only that shard instead of restarting the question set'
+  );
+  assert.equal(
+    shardProgressWrites,
+    0,
+    'per-shard completion must not block generation on durable progress writes'
+  );
+  assert.equal(contentRepository.bundles.at(-1).questions.length, 25);
+
+  const concurrentWorkflows = await Promise.all(
+    Array.from({ length: 3 }, (_, index) => createWorkflow.execute(
+      generationCommand(`generation:test:parallel-25-workflow-${index + 1}`, 25)
+    ))
+  );
+  const sharedParallelGateway = new ParallelShardGateway(ai.ProviderCode.Anthropic);
+  const concurrentResults = await Promise.all(concurrentWorkflows.map((item) => (
+    runWorkflow.execute(item.workflow.id, sharedParallelGateway)
+  )));
+  assert(
+    concurrentResults.every((item) => item.workflow.status === content.GenerationWorkflowStatus.Committed),
+    'three concurrent question sets must all commit successfully'
+  );
+  assert.equal(sharedParallelGateway.callCount, 18);
+  assert(
+    sharedParallelGateway.peakActive <= 6,
+    'concurrent question sets must share one global provider concurrency gate'
   );
 
   const repairedLargeBatch = await createWorkflow.execute(
@@ -779,9 +927,11 @@ class ParallelShardGateway {
   peakActive = 0;
   requests = [];
   failedConfiguredShard = false;
-  constructor(provider, failShardIndex) {
+  constructor(provider, failShardIndex, transientShardIndex, transientError) {
     this.provider = provider;
     this.failShardIndex = failShardIndex;
+    this.transientShardIndex = transientShardIndex;
+    this.transientError = transientError;
   }
   async complete(request) {
     this.requests.push(request);
@@ -794,6 +944,10 @@ class ParallelShardGateway {
       const count = request.responseSchema.properties.questions?.minItems ?? 1;
       const user = String(request.messages[0].content);
       const shardIndex = Number(user.match(/"shardIndex":(\d+)/)?.[1] ?? 0);
+      if (shardIndex === this.transientShardIndex && !this.failedTransientShard) {
+        this.failedTransientShard = true;
+        throw this.transientError();
+      }
       const source = validGeneratedContent(count);
       if (includesLecture) {
         return {

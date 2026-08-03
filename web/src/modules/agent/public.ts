@@ -151,7 +151,7 @@ export { RegisteredAgentToolExecutor, type AgentToolHandler } from './applicatio
 export { ActiveAgentToolSet } from './application/ActiveAgentToolSet';
 export { SaveAgentLoopCheckpoint } from './application/SaveAgentLoopCheckpoint';
 export { RunAgentLoop } from './application/RunAgentLoop';
-export type { AgentLoopResult, RunAgentLoopCommand } from './application/AgentLoopContracts';
+export type { AgentLoopResult, AgentLoopRuntime, RunAgentLoopCommand } from './application/AgentLoopContracts';
 export {
   RunTutorAgentBatch,
   type RunTutorAgentBatchCommand,

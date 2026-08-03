@@ -8,7 +8,7 @@ import type {
 } from '../contracts/AgentRuntimePorts';
 import type { AgentToolReceiptRepository } from '../contracts/AgentToolReceiptRepository';
 import { DurableAgentToolExecutor } from './DurableAgentToolExecutor';
-import { RunAgentLoop } from './RunAgentLoop';
+import { LazyPiAgentLoopRuntime } from './LazyPiAgentLoopRuntime';
 
 export function createDurableAgentLoopFactory(dependencies: {
   readonly invoker: AgentModelInvoker;
@@ -17,7 +17,7 @@ export function createDurableAgentLoopFactory(dependencies: {
   readonly checkpoints: AgentCheckpointStore;
   readonly clock: Clock;
 }) {
-  return (executor: AgentToolExecutor, observer?: AgentRuntimeObserver) => new RunAgentLoop(
+  return (executor: AgentToolExecutor, observer?: AgentRuntimeObserver) => new LazyPiAgentLoopRuntime(
     dependencies.invoker,
     dependencies.policy,
     new DurableAgentToolExecutor(executor, dependencies.receipts, dependencies.clock),

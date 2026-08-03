@@ -34,7 +34,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   readonly provider = ProviderCode.OpenAICompatible;
   readonly capabilities = { multimodalInput: true } as const;
   readonly model: string;
-  private readonly structuredOutput = new StructuredOutputCapability();
+  private readonly structuredOutput: StructuredOutputCapability;
   private readonly modelCapabilities: ModelCapabilityMatrix;
 
   constructor(
@@ -43,6 +43,9 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     capabilityOverrides: ModelRequestCapabilityOverrides = {}
   ) {
     this.model = config.model;
+    this.structuredOutput = new StructuredOutputCapability(
+      `openai-compatible:${normalizedCapabilityEndpoint(config.baseUrl)}:${this.model}`
+    );
     this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides);
   }
 
@@ -55,27 +58,28 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     }
   }
 
+  async prepareStructuredOutput(signal?: AbortSignal): Promise<void> {
+    const request = structuredOutputProbeRequest();
+    await this.structuredOutput.execute({
+      invoke: (mode) => this.sendCompletion(request, mode, signal),
+      acceptsToolResult: (result) => hasRequiredStructuredRoot(result.text, request.responseSchema!),
+      isToolModeUnsupported: isUnsupportedStructuredRequest
+    });
+  }
+
   private async completeWithCurrentCapabilities(
     request: ProviderRequest,
     signal?: AbortSignal
   ): Promise<ProviderResponse> {
-    const mode = request.responseSchema ? this.structuredOutput.current() : 'tool';
-    try {
-      const result = await this.sendCompletion(request, mode, signal);
-      if (
-        mode === 'tool'
-        && request.responseSchema
-        && !hasRequiredStructuredRoot(result.text, request.responseSchema)
-      ) {
-        this.structuredOutput.markToolModeUnsupported();
-        return this.sendCompletion(request, 'prompt', signal);
-      }
-      return result;
-    } catch (error) {
-      if (mode !== 'tool' || !request.responseSchema || !isUnsupportedStructuredRequest(error)) throw error;
-      this.structuredOutput.markToolModeUnsupported();
+    if (!request.responseSchema) return this.sendCompletion(request, 'tool', signal);
+    if (request.structuredOutputMode === 'prompt') {
       return this.sendCompletion(request, 'prompt', signal);
     }
+    return this.structuredOutput.execute({
+      invoke: (mode) => this.sendCompletion(request, mode, signal),
+      acceptsToolResult: (result) => hasRequiredStructuredRoot(result.text, request.responseSchema!),
+      isToolModeUnsupported: isUnsupportedStructuredRequest
+    });
   }
 
   async stream(
@@ -123,6 +127,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     try {
       return assertNonEmptyProviderResult(parseOpenAIResponse(await response.json()));
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
       throw new ProviderGatewayError(
         'OpenAI-compatible provider returned an invalid response format',
@@ -191,6 +196,26 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   }
 }
 
+function structuredOutputProbeRequest(): ProviderRequest {
+  return {
+    system: 'Return the requested structured result.',
+    messages: [{ role: 'user', content: 'Set ok to true.' }],
+    temperature: 0,
+    maxOutputTokens: 64,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    },
+    requestId: `structured-probe-${Date.now()}`
+  };
+}
+
+function normalizedCapabilityEndpoint(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '').toLowerCase();
+}
+
 function toOpenAIMessage(message: ProviderRequest['messages'][number]): Record<string, unknown> {
   if (message.role === 'tool') {
     return {
@@ -229,7 +254,10 @@ function openAIToolChoice(choice: ProviderRequest['toolChoice']): unknown {
 }
 
 function isUnsupportedStructuredRequest(error: unknown): boolean {
-  return error instanceof ProviderGatewayError && error.kind === ProviderErrorKind.InvalidRequest;
+  return error instanceof ProviderGatewayError && (
+    error.kind === ProviderErrorKind.InvalidRequest
+    || error.kind === ProviderErrorKind.EmptyResponse
+  );
 }
 
 function structuredJsonInstruction(system: string, schema: object): string {

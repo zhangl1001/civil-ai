@@ -87,13 +87,14 @@ async function executeStructuredPractice(
     await progress(dependencies.updateProgress, run, TaskCenterStep.PreparingContext, 18, '正在准备个人画像、薄弱点和知识点上下文', signal);
     const aggregate = await dependencies.requestPractice.execute({
       idempotencyKey: `agent-run:${run.run.id}:practice`,
+      sourceAgentRunId: run.run.rootAgentRunId,
       capabilityNodeId: requiredText(snapshot.capabilityNodeId, 'capabilityNodeId') as CapabilityNodeId,
       assessmentRole: assessmentRole(snapshot.assessmentRole),
       requestedCount: number(snapshot.requestedCount, 'requestedCount'),
       difficultyMin: finiteNumber(snapshot.difficultyMin, 0.35),
       difficultyMax: finiteNumber(snapshot.difficultyMax, 0.68),
       goal: text(snapshot.goal),
-      constraints: generationConstraints(snapshot, run.run.id)
+      constraints: generationConstraints(snapshot)
     });
     if (aggregate.workflow.status === GenerationWorkflowStatus.Failed) {
       await dependencies.runGeneration.retry(aggregate.workflow.id);
@@ -235,7 +236,7 @@ function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-function generationConstraints(snapshot: JsonObject, agentRunId: string): JsonObject {
+function generationConstraints(snapshot: JsonObject): JsonObject {
   const entryMode = text(snapshot.entryMode) === QuestionSetEntryMode.Tutor
     ? QuestionSetEntryMode.Tutor
     : QuestionSetEntryMode.Self;
@@ -250,8 +251,7 @@ function generationConstraints(snapshot: JsonObject, agentRunId: string): JsonOb
     durationMinutes: finiteNumber(
       snapshot.durationMinutes,
       Math.max(5, Math.ceil(number(snapshot.requestedCount, 'requestedCount') * 1.5))
-    ),
-    agentRunId
+    )
   };
   if (entryMode === QuestionSetEntryMode.Self) return common;
   return {

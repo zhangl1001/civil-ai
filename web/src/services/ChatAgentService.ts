@@ -500,6 +500,11 @@ export class ChatAgentService {
       });
       await publishChatTaskMessage(runtime, completed, 'completed');
     } catch (error) {
+      console.warn('[ChatAgent] execution failed', {
+        runId,
+        name: error instanceof Error ? error.name : 'UnknownError',
+        message: error instanceof Error ? error.message : String(error)
+      });
       const aborted = controller.signal.aborted;
       const lifecycleInterrupted = isAgentRunSuspended(controller.signal.reason);
       const visibleStreamedText = visibleAssistantText(streamedText);

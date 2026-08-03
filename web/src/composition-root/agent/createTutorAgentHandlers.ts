@@ -319,6 +319,7 @@ async function executeBusinessOperation(
       await context.update(42, '调用 AI 生成结构化讲义和题目');
       const aggregate = await dependencies.requestStructuredPractice.execute({
         idempotencyKey: `agent-run:${run.run.id}:structured-practice`,
+        sourceAgentRunId: run.run.rootAgentRunId,
         capabilityNodeId: capability.id as CapabilityNodeId,
         assessmentRole: AssessmentRole.Practice,
         requestedCount: input.requestedCount,
@@ -327,7 +328,6 @@ async function executeBusinessOperation(
         goal: input.purpose,
         constraints: {
           source: 'agent_business_operation',
-          agentRunId: run.run.id,
           module: input.module,
           knowledgePoint: input.knowledgePoint ?? capability.name,
           requestedBy: input.review ? 'wrongbook_review' : 'ai_or_practice_entry'

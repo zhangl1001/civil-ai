@@ -51,6 +51,43 @@ export function parseJinaHits(raw: string): WebSearchHit[] {
   });
 }
 
+export function parseFirecrawlHits(raw: string): WebSearchHit[] {
+  const body = parseJson(raw);
+  const data = asRecord(body.data);
+  const rows = asArray(data.web).length ? asArray(data.web) : asArray(body.data);
+  return rows.flatMap((value): WebSearchHit[] => {
+    const row = asRecord(value);
+    const metadata = asRecord(row.metadata);
+    const url = safeResultUrl(row.url || metadata.sourceURL || metadata.url);
+    if (!url) return [];
+    const content = optionalString(row.markdown || row.content);
+    return [{
+      title: String(row.title || metadata.title || url.hostname),
+      url: url.toString(),
+      domain: url.hostname,
+      snippet: compact(String(row.description || metadata.description || ''), 3_000),
+      ...(content ? { content: content.slice(0, 8_000) } : {})
+    }];
+  });
+}
+
+export function parseSearXNGHits(raw: string): WebSearchHit[] {
+  const body = parseJson(raw);
+  return asArray(body.results).flatMap((value): WebSearchHit[] => {
+    const row = asRecord(value);
+    const url = safeResultUrl(row.url);
+    if (!url) return [];
+    const publishedAt = optionalString(row.publishedDate || row.published_date);
+    return [{
+      title: String(row.title || url.hostname),
+      url: url.toString(),
+      domain: url.hostname,
+      snippet: compact(String(row.content || row.snippet || ''), 3_000),
+      ...(publishedAt ? { publishedAt } : {})
+    }];
+  });
+}
+
 export function parseRssHits(raw: string): WebSearchHit[] {
   const items = [...raw.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
   return items.flatMap((match): WebSearchHit[] => {

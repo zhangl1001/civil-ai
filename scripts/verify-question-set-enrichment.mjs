@@ -18,7 +18,7 @@ try {
     server.ssrLoadModule('/src/modules/content/public.ts'),
     server.ssrLoadModule('/src/composition-root/agent/QuestionSetContentEnrichmentStrategy.ts')
   ]);
-  let bundle = questionSetBundle(5);
+  let bundle = questionSetBundle(8);
   let activeInvocations = 0;
   let peakInvocations = 0;
   let invocationCount = 0;
@@ -40,15 +40,15 @@ try {
         activeInvocations += 1;
         peakInvocations = Math.max(peakInvocations, activeInvocations);
         const payload = JSON.parse(command.messages[0].content);
-        const questionId = payload.missingBlocks.explanationQuestionIds[0];
+        const questionIds = payload.missingBlocks.explanationQuestionIds;
         await delay(15 + (invocationCount % 3) * 5);
         activeInvocations -= 1;
         return {
           text: JSON.stringify({
-            explanations: [{
+            explanations: questionIds.map((questionId) => ({
               questionId,
               explanation: fullExplanation(questionId)
-            }]
+            }))
           })
         };
       }
@@ -93,13 +93,73 @@ try {
     }
   });
 
-  assert.equal(invocationCount, 5, 'each independent question should receive one focused request');
-  assert.equal(peakInvocations, 3, 'explanation requests should use the bounded three-way parallel limit');
-  assert.equal(new Set(appliedQuestionIds).size, 5, 'every completed shard must be merged exactly once');
+  assert.equal(invocationCount, 3, 'eight explanations should be generated in three compact shards');
+  assert.equal(peakInvocations, 3, 'explanation shards should use the bounded three-way parallel limit');
+  assert.equal(new Set(appliedQuestionIds).size, 8, 'every completed explanation must be merged exactly once');
   assert.equal(
     content.findQuestionSetEnrichmentNeeds(bundle).explanationQuestionIds.length,
     0,
     'all question explanations must be complete after parallel enrichment'
+  );
+
+  let recoveryBundle = questionSetBundle(5);
+  let groupedFailures = 0;
+  let individualRecoveries = 0;
+  const recoveryStrategy = strategyModule.createQuestionSetContentEnrichmentStrategy({
+    contentRepository: { findQuestionSet: async () => recoveryBundle },
+    promptCompiler: {
+      compile: (_code, _variables, payload) => ({
+        system: 'Return the requested structured explanation.',
+        user: JSON.stringify(payload),
+        responseSchema: {}
+      })
+    },
+    invokeAgentModel: {
+      execute: async (command) => {
+        const payload = JSON.parse(command.messages[0].content);
+        const questionIds = payload.missingBlocks.explanationQuestionIds;
+        if (questionIds.length > 1) {
+          groupedFailures += 1;
+          throw new Error('provider rejected grouped structured output');
+        }
+        individualRecoveries += 1;
+        return {
+          text: JSON.stringify({
+            explanations: [{
+              questionId: questionIds[0],
+              explanation: fullExplanation(questionIds[0])
+            }]
+          })
+        };
+      }
+    },
+    applyEnrichment: {
+      execute: async (_questionSetId, enrichment) => {
+        recoveryBundle = applyExplanations(recoveryBundle, enrichment.explanations);
+      }
+    },
+    updateProgress: { execute: async () => undefined }
+  });
+  await recoveryStrategy.execute({
+    run: {
+      id: 'AgentRunId:enrichment-recovery-test',
+      targetResourceId: recoveryBundle.questionSet.id,
+      inputSnapshot: {},
+      checkpoint: {}
+    },
+    events: []
+  }, {
+    provider: 'anthropic',
+    model: 'test',
+    capabilities: { multimodalInput: false },
+    complete: async () => { throw new Error('The invocation stub should own model execution'); }
+  });
+  assert.equal(groupedFailures, 2, 'failed grouped shards should not be retried wholesale');
+  assert.equal(individualRecoveries, 5, 'only missing explanations should use single-question recovery');
+  assert.equal(
+    content.findQuestionSetEnrichmentNeeds(recoveryBundle).explanationQuestionIds.length,
+    0,
+    'single-question recovery must complete every failed grouped explanation'
   );
 
   const cancellationController = new AbortController();
@@ -156,7 +216,7 @@ try {
   cancellationController.abort(new Error('user cancelled'));
   await assert.rejects(cancelled, /user cancelled/);
   assert.equal(appliedAfterCancellation, 0, 'cancelled enrichment must not commit late shard results');
-  console.log('Question-set enrichment verification passed (5 questions, peak concurrency 3).');
+  console.log('Question-set enrichment verification passed (8 questions, 3 compact requests, peak concurrency 3).');
 } finally {
   await server.close();
 }
@@ -223,6 +283,23 @@ function questionSetBundle(questionCount) {
         }
       };
     })
+  };
+}
+
+function applyExplanations(bundle, explanations) {
+  return {
+    ...bundle,
+    questionSet: {
+      ...bundle.questionSet,
+      contentVersion: bundle.questionSet.contentVersion + 1
+    },
+    questions: bundle.questions.map((question) => ({
+      ...question,
+      content: {
+        ...question.content,
+        explanation: explanations.get(question.id) || question.content.explanation
+      }
+    }))
   };
 }
 

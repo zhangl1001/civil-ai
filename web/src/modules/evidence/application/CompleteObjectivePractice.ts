@@ -28,7 +28,8 @@ export class CompleteObjectivePractice {
       sessionId: result.sessionId,
       reviewQueueItemId: command.reviewQueueItemId,
       dailyPlanItemId: command.dailyPlanItemId,
-      elapsedMs: command.elapsedMs
+      elapsedMs: command.elapsedMs,
+      rootAgentRunId: result.rootAgentRunId
     }, contexts);
 
     return {

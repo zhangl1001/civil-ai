@@ -57,6 +57,13 @@ export class NativeStreamingHttpAdapter {
     request.signal?.throwIfAborted();
     await ensureNativeStreamingAvailable();
     request.signal?.throwIfAborted();
+    const releasePermit = await nativeTransportGate.acquire(request.signal);
+    let permitReleased = false;
+    const release = () => {
+      if (permitReleased) return;
+      permitReleased = true;
+      releasePermit();
+    };
     const requestId = crypto.randomUUID();
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     let listener: PluginListenerHandle | undefined;
@@ -73,6 +80,7 @@ export class NativeStreamingHttpAdapter {
 
     const response = new Promise<Response>((resolve, reject) => {
       const fail = (error: unknown) => {
+        release();
         request.signal?.removeEventListener('abort', abort);
         if (settled) {
           try {
@@ -110,6 +118,7 @@ export class NativeStreamingHttpAdapter {
           return;
         }
         request.signal?.removeEventListener('abort', abort);
+        release();
         if (event.error) {
           fail(new Error(event.error));
           return;
@@ -141,6 +150,65 @@ export class NativeStreamingHttpAdapter {
   }
 }
 
+interface NativeTransportWaiter {
+  readonly resolve: (release: () => void) => void;
+  readonly reject: (error: unknown) => void;
+  readonly signal?: AbortSignal;
+  cancelled: boolean;
+  abort?: () => void;
+}
+
+/**
+ * All model, enrichment and public-web requests share the same native URLSession
+ * capacity. Queueing here prevents independent business pools from overflowing
+ * the Swift plugin and turning normal contention into provider retries.
+ */
+class NativeTransportGate {
+  private active = 0;
+  private readonly queue: NativeTransportWaiter[] = [];
+
+  constructor(private readonly limit: number) {}
+
+  acquire(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(abortReason(signal));
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter: NativeTransportWaiter = {
+        resolve,
+        reject,
+        signal,
+        cancelled: false
+      };
+      waiter.abort = () => {
+        waiter.cancelled = true;
+        reject(abortReason(signal));
+        this.drain();
+      };
+      signal?.addEventListener('abort', waiter.abort, { once: true });
+      this.queue.push(waiter);
+      this.drain();
+    });
+  }
+
+  private drain(): void {
+    while (this.active < this.limit && this.queue.length) {
+      const waiter = this.queue.shift()!;
+      waiter.signal?.removeEventListener('abort', waiter.abort!);
+      if (waiter.cancelled || waiter.signal?.aborted) continue;
+      this.active += 1;
+      let released = false;
+      waiter.resolve(() => {
+        if (released) return;
+        released = true;
+        this.active = Math.max(0, this.active - 1);
+        this.drain();
+      });
+    }
+  }
+}
+
+const NATIVE_TRANSPORT_CONCURRENCY = 6;
+const nativeTransportGate = new NativeTransportGate(NATIVE_TRANSPORT_CONCURRENCY);
+
 export async function probeNativeStreamingHttp(): Promise<boolean> {
   if (!Capacitor.isNativePlatform()) return false;
   try {
@@ -170,4 +238,8 @@ function decodeBase64(value: string): Uint8Array {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes;
+}
+
+function abortReason(signal?: AbortSignal): unknown {
+  return signal?.reason ?? new DOMException('Request aborted', 'AbortError');
 }

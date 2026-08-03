@@ -1,4 +1,4 @@
-import type { Clock, LearningSessionId } from '@/kernel/public';
+import type { AgentRunId, Clock, LearningSessionId } from '@/kernel/public';
 import type { OutboxEvent, OutboxRepository } from '@/modules/task/public';
 import type { ObjectiveSubmissionPostProcessor } from './ObjectiveSubmissionPostProcessor';
 
@@ -45,7 +45,8 @@ export class ProcessObjectiveSubmissionOutbox {
         sessionId: payload.sessionId as LearningSessionId,
         reviewQueueItemId: payload.reviewQueueItemId,
         dailyPlanItemId: payload.dailyPlanItemId,
-        elapsedMs: payload.elapsedMs
+        elapsedMs: payload.elapsedMs,
+        rootAgentRunId: payload.rootAgentRunId as AgentRunId | undefined
       });
       if (result.pendingSteps.length) throw new Error(result.pendingSteps.join(','));
       return this.outbox.markPublished(event.id, workerId, this.clock.now());
@@ -67,6 +68,7 @@ interface ParsedPayload {
   readonly reviewQueueItemId?: string;
   readonly dailyPlanItemId?: string;
   readonly elapsedMs: number;
+  readonly rootAgentRunId?: string;
 }
 
 function parsePayload(event: OutboxEvent): ParsedPayload {
@@ -76,7 +78,8 @@ function parsePayload(event: OutboxEvent): ParsedPayload {
     sessionId,
     reviewQueueItemId: stringValue(event.payload.reviewQueueItemId),
     dailyPlanItemId: stringValue(event.payload.dailyPlanItemId),
-    elapsedMs: numberValue(event.payload.elapsedMs)
+    elapsedMs: numberValue(event.payload.elapsedMs),
+    rootAgentRunId: stringValue(event.payload.rootAgentRunId)
   };
 }
 
