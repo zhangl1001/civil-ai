@@ -1,4 +1,17 @@
 .DS_Store
+.idea/
+.vscode/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+*.xcconfig.local
 
 # Dependencies
 node_modules/
@@ -15,6 +28,8 @@ ios/App/build/
 ios/App/build-ipa/
 ios/App/DerivedData/
 ios/App/ota/*.pem
+ios/App/App.xcodeproj/xcuserdata/
+*.xcuserstate
 
 # Local logs and temp files
 *.log

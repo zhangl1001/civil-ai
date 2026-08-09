@@ -33,8 +33,14 @@
     "smoke:vue": "npm run web:build && npm run check:design && node scripts/smoke-vue-mobile.js",
     "test": "npm run smoke:ios"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "ai-agent",
+    "civil-service-exam",
+    "capacitor",
+    "local-first",
+    "vue"
+  ],
+  "author": "zhangl1001",
   "license": "ISC",
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.0",
@@ -43,7 +49,15 @@
     "@capacitor/ios": "^8.4.1",
     "@capacitor/status-bar": "^8.0.2"
   },
-  "description": "",
+  "description": "A local-first AI tutor and agent runtime for civil-service exam preparation.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhangl1001/civil-ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zhangl1001/civil-ai/issues"
+  },
+  "homepage": "https://github.com/zhangl1001/civil-ai#readme",
   "devDependencies": {
     "patch-package": "^8.0.1"
   }

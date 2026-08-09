@@ -4,7 +4,6 @@
 <dict>
     <key>method</key>
     <string>development</string>
-    <key>teamID</key>
-	<string>SYT99564VM</string>
+    <!-- Select your Apple Developer Team in Xcode before exporting. -->
 </dict>
 </plist>

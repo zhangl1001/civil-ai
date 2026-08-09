@@ -48,7 +48,10 @@ fi
 
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_INFO_PLIST")"
 BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_INFO_PLIST")"
-OTA_IPA_URL="${OTA_IPA_URL:-https://192.168.3.30:8443/App.ipa}"
+if [ -z "${OTA_IPA_URL:-}" ]; then
+  echo "OTA_IPA_URL is required (for example: https://downloads.example.org/App.ipa)" >&2
+  exit 1
+fi
 OTA_MANIFEST_PATH="$EXPORT_DIR/manifest.plist"
 cp "$ROOT_DIR/ios/App/ota/manifest.plist" "$OTA_MANIFEST_PATH"
 /usr/libexec/PlistBuddy -c "Set :items:0:assets:0:url $OTA_IPA_URL" "$OTA_MANIFEST_PATH"
