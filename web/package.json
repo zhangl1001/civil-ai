@@ -39,25 +39,25 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/core": "^8.4.1",
+    "@capacitor/core": "^8.5.0",
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
     "@mozilla/readability": "^0.6.0",
     "dompurify": "^3.4.12",
-    "katex": "^0.17.0",
-    "lucide-vue-next": "^0.378.0",
-    "marked": "^18.0.6",
+    "katex": "^0.18.1",
+    "lucide-vue-next": "^1.0.0",
+    "marked": "^18.0.9",
     "marked-katex-extension": "^5.1.10",
-    "pdfjs-dist": "4.10.38",
-    "pinia": "^2.1.7",
-    "vue": "^3.4.21",
-    "vue-router": "^4.3.0"
+    "pdfjs-dist": "6.2.108",
+    "pinia": "^4.0.2",
+    "vue": "^3.5.41",
+    "vue-router": "^5.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.8",
-    "@types/node": "^22.10.0",
-    "typescript": "^5.2.2",
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2",
     "vite": "^8.2.1",
-    "vue-tsc": "^2.0.6"
+    "vue-tsc": "^3.3.9"
   }
 }
