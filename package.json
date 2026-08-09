@@ -44,10 +44,10 @@
   "license": "ISC",
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.0",
-    "@capacitor/cli": "^8.4.1",
-    "@capacitor/core": "^8.4.1",
-    "@capacitor/ios": "^8.4.1",
-    "@capacitor/status-bar": "^8.0.2"
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/status-bar": "^8.0.3"
   },
   "description": "A local-first AI tutor and agent runtime for civil-service exam preparation.",
   "repository": {
