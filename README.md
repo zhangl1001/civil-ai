@@ -25,8 +25,13 @@ npm run dev
 ## Verification
 
 ```bash
+npm run check:data-maintenance
 npm test
 ```
+
+The data-maintenance verifier exercises both the native SQLite deletion order
+and the IndexedDB fallback, including official-question immutability and
+foreign-key integrity.
 
 ## iOS
 
@@ -37,3 +42,11 @@ open ios/App/App.xcodeproj
 
 Xcode always packages the current Vue bundle. The removed Python, Tauri and legacy HTML
 runtimes are not part of the repository or build process.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and verification rules.
+
+## License
+
+ISC. See [LICENSE](LICENSE).

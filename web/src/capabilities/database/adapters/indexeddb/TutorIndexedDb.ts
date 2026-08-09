@@ -48,7 +48,7 @@ export interface IndexedDbWriteOperation {
   readonly type: 'add' | 'put' | 'delete';
   readonly store: TutorIndexedDbStore;
   readonly value?: unknown;
-  readonly key?: string;
+  readonly key?: IDBValidKey;
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {

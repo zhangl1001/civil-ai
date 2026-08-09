@@ -34,6 +34,10 @@ reference_pack_comparison_questions_schema_file="$project_root/web/src/capabilit
 question_set_library_pagination_schema_file="$project_root/web/src/capabilities/database/migrations/029_question_set_library_pagination.sql"
 agent_execution_classes_schema_file="$project_root/web/src/capabilities/database/migrations/030_agent_execution_classes.sql"
 agent_run_lease_fencing_schema_file="$project_root/web/src/capabilities/database/migrations/031_agent_run_lease_fencing.sql"
+agent_tool_receipts_schema_file="$project_root/web/src/capabilities/database/migrations/032_agent_tool_receipts.sql"
+agent_run_hierarchy_schema_file="$project_root/web/src/capabilities/database/migrations/033_agent_run_hierarchy.sql"
+generation_spec_agent_run_source_schema_file="$project_root/web/src/capabilities/database/migrations/034_generation_spec_agent_run_source.sql"
+local_data_maintenance_guard_schema_file="$project_root/web/src/capabilities/database/migrations/035_local_data_maintenance_guard.sql"
 database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.XXXXXX.sqlite")"
 
 cleanup() {
@@ -366,6 +370,10 @@ INSERT INTO question_reference_packs(
 .read $question_set_library_pagination_schema_file
 .read $agent_execution_classes_schema_file
 .read $agent_run_lease_fencing_schema_file
+.read $agent_tool_receipts_schema_file
+.read $agent_run_hierarchy_schema_file
+.read $generation_spec_agent_run_source_schema_file
+.read $local_data_maintenance_guard_schema_file
 
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
@@ -407,6 +415,10 @@ expect_count "SELECT COUNT(*) FROM pragma_table_info('question_reference_packs')
 expect_count "SELECT COUNT(*) FROM pragma_table_info('question_sets') WHERE name = 'entry_mode';" "1" "question set entry mode column"
 expect_count "SELECT COUNT(*) FROM question_sets WHERE id = 'question-set-1' AND entry_mode = 'tutor';" "1" "question set entry mode backfill"
 expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'question_sets_library_page_idx';" "1" "question set library pagination index"
+expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_tool_receipts';" "1" "agent tool receipt table"
+expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name IN ('root_agent_run_id', 'parent_agent_run_id');" "2" "agent run hierarchy columns"
+expect_count "SELECT COUNT(*) FROM pragma_table_info('generation_specs') WHERE name = 'source_agent_run_id';" "1" "generation spec agent source column"
+expect_count "SELECT allow_immutable_deletes FROM local_data_maintenance_guard WHERE singleton = 1;" "0" "local data maintenance guard"
 
 expect_constraint_failure() {
   local statement="$1"

@@ -32,6 +32,7 @@ import agentRunLeaseFencingSql from './031_agent_run_lease_fencing.sql?raw';
 import agentToolReceiptsSql from './032_agent_tool_receipts.sql?raw';
 import agentRunHierarchySql from './033_agent_run_hierarchy.sql?raw';
 import generationSpecAgentRunSourceSql from './034_generation_spec_agent_run_source.sql?raw';
+import localDataMaintenanceGuardSql from './035_local_data_maintenance_guard.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -238,5 +239,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'generation_spec_agent_run_source',
     checksum: 'sha256:0925442e658efb0b8ce8292ebca9809d0c62dde70c2d3b360f473ab319d07af7',
     sql: generationSpecAgentRunSourceSql
+  },
+  {
+    version: 35,
+    name: 'local_data_maintenance_guard',
+    checksum: 'sha256:ef1b5d84d1edc73c0362693441a28e8b3a74a607ad8a6518b3c9b5f4491d7695',
+    sql: localDataMaintenanceGuardSql
   }
 ];

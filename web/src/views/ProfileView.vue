@@ -205,15 +205,16 @@
                 </div>
                 <button class="data-action primary" type="button" @click="exportLocalData" :disabled="isDataBusy">
                   <DownloadIcon />
-                  <span>{{ isDataBusy ? '处理中...' : '导出数据' }}</span>
+                  <span>{{ dataOperation === 'export' ? '正在导出...' : '导出数据' }}</span>
                 </button>
                 <button class="data-action" type="button" @click="importLocalData" :disabled="isDataBusy">
                   <UploadIcon />
-                  <span>导入数据</span>
+                  <span>{{ dataOperation === 'import' ? '正在导入...' : '导入数据' }}</span>
                 </button>
-                <button class="data-action danger" type="button" @click="clearLearningData" :disabled="isDataBusy">
+                <p v-if="dataMessage" class="config-message data-message" role="status" aria-live="polite">{{ dataMessage }}</p>
+                <button class="data-action danger" type="button" @click.stop="clearLearningData" :disabled="isDataBusy">
                   <Trash2Icon />
-                  <span>清除学习数据</span>
+                  <span>{{ dataOperation === 'clear' ? '正在清理...' : '清除学习数据' }}</span>
                 </button>
                 <textarea
                   v-if="exportText"
@@ -222,7 +223,6 @@
                   :value="exportText"
                   aria-label="导出备份内容"
                 />
-                <p v-if="dataMessage" class="config-message">{{ dataMessage }}</p>
               </div>
 
               <div v-else class="sheet-body">
@@ -359,6 +359,7 @@ const isTestingConfig = ref(false);
 const isSavingReminder = ref(false);
 const isSavingTargets = ref(false);
 const isDataBusy = ref(false);
+const dataOperation = ref<'export' | 'import' | 'clear' | null>(null);
 const showClearLearningConfirm = ref(false);
 const configMessage = ref('');
 const reminderMessage = ref('');
@@ -412,7 +413,6 @@ const proactiveOptions = [
   { value: ProactiveLevel.Active, label: '主动' }
 ] as const;
 const targetForm = reactive({ aptitude: 80, essay: 70, reason: '' });
-
 const secureLabel = computed(() => aiConfigService.isNativeSecure() ? 'iOS Keychain' : '本地开发存储');
 const profileHeaderTitle = computed(() => candidateHome.value?.projectName || 'AI 私教档案');
 const profileHeaderMeta = computed(() => {
@@ -460,18 +460,15 @@ const sheetSubtitle = computed(() => {
   if (activeSheet.value === 'appearance') return '颜色、字体和个性背景';
   return secureLabel.value;
 });
-
 onMounted(() => {
   void loadCandidateHome();
   void loadAIConfig();
   void loadReminderStatus();
   void loadProfileStats();
 });
-
 async function loadProfileStats() {
   profileStats.value = await profileStatsRepository.getStats();
 }
-
 async function loadCandidateHome() {
   candidateHomeError.value = '';
   try {
@@ -488,12 +485,10 @@ async function loadCandidateHome() {
     candidateHomeLoaded.value = true;
   }
 }
-
 function retryCandidateHome() {
   candidateHomeLoaded.value = false;
   void loadCandidateHome();
 }
-
 function subjectLabel(subject: SubjectCode): string {
   return subject === 'aptitude' ? '行测' : subject === 'essay' ? '申论' : subject;
 }
@@ -503,7 +498,6 @@ function evidenceLabel(source: CandidateHomeSnapshot['scores'][number]['evidence
   if (source === 'self_report') return '自报基线';
   return '待诊断';
 }
-
 async function loadAIConfig() {
   const [config, webConfig] = await Promise.all([
     aiConfigService.load(),
@@ -761,6 +755,7 @@ function downloadJson(filename: string, json: string): boolean {
 async function exportLocalData() {
   if (isDataBusy.value) return;
   isDataBusy.value = true;
+  dataOperation.value = 'export';
   dataMessage.value = '';
   try {
     const backup = await dataManagementService.exportActiveProject();
@@ -775,6 +770,7 @@ async function exportLocalData() {
     dataMessage.value = error instanceof Error ? error.message : '导出失败';
   } finally {
     isDataBusy.value = false;
+    dataOperation.value = null;
   }
 }
 
@@ -787,6 +783,7 @@ function importLocalData() {
     const file = input.files?.[0];
     if (!file) return;
     isDataBusy.value = true;
+    dataOperation.value = 'import';
     dataMessage.value = '';
     try {
       const backup = JSON.parse(await file.text());
@@ -797,29 +794,32 @@ function importLocalData() {
       dataMessage.value = error instanceof Error ? error.message : '导入失败';
     } finally {
       isDataBusy.value = false;
+      dataOperation.value = null;
     }
   };
   input.click();
 }
 
-async function clearLearningData() {
+function clearLearningData() {
   if (isDataBusy.value) return;
+  dataMessage.value = '请确认是否清除当前工程的学习数据';
   showClearLearningConfirm.value = true;
 }
-
 async function confirmClearLearningData() {
   if (isDataBusy.value) return;
   showClearLearningConfirm.value = false;
   isDataBusy.value = true;
-  dataMessage.value = '';
+  dataOperation.value = 'clear';
+  dataMessage.value = '正在安全清理本地学习数据...';
   try {
     const count = await dataManagementService.clearLearningData();
     dataMessage.value = `已清除 ${count} 条学习数据`;
     await Promise.all([loadCandidateHome(), loadDataSummary()]);
   } catch (error) {
-    dataMessage.value = error instanceof Error ? error.message : '清理失败';
+    dataMessage.value = error instanceof Error ? `清理失败：${error.message}` : '清理失败，请重试';
   } finally {
     isDataBusy.value = false;
+    dataOperation.value = null;
   }
 }
 </script>
