@@ -21,6 +21,8 @@
 
 - [`docs/architecture-index.md`](docs/architecture-index.md)
 - [`docs/architecture-constitution.md`](docs/architecture-constitution.md)
+- [`docs/core-business-architecture.md`](docs/core-business-architecture.md)
+- [`docs/ai-service-architecture.md`](docs/ai-service-architecture.md)
 - [`docs/adr-001-provider-neutral-agent-runtime.md`](docs/adr-001-provider-neutral-agent-runtime.md)
 - [`docs/adr-002-pi-agent-core-loop-engine.md`](docs/adr-002-pi-agent-core-loop-engine.md)
 
