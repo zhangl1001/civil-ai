@@ -45,17 +45,11 @@
             />
           </FormField>
           <FormField label="报考地区">
-            <div class="province-picker" role="listbox" aria-label="报考地区">
-              <button
-                v-for="item in provinceOptions"
-                :key="item.value"
-                type="button"
-                :class="{ active: form.province === item.value }"
-                @click="selectProvince(item.value)"
-              >
-                {{ item.label }}
-              </button>
-            </div>
+            <ProvincePickerControl
+              v-model="form.province"
+              :national="form.examScope === 'national'"
+              :options="provincialProvinceOptions"
+            />
           </FormField>
         </div>
         <FormField label="目标岗位" hint="可选，只用于调整岗位匹配和备考建议">
@@ -154,7 +148,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   CalendarClockIcon,
@@ -177,6 +171,7 @@ import {
 import type { JsonObject, LocalDate, SubjectCode, TimeZoneId } from '@/kernel/public';
 import { OnboardingMessage, resolveOnboardingError } from './onboardingMessages';
 import { OnboardingDraftFeature } from './OnboardingDraftFeature';
+import ProvincePickerControl from './ProvincePickerControl.vue';
 
 const OnboardingStep = {
   Goal: 1,
@@ -238,13 +233,9 @@ const proactiveOptions = [
   { value: ProactiveLevel.Active, label: '主动督学' }
 ] as const;
 const provincialProvinceOptions = PROVINCE_OPTIONS.map((name) => ({ value: name, label: name }));
-const provinceOptions = computed(() => (
-  form.examScope === 'national'
-    ? [{ value: '全国', label: '全国' }]
-    : provincialProvinceOptions
-));
+watch(() => form.examScope, normalizeProvince, { immediate: true });
 
-watch(() => form.examScope, (scope) => {
+function normalizeProvince(scope: string) {
   if (scope === 'national') {
     form.province = '全国';
     return;
@@ -252,7 +243,7 @@ watch(() => form.examScope, (scope) => {
   if (!provincialProvinceOptions.some((item) => item.value === form.province)) {
     form.province = '江西';
   }
-}, { immediate: true });
+}
 
 onMounted(async () => {
   await restoreDraft();
@@ -283,6 +274,7 @@ async function restoreDraft() {
         (form[key] as string | number) = value as string | number;
       }
     }
+    normalizeProvince(form.examScope);
   } catch {
     submitMessage.value = OnboardingMessage.SaveFailed;
   }
@@ -312,10 +304,6 @@ function draftFeature(): Promise<OnboardingDraftFeature> {
 
 function goToStep(target: number) {
   if (target <= step.value || validateStep(step.value)) step.value = target;
-}
-
-function selectProvince(value: string) {
-  form.province = value;
 }
 
 function nextStep() {
@@ -556,33 +544,6 @@ function isValidLocalDate(value: string): boolean {
 .date-text-input {
   letter-spacing: .02em;
   font-variant-numeric: tabular-nums;
-}
-
-.province-picker {
-  max-height: 94px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.province-picker button {
-  min-width: 54px;
-  min-height: 31px;
-  border: none;
-  border-radius: 999px;
-  padding: 0 10px;
-  background: var(--surface-control);
-  color: var(--text-secondary-color);
-  font: inherit;
-  font-size: var(--type-size-caption);
-  font-weight: var(--type-weight-semibold);
-}
-
-.province-picker button.active {
-  background: rgba(var(--color-brand-rgb), .12);
-  color: var(--primary-color);
 }
 
 .score-block {
