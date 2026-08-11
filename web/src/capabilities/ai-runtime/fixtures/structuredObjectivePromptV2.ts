@@ -143,12 +143,12 @@ const responseSchema: JsonObject = {
 
 export const structuredObjectivePromptV2: PromptBundle = {
   definitionId: 'prompt-definition:content-generate-structured-objective',
-  versionId: 'prompt-version:content-generate-structured-objective:v14' as PromptVersionId,
+  versionId: 'prompt-version:content-generate-structured-objective:v15' as PromptVersionId,
   promptCode: 'content.generate.aptitude.structured_objective',
   taskType: 'lecture_with_questions',
   description: '围绕指定能力节点生成结构化讲义与单选训练题',
-  version: '2.4.1',
-  contentHash: 'sha256:e07e88d5cbf980e243e04bad14b5954c936857cdc8a893b1ab517084a3484287',
+  version: '2.4.2',
+  contentHash: 'sha256:39d5f77ee1bb641d439e55e1b6c369c24723d507424442e273067c38194030ca',
   createdAt: 1784016000000 as InstantMs,
   requiredVariables: ['QUESTION_COUNT', 'ASSESSMENT_ROLE', 'DIFFICULTY_MIN', 'DIFFICULTY_MAX'],
   compatibleSchemaVersions: ['content.v1', 'question.single_choice.v2'],
@@ -189,7 +189,8 @@ export const structuredObjectivePromptV2: PromptBundle = {
         '学生自报成绩只能作为低可信背景，不得当作已测量掌握度。',
         '只使用输入中明确给出的事实；缺失事实不得自行编造。',
         'trueQuestionReference 不为 null 时，它只包含当前能力点的最小真题参考包。使用其中的题型、难度、结构和干扰项特征校准本次生成，不得把参考题原文直接改写后冒充新题。',
-        'trueQuestionReference 为 null 时，不得声称本次内容已由真题校准。'
+        'trueQuestionReference 为 null 时，不得声称本次内容已由真题校准。',
+        'generationVariation 是本轮避免模板化重复的创作引导。保持能力节点、难度和输出合同不变，按其方向变化材料关系、案例、设问或干扰项；它不是额外的硬字段数量要求。'
       ].join('\n')
     },
     {

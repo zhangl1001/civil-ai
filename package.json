@@ -22,6 +22,7 @@
     "check:provider-gateway": "node scripts/verify-provider-gateway.mjs",
     "check:web-research": "node scripts/verify-web-research.mjs",
     "check:generation-workflow": "node scripts/verify-generation-workflow.mjs",
+    "check:generation-diversity": "node scripts/verify-generation-diversity.mjs",
     "check:generation-foundation": "node scripts/verify-generation-foundation.mjs",
     "check:content-enrichment": "node scripts/verify-question-set-enrichment.mjs",
     "check:learning-evidence": "node scripts/verify-learning-evidence.mjs",

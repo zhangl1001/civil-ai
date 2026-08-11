@@ -66,8 +66,9 @@ try {
   assert(compiled.system.includes('# 第6章 提交前质检'));
   assert(compiled.system.includes('本次生成 5 道题'));
   assert(!compiled.system.includes('{{QUESTION_COUNT}}'));
-  assert.equal(compiled.version, '2.4.1');
+  assert.equal(compiled.version, '2.4.2');
   assert(compiled.system.includes('最小真题参考包'));
+  assert(compiled.system.includes('generationVariation'));
   assert(!compiled.responseSchema.properties.questions.items.required.includes('referenceQuestionId'));
   assert.equal(compiled.responseSchema.properties.questions.items.properties.capabilityCode, undefined);
   assert(compiled.system.includes('由应用按照当前 GenerationSpec 统一注入'));
@@ -109,6 +110,7 @@ try {
   assert(dailyDigest);
   const compiledDigest = compiler.compile(dailyDigest.promptCode, {}, { date: '2026-07-26', type: 'tips' }, dailyDigest.version);
   assert(compiledDigest.system.includes('主题数量、栏目、篇幅和例子数量由信息价值与当天学习负担决定'));
+  assert(compiledDigest.system.includes('recentOutlinesToAvoid'));
   assert(compiledDigest.system.includes('百分号必须写成 \\%'));
   assert(!compiledDigest.system.includes('3 至 5 个二级主题'));
 

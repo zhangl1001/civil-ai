@@ -2,6 +2,10 @@ import type { JsonObject } from '@/kernel/public';
 import type { TrueQuestionReferencePack } from '../contracts/QuestionReferencePackRepository';
 import type { GenerationAggregate } from '../contracts/GenerationRepository';
 import type { PracticeGenerationShard } from './PracticeCoreGenerationPolicy';
+import {
+  GenerationVariationKind,
+  buildGenerationVariationContext
+} from './GenerationVariationPolicy';
 
 export function generationPromptVariables(
   aggregate: GenerationAggregate,
@@ -40,6 +44,7 @@ export function generationPromptPayload(
     } : null,
     difficulty: aggregate.spec.difficulty,
     constraints: aggregate.spec.constraints,
+    generationVariation: objectiveVariation(aggregate, shard?.index ?? 0),
     studentContext: aggregate.spec.contextSnapshot,
     trueQuestionReference: referencePack ? referencePayload(referencePack) : null
   };
@@ -68,6 +73,7 @@ export function generationShardPromptPayload(
     },
     difficulty: aggregate.spec.difficulty,
     constraints: aggregate.spec.constraints,
+    generationVariation: objectiveVariation(aggregate, shard.index),
     studentContext: compactStudentContext(aggregate.spec.contextSnapshot),
     trueQuestionReference: referencePack
       ? compactReferencePayload(referencePack, shard.index, 1)
@@ -86,11 +92,20 @@ export function generationLecturePromptPayload(
     requestedCount: totalCount,
     difficulty: aggregate.spec.difficulty,
     constraints: aggregate.spec.constraints,
+    generationVariation: objectiveVariation(aggregate, 0),
     studentContext: compactStudentContext(aggregate.spec.contextSnapshot),
     trueQuestionReference: referencePack
       ? compactReferencePayload(referencePack, 0, 2)
       : null
   };
+}
+
+function objectiveVariation(aggregate: GenerationAggregate, shardIndex: number): JsonObject {
+  return buildGenerationVariationContext({
+    kind: GenerationVariationKind.ObjectiveQuestions,
+    seed: `${aggregate.workflow.id}:${aggregate.spec.capabilityNodeId}`,
+    attempt: aggregate.workflow.attemptCount + shardIndex
+  });
 }
 
 function referencePayload(referencePack: TrueQuestionReferencePack): JsonObject {
