@@ -1,7 +1,7 @@
 # Civil AI
 
 [![CI](https://github.com/zhangl1001/civil-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/zhangl1001/civil-ai/actions/workflows/ci.yml)
-[![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](web/package.json)
 [![iOS](https://img.shields.io/badge/iOS-Capacitor-lightgrey.svg)](ios/App/App.xcodeproj)
 
@@ -141,4 +141,4 @@ Issues and pull requests are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md),
 
 ## License
 
-Civil AI is available under the [ISC License](LICENSE).
+Civil AI is available under the [MIT License](LICENSE).

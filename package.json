@@ -43,7 +43,7 @@
     "vue"
   ],
   "author": "zhangl1001",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.0",
     "@capacitor/cli": "^8.4.1",

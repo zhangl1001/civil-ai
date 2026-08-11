@@ -84,4 +84,4 @@ For user-facing changes, include screenshots or a short recording and state whic
 
 Maintainers review correctness, architecture boundaries, user impact, security, accessibility, and test coverage. A merged change is included in a release only after the release gate passes and the public changelog is updated.
 
-By contributing, you confirm that you have the right to provide the contribution under the project's ISC License and agree to follow the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+By contributing, you confirm that you have the right to provide the contribution under the project's MIT License and agree to follow the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
