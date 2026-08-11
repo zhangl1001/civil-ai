@@ -227,7 +227,7 @@ async function executeBusinessOperation(
   }
   if (!gateway) throw new Error('Business operation requires provider gateway');
   const intent = text(run.run.inputSnapshot.intent, 'intent') as GenerationIntent;
-  const payload = {
+  const payload: JsonObject = {
     ...object(run.run.inputSnapshot.payload),
     intent,
     module: run.run.inputSnapshot.module ?? null,
@@ -455,6 +455,7 @@ async function executeBusinessOperation(
     await executorFor(intent)(task, context);
   }
   executionSignal.throwIfAborted();
+  await markDailyPlanContentReady(run, payload, resultData, dependencies);
   const navigation = completedNavigation(intent, run.run.inputSnapshot, resultData);
   const completionMessage = intent === 'trueQuestionResearch'
     ? `已形成 ${String(objectValue(resultData.result).totalCount || 0)} 道待确认真题`
@@ -470,11 +471,33 @@ async function executeBusinessOperation(
       progress: 100,
       step: TaskCenterStep.Completed,
       message: completionMessage,
+      dailyPlanItemId: optionalText(payload.dailyPlanItemId) ?? null,
       actionRoute: navigation.route,
       actionParams: navigation.params
     },
     payload: { intent, ...resultData },
     leaseToken: leaseTokenOf(run.run)
+  });
+}
+
+async function markDailyPlanContentReady(
+  run: AgentRunAggregate,
+  payload: JsonObject,
+  resultData: JsonObject,
+  dependencies: TutorAgentHandlerDependencies
+): Promise<void> {
+  const dailyPlanItemId = optionalText(payload.dailyPlanItemId);
+  if (!dailyPlanItemId) return;
+  await dependencies.updateDailyPlanItemStatus.execute({
+    dailyPlanItemId,
+    status: 'in_progress',
+    resultSummary: {
+      contentReady: true,
+      agentRunId: run.run.id,
+      ...(optionalText(resultData.resultRef) ? { resultRef: optionalText(resultData.resultRef)! } : {})
+    }
+  }).catch((error: unknown) => {
+    console.warn('[TutorAgent] generated content is ready but daily plan linkage could not be updated', error);
   });
 }
 
@@ -498,10 +521,10 @@ function completedNavigation(
       };
     }
     if (intent === 'study' && assetId) {
-      return { route: '/vue/study/lecture', params: { assetId } };
+      return { route: '/vue/study/lecture', params: { ...fallbackParams, assetId } };
     }
     if (intent === 'mock' && assetId && result.subject === '行测') {
-      return { route: '/vue/practice/objective-session', params: { manifestId: assetId } };
+      return { route: '/vue/practice/objective-session', params: { ...fallbackParams, manifestId: assetId } };
     }
     return {
       route: fallbackRoute,
@@ -523,7 +546,7 @@ function completedNavigation(
   }
   return {
     route: '/vue/practice/objective-session',
-    params: { questionSetId, learningThreadId }
+    params: { ...fallbackParams, questionSetId, learningThreadId }
   };
 }
 

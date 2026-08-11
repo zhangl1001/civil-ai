@@ -34,7 +34,12 @@ reference_pack_comparison_questions_schema_file="$project_root/web/src/capabilit
 question_set_library_pagination_schema_file="$project_root/web/src/capabilities/database/migrations/029_question_set_library_pagination.sql"
 agent_execution_classes_schema_file="$project_root/web/src/capabilities/database/migrations/030_agent_execution_classes.sql"
 agent_run_lease_fencing_schema_file="$project_root/web/src/capabilities/database/migrations/031_agent_run_lease_fencing.sql"
-database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.XXXXXX.sqlite")"
+agent_tool_receipts_schema_file="$project_root/web/src/capabilities/database/migrations/032_agent_tool_receipts.sql"
+agent_run_hierarchy_schema_file="$project_root/web/src/capabilities/database/migrations/033_agent_run_hierarchy.sql"
+generation_spec_agent_run_source_schema_file="$project_root/web/src/capabilities/database/migrations/034_generation_spec_agent_run_source.sql"
+adaptive_daily_planning_schema_file="$project_root/web/src/capabilities/database/migrations/035_adaptive_daily_planning.sql"
+learning_data_maintenance_schema_file="$project_root/web/src/capabilities/database/migrations/036_learning_data_maintenance.sql"
+database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.sqlite.XXXXXX")"
 
 cleanup() {
   rm -f "$database_file"
@@ -366,6 +371,11 @@ INSERT INTO question_reference_packs(
 .read $question_set_library_pagination_schema_file
 .read $agent_execution_classes_schema_file
 .read $agent_run_lease_fencing_schema_file
+.read $agent_tool_receipts_schema_file
+.read $agent_run_hierarchy_schema_file
+.read $generation_spec_agent_run_source_schema_file
+.read $adaptive_daily_planning_schema_file
+.read $learning_data_maintenance_schema_file
 
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
@@ -436,6 +446,10 @@ expect_count "SELECT COUNT(*) FROM prompt_definitions WHERE prompt_code='questio
 expect_count "SELECT COUNT(*) FROM prompt_versions WHERE prompt_definition_id='prompt-question';" "2" "prompt versions after definition reuse"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='work_pool';" "1" "agent work pool column"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='lease_epoch';" "1" "agent lease epoch column"
+expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='daily_plan_blocks';" "1" "daily plan block table"
+expect_count "SELECT COUNT(*) FROM pragma_table_info('daily_plan_items') WHERE name IN ('daily_plan_block_id','item_category','priority','required','dependency_ids_json');" "5" "adaptive daily plan item columns"
+expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='data_maintenance_context';" "1" "data maintenance context table"
+expect_constraint_failure "DELETE FROM question_source_links WHERE id='source-link-1';"
 
 sqlite3 "$database_file" <<'SQL'
 INSERT INTO tutor_agent_runs(
@@ -464,5 +478,79 @@ SQL
 
 expect_count "SELECT lease_epoch FROM tutor_agent_runs WHERE id='agent-run-lease-test';" "2" "lease epoch after reclaim"
 expect_count "SELECT COUNT(*) FROM tutor_agent_runs WHERE id='agent-run-lease-test' AND lease_owner='worker-b' AND checkpoint_json='{}';" "1" "stale worker fenced from write"
+
+sqlite3 "$database_file" <<'SQL'
+.bail on
+PRAGMA foreign_keys = ON;
+BEGIN;
+INSERT INTO data_maintenance_context(operation, enabled)
+VALUES ('clear_learning_data', 1);
+DELETE FROM domain_outbox;
+DELETE FROM system_messages;
+DELETE FROM question_source_import_receipts
+WHERE source_id IN (
+  SELECT link.source_id
+  FROM question_source_links link
+  JOIN questions question ON question.id = link.question_id
+  WHERE question.exam_cycle_id = 'cycle-1'
+  UNION
+  SELECT receipt.source_id
+  FROM question_import_publish_receipts receipt
+  JOIN question_import_drafts draft ON draft.id = receipt.draft_id
+  WHERE draft.exam_cycle_id = 'cycle-1'
+);
+DELETE FROM question_import_publish_receipts
+WHERE draft_id IN (SELECT id FROM question_import_drafts WHERE exam_cycle_id = 'cycle-1');
+DELETE FROM question_import_candidates
+WHERE draft_id IN (SELECT id FROM question_import_drafts WHERE exam_cycle_id = 'cycle-1');
+DELETE FROM question_source_links
+WHERE question_id IN (SELECT id FROM questions WHERE exam_cycle_id = 'cycle-1');
+DELETE FROM question_lineage
+WHERE question_id IN (SELECT id FROM questions WHERE exam_cycle_id = 'cycle-1')
+   OR parent_question_id IN (SELECT id FROM questions WHERE exam_cycle_id = 'cycle-1');
+DELETE FROM question_import_drafts WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM question_reference_packs WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM tutor_cycle_conclusions WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM error_diagnosis_current_projection
+WHERE error_diagnosis_id IN (SELECT id FROM error_diagnoses WHERE exam_cycle_id = 'cycle-1');
+DELETE FROM error_diagnosis_confirmations WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM error_diagnoses WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM evidence_validity_projection
+WHERE evidence_id IN (SELECT id FROM learning_evidence WHERE exam_cycle_id = 'cycle-1');
+DELETE FROM evidence_corrections WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM learning_evidence WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM question_exposures WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM learning_sessions WHERE exam_cycle_id = 'cycle-1';
+UPDATE daily_plans SET supersedes_plan_id = NULL WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM daily_plans WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM review_queue WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM mastery_tracks WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM ability_calibration_snapshots WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM proactive_signals WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM learning_assets WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM tutor_agent_runs WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM lectures WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM question_sets WHERE exam_cycle_id = 'cycle-1';
+UPDATE content_documents SET supersedes_document_id = NULL WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM content_documents WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM generation_workflows WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM generation_specs WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM teaching_blueprints WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM learning_threads WHERE exam_cycle_id = 'cycle-1';
+DELETE FROM data_maintenance_context WHERE operation = 'clear_learning_data';
+COMMIT;
+SQL
+
+expect_count "SELECT COUNT(*) FROM questions WHERE exam_cycle_id='cycle-1';" "0" "questions after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM learning_sessions WHERE exam_cycle_id='cycle-1';" "0" "sessions after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM question_import_drafts WHERE exam_cycle_id='cycle-1';" "0" "import drafts after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM question_source_links WHERE question_id='question-1';" "0" "source links after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM daily_plans WHERE exam_cycle_id='cycle-1';" "0" "daily plans after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM tutor_agent_runs WHERE exam_cycle_id='cycle-1';" "0" "agent runs after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM exam_cycles WHERE id='cycle-1';" "1" "exam cycle retained after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM score_targets WHERE exam_cycle_id='cycle-1';" "1" "score target retained after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM score_measurements WHERE exam_cycle_id='cycle-1';" "1" "score baseline retained after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM data_maintenance_context;" "0" "maintenance context closed after cleanup"
+expect_count "SELECT COUNT(*) FROM pragma_foreign_key_check;" "0" "foreign-key integrity after learning-data cleanup"
 
 printf 'Tutor database schema verification passed.\n'

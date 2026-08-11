@@ -24,7 +24,28 @@
 
     <PullToRefresh class="study-content" :on-refresh="load">
       <AppStateView v-if="isLoading" state="loading" title="加载考点精讲" />
-      <LectureContent v-else-if="lectureContent" :markdown="lectureContent" surface />
+      <AiTaskPendingState
+        v-else-if="visibleTask"
+        :task="visibleTask"
+        title="AI 正在准备考点精讲"
+        :description="visibleTask.message || visibleTask.detail || '正在整理知识结构与典型例题。'"
+        retry-action-label="重新生成"
+        @retry="startPlanLecture"
+        @cancel="cancelGeneration"
+      />
+      <template v-else-if="lectureContent">
+        <LectureContent :markdown="lectureContent" surface />
+        <button
+          v-if="dailyPlanItemId && !planItemCompleted"
+          type="button"
+          class="complete-learning-button"
+          :disabled="isCompleting"
+          @click="completePlanLecture"
+        >
+          <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成本节' }}
+        </button>
+        <p v-else-if="planItemCompleted" class="completion-notice"><CheckCircle2Icon />本节已完成，今日计划已更新</p>
+      </template>
       <template v-else-if="dashboard">
         <section class="study-hero app-card">
           <div>
@@ -92,9 +113,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { BookOpenIcon, ChevronRightIcon, SearchIcon } from 'lucide-vue-next';
+import { BookOpenIcon, CheckCircle2Icon, ChevronRightIcon, SearchIcon } from 'lucide-vue-next';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { studyService, type StudyDashboard, type StudyLectureSummary, type StudyPoint } from '@/services/StudyService';
 import { useAIChatStore } from '@/stores/aiChat';
@@ -102,8 +123,12 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
 import LectureContent from '@/components/content/LectureContent.vue';
+import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
+import type { AgentRunView } from '@/modules/agent/public';
+import { useTaskCenterStore } from '@/stores/taskCenter';
 
 const chat = useAIChatStore();
+const taskCenter = useTaskCenterStore();
 const route = useRoute();
 const router = useRouter();
 const dashboard = ref<StudyDashboard | null>(null);
@@ -114,13 +139,51 @@ const activeModule = ref('');
 const opened = reactive(new Set<string>());
 const lectureContent = ref('');
 const lectureTitle = ref('');
+const trackedTaskId = ref('');
+const taskSnapshot = ref<AgentRunView>();
+const isDispatching = ref(false);
+const isCompleting = ref(false);
+const planItemCompleted = ref(false);
+
+const dailyPlanItemId = computed(() => typeof route.query.dailyPlanItemId === 'string' ? route.query.dailyPlanItemId : '');
+const capabilityNodeId = computed(() => typeof route.query.capabilityNodeId === 'string' ? route.query.capabilityNodeId : '');
+const visibleTask = computed(() => {
+  const task = taskCenter.runs.find((candidate) => candidate.id === trackedTaskId.value)
+    || (taskSnapshot.value?.id === trackedTaskId.value ? taskSnapshot.value : undefined);
+  return task && (task.isActive || task.status === 'failed' || task.status === 'cancelled') ? task : undefined;
+});
 
 const visibleModules = computed(() => {
   const modules = dashboard.value?.modules || [];
   return activeModule.value ? modules.filter((module) => module.name === activeModule.value) : modules;
 });
 
-watch(() => route.query.assetId, load, { immediate: true });
+onMounted(async () => {
+  taskCenter.connect();
+  await taskCenter.refresh();
+});
+
+onBeforeUnmount(() => taskCenter.disconnect());
+
+watch(() => [route.query.assetId, route.query.dailyPlanItemId, route.query.start], load, { immediate: true });
+watch(() => taskCenter.runs.find((task) => task.id === trackedTaskId.value), async (task) => {
+  if (!task) return;
+  taskSnapshot.value = task;
+  if (task.status !== 'completed') return;
+  const assetId = typeof task.actionParams.assetId === 'string' ? task.actionParams.assetId : '';
+  trackedTaskId.value = '';
+  taskSnapshot.value = undefined;
+  if (!assetId) return;
+  await router.replace({
+    path: '/vue/study/lecture',
+    query: {
+      assetId,
+      ...(dailyPlanItemId.value ? { dailyPlanItemId: dailyPlanItemId.value } : {}),
+      ...(capabilityNodeId.value ? { capabilityNodeId: capabilityNodeId.value } : {}),
+      source: route.query.source || 'daily-plan'
+    }
+  });
+});
 
 async function load() {
   isLoading.value = true;
@@ -135,6 +198,10 @@ async function load() {
       lectureTitle.value = asset?.title || '';
       if (lectureContent.value) return;
     }
+    if (route.query.start === '1' && dailyPlanItemId.value) {
+      await startPlanLecture();
+      return;
+    }
     const [nextDashboard, nextLectures] = await Promise.all([
       studyService.dashboard(),
       studyService.listLectures()
@@ -144,6 +211,44 @@ async function load() {
     if (!opened.size && dashboard.value.modules[0]) opened.add(dashboard.value.modules[0].name);
   } finally {
     isLoading.value = false;
+  }
+}
+
+async function startPlanLecture() {
+  if (isDispatching.value || visibleTask.value?.isActive || !dailyPlanItemId.value) return;
+  isDispatching.value = true;
+  try {
+    const result = await studyService.startDailyPlanLecture({
+      dailyPlanItemId: dailyPlanItemId.value,
+      capabilityNodeId: capabilityNodeId.value || undefined
+    });
+    trackedTaskId.value = result.task.id;
+    taskSnapshot.value = result.task;
+    await taskCenter.refresh();
+  } finally {
+    isDispatching.value = false;
+  }
+}
+
+async function cancelGeneration() {
+  if (!visibleTask.value) return;
+  const runtime = await initializeTutorRuntime();
+  await runtime.cancelAgentRun.execute({
+    agentRunId: visibleTask.value.id,
+    reason: 'user_cancelled_daily_plan_lecture'
+  });
+  await taskCenter.refresh();
+}
+
+async function completePlanLecture() {
+  const assetId = typeof route.query.assetId === 'string' ? route.query.assetId : '';
+  if (!dailyPlanItemId.value || !assetId || isCompleting.value) return;
+  isCompleting.value = true;
+  try {
+    await studyService.completeDailyPlanLecture({ dailyPlanItemId: dailyPlanItemId.value, assetId });
+    planItemCompleted.value = true;
+  } finally {
+    isCompleting.value = false;
   }
 }
 
@@ -231,4 +336,7 @@ async function learnQuery() {
 .tree-group div { display:flex; flex-wrap:wrap; gap:7px; }
 .tree-group button { max-width:100%; min-height:31px; padding:0 10px; border:0; border-radius:9px; background:rgba(var(--color-ink-rgb), .06); color:var(--text-color); font-size: var(--type-size-caption); font-weight: var(--type-weight-semibold); font-family: inherit; }
 .tree-group span { display:inline-flex; align-items:center; justify-content:center; min-width:15px; height:15px; margin-left:4px; padding:0 4px; border-radius:8px; background:#dc2626; color:#fff; font-size: var(--type-size-micro); }
+.complete-learning-button { align-self:center; min-height:40px; border:0; border-radius:20px; padding:0 18px; display:inline-flex; align-items:center; gap:7px; background:rgba(var(--color-brand-rgb),.13); color:var(--primary-color); font:inherit; font-size:var(--type-size-secondary); font-weight:var(--type-weight-semibold); }
+.complete-learning-button svg,.completion-notice svg { width:16px; height:16px; }
+.completion-notice { margin:0; display:flex; align-items:center; justify-content:center; gap:7px; color:var(--primary-color); font-size:var(--type-size-caption); }
 </style>

@@ -32,6 +32,11 @@ export interface StudyLectureSummary {
   updatedAt: number;
 }
 
+export interface DailyPlanLearningContext {
+  readonly dailyPlanItemId: string;
+  readonly capabilityNodeId?: string;
+}
+
 function score(value: number | undefined, fallback = 0): number {
   return Math.round(Math.max(0, Math.min(1, value ?? fallback)) * 100);
 }
@@ -121,18 +126,54 @@ export class StudyService {
     return { modules, weakPoints };
   }
 
-  async startLearning(point: Pick<StudyPoint, 'module' | 'name'> | { module?: string; name: string }) {
+  async startLearning(
+    point: Pick<StudyPoint, 'module' | 'name'> | { module?: string; name: string },
+    planContext?: DailyPlanLearningContext
+  ) {
     const module = point.module || '公考';
     return generationTaskService.enqueue({
       intent: 'study',
       title: '生成考点精讲',
       detail: `${module} · ${point.name}`,
       module,
-      sourceId: `study:${module}:${point.name}`,
+      sourceId: planContext?.dailyPlanItemId || `study:${module}:${point.name}`,
       payload: {
         topic: point.name,
-        prompt: `请系统讲解公考${module}考点「${point.name}」，包括核心概念、常见陷阱、典型例题、解题步骤和复盘提问。`
+        prompt: `请系统讲解公考${module}考点「${point.name}」，包括核心概念、常见陷阱、典型例题、解题步骤和复盘提问。`,
+        ...(planContext ? {
+          dailyPlanItemId: planContext.dailyPlanItemId,
+          capabilityNodeId: planContext.capabilityNodeId ?? null
+        } : {})
       }
+    });
+  }
+
+  async startDailyPlanLecture(context: DailyPlanLearningContext) {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    if (!context.capabilityNodeId) throw new Error('今日计划缺少能力节点，请刷新计划后重试。');
+    const curriculum = await runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId);
+    const node = curriculum?.capabilityNodes.find((candidate) => candidate.id === context.capabilityNodeId);
+    if (!node || !curriculum) throw new Error('今日计划对应考点已失效，请刷新计划后重试。');
+    const byId = new Map(curriculum.capabilityNodes.map((candidate) => [candidate.id, candidate]));
+    return this.startLearning({
+      module: moduleAncestor(node, byId)?.name || node.module || '公考',
+      name: node.name
+    }, context);
+  }
+
+  async completeDailyPlanLecture(input: {
+    readonly dailyPlanItemId: string;
+    readonly assetId: string;
+    readonly actualMinutes?: number;
+  }) {
+    const runtime = await initializeTutorRuntime();
+    return runtime.completeDailyPlanItem.execute({
+      dailyPlanItemId: input.dailyPlanItemId,
+      actualMinutes: input.actualMinutes,
+      resultSummary: { assetId: input.assetId, contentConsumed: true },
+      sourceId: `study-lecture:${input.assetId}:completed`
     });
   }
 

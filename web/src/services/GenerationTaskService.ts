@@ -74,6 +74,8 @@ export class GenerationTaskService {
     const detail = input.detail || input.module || '准备执行';
     const actionRoute = routeForInput(input);
     const actionParams = actionParamsForInput(input);
+    const dailyPlanItemId = optionalText(input.payload?.dailyPlanItemId);
+    const capabilityNodeId = optionalText(input.payload?.capabilityNodeId);
     const aggregate = await runtime.createAgentRun.execute({
       idempotencyKey: input.idempotencyKey?.trim()
         || `business:${scopeKey}:${crypto.randomUUID()}`,
@@ -88,6 +90,8 @@ export class GenerationTaskService {
         detail,
         module: input.module ?? null,
         sourceId: input.sourceId ?? null,
+        dailyPlanItemId: dailyPlanItemId ?? null,
+        capabilityNodeId: capabilityNodeId ?? null,
         payload: toJsonObject(input.payload || {}),
         scopeKey,
         businessLine: businessLineForIntent(input.intent),
@@ -158,8 +162,17 @@ function routeForInput(input: GenerationTaskInput): string {
 }
 
 function actionParamsForInput(input: GenerationTaskInput): JsonObject {
-  if (input.intent === 'trueQuestionResearch') return { mode: 'true' };
-  return {};
+  const linkage = {
+    ...(optionalText(input.payload?.dailyPlanItemId) ? { dailyPlanItemId: optionalText(input.payload?.dailyPlanItemId)! } : {}),
+    ...(optionalText(input.payload?.capabilityNodeId) ? { capabilityNodeId: optionalText(input.payload?.capabilityNodeId)! } : {}),
+    ...(optionalText(input.payload?.reviewQueueItemId) ? { reviewQueueItemId: optionalText(input.payload?.reviewQueueItemId)! } : {})
+  };
+  if (input.intent === 'trueQuestionResearch') return { mode: 'true', ...linkage };
+  return linkage;
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function toJsonObject(value: Record<string, unknown>): JsonObject {

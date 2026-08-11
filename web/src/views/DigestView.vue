@@ -64,6 +64,16 @@
           <h4>{{ section.title }}</h4>
           <MarkdownContent class="digest-body" :content="section.body" variant="compact" />
         </article>
+        <button
+          v-if="dailyPlanItemId && !planItemCompleted"
+          type="button"
+          class="complete-digest-button"
+          :disabled="isCompleting"
+          @click="completePlanDigest"
+        >
+          <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成今日积累' }}
+        </button>
+        <p v-else-if="planItemCompleted" class="completion-notice"><CheckCircle2Icon />今日积累已完成，计划已更新</p>
       </template>
     </PullToRefresh>
 
@@ -95,11 +105,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
+  CheckCircle2Icon,
   ChevronRightIcon,
   HistoryIcon,
   SparklesIcon,
   Trash2Icon
 } from 'lucide-vue-next';
+import { useRoute } from 'vue-router';
 import { AppStateView, PullToRefresh, SegmentedControl } from '@/capabilities/design-system/public';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
@@ -114,7 +126,9 @@ import { useTaskCenterStore } from '@/stores/taskCenter';
 
 
 const taskCenter = useTaskCenterStore();
-const tab = ref<DigestTab>(digestService.readActiveTab());
+const route = useRoute();
+const routeTab = route.query.tab === 'tips' ? 'tips' : route.query.tab === 'news' ? 'news' : undefined;
+const tab = ref<DigestTab>(routeTab || digestService.readActiveTab());
 const date = ref(localDate());
 const dashboard = ref<DigestDashboard | null>(null);
 const isLoading = ref(false);
@@ -124,6 +138,10 @@ const taskSnapshot = ref<AgentRunView>();
 const showHistorySheet = ref(false);
 const showDeleteConfirm = ref(false);
 const notice = ref('');
+const isCompleting = ref(false);
+const planItemCompleted = ref(false);
+const dailyPlanItemId = computed(() => typeof route.query.dailyPlanItemId === 'string' ? route.query.dailyPlanItemId : '');
+const capabilityNodeId = computed(() => typeof route.query.capabilityNodeId === 'string' ? route.query.capabilityNodeId : '');
 const digestTabOptions = [
   { value: 'news', label: '热点' },
   { value: 'tips', label: '知识点' }
@@ -159,6 +177,9 @@ onMounted(async () => {
   await loadDashboard();
   await taskCenter.refresh();
   if (scopedTask.value?.isActive) trackedTaskId.value = scopedTask.value.id;
+  if (route.query.start === '1' && dailyPlanItemId.value && !sections.value.length && !visibleTask.value) {
+    await generate();
+  }
 });
 
 onBeforeUnmount(() => {
@@ -212,7 +233,15 @@ async function generate() {
   isDispatching.value = true;
   notice.value = '';
   try {
-    const result = await digestService.enqueueGenerate(tab.value, date.value);
+    const result = await digestService.enqueueGenerate(
+      tab.value,
+      date.value,
+      undefined,
+      dailyPlanItemId.value ? {
+        dailyPlanItemId: dailyPlanItemId.value,
+        capabilityNodeId: capabilityNodeId.value || undefined
+      } : undefined
+    );
     trackedTaskId.value = result.task.id;
     taskSnapshot.value = result.task;
     await taskCenter.refresh();
@@ -221,6 +250,21 @@ async function generate() {
     notice.value = error instanceof Error ? error.message : '生成任务派发失败';
   } finally {
     isDispatching.value = false;
+  }
+}
+
+async function completePlanDigest() {
+  if (!dailyPlanItemId.value || isCompleting.value) return;
+  isCompleting.value = true;
+  try {
+    await digestService.completeDailyPlanDigest({
+      dailyPlanItemId: dailyPlanItemId.value,
+      tab: tab.value,
+      date: date.value
+    });
+    planItemCompleted.value = true;
+  } finally {
+    isCompleting.value = false;
   }
 }
 
@@ -314,6 +358,35 @@ function localDate(): string {
 .digest-card {
   width: 100%;
   padding: 14px;
+}
+
+.complete-digest-button {
+  align-self: center;
+  min-height: 40px;
+  border: 0;
+  border-radius: 20px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(var(--color-brand-rgb), .13);
+  color: var(--primary-color);
+  font: inherit;
+  font-size: var(--type-size-secondary);
+  font-weight: var(--type-weight-semibold);
+}
+
+.complete-digest-button svg,
+.completion-notice svg { width: 16px; height: 16px; }
+
+.completion-notice {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--primary-color);
+  font-size: var(--type-size-caption);
 }
 
 .digest-tag {

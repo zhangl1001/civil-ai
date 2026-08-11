@@ -1,5 +1,5 @@
 import type { Clock, ExamCycleId, LocalDate, TimeZoneId } from '@/kernel/public';
-import type { DailyPlanProposal } from '@/modules/mastery/public';
+import type { DailyPlanProposal } from '../domain/DailyPlanPolicy';
 import type { DailyPlanAggregate, DailyPlanRepository } from '../contracts/DailyPlanRepository';
 import { DailyPlanItemStatus, type DailyPlanRebalanceReason } from '../domain/DailyPlanCodes';
 import type { PersistDailyPlanProposal } from './PersistDailyPlanProposal';
@@ -48,8 +48,9 @@ export class RebalanceDailyPlanAfterLearning {
       examDate: cycle.examCycle.examDate,
       phase: cycle.examCycle.phase
     });
+    const nextProposal = excludeTerminalActions(proposal, current);
     return this.persist.execute({
-      proposal,
+      proposal: nextProposal,
       planDate,
       phase: cycle.examCycle.phase,
       retainTerminalItems: true,
@@ -62,6 +63,26 @@ export class RebalanceDailyPlanAfterLearning {
       }
     });
   }
+}
+
+function excludeTerminalActions(
+  proposal: DailyPlanProposal,
+  current: DailyPlanAggregate
+): DailyPlanProposal {
+  const terminalKeys = new Set(current.items
+    .filter((item) => item.status === DailyPlanItemStatus.Completed
+      || item.status === DailyPlanItemStatus.Skipped
+      || item.status === DailyPlanItemStatus.Cancelled)
+    .map((item) => `${item.capabilityNodeId}:${item.itemType}`));
+  if (!terminalKeys.size) return proposal;
+  const items = proposal.items.filter((item) => !terminalKeys.has(`${item.capabilityNodeId}:${item.action}`));
+  const blockKeys = new Set(items.map((item) => item.blockKey));
+  return {
+    ...proposal,
+    blocks: proposal.blocks.filter((block) => blockKeys.has(block.key)),
+    items,
+    plannedMinutes: items.reduce((total, item) => total + item.targetMinutes, 0)
+  };
 }
 
 function localDate(now: number, timeZone: TimeZoneId): LocalDate {

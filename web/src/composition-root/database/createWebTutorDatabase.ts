@@ -82,9 +82,9 @@ import { IndexedDbProactiveSignalRepository } from '@/modules/proactive/adapters
 import { DeliverProactiveSignals, EvaluateProactiveSignals } from '@/modules/proactive/public';
 import { IndexedDbMasteryRepository } from '@/modules/mastery/adapters/IndexedDbMasteryRepository';
 import { createGenerationLearningContextPort } from './createGenerationLearningContextPort';
-import { BuildDailyPlanProposal, CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem } from '@/modules/mastery/public';
+import { CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem } from '@/modules/mastery/public';
 import { IndexedDbDailyPlanRepository } from '@/modules/planning/adapters/IndexedDbDailyPlanRepository';
-import { DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus } from '@/modules/planning/public';
+import { BuildDailyPlanProposal, CompleteDailyPlanItem, DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import {
   CreateLearningThread,
   StartStructuredTeaching,
@@ -364,10 +364,11 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const completeReviewQueueItem = new CompleteReviewQueueItem(unitOfWork, masteryRepository, clock);
   const failReviewQueueItem = new FailReviewQueueItem(unitOfWork, masteryRepository, clock);
   const retryReviewQueueItem = new RetryReviewQueueItem(unitOfWork, masteryRepository, clock);
-  const buildDailyPlanProposal = new BuildDailyPlanProposal(masteryRepository, clock);
+  const buildDailyPlanProposal = new BuildDailyPlanProposal(candidateRepository, masteryRepository, curriculumRepository, clock);
   const persistDailyPlanProposal = new PersistDailyPlanProposal(unitOfWork, dailyPlanRepository, clock, new UuidV7IdGenerator(clock));
   const updateDailyPlanItemStatus = new UpdateDailyPlanItemStatus(unitOfWork, dailyPlanRepository, clock);
   const rebalanceDailyPlanAfterLearning = new RebalanceDailyPlanAfterLearning(candidateRepository,dailyPlanRepository,buildDailyPlanProposal,persistDailyPlanProposal,clock);
+  const completeDailyPlanItem = new CompleteDailyPlanItem(candidateRepository, updateDailyPlanItemStatus, rebalanceDailyPlanAfterLearning);
   const runTutorAgentBatch = new RunTutorAgentBatch(
     claimAgentRuns,
     recoverExpiredAgentRuns,
@@ -533,6 +534,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     persistDailyPlanProposal,
     rebalanceDailyPlanAfterLearning,
     updateDailyPlanItemStatus,
+    completeDailyPlanItem,
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
     applyQuestionSetEnrichment,
