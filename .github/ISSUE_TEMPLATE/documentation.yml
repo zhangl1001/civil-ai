@@ -1,0 +1,40 @@
+name: Documentation improvement
+description: Report missing, unclear, or outdated public documentation
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Document or location
+      placeholder: README.md, upgrade guide, architecture index, or URL
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is unclear or missing?
+    validations:
+      required: true
+
+  - type: textarea
+    id: audience
+    attributes:
+      label: Intended audience
+      description: Contributor, iOS tester, end user, provider-adapter author, or maintainer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested improvement
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I confirmed that the information is not already documented elsewhere.
+          required: true

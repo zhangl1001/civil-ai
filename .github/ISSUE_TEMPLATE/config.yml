@@ -1,5 +1,11 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Public roadmap
+    url: https://github.com/zhangl1001/civil-ai/blob/main/ROADMAP.md
+    about: Review current priorities before proposing large scope.
   - name: Security vulnerability
     url: https://github.com/zhangl1001/civil-ai/security/advisories/new
-    about: Report vulnerabilities privately
+    about: Report vulnerabilities privately. Do not open a public Issue.
+  - name: Usage and setup questions
+    url: https://github.com/zhangl1001/civil-ai/discussions
+    about: Ask general setup and usage questions without sharing credentials or personal data.

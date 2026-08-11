@@ -1,6 +1,6 @@
 {
   "name": "zhangl-agent",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "main": "index.js",
   "scripts": {
     "postinstall": "patch-package",
@@ -10,6 +10,7 @@
     "ios:archive": "npm run ios:sync && bash scripts/archive-ios-web.sh",
     "ios:archive:web": "npm run ios:archive",
     "ios:verify-ipa": "node scripts/verify-ios-ipa.js",
+    "release:assets": "bash scripts/build-release-assets.sh",
     "smoke:ios": "npm run smoke:vue",
     "check:design": "node scripts/check-design-system.js",
     "check:architecture": "node scripts/check-architecture.mjs",

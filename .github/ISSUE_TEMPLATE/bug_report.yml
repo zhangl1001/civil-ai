@@ -1,39 +1,102 @@
 name: Bug report
-description: Report a reproducible problem
+description: Report a reproducible defect in Civil AI
 title: "[Bug]: "
-labels: ["bug", "triage"]
+labels: ["bug"]
 body:
   - type: markdown
     attributes:
-      value: "Do not include API keys, personal data, or vulnerability details. Use the Security tab for vulnerabilities."
+      value: |
+        Thank you for helping improve Civil AI.
+        Do not include API keys, personal learning data, signing material, copyrighted question content, or vulnerability details. Report security issues privately through the Security tab.
+
   - type: textarea
     id: summary
     attributes:
-      label: Summary
-      description: What happened, and what did you expect?
+      label: Problem summary
+      description: What happened, and what did you expect instead?
+      placeholder: A concise description of the user-visible problem.
     validations:
       required: true
+
   - type: textarea
     id: steps
     attributes:
       label: Steps to reproduce
+      description: Provide the smallest reliable sequence. Use sanitized sample data.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
     validations:
       required: true
+
   - type: input
     id: version
     attributes:
       label: Version or commit
+      placeholder: v1.2.0 or 4b22330
     validations:
       required: true
+
   - type: dropdown
     id: platform
     attributes:
       label: Platform
-      options: ["Web", "iOS", "Other"]
+      options:
+        - iOS physical device
+        - iOS simulator
+        - Web browser
+        - Build or CI
+        - Other
     validations:
       required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment details
+      description: Device/browser, operating-system version, and Xcode version when relevant.
+      placeholder: iPhone 15, iOS 18.6; or Chrome 140 on macOS
+
+  - type: input
+    id: provider
+    attributes:
+      label: Model provider and model
+      description: Required only when generation, chat, grading, or enrichment is involved. Never include credentials.
+      placeholder: Anthropic-compatible / model-name
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Reproduction frequency
+      options:
+        - Every time
+        - Often
+        - Intermittent
+        - Once
+        - Unknown
+    validations:
+      required: true
+
   - type: textarea
     id: logs
     attributes:
       label: Sanitized logs
+      description: Remove secrets, identifiers, imported content, and personal data.
       render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add sanitized screenshots, recovery behavior, or suspected regressions.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing Issues and did not find a duplicate.
+          required: true
+        - label: I removed secrets, personal data, and restricted examination content.
+          required: true
