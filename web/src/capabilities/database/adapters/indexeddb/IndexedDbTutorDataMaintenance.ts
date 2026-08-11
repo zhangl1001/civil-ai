@@ -25,8 +25,19 @@ const cycleStores = [
   TutorIndexedDbStore.LearningEvidenceAggregates,
   TutorIndexedDbStore.ProactiveSignals,
   TutorIndexedDbStore.LearningAssets,
+  TutorIndexedDbStore.QuestionImportDrafts,
+  TutorIndexedDbStore.QuestionReferencePacks,
   TutorIndexedDbStore.TutorCycleConclusions,
   TutorIndexedDbStore.AbilityCalibrationSnapshots
+] as const;
+
+const linkedStores = [
+  TutorIndexedDbStore.AgentToolReceipts,
+  TutorIndexedDbStore.QuestionSourceLinks,
+  TutorIndexedDbStore.QuestionLineages,
+  TutorIndexedDbStore.QuestionSourceImportReceipts,
+  TutorIndexedDbStore.QuestionImportCandidates,
+  TutorIndexedDbStore.QuestionImportPublishReceipts
 ] as const;
 
 export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
@@ -42,6 +53,12 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
     }
     const diagnosisIds = idsMatching(rowsByStore, TutorIndexedDbStore.ErrorDiagnoses, examCycleId, 'id');
     const workflowIds = idsMatching(rowsByStore, TutorIndexedDbStore.GenerationAggregates, examCycleId, 'workflowId');
+    const agentRunIds = idsMatching(rowsByStore, TutorIndexedDbStore.AgentRunAggregates, examCycleId, 'runId');
+    const draftIds = idsMatching(rowsByStore, TutorIndexedDbStore.QuestionImportDrafts, examCycleId, 'id');
+    const questionIds = questionIdsMatching(rowsByStore, examCycleId);
+    const linkedRows = new Map<TutorIndexedDbStore, readonly Row[]>();
+    for (const store of linkedStores) linkedRows.set(store, await this.database.getAll<Row>(store));
+    const sourceIds = linkedSourceIds(linkedRows, questionIds, draftIds);
     const operations: IndexedDbWriteOperation[] = [];
 
     for (const [store, rows] of rowsByStore) {
@@ -66,6 +83,24 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
     await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.AIInvocations, (row) => (
       workflowIds.has(text(row.workflowId))
     ));
+    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.AgentToolReceipts, (row) => (
+      agentRunIds.has(text(row.agentRunId))
+    ));
+    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionSourceImportReceipts, (row) => (
+      sourceIds.has(text(row.sourceId))
+    ));
+    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionImportPublishReceipts, (row) => (
+      draftIds.has(text(row.draftId))
+    ));
+    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionImportCandidates, (row) => (
+      draftIds.has(text(row.draftId))
+    ));
+    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionSourceLinks, (row) => (
+      questionIds.has(text(row.questionId))
+    ));
+    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionLineages, (row) => (
+      questionIds.has(text(row.questionId)) || questionIds.has(text(row.parentQuestionId))
+    ));
     await appendAllDeletes(this.database, operations, TutorIndexedDbStore.DomainOutbox);
     await appendAllDeletes(this.database, operations, TutorIndexedDbStore.SystemMessages);
     if (context) {
@@ -76,6 +111,54 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
     return operations.length;
   }
 
+}
+
+function questionIdsMatching(
+  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
+  examCycleId: string
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  (rowsByStore.get(TutorIndexedDbStore.ContentQuestionSetBundles) || [])
+    .filter((row) => matchesCycle(row, examCycleId))
+    .forEach((row) => {
+      const bundle = record(row.bundle);
+      array(bundle.questions).forEach((question) => {
+        const id = text(record(question).id);
+        if (id) ids.add(id);
+      });
+    });
+  return ids;
+}
+
+function linkedSourceIds(
+  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
+  questionIds: ReadonlySet<string>,
+  draftIds: ReadonlySet<string>
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  (rowsByStore.get(TutorIndexedDbStore.QuestionSourceLinks) || []).forEach((row) => {
+    if (!questionIds.has(text(row.questionId))) return;
+    const sourceId = text(row.sourceId);
+    if (sourceId) ids.add(sourceId);
+  });
+  (rowsByStore.get(TutorIndexedDbStore.QuestionImportPublishReceipts) || []).forEach((row) => {
+    if (!draftIds.has(text(row.draftId))) return;
+    const sourceId = text(row.sourceId);
+    if (sourceId) ids.add(sourceId);
+  });
+  return ids;
+}
+
+function appendMatchingDeletes(
+  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
+  operations: IndexedDbWriteOperation[],
+  store: TutorIndexedDbStore,
+  matches: (row: Row) => boolean
+): void {
+  (rowsByStore.get(store) || []).filter(matches).forEach((row) => {
+    const key = keyOf(store, row);
+    if (key !== undefined) operations.push({ type: 'delete', store, key });
+  });
 }
 
 async function appendAllDeletes(
@@ -126,7 +209,7 @@ function matchesCycle(row: Row, examCycleId: string): boolean {
     });
 }
 
-function keyOf(store: TutorIndexedDbStore, row: Row): string {
+function keyOf(store: TutorIndexedDbStore, row: Row): IDBValidKey | undefined {
   if (store === TutorIndexedDbStore.DomainOutbox || store === TutorIndexedDbStore.SystemMessages) return text(row.id);
   if (store === TutorIndexedDbStore.ContentQuestionSetBundles) return text(row.questionSetId);
   if (store === TutorIndexedDbStore.GenerationAggregates) return text(row.workflowId);
@@ -136,7 +219,16 @@ function keyOf(store: TutorIndexedDbStore, row: Row): string {
   if (store === TutorIndexedDbStore.AgentRunAggregates) return text(row.runId);
   if (store === TutorIndexedDbStore.DailyPlanAggregates) return text(record(row.plan).id);
   if (store === TutorIndexedDbStore.LearningEvidenceAggregates) return text(row.evidenceId);
+  if (store === TutorIndexedDbStore.AgentToolReceipts) {
+    const agentRunId = text(row.agentRunId);
+    const toolCallId = text(row.toolCallId);
+    return agentRunId && toolCallId ? [agentRunId, toolCallId] : undefined;
+  }
   return text(row.id);
+}
+
+function array(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function record(value: unknown): Row {

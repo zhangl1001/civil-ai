@@ -1,8 +1,8 @@
 # AI 私教服务架构设计
 
-> 状态：核心运行时已实施，扩展能力继续按本文推进
+> 文档性质：公开架构参考
 > 上位约束：[Zhangl Agent 架构宪法](./architecture-constitution.md)  
-> 业务依据：[AI 私教能力提升闭环重构计划](./ai-tutor-capability-loop-redesign-plan.md)  
+> 业务边界：[核心业务模块架构](./core-business-architecture.md)
 > 部署方式：本地 TypeScript 服务层直接访问用户配置的模型供应商，不依赖自建云服务。
 > Agent Runtime 边界决策：[ADR-001：供应商无关的本地 Tutor Agent Runtime](./adr-001-provider-neutral-agent-runtime.md)
 
@@ -988,37 +988,7 @@ src/features/tutor-ui/
 
 `src/tasks` 只负责通用调度和运行，不再承载学科提示词与业务落库。
 
-## 19. 实施顺序
-
-### AI Phase 1：底座
-
-- [ ] 定义 Provider Gateway、类型化响应、错误分类和 capability matrix。
-- [ ] 建立 Prompt Registry/Compiler、Manifest 和版本表。
-- [ ] 建立 Context Compiler 与 token 预算。
-- [ ] 建立 ai invocation ledger。
-
-### AI Phase 2：确定性工作流
-
-- [ ] 将生题、讲义、批改、计划从巨型 Runner 拆成状态机。
-- [ ] 接入结构、领域和教学质量流水线。
-- [ ] 接入 staging、Unit of Work 和 Outbox。
-- [ ] 建立取消、恢复和部分批次提交。
-
-### AI Phase 3：对话 Agent
-
-- [x] 建立版本化 Skill/Tool Registry 和 Policy Guard。
-- [x] 实现原生 tool call 的多 turn Agent loop。
-- [x] 贯通 session/run/workflow/task/tool call/resource ID。
-- [x] 实现必要信息确认、风险确认、重复调用和循环上限。
-
-### AI Phase 4：质量与优化
-
-- [ ] 建立固定评测集和 Provider 回放测试。
-- [ ] 建立角色级模型路由、预算和限流降级。
-- [ ] 校准 Context 摘要和 Prompt token。
-- [x] 删除旧 AIEngine、AIProvider、LocalTask、TaskQueue、TaskStore 和巨型 AIRunners 业务逻辑。
-
-## 20. 完成标准
+## 19. 架构符合性标准
 
 - 页面动作不依赖意图识别，聊天可以在受控范围内完成多步工具调用。
 - 每次 AI 结果可追溯到学生上下文、元数据、提示词、Schema、模型和任务版本。

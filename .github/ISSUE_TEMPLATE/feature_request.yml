@@ -1,22 +1,70 @@
-name: Feature request
-description: Propose an improvement
+name: Feature proposal
+description: Propose a focused product or architecture improvement
 title: "[Feature]: "
-labels: ["enhancement", "triage"]
+labels: ["enhancement"]
 body:
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: Which user problem should this solve?
+      label: User problem
+      description: Who experiences this problem, and why does it matter?
     validations:
       required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior, not only an implementation.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Candidate onboarding and exam cycle
+        - Daily planning and proactive tutoring
+        - Practice, grading, and wrong-book review
+        - Essay or interview learning
+        - Agent runtime, tools, and skills
+        - Content generation and rendering
+        - Local data, SQLite, and recovery
+        - iOS experience and native capabilities
+        - Documentation and maintainership
+        - Other
+    validations:
+      required: true
+
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed solution
-    validations:
-      required: true
+      label: Proposed approach
+      description: Include relevant domain or architecture boundaries when known.
+
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] User-visible result ...
+        - [ ] Failure and cancellation behavior ...
+        - [ ] Verification or device coverage ...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing Issues and the public roadmap.
+          required: true
+        - label: This proposal does not require bundling content that the project cannot redistribute.
+          required: true

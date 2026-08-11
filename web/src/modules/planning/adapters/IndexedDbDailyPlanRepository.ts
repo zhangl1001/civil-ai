@@ -4,6 +4,7 @@ import type { TransactionContext } from '@/capabilities/database/public';
 import type { ExamCycleId, LocalDate } from '@/kernel/public';
 import type {
   DailyPlanAggregate,
+  DailyPlanBlockRecord,
   DailyPlanItemRecord,
   DailyPlanItemStatusPatch,
   DailyPlanRecord,
@@ -15,13 +16,13 @@ export class IndexedDbDailyPlanRepository implements DailyPlanRepository {
 
   async findCurrent(cycle: ExamCycleId, date: LocalDate): Promise<DailyPlanAggregate | undefined> {
     const all = await this.db.getAll<DailyPlanAggregate>(TutorIndexedDbStore.DailyPlanAggregates);
-    return all.filter((value) => value.plan.examCycleId === cycle && value.plan.planDate === date && value.plan.status === 'active')
+    return all.map(normalizeAggregate).filter((value) => value.plan.examCycleId === cycle && value.plan.planDate === date && value.plan.status === 'active')
       .sort((left, right) => right.plan.version - left.plan.version)[0];
   }
 
   async listAll(cycle: ExamCycleId): Promise<readonly DailyPlanAggregate[]> {
     const all = await this.db.getAll<DailyPlanAggregate>(TutorIndexedDbStore.DailyPlanAggregates);
-    return all
+    return all.map(normalizeAggregate)
       .filter((value) => value.plan.examCycleId === cycle)
       .sort((left, right) => right.plan.createdAt - left.plan.createdAt || right.plan.version - left.plan.version);
   }
@@ -48,7 +49,7 @@ export class IndexedDbDailyPlanRepository implements DailyPlanRepository {
     context: TransactionContext
   ): Promise<DailyPlanItemRecord | undefined> {
     const all = await this.db.getAll<DailyPlanAggregate>(TutorIndexedDbStore.DailyPlanAggregates);
-    const aggregate = all.filter((value) => value.plan.status === 'active' && value.items.some(matches))
+    const aggregate = all.map(normalizeAggregate).filter((value) => value.plan.status === 'active' && value.items.some(matches))
       .sort((left, right) => right.plan.version - left.plan.version)[0];
     if (!aggregate) return undefined;
     let updated: DailyPlanItemRecord | undefined;
@@ -73,6 +74,47 @@ export class IndexedDbDailyPlanRepository implements DailyPlanRepository {
   private async require(id: string): Promise<DailyPlanAggregate> {
     const item = await this.db.get<DailyPlanAggregate>(TutorIndexedDbStore.DailyPlanAggregates, id);
     if (!item) throw new Error(`Daily plan version conflict: ${id}`);
-    return item;
+    return normalizeAggregate(item);
   }
+}
+
+function normalizeAggregate(value: DailyPlanAggregate): DailyPlanAggregate {
+  const rawBlocks = Array.isArray(value.blocks) ? value.blocks : [];
+  const blockByCapability = new Map(rawBlocks.map((block) => [block.capabilityNodeId, block]));
+  const blocks: DailyPlanBlockRecord[] = [...rawBlocks];
+  const items = value.items.map((item) => {
+    let block = blockByCapability.get(item.capabilityNodeId);
+    if (!block) {
+      block = {
+        id:`DailyPlanBlockId:legacy:${value.plan.id}:${blocks.length + 1}`,
+        dailyPlanId:value.plan.id,
+        capabilityNodeId:item.capabilityNodeId,
+        subject:item.itemType === 'essay' ? 'essay' : 'aptitude',
+        module:'',
+        teachingGoalCode:'legacy_plan_item',
+        sequence:blocks.length + 1,
+        priority:50,
+        required:true
+      };
+      blocks.push(block);
+      blockByCapability.set(item.capabilityNodeId, block);
+    }
+    return {
+      ...item,
+      dailyPlanBlockId:item.dailyPlanBlockId || block.id,
+      category:item.category || categoryFor(item.itemType),
+      priority:Number.isFinite(item.priority) ? item.priority : 50,
+      required:item.required ?? true,
+      dependencyIds:Array.isArray(item.dependencyIds) ? item.dependencyIds : []
+    };
+  });
+  return { ...value, blocks, items };
+}
+
+function categoryFor(itemType: DailyPlanItemRecord['itemType']): DailyPlanItemRecord['category'] {
+  if (itemType === 'lecture') return 'learn';
+  if (itemType === 'review') return 'review';
+  if (itemType === 'diagnosis' || itemType === 'mock') return 'assess';
+  if (itemType === 'digest') return 'accumulate';
+  return 'practice';
 }

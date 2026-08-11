@@ -70,7 +70,6 @@ import type {
   SubmitObjectiveSession
 } from '@/modules/evidence/public';
 import type {
-  BuildDailyPlanProposal,
   CompleteReviewQueueItem,
   FailReviewQueueItem,
   MasteryRepository,
@@ -80,6 +79,8 @@ import type {
 } from '@/modules/mastery/public';
 import type { MessageCenter, MessageCenterRepository } from '@/modules/message-center/public';
 import type {
+  BuildDailyPlanProposal,
+  CompleteDailyPlanItem,
   DailyPlanRepository,
   PersistDailyPlanProposal,
   RebalanceDailyPlanAfterLearning,
@@ -156,6 +157,7 @@ export interface TutorDatabaseRuntime {
   readonly persistDailyPlanProposal: PersistDailyPlanProposal;
   readonly rebalanceDailyPlanAfterLearning: RebalanceDailyPlanAfterLearning;
   readonly updateDailyPlanItemStatus: UpdateDailyPlanItemStatus;
+  readonly completeDailyPlanItem: CompleteDailyPlanItem;
   readonly createGenerationWorkflow: CreateGenerationWorkflow;
   readonly runStructuredObjectiveGenerationWorkflow: RunStructuredObjectiveGenerationWorkflow;
   readonly applyQuestionSetEnrichment: ApplyQuestionSetEnrichment;

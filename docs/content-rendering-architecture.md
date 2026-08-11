@@ -1,6 +1,6 @@
 # 内容与 Markdown 渲染架构
 
-> 状态：设计完成，待实施  
+> 文档性质：公开架构参考
 > 适用范围：AI 对话、讲义、题干、材料、选项、解析、错因、申论、面试、每日积累、历史和闪卡。  
 > 上位设计：[前端设计系统与业务模板架构](./frontend-design-system-architecture.md)
 
@@ -334,35 +334,7 @@ renderer_missing
 
 只增加视觉样式时不应创建新 Block；只有数据语义、交互或安全策略不同才扩展类型。
 
-## 13. 实施顺序
-
-### Render Phase 1：拆引擎
-
-- [ ] 抽出 `MarkdownEngine/MarkdownSanitizer/MarkdownCache`。
-- [ ] 移除组件中的 `unknown → String` 和全局 marked 配置。
-- [ ] 将表格 wrapper、链接和中断状态改成插件/业务状态。
-- [ ] 建立现有 Markdown fixture 防回归。
-
-### Render Phase 2：结构块
-
-- [ ] 建立 ContentDocument 和 ContentBlock schema。
-- [ ] 建立 Renderer Registry 与各 Block Renderer。
-- [ ] 将资料表格、图推 SVG、图片和 Callout 迁到结构块。
-- [ ] 在 AI 输出校验和 Repository 边界接入 ContentAdapter。
-
-### Render Phase 3：题目统一
-
-- [ ] Practice/WrongBook/History/Flashcard 全部改用 QuestionRenderer。
-- [ ] 共享材料、多小题、长阅读和资料分析改为 schema/template 选择。
-- [ ] 删除题干正则拆分和页面专用 SVG/Markdown 逻辑。
-
-### Render Phase 4：质量与性能
-
-- [ ] 补 SVG ID 隔离、URL/图片策略和降级报告。
-- [ ] 建立解析缓存、可见区延迟渲染和流式节流。
-- [ ] 完成所有题型、字号、主题和真机视觉回归。
-
-## 14. 完成标准
+## 13. 架构符合性标准
 
 - `MarkdownContent.vue` 不再是包含解析、安全、结构变换和全样式的巨型组件。
 - 上游传错类型会明确失败，不再出现 `trim is not a function` 或 `[object Object]`。

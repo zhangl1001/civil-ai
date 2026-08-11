@@ -35,3 +35,8 @@ ios/App/App.xcodeproj/xcuserdata/
 *.log
 tmp/
 .tmp/
+
+# Private project-management and review records
+/.internal/
+/docs/internal/
+/G*.code-review-report.md

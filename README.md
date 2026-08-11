@@ -1,91 +1,144 @@
 # Civil AI
 
-面向个人备考周期的本地优先 AI 公考私教，也是一个可复用的端侧 Agent Runtime 实验项目。
+[![CI](https://github.com/zhangl1001/civil-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/zhangl1001/civil-ai/actions/workflows/ci.yml)
+[![License: ISC](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
+[![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](web/package.json)
+[![iOS](https://img.shields.io/badge/iOS-Capacitor-lightgrey.svg)](ios/App/App.xcodeproj)
 
-> 项目仍处于积极开发阶段。题目、模型输出和学习建议仅用于辅助学习，不构成考试机构的官方意见。
+Civil AI is a local-first AI tutor for China's civil-service examinations and a reusable reference implementation for on-device agent workflows.
 
-本项目不是考试主管部门、命题机构或培训机构的官方产品，不保证考试信息、题目或 AI 输出准确、完整或持续可用。仓库只内置自行编写的演示内容；不附带、销售或授权任何第三方真题库。使用者导入、检索、保存或分享内容前，应自行确认具有相应权利和合法依据。详细边界见 [`LEGAL_AND_CONTENT_POLICY.md`](LEGAL_AND_CONTENT_POLICY.md)。
+中文定位：面向个人完整备考周期的本地优先 AI 公考私教。系统围绕建档、计划、学习、练习、批改、错因诊断、间隔复习和能力变化建立持续闭环，而不是只提供聊天或批量生题。
 
-## 特性
+> Civil AI is under active development. Questions, model output, predictions, and learning advice are educational aids, not official examination guidance.
 
-- Vue 3 + TypeScript 的移动端 Web UI
-- Capacitor iOS 容器，iOS 使用 SQLite，Web 开发环境使用 IndexedDB
-- 支持 Anthropic 与 OpenAI-compatible Provider Gateway
-- 统一的 AgentRun Runtime，覆盖生成、批改、规划、工具调用、暂停与恢复
-- 本地优先：项目不依赖自有云后端；模型请求由本地客户端直接发往用户配置的服务商
-- 面向长周期备考的计划、练习、错题、面试、申论与学习证据闭环
+Civil AI is not affiliated with an examination authority, question setter, or training provider. The repository contains only original demonstration material and does not bundle or license third-party question banks. Review [`LEGAL_AND_CONTENT_POLICY.md`](LEGAL_AND_CONTENT_POLICY.md) before importing, retrieving, storing, or sharing external content.
 
-## 架构
+## Why this project exists
 
-核心设计与边界见：
+Most study products optimize for question volume. Civil AI explores a different model: use deterministic learning evidence and an AI tutor together to decide what a candidate should learn, practise, review, or revisit next.
 
-- [`docs/architecture-index.md`](docs/architecture-index.md)
-- [`docs/architecture-constitution.md`](docs/architecture-constitution.md)
-- [`docs/adr-001-provider-neutral-agent-runtime.md`](docs/adr-001-provider-neutral-agent-runtime.md)
-- [`docs/adr-002-pi-agent-core-loop-engine.md`](docs/adr-002-pi-agent-core-loop-engine.md)
+The application is designed around three principles:
 
-## 开发环境
+- **Local-first ownership:** structured learning data stays on the device by default.
+- **Evidence before autonomy:** the agent can make teaching decisions, while deterministic services own scores, state transitions, validation, and persistence.
+- **Provider neutrality:** model providers are adapters, not business dependencies.
 
-- Node.js 20.19+ 或 22.12+
+## Current capabilities
+
+- Vue 3 and TypeScript mobile UI with a Capacitor iOS shell.
+- SQLite on iOS and IndexedDB as the browser development adapter.
+- Anthropic and OpenAI-compatible provider gateway with bounded retries and cancellation.
+- Agent runtime with tools, skills, checkpoints, task state, recovery, and controlled concurrency.
+- Candidate profile, target score, daily plan, practice, grading, error diagnosis, wrong-book review, essay and interview workflows.
+- Structured content generation with Markdown rendering and asynchronous enrichment.
+- Local data export, import, and deletion controls.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["Vue mobile UI"] --> APP["Application use cases"]
+    APP --> DOM["Tutor domain modules"]
+    APP --> AGENT["Agent runtime"]
+    AGENT --> TOOLS["Tool and skill registries"]
+    AGENT --> PROVIDERS["Provider gateway"]
+    DOM --> PORTS["Repository ports"]
+    PORTS --> SQLITE["SQLite on iOS"]
+    PORTS --> IDB["IndexedDB on Web"]
+    AGENT --> DOM
+```
+
+The repository separates business modules from reusable capabilities:
+
+| Area | Purpose | Reusable boundary |
+| --- | --- | --- |
+| `web/src/modules/agent` | Agent runs, leases, checkpoints, cancellation, recovery | Provider-independent run lifecycle |
+| `web/src/capabilities/ai-runtime` | Provider adapters, prompt compilation, parsing | Anthropic/OpenAI-compatible gateway |
+| `web/src/modules/content` | Structured generation and enrichment | Block-based content generation pipeline |
+| `web/src/modules/planning` | Daily and cycle planning | Deterministic planning policies |
+| `web/src/modules/mastery` | Mastery state and review priority | Evidence-based capability model |
+| `web/src/modules/evidence` | Learning observations and outcomes | Append-oriented evidence contracts |
+| `web/src/capabilities/database` | Database abstraction and migrations | SQLite/IndexedDB adapter boundary |
+| `web/src/capabilities/content-rendering` | Safe Markdown and structured blocks | Shared rendering pipeline |
+| `web/src/capabilities/web-research` | Search, fetch, normalization, network policy | Provider-neutral research tools |
+
+Start with the [architecture index](docs/architecture-index.md), then read:
+
+- [Architecture constitution](docs/architecture-constitution.md)
+- [Core business architecture](docs/core-business-architecture.md)
+- [AI service architecture](docs/ai-service-architecture.md)
+- [Provider-neutral agent runtime ADR](docs/adr-001-provider-neutral-agent-runtime.md)
+- [Pi agent loop ADR](docs/adr-002-pi-agent-core-loop-engine.md)
+- [Public roadmap](ROADMAP.md)
+
+## Quick start
+
+### Requirements
+
+- Node.js 20.19+ or 22.12+
 - npm 10+
-- iOS 构建需要 macOS、Xcode 16+ 和你自己的 Apple Developer Team
+- macOS and Xcode 16+ for iOS builds
 
 ```bash
 git clone https://github.com/zhangl1001/civil-ai.git
 cd civil-ai
-npm install
-cd web && npm install
-npm run dev
+npm ci
+npm --prefix web ci
+npm --prefix web run dev
 ```
 
-模型 API Key 只应在应用设置或本地环境中配置。不要把密钥写入源码、Issue、日志或提交记录。
+Open the local URL printed by Vite. Configure model credentials only in the application settings or local environment. Never commit credentials to source, Issues, logs, or screenshots.
 
-## 验证
+## Verification
 
-在仓库根目录运行：
+Run the complete repository gate:
 
 ```bash
 npm test
 ```
 
-也可以运行更细的检查，例如：
+Focused checks are also available:
 
 ```bash
 npm run check:architecture
 npm run check:agent-runtime
+npm run check:generation-workflow
 npm run check:web-research
 ```
 
-## iOS
+The CI workflow installs locked dependencies, audits production dependencies, and runs the same verification gate on pull requests to `main`.
+
+## iOS build and installation
 
 ```bash
 npm run ios:sync
 open ios/App/App.xcodeproj
 ```
 
-首次构建时，请在 Xcode 的 Signing & Capabilities 中选择自己的 Team，并设置唯一的 Bundle Identifier。Xcode 始终打包当前 Vue 构建产物。
+In Xcode, select your own Apple Developer Team and a unique Bundle Identifier before running on a device. The project always packages the current Vue build.
 
-OTA 打包必须显式提供公开的 HTTPS 地址：
+Public releases include a browser-ready Web bundle. An iOS IPA is not published because a development-signed IPA is limited to registered devices and contains provisioning metadata. Contributors can build an installable IPA with their own signing identity by following the [iOS installation guide](docs/upgrade-v1.2.0.md#ios-installation).
 
-```bash
-OTA_IPA_URL=https://downloads.example.org/App.ipa npm run ios:archive
-```
+## Data and model boundaries
 
-## 隐私与安全
+- API keys are stored on the user's device and must not enter the repository.
+- Model, research, voice, image, and document requests may be sent directly to the provider selected by the user.
+- Imported learning material and conversation records are stored locally by default.
+- Web research rejects localhost, private-network targets, credential-bearing URLs, and unsafe redirects.
+- AI-generated material remains identifiable and must not impersonate official or human-authored content.
 
-- API Key 保存在用户设备侧，不应进入仓库。
-- 当用户调用模型、联网研究、语音、图片或文档能力时，相关输入可能按用户选择直接发送给第三方服务商；本项目维护者不代为托管这些数据，也无法替代第三方服务商的隐私条款。
-- Web Research 会阻止 localhost、内网地址和带账号信息的 URL。
-- 导入的学习资料和会话数据默认保存在本地存储中。
-- AI 生成或整理的内容应在界面和导出场景保持可识别标记，不应冒充官方材料或人工原创内容。
-- 请勿上传国家秘密、工作秘密、未公开考试材料、他人个人信息或无权处理的内容。
-- 详细的数据边界、删除方式和部署者责任见 [`PRIVACY.md`](PRIVACY.md)。
-- 安全问题请不要创建公开 Issue，处理方式见 [`SECURITY.md`](SECURITY.md)。
+See [`PRIVACY.md`](PRIVACY.md), [`SECURITY.md`](SECURITY.md), and [`LEGAL_AND_CONTENT_POLICY.md`](LEGAL_AND_CONTENT_POLICY.md) for complete boundaries.
 
-## 参与贡献
+## Releases and upgrades
 
-欢迎提交 Issue 与 Pull Request。开始前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)。项目维护者见 [`MAINTAINERS.md`](MAINTAINERS.md)。
+- [GitHub Releases](https://github.com/zhangl1001/civil-ai/releases)
+- [Changelog](CHANGELOG.md)
+- [v1.2.0 upgrade guide](docs/upgrade-v1.2.0.md)
 
-## 许可证
+## Contributing
 
-本项目基于 [ISC License](LICENSE) 开源。
+Issues and pull requests are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and [`MAINTAINERS.md`](MAINTAINERS.md) before contributing. Security findings must be reported privately as described in [`SECURITY.md`](SECURITY.md).
+
+## License
+
+Civil AI is available under the [ISC License](LICENSE).

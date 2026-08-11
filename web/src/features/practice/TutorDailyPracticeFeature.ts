@@ -6,11 +6,13 @@ import {
 } from '@/kernel/public';
 import type { CapabilityNode } from '@/modules/curriculum/public';
 import {
+  DailyPlanReasonCode,
+  decidePreparationStrategy,
   prescribeDailyLearningLoad,
-  questionCountForDailyAction
-} from '@/modules/mastery/public';
+  targetCountForPlanItem
+} from '@/modules/planning/public';
 import type { DailyPlanAggregate, DailyPlanItemRecord } from '@/modules/planning/public';
-import { DailyPlanReasonCode } from '@/modules/mastery/public';
+import { ReviewReasonCode } from '@/modules/mastery/public';
 import { ReviewPracticeFeature } from './ReviewPracticeFeature';
 import { StructuredPracticeFeature } from './StructuredPracticeFeature';
 import { selectPriorityOrCoverageCapability } from './CapabilitySelection';
@@ -76,8 +78,7 @@ export class TutorDailyPracticeFeature {
 
     const load = prescribeDailyLearningLoad({
       availableMinutes: plan?.plan.availableMinutes ?? availableMinutesForToday(cycle.studyConstraints.weekdayMinutes, cycle.studyConstraints.weekendMinutes),
-      remainingDays: daysUntil(cycle.examCycle.examDate),
-      phase: cycle.examCycle.phase
+      strategy: decidePreparationStrategy({ remainingDays: daysUntil(cycle.examCycle.examDate) })
     });
     const requestedCount = clampCount(planItem?.targetCount ?? defaultCountFor(planItem, load));
     return {
@@ -180,18 +181,7 @@ function defaultCountFor(
   item: DailyPlanItemRecord | undefined,
   load: ReturnType<typeof prescribeDailyLearningLoad>
 ): number {
-  const action = item?.itemType === 'lecture'
-    ? 'lecture'
-    : item?.itemType === 'guided_practice'
-      ? 'guided_practice'
-      : item?.itemType === 'transfer'
-        ? 'transfer'
-        : item?.itemType === 'review'
-          ? 'review'
-          : item?.itemType === 'diagnosis'
-            ? 'repair'
-            : 'independent_practice';
-  return questionCountForDailyAction(action, item?.targetMinutes ?? 20, load);
+  return targetCountForPlanItem(item?.itemType ?? 'independent_practice', item?.targetMinutes ?? 20, load) ?? load.baselinePracticeCount;
 }
 
 function roleFor(item?: DailyPlanItemRecord) {
@@ -229,9 +219,9 @@ function planReasonLabel(reason: string): string {
     [DailyPlanReasonCode.MasteryRepairRequired]: '当前掌握出现回退，需要先补讲并修复',
     [DailyPlanReasonCode.IndependentEvidenceNeeded]: '还缺少独立作答证据',
     [DailyPlanReasonCode.TransferEvidenceNeeded]: '需要用变式题验证迁移能力',
-    [DailyPlanReasonCode.RecentPerformanceRegression]: '最近表现出现回退，需要及时复习',
-    [DailyPlanReasonCode.SpacedRetentionMaintenance]: '已到间隔复习时间',
-    [DailyPlanReasonCode.MasteryEvidenceIncomplete]: '当前掌握证据还不充分'
+    [ReviewReasonCode.RecentPerformanceRegression]: '最近表现出现回退，需要及时复习',
+    [ReviewReasonCode.SpacedRetentionMaintenance]: '已到间隔复习时间',
+    [ReviewReasonCode.MasteryEvidenceIncomplete]: '当前掌握证据还不充分'
   };
   return labels[reason] ?? '根据当前能力证据安排';
 }

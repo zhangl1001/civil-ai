@@ -85,9 +85,9 @@ import { SqliteProactiveSignalRepository } from '@/modules/proactive/adapters/Sq
 import { DeliverProactiveSignals, EvaluateProactiveSignals } from '@/modules/proactive/public';
 import { SqliteMasteryRepository } from '@/modules/mastery/adapters/SqliteMasteryRepository';
 import { createGenerationLearningContextPort } from './createGenerationLearningContextPort';
-import { BuildDailyPlanProposal, CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem } from '@/modules/mastery/public';
+import { CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem } from '@/modules/mastery/public';
 import { SqliteDailyPlanRepository } from '@/modules/planning/adapters/SqliteDailyPlanRepository';
-import { DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus } from '@/modules/planning/public';
+import { BuildDailyPlanProposal, CompleteDailyPlanItem, DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import {
   CreateLearningThread,
   StartStructuredTeaching,
@@ -362,10 +362,11 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const completeReviewQueueItem = new CompleteReviewQueueItem(unitOfWork, masteryRepository, clock);
   const failReviewQueueItem = new FailReviewQueueItem(unitOfWork, masteryRepository, clock);
   const retryReviewQueueItem = new RetryReviewQueueItem(unitOfWork, masteryRepository, clock);
-  const buildDailyPlanProposal = new BuildDailyPlanProposal(masteryRepository, clock);
+  const buildDailyPlanProposal = new BuildDailyPlanProposal(candidateRepository, masteryRepository, curriculumRepository, clock);
   const persistDailyPlanProposal = new PersistDailyPlanProposal(unitOfWork, dailyPlanRepository, clock, new UuidV7IdGenerator(clock));
   const updateDailyPlanItemStatus = new UpdateDailyPlanItemStatus(unitOfWork, dailyPlanRepository, clock);
   const rebalanceDailyPlanAfterLearning = new RebalanceDailyPlanAfterLearning(candidateRepository,dailyPlanRepository,buildDailyPlanProposal,persistDailyPlanProposal,clock);
+  const completeDailyPlanItem = new CompleteDailyPlanItem(candidateRepository, updateDailyPlanItemStatus, rebalanceDailyPlanAfterLearning);
   const runTutorAgentBatch = new RunTutorAgentBatch(
     claimAgentRuns,
     recoverExpiredAgentRuns,
@@ -531,6 +532,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     persistDailyPlanProposal,
     rebalanceDailyPlanAfterLearning,
     updateDailyPlanItemStatus,
+    completeDailyPlanItem,
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
     applyQuestionSetEnrichment,

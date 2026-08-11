@@ -32,6 +32,8 @@ import agentRunLeaseFencingSql from './031_agent_run_lease_fencing.sql?raw';
 import agentToolReceiptsSql from './032_agent_tool_receipts.sql?raw';
 import agentRunHierarchySql from './033_agent_run_hierarchy.sql?raw';
 import generationSpecAgentRunSourceSql from './034_generation_spec_agent_run_source.sql?raw';
+import adaptiveDailyPlanningSql from './035_adaptive_daily_planning.sql?raw';
+import learningDataMaintenanceSql from './036_learning_data_maintenance.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -238,5 +240,17 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'generation_spec_agent_run_source',
     checksum: 'sha256:0925442e658efb0b8ce8292ebca9809d0c62dde70c2d3b360f473ab319d07af7',
     sql: generationSpecAgentRunSourceSql
+  },
+  {
+    version: 35,
+    name: 'adaptive_daily_planning',
+    checksum: 'sha256:46d27b29492256f85314679259b19ce2a7806884862723ccb55d57368c2d74a4',
+    sql: adaptiveDailyPlanningSql
+  },
+  {
+    version: 36,
+    name: 'learning_data_maintenance',
+    checksum: 'sha256:6974418186477b633481ddec377a71f1973c135057680e2a000a364740133e5d',
+    sql: learningDataMaintenanceSql
   }
 ];

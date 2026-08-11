@@ -2,7 +2,7 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
 import type { DigestSection, DigestTab } from '@/domain/digest';
 import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
-import { prescribeDailyLearningLoad } from '@/modules/mastery/public';
+import { decidePreparationStrategy, prescribeDailyLearningLoad } from '@/modules/planning/public';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 import type { InstantMs } from '@/kernel/public';
@@ -127,7 +127,8 @@ export class DigestService {
   async enqueueGenerate(
     tab: DigestTab,
     date = today(),
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    planContext?: { readonly dailyPlanItemId: string; readonly capabilityNodeId?: string }
   ): Promise<AgentTaskEnqueueResult> {
     this.writeActiveTab(tab);
     const runtime = await initializeTutorRuntime();
@@ -138,16 +139,44 @@ export class DigestService {
       cycle.studyConstraints.weekdayMinutes,
       cycle.studyConstraints.weekendMinutes
     );
-    const [tracks, reviews] = await Promise.all([
+    const [tracks, reviews, curriculum] = await Promise.all([
       runtime.masteryRepository.listPriorityTracks(cycle.examCycle.id, 8),
-      runtime.masteryRepository.listDueReviews(cycle.examCycle.id, Date.now() as InstantMs, 8)
+      runtime.masteryRepository.listDueReviews(cycle.examCycle.id, Date.now() as InstantMs, 8),
+      runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId)
     ]);
     const learningLoad = prescribeDailyLearningLoad({
       availableMinutes,
-      remainingDays: daysUntil(cycle.examCycle.examDate),
-      phase: cycle.examCycle.phase,
+      strategy: decidePreparationStrategy({
+        remainingDays: daysUntil(cycle.examCycle.examDate),
+        dueReviewCount: reviews.length
+      }),
       dueReviewCount: reviews.length,
-      priorityTracks: tracks
+      prioritySignals: tracks.map((track) => ({
+        state: track.state,
+        accuracy: track.accuracy,
+        confidence: track.confidence
+      }))
+    });
+    const trackByCapability = new Map(tracks.map((track) => [track.capabilityNodeId, track]));
+    const focusIds = Array.from(new Set([
+      ...(planContext?.capabilityNodeId ? [planContext.capabilityNodeId] : []),
+      ...tracks.map((track) => track.capabilityNodeId)
+    ])).slice(0, 4);
+    const learningFocus = focusIds.flatMap((capabilityNodeId) => {
+      const node = curriculum?.capabilityNodes.find((candidate) => candidate.id === capabilityNodeId);
+      if (!node) return [];
+      const track = trackByCapability.get(node.id);
+      return [{
+        capabilityNodeId: node.id,
+        code: node.code,
+        name: node.name,
+        module: node.module,
+        ...(track ? {
+          masteryState: track.state,
+          accuracy: track.accuracy,
+          confidence: track.confidence
+        } : {})
+      }];
     });
     return generationTaskService.enqueue({
       idempotencyKey,
@@ -155,12 +184,32 @@ export class DigestService {
       title: TITLE_BY_TAB[tab],
       detail: tab === 'news' ? '生成今日时政热点积累' : '生成今日公考知识点积累',
       module: TITLE_BY_TAB[tab],
-      sourceId: `${tab}:${date}`,
+      sourceId: planContext?.dailyPlanItemId || `${tab}:${date}`,
       payload: {
         digestTab: tab,
         digestDate: date,
-        learningLoad
+        learningLoad,
+        learningFocus,
+        ...(planContext ? {
+          dailyPlanItemId: planContext.dailyPlanItemId,
+          capabilityNodeId: planContext.capabilityNodeId ?? null
+        } : {})
       }
+    });
+  }
+
+  async completeDailyPlanDigest(input: {
+    readonly dailyPlanItemId: string;
+    readonly tab: DigestTab;
+    readonly date: string;
+    readonly actualMinutes?: number;
+  }) {
+    const runtime = await initializeTutorRuntime();
+    return runtime.completeDailyPlanItem.execute({
+      dailyPlanItemId: input.dailyPlanItemId,
+      actualMinutes: input.actualMinutes,
+      resultSummary: { tab: input.tab, date: input.date, contentConsumed: true },
+      sourceId: `daily-digest:${input.tab}:${input.date}:completed`
     });
   }
 

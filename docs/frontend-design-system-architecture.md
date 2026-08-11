@@ -1,6 +1,6 @@
 # 前端设计系统与业务模板架构
 
-> 状态：设计完成，待实施  
+> 文档性质：公开架构参考
 > 上位约束：[Zhangl Agent 架构宪法](./architecture-constitution.md)  
 > 目标：统一字体、主题、布局、弹层、表单、状态和业务模板，同时保持不同业务语义的扩展能力。
 
@@ -453,37 +453,7 @@ src/features/
 - 可访问性：VoiceOver label、焦点顺序、44px 触控区和对比度。
 - 性能：长列表虚拟化、Markdown 缓存、图片解码和首屏查询预算。
 
-## 16. 实施顺序
-
-### UI Phase 1：基础
-
-- [ ] 整理 token：字体角色、间距、层级、状态、safe-area 和 motion。
-- [ ] 建立 Primitives 和图标语义映射。
-- [ ] 建立 AppShell 和四类 PageLayout。
-- [ ] 建立开发组件画廊和 fixture 数据。
-
-### UI Phase 2：弹层和表单
-
-- [ ] 建立 OverlayHost/Manager。
-- [ ] 收敛 Popover、Filter/Form/Action/Picker/Answer Sheet 和 Confirm/Content Dialog。
-- [ ] 建立统一 FormField 与选择器。
-- [ ] 删除页面原生 alert/confirm/select 样式依赖和重复 overlay CSS。
-
-### UI Phase 3：业务组件和题目模板
-
-- [ ] 建立 Renderer Registry、内容区域和模板 Manifest。
-- [ ] 统一实践、错题、历史和闪卡渲染。
-- [ ] 建立 Candidate/Planning/Learning/Assessment 业务组件。
-- [ ] 统一空状态、错误状态、加载和无数据展示。
-
-### UI Phase 4：Tutor Agent
-
-- [ ] 接入统一 Agent/Workflow View DTO。
-- [ ] 统一小猫状态、工具条、Task Dock、铃铛和目标跳转。
-- [ ] 保留现款有效交互并删除页面级任务推断。
-- [ ] 完成真机前后台、键盘、滚动和遮挡回归。
-
-## 17. 完成标准
+## 16. 架构符合性标准
 
 - 修改字体、主题、圆角和状态颜色只需要调整 token 或组件，不逐页修改。
 - 每种弹层都有明确业务分类，同类内容外观和行为一致。

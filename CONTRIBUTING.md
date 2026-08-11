@@ -1,27 +1,87 @@
-# Contributing
+# Contributing to Civil AI
 
-感谢你参与 Civil AI。
+Thank you for improving Civil AI. Contributions may include bug reports, documentation, tests, provider adapters, accessibility improvements, and focused product changes.
 
-## 开始之前
+## Before opening a change
 
-1. 对较大的功能或架构调整，请先创建 Issue 说明目标、用户价值和设计边界。
-2. 不要提交真实 API Key、个人学习数据、考试机构的非公开材料或无权再分发的题目。
-3. 新代码应遵守 `docs/architecture-constitution.md` 和现有模块边界。
+1. Search existing Issues and Pull Requests first.
+2. Use an Issue template for bugs, feature proposals, and documentation gaps.
+3. Discuss large features, schema changes, new providers, and architecture changes before implementation.
+4. Never submit API keys, personal learning data, signing material, non-public examination material, or content you cannot redistribute.
 
-## 本地开发
+## Development setup
 
 ```bash
-npm install
-cd web && npm install
-npm run dev
+git clone https://github.com/zhangl1001/civil-ai.git
+cd civil-ai
+npm ci
+npm --prefix web ci
+npm --prefix web run dev
 ```
 
-## Pull Request
+For iOS development:
 
-- 从 `main` 创建聚焦单一目标的分支。
-- 为行为变化增加或更新验证脚本。
-- 在提交前运行 `npm test`；如果只运行了部分检查，请在 PR 中说明。
-- 清楚描述用户影响、风险、验证结果和必要的迁移步骤。
-- 保持提交中不含生成产物、编辑器配置和本地签名材料。
+```bash
+npm run ios:sync
+open ios/App/App.xcodeproj
+```
 
-提交贡献即表示你有权按本项目的 ISC License 提供相关内容。
+Use your own Apple Developer Team and Bundle Identifier. Do not commit changes that only contain your local signing identity.
+
+## Architecture rules
+
+- Business rules belong in `web/src/modules/*`; shared technical capabilities belong in `web/src/capabilities/*`.
+- Domain and application code depend on contracts, not concrete SQLite, IndexedDB, provider, or native-plugin implementations.
+- Structured business data belongs in repositories. Agent conversation and transient tool presentation must not become business facts.
+- Model output is untrusted input. Validate render-critical structure and ownership at deterministic boundaries.
+- Agent autonomy is guided through tool and skill descriptions. Do not replace intent understanding with language-specific regular-expression routing.
+- Transactions must be short and limited to consistency-critical writes. Network and model calls never run inside a database transaction.
+- Reuse design-system, Markdown, pagination, modal, and task-state components instead of creating page-local variants.
+
+The normative documents are:
+
+- [`docs/architecture-constitution.md`](docs/architecture-constitution.md)
+- [`docs/modular-architecture-standard.md`](docs/modular-architecture-standard.md)
+- [`docs/coding-quality-standard.md`](docs/coding-quality-standard.md)
+- [`docs/frontend-design-system-architecture.md`](docs/frontend-design-system-architecture.md)
+
+## Branches and commits
+
+- Branch from the latest `main`.
+- Keep a branch focused on one Issue or one coherent maintenance goal.
+- Prefer Conventional Commit subjects such as `fix(agent): respect cancellation`.
+- Reference the Issue in the Pull Request and use `Fixes #123` only when the PR fully resolves it.
+- Do not mix generated artifacts, editor settings, signing identities, or unrelated refactors into the change.
+
+## Verification
+
+Run the complete gate before requesting review:
+
+```bash
+npm test
+```
+
+During development, run the smallest relevant checks first. Examples:
+
+```bash
+npm run check:architecture
+npm run check:generation-workflow
+npm run check:agent-runtime
+npm --prefix web run typecheck
+```
+
+For user-facing changes, include screenshots or a short recording and state which mobile viewport or iOS device was tested. If a test could not be run, explain why in the PR.
+
+## Pull Request checklist
+
+- Explain the user problem and why the selected boundary owns the fix.
+- Describe behavior changes, compatibility risks, migrations, and rollback considerations.
+- Add or update focused verification for changed behavior.
+- Confirm that no secrets, personal data, copyrighted question banks, or signing material are included.
+- Keep reviewable scope; split follow-up work into separate Issues.
+
+## Review and release
+
+Maintainers review correctness, architecture boundaries, user impact, security, accessibility, and test coverage. A merged change is included in a release only after the release gate passes and the public changelog is updated.
+
+By contributing, you confirm that you have the right to provide the contribution under the project's ISC License and agree to follow the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).

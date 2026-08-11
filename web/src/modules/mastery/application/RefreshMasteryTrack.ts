@@ -3,8 +3,7 @@ import type { CapabilityNodeId, Clock, ExamCycleId, IdGenerator } from '@/kernel
 import type { LearningEvidenceRepository } from '@/modules/evidence/public';
 import type { MasteryRepository, MasteryTrack } from '../contracts/MasteryRepository';
 import { MASTERY_ALGORITHM_VERSION, projectMastery } from '../domain/MasteryProjectionPolicy';
-import { DailyPlanReasonCode } from '../domain/DailyPlanPolicy';
-import { MasteryState, ReviewStatus, ReviewType } from '../domain/MasteryCodes';
+import { MasteryState, ReviewReasonCode, ReviewStatus, ReviewType } from '../domain/MasteryCodes';
 
 export interface RefreshMasteryTrackCommand {
   readonly examCycleId: ExamCycleId;
@@ -65,10 +64,10 @@ function nextReview(track: MasteryTrack, now: number, ids: IdGenerator) {
     priority: Math.round((1 - track.stability + (repair ? 0.5 : 0)) * 10_000) / 10_000,
     intervalDays, stabilityBefore: track.stability, status: ReviewStatus.Scheduled,
     reason: repair
-      ? DailyPlanReasonCode.RecentPerformanceRegression
+      ? ReviewReasonCode.RecentPerformanceRegression
       : stable
-        ? DailyPlanReasonCode.SpacedRetentionMaintenance
-        : DailyPlanReasonCode.MasteryEvidenceIncomplete,
+        ? ReviewReasonCode.SpacedRetentionMaintenance
+        : ReviewReasonCode.MasteryEvidenceIncomplete,
     version: 1,
     updatedAt: now as typeof track.updatedAt
   };

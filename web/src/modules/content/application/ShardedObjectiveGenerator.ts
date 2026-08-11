@@ -410,8 +410,7 @@ function shardUserMessage(
         input.shard.offset + 1,
         input.shard.offset + input.shard.count
       ],
-      requestedCount: input.shard.count,
-      variationFocus: shardVariationFocus(input.shard.index),
+      requestedCount: input.shard.count
     }),
     '只提交当前分片的 questions 和必要的 materialGroups。'
   ].join('\n');
@@ -521,16 +520,6 @@ function mergeAuthorRoots(roots: readonly JsonObject[]): JsonObject {
       Array.isArray(root.questions) ? root.questions : []
     ))
   };
-}
-
-function shardVariationFocus(index: number): string {
-  return [
-    '基础识别与核心方法',
-    '概念边界与典型干扰项',
-    '真实场景应用与方法选择',
-    '相邻知识迁移与变式辨析',
-    '综合应用与限时决策'
-  ][index % 5]!;
 }
 
 function capabilityCode(aggregate: GenerationAggregate): string {

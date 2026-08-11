@@ -1,5 +1,5 @@
 import type { RouteLocationRaw } from 'vue-router';
-import { DailyPlanItemType, type DailyPlanItemRecord } from '@/modules/planning/public';
+import { DailyPlanDigestType, DailyPlanItemType, type DailyPlanItemRecord } from '@/modules/planning/public';
 
 const PRACTICE_ITEM_TYPES = new Set<DailyPlanItemRecord['itemType']>([
   DailyPlanItemType.GuidedPractice,
@@ -24,7 +24,11 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord): RouteLocationR
     };
   }
   if (item.itemType === DailyPlanItemType.Lecture) {
-    return { path: '/vue/study/lecture', query: { ...context, start: '1' } };
+    const assetId = resultText(item.resultSummary, 'assetId') || resultText(item.resultSummary, 'resultRef');
+    return {
+      path: '/vue/study/lecture',
+      query: { ...context, ...(assetId ? { assetId } : { start: '1' }) }
+    };
   }
   if (item.itemType === DailyPlanItemType.Diagnosis) {
     return { path: '/vue/diagnosis', query: context };
@@ -35,5 +39,19 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord): RouteLocationR
   if (item.itemType === DailyPlanItemType.Essay) {
     return { path: '/vue/essay', query: { ...context, entryMode: 'tutor' } };
   }
-  return { path: '/vue/digest', query: { ...context, tab: 'tips' } };
+  return {
+    path: '/vue/digest',
+    query: {
+      ...context,
+      tab: item.exitCriteria.digestTab === DailyPlanDigestType.CurrentAffairs
+        ? DailyPlanDigestType.CurrentAffairs
+        : DailyPlanDigestType.KnowledgeTips,
+      start: '1'
+    }
+  };
+}
+
+function resultText(value: DailyPlanItemRecord['resultSummary'], field: string): string | undefined {
+  const candidate = value?.[field];
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }

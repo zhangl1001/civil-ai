@@ -34,6 +34,28 @@ export const DailyPlanItemType = {
 
 export type DailyPlanItemType = typeof DailyPlanItemType[keyof typeof DailyPlanItemType];
 
+export const DailyPlanDigestType = {
+  CurrentAffairs: 'news',
+  KnowledgeTips: 'tips'
+} as const;
+
+export type DailyPlanDigestType = typeof DailyPlanDigestType[keyof typeof DailyPlanDigestType];
+
+export const DailyPlanItemCategory = {
+  Learn: 'learn',
+  Practice: 'practice',
+  Review: 'review',
+  Assess: 'assess',
+  Accumulate: 'accumulate'
+} as const;
+
+export type DailyPlanItemCategory = typeof DailyPlanItemCategory[keyof typeof DailyPlanItemCategory];
+
+export function isDailyPlanItemCategory(value: unknown): value is DailyPlanItemCategory {
+  return typeof value === 'string'
+    && Object.values(DailyPlanItemCategory).includes(value as DailyPlanItemCategory);
+}
+
 export const DailyPlanRebalanceReason = {
   LearningResult: 'learning_result',
   UserRequested: 'user_requested',

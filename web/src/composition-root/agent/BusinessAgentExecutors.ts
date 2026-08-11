@@ -2,103 +2,28 @@ import { buildCompanionChatPrompt } from '@/ai/prompts';
 import { buildEssayRepairPrompt, validateEssayQuestion } from '@/ai/QuestionValidation';
 import { BusinessTutorPromptCode, parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
-import { abortableDelay, mapWithAbortableConcurrency, type JsonObject } from '@/kernel/public';
+import { abortableDelay, mapWithAbortableConcurrency } from '@/kernel/public';
 import type { DigestTab } from '@/domain/digest';
 import { aiChatRepository } from '@/services/AIChatRepository';
-import { webResearchService } from '@/services/WebResearchService'; import { buildDailyDigestRequest } from '@/services/DailyDigestGenerationPolicy';
+import { buildDailyDigestRequest } from '@/services/DailyDigestGenerationPolicy';
+import { webResearchService } from '@/services/WebResearchService';
 import type { EssayQuestionRecord } from '@/services/EssayRepository';
-import type { AITextMessage, AITextRequestOptions } from '../ai/ConfiguredAIClient';
-import { LearningAssetKind, type LearningAssetKind as LearningAssetKindCode } from '@/modules/content/public';
-export type BusinessAgentTaskType =
-  | 'chat'
-  | 'generate'
-  | 'grade'
-  | 'digest'
-  | 'study'
-  | 'mock'
-  | 'redo'
-  | 'interview'
-  | 'research';
-
-export interface BusinessAgentTask {
-  readonly id: string;
-  readonly type: BusinessAgentTaskType;
-  readonly detail?: string;
-  readonly payload: Record<string, unknown>;
-}
-
-export interface BusinessAgentExecutionContext {
-  readonly signal: AbortSignal;
-  compilePrompt(
-    promptCode: string,
-    payload: Record<string, unknown>
-  ): { readonly system: string; readonly user: string; readonly responseSchema: JsonObject };
-  update(progress: number, progressText?: string): Promise<void>;
-  log(message: string): Promise<void>;
-  setResult(result: {
-    readonly resultRef?: string;
-    readonly payload?: Record<string, unknown>;
-  }): Promise<void>;
-  complete(
-    messages: readonly AITextMessage[],
-    options?: AITextRequestOptions
-  ): Promise<string>;
-  stream(
-    messages: readonly AITextMessage[],
-    onDelta: (delta: string) => void | Promise<void>,
-    options?: AITextRequestOptions
-  ): Promise<string>;
-  generatePractice(input: {
-    readonly module: string;
-    readonly knowledgePoint?: string;
-    readonly requestedCount: number;
-    readonly difficultyMin: number;
-    readonly difficultyMax: number;
-    readonly purpose: string;
-    readonly review: boolean;
-    readonly capabilityIndex?: number;
-  }): Promise<{
-    readonly questionSetId: string;
-    readonly learningThreadId: string;
-    readonly capabilityNodeId: string;
-    readonly capabilityCode: string;
-  }>;
-  saveLearningAsset(input: {
-    readonly kind: LearningAssetKindCode;
-    readonly businessKey: string;
-    readonly title: string;
-    readonly payload: Record<string, unknown>;
-  }): Promise<{ readonly id: string; readonly version: number }>;
-  findLatestLearningAsset(input: {
-    readonly kind: LearningAssetKindCode;
-    readonly businessKey: string;
-  }): Promise<{ readonly id: string; readonly payload: Record<string, unknown> } | undefined>;
-  listLearningAssets(input: {
-    readonly kinds: readonly LearningAssetKindCode[];
-    readonly limit: number;
-  }): Promise<readonly {
-    readonly id: string;
-    readonly businessKey: string;
-    readonly title: string;
-    readonly payload: Record<string, unknown>;
-    readonly createdAt: number;
-  }[]>;
-  recordSubjectiveAssessment(input: {
-    readonly sourceAssetId: string;
-    readonly rubricVersion: string;
-    readonly dimensions: readonly {
-      readonly capabilityCode: string;
-      readonly score: number;
-      readonly confidence: number;
-      readonly metadata: Record<string, unknown>;
-    }[];
-  }): Promise<void>;
-}
-
-export type BusinessAgentExecutor = (
-  task: BusinessAgentTask,
-  context: BusinessAgentExecutionContext
-) => Promise<void>;
+import type { AITextMessage } from '../ai/ConfiguredAIClient';
+import {
+  GenerationVariationKind,
+  LearningAssetKind
+} from '@/modules/content/public';
+import { completeFreshGeneratedContent, learningAssetReferences } from './FreshGeneratedContent';
+import type {
+  BusinessAgentExecutionContext,
+  BusinessAgentExecutor
+} from './BusinessAgentContracts';
+export type {
+  BusinessAgentExecutionContext,
+  BusinessAgentExecutor,
+  BusinessAgentTask,
+  BusinessAgentTaskType
+} from './BusinessAgentContracts';
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -114,12 +39,12 @@ function essayBusinessKey(input: { date: string; topic: string; type: string }):
   return `essay:${input.date}:${input.topic}:${input.type}`;
 }
 
-function interviewBusinessKey(sessionId: string): string {
-  return `interview:${sessionId}`;
-}
-
 function digestBusinessKey(tab: DigestTab, date: string): string {
   return `digest:${tab}:${date}`;
+}
+
+function interviewBusinessKey(sessionId: string): string {
+  return `interview:${sessionId}`;
 }
 
 function buildEssayJsonRewritePrompt(rawText: string, issues: string[]): string {
@@ -584,15 +509,24 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
     const essayQuestionCount = Math.max(1, Math.min(3, Number(task.payload?.essayQuestionCount || 1)));
     const date = asString(task.payload?.date) || new Date().toISOString().slice(0, 10);
     await context.update(20, '生成申论材料');
-    const prompt = context.compilePrompt(BusinessTutorPromptCode.EssayGeneration, {
-      topic: essayTopic,
-      type: essayType,
-      questionCount: essayType === 'long' ? 1 : essayQuestionCount
+    const recentEssayAssets = await context.listLearningAssets({
+      kinds: [LearningAssetKind.EssayQuestion],
+      limit: 16
     });
-    const text = await context.complete([
-      { role: 'system', content: prompt.system },
-      { role: 'user', content: prompt.user }
-    ], { temperature: 0.3, responseSchema: prompt.responseSchema });
+    const text = await completeFreshGeneratedContent({
+      context,
+      promptCode: BusinessTutorPromptCode.EssayGeneration,
+      payload: {
+        topic: essayTopic,
+        type: essayType,
+        questionCount: essayType === 'long' ? 1 : essayQuestionCount
+      },
+      variationKind: GenerationVariationKind.EssayQuestion,
+      seed: `${task.id}:${essayTopic}:${essayType}`,
+      recentItems: learningAssetReferences(recentEssayAssets),
+      options: { temperature: 0.42 },
+      structured: true
+    });
     await context.update(72, '解析申论题目');
     const question = await parseOrRepairEssayQuestion(text, context);
     const saved = await context.saveLearningAsset({
@@ -712,7 +646,7 @@ export const digestExecutor: BusinessAgentExecutor = async (task, context) => {
     await context.update(18, '读取月度热点');
     const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
     const assets = await context.listLearningAssets({
-      kinds: [LearningAssetKind.DigestDaily],
+      kinds: [LearningAssetKind.DigestDaily, LearningAssetKind.DigestMonthly],
       limit: 120
     });
     const items = assets
@@ -723,14 +657,21 @@ export const digestExecutor: BusinessAgentExecutor = async (task, context) => {
       `${index + 1}. [${asString(item.date)}] ${asString(item.content).slice(0, 800)}`
     )).join('\n');
     await context.update(42, '生成月度复盘');
-    const prompt = context.compilePrompt(BusinessTutorPromptCode.MonthlyDigest, {
-      month: monthLabel,
-      dailyDigestItems: briefing
+    const result = await completeFreshGeneratedContent({
+      context,
+      promptCode: BusinessTutorPromptCode.MonthlyDigest,
+      payload: {
+        month: monthLabel,
+        dailyDigestItems: briefing
+      },
+      variationKind: GenerationVariationKind.MonthlyDigest,
+      seed: `${task.id}:${monthPrefix}`,
+      recentItems: learningAssetReferences(
+        assets.filter((asset) => asset.businessKey.startsWith('digest:monthly:')),
+        6
+      ),
+      options: { temperature: 0.35 }
     });
-    const result = await context.complete([
-      { role: 'system', content: prompt.system },
-      { role: 'user', content: prompt.user }
-    ]);
     await context.update(82, '写入 AI 月报');
     const saved = await context.saveLearningAsset({
       kind: LearningAssetKind.DigestMonthly,
@@ -745,24 +686,36 @@ export const digestExecutor: BusinessAgentExecutor = async (task, context) => {
   const tab: DigestTab = task.payload?.digestTab === 'tips' ? 'tips' : 'news';
   const date = asString(task.payload?.digestDate) || new Date().toISOString().slice(0, 10);
   const learningLoad = asRecord(task.payload?.learningLoad);
-  const research = tab === 'news'
-    ? await collectDailyDigestResearch(date, context)
-    : undefined;
-  await context.update(research ? 42 : 24, tab === 'news' ? '整理时政热点' : '生成知识点积累');
-  const prompt = context.compilePrompt(BusinessTutorPromptCode.DailyDigest, {
-    date,
-    type: tab,
-    request: buildDailyDigestRequest(tab, task.detail, learningLoad),
-    ...(research ? {
-      webSearchQuery: research.query,
-      webEvidence: research.evidence,
-      evidenceRule: '只能使用 webEvidence 支持时效性事实；正文用 [来源1] 形式标注，并在末尾列出来源标题和 URL。'
-    } : {})
-  });
-  const result = await context.complete([
-    { role: 'system', content: prompt.system },
-    { role: 'user', content: prompt.user }
+  const [recentAssets, research] = await Promise.all([
+    context.listLearningAssets({ kinds: [LearningAssetKind.DigestDaily], limit: 40 }),
+    tab === 'news' ? collectDailyDigestResearch(date, context) : Promise.resolve(undefined)
   ]);
+  const recentItems = learningAssetReferences(
+    recentAssets.filter((asset) => asString(asset.payload.tab) === tab),
+    12
+  );
+  await context.update(research ? 42 : 24, tab === 'news' ? '整理时政热点' : '生成知识点积累');
+  const result = await completeFreshGeneratedContent({
+    context,
+    promptCode: BusinessTutorPromptCode.DailyDigest,
+    payload: {
+      date,
+      type: tab,
+      request: buildDailyDigestRequest(tab, task.detail, learningLoad),
+      learningFocus: task.payload?.learningFocus ?? null,
+      ...(research ? {
+        webSearchQuery: research.query,
+        webEvidence: research.evidence,
+        evidenceRule: '只能使用 webEvidence 支持时效性事实；正文用 [来源1] 形式标注，并在末尾列出来源标题和 URL。'
+      } : {})
+    },
+    variationKind: tab === 'news'
+      ? GenerationVariationKind.DailyNews
+      : GenerationVariationKind.DailyKnowledge,
+    seed: `${task.id}:${tab}:${date}`,
+    recentItems,
+    options: { temperature: tab === 'news' ? 0.35 : 0.58 }
+  });
   await context.update(82, '保存每日积累');
   const saved = await context.saveLearningAsset({
     kind: LearningAssetKind.DigestDaily,
@@ -805,15 +758,19 @@ export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
   const module = asString(task.payload?.module) || '公考';
   const userRequest = asString(task.payload?.prompt) || `请系统讲解公考${module}考点「${topic}」。`;
   await context.update(18, '整理考点上下文');
-  const prompt = context.compilePrompt(BusinessTutorPromptCode.StudyLecture, {
-    module,
-    topic,
-    request: userRequest
+  const recentAssets = await context.listLearningAssets({
+    kinds: [LearningAssetKind.StudyLecture],
+    limit: 24
   });
-  const result = await context.complete([
-    { role: 'system', content: prompt.system },
-    { role: 'user', content: prompt.user }
-  ]);
+  const result = await completeFreshGeneratedContent({
+    context,
+    promptCode: BusinessTutorPromptCode.StudyLecture,
+    payload: { module, topic, request: userRequest },
+    variationKind: GenerationVariationKind.StudyLecture,
+    seed: `${task.id}:${module}:${topic}`,
+    recentItems: learningAssetReferences(recentAssets),
+    options: { temperature: 0.55 }
+  });
   await context.update(82, '生成精讲内容');
   const saved = await context.saveLearningAsset({
     kind: LearningAssetKind.StudyLecture,

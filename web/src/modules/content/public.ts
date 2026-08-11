@@ -53,6 +53,13 @@ export {
   ContentEnrichmentKind,
   type ContentEnrichmentKind as ContentEnrichmentKindCode
 } from './domain/ContentEnrichmentCodes';
+export {
+  GenerationVariationKind,
+  buildGenerationVariationContext,
+  isNearDuplicateGeneratedContent,
+  type GenerationVariationKind as GenerationVariationKindCode,
+  type RecentGeneratedContent
+} from './application/GenerationVariationPolicy';
 export type {
   CommittedQuestionSetBundle,
   ContentDocumentRecord,

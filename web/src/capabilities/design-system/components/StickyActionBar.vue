@@ -1,8 +1,16 @@
 <template>
-  <footer class="sticky-action-bar">
+  <footer :class="['sticky-action-bar', { 'avoid-bottom-nav': avoidBottomNav }]">
     <slot></slot>
   </footer>
 </template>
+
+<script setup lang="ts">
+withDefaults(defineProps<{
+  avoidBottomNav?: boolean;
+}>(), {
+  avoidBottomNav: false
+});
+</script>
 
 <style scoped>
 .sticky-action-bar {
@@ -14,6 +22,11 @@
   padding: 10px var(--page-x) calc(10px + var(--app-safe-bottom));
   background: var(--surface-header);
   box-shadow: 0 -10px 24px rgba(28, 38, 58, .05);
+}
+
+.sticky-action-bar.avoid-bottom-nav {
+  margin-bottom: var(--app-bottom-nav-reserved);
+  padding-bottom: 10px;
 }
 
 .sticky-action-bar :deep(button) {

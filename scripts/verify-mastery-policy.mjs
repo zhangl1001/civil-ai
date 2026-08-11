@@ -39,13 +39,50 @@ try {
     evidence: Array.from({ length: 8 }, (_, index) => evidence(`error:${index}`, 0))
   });
   assert.equal(regressed.state, 'regressed');
-  const plan = mastery.proposeDailyPlan({
+  const planning = await server.ssrLoadModule('/src/modules/planning/public.ts');
+  const strategy = planning.decidePreparationStrategy({
+    remainingDays: 120,
+    averageScoreGapRatio: 0.3,
+    curriculumCoverageRatio: 0.2,
+    dueReviewCount: 1
+  });
+  const plan = planning.proposeDailyPlan({
     examCycleId: 'cycle:1', availableMinutes: 35,
     dueReviews: [{ id: 'review:1', examCycleId: 'cycle:1', capabilityNodeId: 'node:review', masteryTrackId: 'track:1', reviewType: 'retention', dueAt: now, priority: 1, intervalDays: 1, stabilityBefore: 0.3, status: 'scheduled', reason: 'spaced_retention_maintenance', updatedAt: now }],
-    priorityTracks: [{ id: 'track:2', examCycleId: 'cycle:1', capabilityNodeId: 'node:weak', state: 'regressed', concept: 0, recognition: 0, method: 0, accuracy: 0.2, speed: 0, retention: 0, transfer: 0, stability: 0.1, confidence: 0.6, effectiveSample: 8, lastStateChangeAt: now, algorithmVersion: 'test:v1', version: 1, createdAt: now, updatedAt: now }]
+    strategy,
+    prioritySignals: [
+      { capabilityNodeId: 'node:review', subject: 'aptitude', module: '判断推理', name: '复习节点', scoreWeight: 0.1, scoreGapRatio: 0.3, state: 'maintaining', accuracy: 0.8, speed: 0.7, retention: 0.5, transfer: 0.5, stability: 0.5, confidence: 0.7, effectiveSample: 8 },
+      { capabilityNodeId: 'node:weak', subject: 'aptitude', module: '判断推理', name: '薄弱节点', scoreWeight: 0.2, scoreGapRatio: 0.3, state: 'regressed', accuracy: 0.2, speed: 0, retention: 0, transfer: 0, stability: 0.1, confidence: 0.6, effectiveSample: 8 }
+    ],
+    coverageCandidates: [],
+    currentAffairsCapability: {
+      capabilityNodeId: 'node:current-affairs', subject: 'aptitude', module: 'common_sense',
+      name: '政治与经济常识', scoreWeight: 0.025, scoreGapRatio: 0.3
+    }
   });
   assert.equal(plan.items[0].action, 'review');
   assert.ok(plan.plannedMinutes <= 35);
+  const digestItem = plan.items.find((item) => item.action === 'digest');
+  assert.ok(digestItem);
+  assert.equal(digestItem.category, 'accumulate');
+  assert.equal(digestItem.completionCriteria.digestTab, 'news');
+  assert.equal(digestItem.targetCount, plan.learningLoad.digest.targetThemes);
+  const sprintStrategy = planning.decidePreparationStrategy({
+    remainingDays: 30,
+    averageScoreGapRatio: 0.3,
+    curriculumCoverageRatio: 0.2,
+    dueReviewCount: 1
+  });
+  const extendedStrategy = planning.decidePreparationStrategy({
+    remainingDays: 300,
+    averageScoreGapRatio: 0.3,
+    curriculumCoverageRatio: 0.2,
+    dueReviewCount: 1
+  });
+  assert.equal(sprintStrategy.horizon, 'sprint');
+  assert.equal(extendedStrategy.horizon, 'extended');
+  assert.ok(extendedStrategy.maximumNewCapabilities > sprintStrategy.maximumNewCapabilities);
+  assert.ok(sprintStrategy.timedPracticeRatio > extendedStrategy.timedPracticeRatio);
 
   const unitOfWork = { async run(work) { return work({}); } };
   const reviewStore = new Map();
@@ -83,7 +120,6 @@ try {
   assert.equal(completed.status, 'completed');
   assert.ok(completed.completedAt);
 
-  const planning = await server.ssrLoadModule('/src/modules/planning/public.ts');
   const planItems = new Map([['review:state', {
     id: 'plan-item:1', dailyPlanId: 'plan:1', capabilityNodeId: 'node:review', reviewQueueItemId: 'review:state',
     itemType: 'review', sequence: 1, targetMinutes: 12, targetCount: 4, exitCriteria: {}, reason: 'review_due',
@@ -131,9 +167,13 @@ try {
       phase: 'foundation', availableMinutes: 35, decisionSummary: 'initial', decisionFactors: {},
       createdBy: 'system', createdAt: now
     },
+    blocks: [{
+      id: 'block:1', dailyPlanId: 'daily:1', capabilityNodeId: 'node:review', subject: 'aptitude',
+      module: '判断推理', teachingGoalCode: 'retention_maintenance', sequence: 1, priority: 80, required: true
+    }],
     items: [
-      { ...finishedPlanItem, id: 'done:1', dailyPlanId: 'daily:1', reviewQueueItemId: undefined },
-      { ...finishedPlanItem, id: 'pending:1', dailyPlanId: 'daily:1', status: 'pending', actualMinutes: 0, finishedAt: undefined }
+      { ...finishedPlanItem, id: 'done:1', dailyPlanId: 'daily:1', dailyPlanBlockId: 'block:1', category: 'review', priority: 80, required: true, dependencyIds: [], reviewQueueItemId: undefined },
+      { ...finishedPlanItem, id: 'pending:1', dailyPlanId: 'daily:1', dailyPlanBlockId: 'block:1', category: 'review', priority: 80, required: true, dependencyIds: [], status: 'pending', actualMinutes: 0, finishedAt: undefined }
     ]
   };
   const replanRepository = {
@@ -161,9 +201,18 @@ try {
         return {
           examCycleId,
           availableMinutes,
-          plannedMinutes: 12,
-          items: [{ capabilityNodeId: 'node:next', action: 'review', targetMinutes: 12, reasonCode: 'latest_evidence' }],
-          rationale: ['根据最新作答结果调整剩余安排。']
+          plannedMinutes: 24,
+          blocks: [
+            { key: 'block:duplicate', capabilityNodeId: 'node:review', subject: 'aptitude', module: '判断推理', teachingGoalCode: 'retention_maintenance', sequence: 1, priority: 90, required: true },
+            { key: 'block:next', capabilityNodeId: 'node:next', subject: 'aptitude', module: '判断推理', teachingGoalCode: 'retention_maintenance', sequence: 2, priority: 80, required: true }
+          ],
+          items: [
+            { key: 'item:duplicate', blockKey: 'block:duplicate', capabilityNodeId: 'node:review', category: 'review', action: 'review', targetMinutes: 12, targetCount: 4, priority: 90, required: true, dependencyKeys: [], completionCriteria: { event: 'practice_submitted', targetCount: 4 }, reasonCode: 'duplicate_action' },
+            { key: 'item:next', blockKey: 'block:next', capabilityNodeId: 'node:next', category: 'review', action: 'review', targetMinutes: 12, targetCount: 4, priority: 80, required: true, dependencyKeys: [], completionCriteria: { event: 'practice_submitted', targetCount: 4 }, reasonCode: 'latest_evidence' }
+          ],
+          rationaleCodes: ['reviews_first'],
+          strategy,
+          learningLoad: plan.learningLoad
         };
       }
     },
@@ -178,7 +227,31 @@ try {
   assert.equal(rebalanced.plan.version, 2);
   assert.equal(rebalanced.items[0].status, 'completed');
   assert.equal(rebalanced.items[1].capabilityNodeId, 'node:next');
+  assert.equal(rebalanced.items.length, 2);
   assert.equal(rebalanced.plan.decisionFactors.rebalanceReason, 'learning_result');
+
+  let completionRebalanced = false;
+  const completeDailyPlanItem = new planning.CompleteDailyPlanItem(
+    { async findCurrentCycle() { return { examCycle: { id: 'cycle:1' } }; } },
+    {
+      async execute(command) {
+        assert.equal(command.status, 'completed');
+        return { ...finishedPlanItem, id: command.dailyPlanItemId, status: command.status };
+      }
+    },
+    {
+      async execute(command) {
+        assert.equal(command.reason, 'learning_result');
+        completionRebalanced = true;
+      }
+    }
+  );
+  const completedLecture = await completeDailyPlanItem.execute({
+    dailyPlanItemId: 'lecture:1',
+    resultSummary: { assetId: 'asset:1' }
+  });
+  assert.equal(completedLecture.status, 'completed');
+  assert.equal(completionRebalanced, true);
 
   const proactive = await server.ssrLoadModule('/src/modules/proactive/public.ts');
   const preferences = {
