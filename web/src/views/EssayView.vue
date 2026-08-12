@@ -623,15 +623,11 @@ function formatTime(time: number): string {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 18px;
   padding-bottom: 10px;
 }
 .lecture-section {
-  padding: 13px;
-  border-radius: var(--radius-card);
-  background: var(--surface-card-strong);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-card);
+  padding: 2px 0 0;
 }
 .lecture-head {
   display: flex;
@@ -658,16 +654,14 @@ function formatTime(time: number): string {
 .lecture-grid {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
+  margin-top: 14px;
 }
 .lecture-grid article {
-  padding: 11px 12px;
-  border-radius: var(--radius-inset);
+  padding: 13px 0;
+  border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 7px;
-  background: var(--surface-muted);
 }
 .lecture-grid strong {
   color: var(--text-secondary-color);
@@ -696,11 +690,7 @@ function formatTime(time: number): string {
 }
 .question-section {
   margin: 0;
-  padding: 13px 14px;
-  border-radius: var(--radius-card);
-  background: var(--surface-card-strong);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-card);
+  padding: 2px 0 0;
 }
 .question-meta {
   display: flex;
@@ -736,10 +726,9 @@ function formatTime(time: number): string {
 }
 .material-block,
 .requirement-block {
-  margin-top: 10px;
-  padding: 12px;
-  border-radius: var(--radius-inset);
-  background: var(--surface-muted);
+  margin-top: 14px;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border-subtle);
 }
 .material-block strong,
 .requirement-block strong {
@@ -760,9 +749,7 @@ function formatTime(time: number): string {
   line-height: 1.78;
 }
 .material-block p + p {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px dashed var(--border-control);
+  margin-top: 12px;
 }
 .requirement-block ol {
   margin: 0;
@@ -807,9 +794,8 @@ function formatTime(time: number): string {
   font-weight: var(--type-weight-semibold);
 }
 .attempt-preview-answer {
-  padding: 12px;
-  border-radius: var(--radius-inset);
-  background: var(--surface-muted);
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-subtle);
 }
 .attempt-preview-answer strong {
   display: block;
