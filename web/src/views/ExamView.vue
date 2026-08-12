@@ -264,7 +264,7 @@ async function startExam() {
       tags: selectedTags.value,
       essayType: essayType.value
     });
-    notice.value = result.reused ? '已有相同模考任务在执行，已为你打开对应页面。' : '模考任务已加入执行队列。';
+    notice.value = result.reused ? '已有相同模考任务在执行，可在任务栏查看进度。' : '模考任务已加入执行队列。';
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '模考任务派发失败';
   } finally {

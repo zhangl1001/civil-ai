@@ -6,7 +6,11 @@ import {
   type LearningAssetRecord
 } from '@/modules/content/public';
 import type { EssayContext } from './EssayFlowService';
-import { essayQuestionSetBusinessKey, normalizeEssayQuestionSetMode } from '@/domain/essayQuestionSet';
+import {
+  essayQuestionSetBusinessKey,
+  normalizeEssayQuestionSetMode,
+  normalizeEssayQuestionSetPurpose
+} from '@/domain/essayQuestionSet';
 
 export interface EssayQuestionRecord {
   id: string;
@@ -55,18 +59,26 @@ export interface EssayLocalState {
   updatedAt: number;
 }
 
-export interface EssayStateHistoryItem {
+export interface EssayQuestionSetSummary {
   key: string;
   context: EssayContext;
-  state: EssayLocalState;
+  question: EssayQuestionRecord | null;
+  updatedAt: number;
 }
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function normalizeContext(context?: EssayContext): EssayContext {
-  return context ?? { date: today(), topic: '申论', type: 'short' };
+function normalizeContext(context: EssayContext): EssayContext {
+  const questionSetId = context.questionSetId.trim();
+  if (!questionSetId) throw new TypeError('Essay repository requires questionSetId');
+  return {
+    ...context,
+    questionSetId,
+    entryMode: normalizeEssayQuestionSetMode(context.entryMode),
+    purpose: normalizeEssayQuestionSetPurpose(context.purpose, context.entryMode)
+  };
 }
 
 function businessKey(context: EssayContext): string {
@@ -112,7 +124,7 @@ function historyFromAsset(asset: LearningAssetRecord): EssayHistoryRecord | unde
 export class EssayRepository {
   constructor(private readonly runtimeProvider: () => Promise<TutorDatabaseRuntime> = defaultRuntimeProvider) {}
 
-  async getState(context?: EssayContext): Promise<EssayLocalState> {
+  async getState(context: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
     const key = businessKey(normalized);
     const { runtime, examCycleId } = await this.activeCycle();
@@ -140,7 +152,7 @@ export class EssayRepository {
     };
   }
 
-  async saveDraft(draft: string, context?: EssayContext): Promise<EssayLocalState> {
+  async saveDraft(draft: string, context: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
     const { runtime, examCycleId } = await this.activeCycle();
     await runtime.learningAssetStore.saveDraft({
@@ -153,7 +165,7 @@ export class EssayRepository {
     return this.getState(normalized);
   }
 
-  async saveQuestion(question: EssayQuestionRecord, context?: EssayContext): Promise<EssayLocalState> {
+  async saveQuestion(question: EssayQuestionRecord, context: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
     const { runtime, examCycleId } = await this.activeCycle();
     await runtime.learningAssetStore.save({
@@ -174,12 +186,12 @@ export class EssayRepository {
   async saveFeedback(
     content: string,
     feedback: string,
-    structured?: {
+    structured: {
       score?: number;
       dimensions?: EssayFeedbackDimension[];
       suggestions?: string[];
-    },
-    context?: EssayContext
+    } | undefined,
+    context: EssayContext
   ): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
     const current = await this.getState(normalized);
@@ -205,11 +217,11 @@ export class EssayRepository {
     return this.getState(normalized);
   }
 
-  async resetDraft(context?: EssayContext): Promise<EssayLocalState> {
+  async resetDraft(context: EssayContext): Promise<EssayLocalState> {
     return this.saveDraft('', context);
   }
 
-  async deleteState(context?: EssayContext): Promise<EssayLocalState> {
+  async deleteState(context: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
     const { runtime, examCycleId } = await this.activeCycle();
     await Promise.all([
@@ -220,7 +232,7 @@ export class EssayRepository {
     return this.getState(normalized);
   }
 
-  async listStates(): Promise<EssayStateHistoryItem[]> {
+  async listStates(): Promise<EssayQuestionSetSummary[]> {
     const { runtime, examCycleId } = await this.activeCycle();
     const assets = await runtime.learningAssetStore.list({
       examCycleId,
@@ -242,21 +254,17 @@ export class EssayRepository {
         date: typeof record.date === 'string' ? record.date : today(),
         topic: typeof record.topic === 'string' ? record.topic : '申论',
         type: record.type === 'long' ? 'long' : 'short',
-        entryMode: normalizeEssayQuestionSetMode(record.entryMode)
+        entryMode: normalizeEssayQuestionSetMode(record.entryMode),
+        purpose: normalizeEssayQuestionSetPurpose(record.purpose, record.entryMode)
       };
       return {
         key: asset.businessKey,
         context: itemContext,
-        state: {
-          question: asQuestion(asset.payload.question),
-          draft: '',
-          feedback: null,
-          history: [],
-          updatedAt: asset.updatedAt
-        }
+        question: asQuestion(asset.payload.question),
+        updatedAt: asset.updatedAt
       };
     });
-    return items.sort((left, right) => right.state.updatedAt - left.state.updatedAt);
+    return items.sort((left, right) => right.updatedAt - left.updatedAt);
   }
 
   private async activeCycle(): Promise<{ runtime: TutorDatabaseRuntime; examCycleId: ExamCycleId }> {

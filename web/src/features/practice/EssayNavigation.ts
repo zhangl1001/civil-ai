@@ -1,5 +1,10 @@
 import type { RouteLocationRaw } from 'vue-router';
-import { normalizeEssayQuestionSetMode, type EssayQuestionSetMode } from '@/domain/essayQuestionSet';
+import {
+  normalizeEssayQuestionSetMode,
+  normalizeEssayQuestionSetPurpose,
+  type EssayQuestionSetMode,
+  type EssayQuestionSetPurpose
+} from '@/domain/essayQuestionSet';
 
 export interface EssayQuestionSetRouteTarget {
   readonly questionSetId: string;
@@ -7,6 +12,7 @@ export interface EssayQuestionSetRouteTarget {
   readonly date: string;
   readonly topic: string;
   readonly type: 'short' | 'long';
+  readonly purpose?: EssayQuestionSetPurpose;
 }
 
 export interface EssayHistoryRouteTarget {
@@ -16,6 +22,7 @@ export interface EssayHistoryRouteTarget {
   readonly essayTopic?: string;
   readonly title: string;
   readonly essayType?: 'short' | 'long';
+  readonly essayPurpose?: EssayQuestionSetPurpose;
 }
 
 export function essayCenterLocation(entryMode: EssayQuestionSetMode = 'tutor'): RouteLocationRaw {
@@ -35,7 +42,8 @@ export function essayQuestionSetLocation(target: EssayQuestionSetRouteTarget): R
       entryMode: normalizeEssayQuestionSetMode(target.entryMode),
       date: target.date,
       topic: target.topic,
-      type: target.type
+      type: target.type,
+      purpose: normalizeEssayQuestionSetPurpose(target.purpose, target.entryMode)
     }
   };
 }
@@ -47,7 +55,8 @@ export function essayHistoryLocation(target: EssayHistoryRouteTarget): RouteLoca
     entryMode: target.essayEntryMode,
     date: target.date,
     topic: target.essayTopic || target.title,
-    type: target.essayType || 'short'
+    type: target.essayType || 'short',
+    purpose: target.essayPurpose
   });
 }
 
@@ -60,7 +69,8 @@ export function essayQuestionSetTargetFromQuery(query: Readonly<Record<string, u
     entryMode: normalizeEssayQuestionSetMode(text(query.entryMode) || text(query.mode)),
     date: text(query.date) || localDate(),
     topic,
-    type: text(query.type) === 'long' ? 'long' : 'short'
+    type: text(query.type) === 'long' ? 'long' : 'short',
+    purpose: normalizeEssayQuestionSetPurpose(text(query.purpose), text(query.entryMode) || text(query.mode))
   };
 }
 

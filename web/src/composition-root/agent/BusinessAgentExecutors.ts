@@ -8,7 +8,11 @@ import { aiChatRepository } from '@/services/AIChatRepository';
 import { buildDailyDigestRequest } from '@/services/DailyDigestGenerationPolicy';
 import { webResearchService } from '@/services/WebResearchService';
 import type { EssayQuestionRecord } from '@/services/EssayRepository';
-import { essayQuestionSetBusinessKey, normalizeEssayQuestionSetMode } from '@/domain/essayQuestionSet';
+import {
+  essayQuestionSetBusinessKey,
+  normalizeEssayQuestionSetMode,
+  normalizeEssayQuestionSetPurpose
+} from '@/domain/essayQuestionSet';
 import type { AITextMessage } from '../ai/ConfiguredAIClient';
 import {
   GenerationVariationKind,
@@ -273,12 +277,16 @@ export const chatExecutor: BusinessAgentExecutor = async (task, context) => {
 export const essayGradeExecutor: BusinessAgentExecutor = async (task, context) => {
   const content = asString(task.payload?.content);
   if (!content.trim()) throw new Error('申论批改任务缺少作答内容');
+  const questionSetId = asString(task.payload?.questionSetId).trim();
+  if (!questionSetId) throw new Error('申论批改任务缺少题组标识');
+  const entryMode = normalizeEssayQuestionSetMode(task.payload?.entryMode);
   const essayContext = {
-    questionSetId: asString(task.payload?.questionSetId) || undefined,
+    questionSetId,
     date: asString(task.payload?.essayDate) || new Date().toISOString().slice(0, 10),
     topic: asString(task.payload?.essayTopic) || '申论',
     type: asString(task.payload?.essayType) === 'long' ? 'long' : 'short',
-    entryMode: normalizeEssayQuestionSetMode(task.payload?.entryMode)
+    entryMode,
+    purpose: normalizeEssayQuestionSetPurpose(task.payload?.purpose, entryMode)
   };
   const questionAsset = await context.findLatestLearningAsset({
     kind: LearningAssetKind.EssayQuestion,
@@ -509,6 +517,7 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
     const date = asString(task.payload?.date) || new Date().toISOString().slice(0, 10);
     const questionSetId = asString(task.payload?.questionSetId) || `EssayQuestionSetId:${task.id}`;
     const entryMode = normalizeEssayQuestionSetMode(task.payload?.entryMode);
+    const purpose = normalizeEssayQuestionSetPurpose(task.payload?.purpose, entryMode);
     await context.update(20, '生成申论材料');
     const recentEssayAssets = await context.listLearningAssets({
       kinds: [LearningAssetKind.EssayQuestion],
@@ -532,18 +541,18 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
     const question = await parseOrRepairEssayQuestion(text, context);
     const saved = await context.saveLearningAsset({
       kind: LearningAssetKind.EssayQuestion,
-      businessKey: essayQuestionSetBusinessKey({ questionSetId, date, topic: essayTopic, type: essayType, entryMode }),
+      businessKey: essayQuestionSetBusinessKey({ questionSetId, date, topic: essayTopic, type: essayType, entryMode, purpose }),
       title: question.title,
       payload: {
         question,
-        essayContext: { questionSetId, date, topic: essayTopic, type: essayType, entryMode }
+        essayContext: { questionSetId, date, topic: essayTopic, type: essayType, entryMode, purpose }
       }
     });
     await context.setResult({
       resultRef: saved.id,
       payload: {
         assetId: saved.id,
-        essayContext: { questionSetId, date, topic: essayTopic, type: essayType, entryMode }
+        essayContext: { questionSetId, date, topic: essayTopic, type: essayType, entryMode, purpose }
       }
     });
     await context.update(94, '申论模考题已写入');

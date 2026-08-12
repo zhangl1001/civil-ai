@@ -108,7 +108,12 @@ import BottomSheet from '@/components/layout/BottomSheet.vue';
 import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import type { AgentRunView } from '@/modules/agent/public';
-import { EssayGenerationCoordinator, initializeTutorRuntime, type EssayContext } from '@/composition-root/public';
+import {
+  EssayGenerationCoordinator,
+  initializeTutorRuntime,
+  type EssayContext,
+  type EssayGenerationContext
+} from '@/composition-root/public';
 import { EssayPracticeCenterFeature, type EssayPracticeMode, type EssayPracticeSet } from './EssayPracticeCenterFeature';
 import { essayQuestionSetLocation } from './EssayNavigation';
 
@@ -121,7 +126,7 @@ const coordinator = ref<EssayGenerationCoordinator>();
 const loading = ref(true);
 const opening = ref(false);
 const activeTask = ref<AgentRunView>();
-const pendingContext = ref<EssayContext>();
+const pendingContext = ref<EssayGenerationContext>();
 const pendingQuestionCount = ref(1);
 const error = ref('');
 const showHistory = ref(false);
@@ -204,8 +209,9 @@ async function startGeneration(input: { entryMode: Mode; topic: string; count: n
   if (!coordinator.value || activeTask.value?.isActive) return;
   opening.value = true;
   error.value = '';
-  const context: EssayContext = {
+  const context: EssayGenerationContext = {
     entryMode: input.entryMode,
+    purpose: input.entryMode === 'true' ? 'true_question' : 'practice',
     topic: input.topic,
     type: input.topic === '申发论述' ? 'long' : 'short',
     date: new Date().toISOString().slice(0, 10)
@@ -275,10 +281,11 @@ async function openSet(item: EssayPracticeSet) {
     entryMode: normalizedMode(item.context.entryMode),
     date: item.context.date,
     topic: item.context.topic,
-    type: item.context.type
+    type: item.context.type,
+    purpose: item.context.purpose
   }));
 }
-async function openLatestSet(context: EssayContext) {
+async function openLatestSet(context: EssayGenerationContext) {
   const item = allStates.value.find((candidate) => (
     context.questionSetId
       ? candidate.context.questionSetId === context.questionSetId
@@ -295,8 +302,23 @@ function contextFromTask(task: AgentRunView): EssayContext | undefined {
   const topic = task.actionParams.topic;
   const date = task.actionParams.date;
   const questionSetId = task.actionParams.questionSetId;
-  if ((mode !== 'tutor' && mode !== 'self' && mode !== 'true') || typeof topic !== 'string' || typeof date !== 'string') return undefined;
-  return { questionSetId: typeof questionSetId === 'string' && questionSetId ? questionSetId : undefined, entryMode: mode, topic, date, type: topic === '申发论述' ? 'long' : 'short' };
+  const type = task.actionParams.type;
+  const purpose = task.actionParams.purpose;
+  if (
+    (mode !== 'tutor' && mode !== 'self' && mode !== 'true')
+    || typeof topic !== 'string'
+    || typeof date !== 'string'
+    || typeof questionSetId !== 'string'
+    || !questionSetId
+  ) return undefined;
+  return {
+    questionSetId,
+    entryMode: mode,
+    topic,
+    date,
+    type: type === 'long' ? 'long' : 'short',
+    purpose: purpose === 'mock' || purpose === 'true_question' ? purpose : 'practice'
+  };
 }
 function normalizedMode(value?: EssayPracticeMode): Mode { return value === 'tutor' || value === 'true' ? value : 'self'; }
 function modeLabelFor(value?: EssayPracticeMode): string { return modes.find((item) => item.value === normalizedMode(value))?.label || '自主刷题'; }

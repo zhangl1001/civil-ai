@@ -176,7 +176,7 @@
     <BottomSheet v-model="showQuestionHistorySheet" title="历史题目" subtitle="按题型和日期选择" variant="actions">
       <InfiniteScrollPagination :has-more="questionHistoryVisibleCount < questionHistory.length" :has-items="Boolean(questionHistory.length)" :on-load-more="loadMoreQuestionHistory">
         <div v-if="questionHistory.length" class="essay-history-list">
-          <button v-for="item in visibleQuestionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)"><span>{{ item.state.question?.title }}</span><em>{{ item.context.date }} · {{ item.context.topic }}</em>
+          <button v-for="item in visibleQuestionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)"><span>{{ item.question?.title }}</span><em>{{ item.context.date }} · {{ item.context.topic }}</em>
           </button>
         </div>
       </InfiniteScrollPagination>
@@ -204,7 +204,7 @@ import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
 import { InfiniteScrollPagination } from '@/capabilities/design-system/public';
-import type { EssayHistoryRecord, EssayLecture, EssayStateHistoryItem } from '@/services/EssayRepository';
+import type { EssayHistoryRecord, EssayLecture, EssayQuestionSetSummary } from '@/services/EssayRepository';
 import { essayRepository } from '@/services/EssayRepository';
 import { useEssayStore } from '@/stores/essay';
 import { essayFlowService } from '@/services/EssayFlowService';
@@ -222,30 +222,34 @@ const isAnswerSheetOpen = ref(false);
 const showHistorySheet = ref(false);
 const showQuestionHistorySheet = ref(false);
 const showDeleteConfirmSheet = ref(false);
-const questionHistory = ref<EssayStateHistoryItem[]>([]); const questionHistoryVisibleCount = ref(20);
+const questionHistory = ref<EssayQuestionSetSummary[]>([]); const questionHistoryVisibleCount = ref(20);
 const visibleQuestionHistory = computed(() => questionHistory.value.slice(0, questionHistoryVisibleCount.value));
 const answerSheetHeight = ref(42);
 const elapsedMs = ref(0);
 const isTimerRunning = ref(false);
 let timerId: number | null = null;
+let timerStorageKey: string | null = null;
+let disposed = false;
 let resizeStartY = 0;
 let resizeStartHeight = 0;
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   const target = essayQuestionSetTargetFromQuery(route.query);
   if (!target) {
+    store.reset();
     await router.replace(essayCenterLocation());
     return;
   }
-  const routeContext = essayFlowService.writeContext({
-    ...target
-  });
+  const routeContext = essayFlowService.writeContext(target);
+  activateTimerOwner(routeContext);
   await store.fetchQuestion(routeContext);
+  if (disposed) return;
   restoreTimer();
-  document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 
 onUnmounted(() => {
+  disposed = true;
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('pointermove', resizeAnswerSheet);
   saveTimer();
@@ -303,7 +307,8 @@ async function confirmDeleteCurrentEssay() {
   isAnswerSheetOpen.value = false;
   activeMode.value = 'lecture';
   resetTimer();
-  const state = await essayRepository.deleteState(store.context || essayFlowService.readContext());
+  if (!store.context) return;
+  const state = await essayRepository.deleteState(store.context);
   store.question = state.question;
   store.submission.content = state.draft;
   store.submission.feedback = state.feedback;
@@ -321,19 +326,25 @@ async function openQuestionHistory() {
   questionHistory.value = await essayRepository.listStates(); questionHistoryVisibleCount.value = 20; showQuestionHistorySheet.value = true;
 }
 function loadMoreQuestionHistory() { questionHistoryVisibleCount.value = Math.min(questionHistory.value.length, questionHistoryVisibleCount.value + 20); }
-async function openQuestionHistoryItem(item: EssayStateHistoryItem) {
+async function openQuestionHistoryItem(item: EssayQuestionSetSummary) {
   showQuestionHistorySheet.value = false;
   isAnswerSheetOpen.value = false;
   activeMode.value = 'lecture';
   const context = essayFlowService.writeContext(item.context);
-  resetTimer();
+  saveTimer();
+  stopTimer();
+  elapsedMs.value = 0;
+  activateTimerOwner(context);
   await store.fetchQuestion(context);
+  if (disposed) return;
+  restoreTimer();
   await router.replace(essayQuestionSetLocation({
-    questionSetId: context.questionSetId || item.key,
+    questionSetId: context.questionSetId,
     entryMode: context.entryMode,
     date: context.date,
     topic: context.topic,
-    type: context.type
+    type: context.type,
+    purpose: context.purpose
   }));
 }
 
@@ -397,14 +408,14 @@ function splitRequirement(requirement: string): string[] {
   return parts.length ? parts : [clean];
 }
 
-function timerKey() {
-  const context = store.context || essayFlowService.readContext();
-  return `essay-timer:${context.questionSetId || `${context.topic}:${context.date}`}`;
+function activateTimerOwner(context: { questionSetId: string }) {
+  timerStorageKey = `essay-timer:${context.questionSetId}`;
 }
 
 function restoreTimer() {
+  if (!timerStorageKey) return;
   try {
-    const raw = localStorage.getItem(timerKey());
+    const raw = localStorage.getItem(timerStorageKey);
     if (!raw) return;
     const saved = JSON.parse(raw) as { elapsedMs?: number; running?: boolean; savedAt?: number };
     elapsedMs.value = saved.elapsedMs || 0;
@@ -418,8 +429,8 @@ function restoreTimer() {
 }
 
 function saveTimer() {
-  if (!store.context) return;
-  localStorage.setItem(timerKey(), JSON.stringify({
+  if (!timerStorageKey) return;
+  localStorage.setItem(timerStorageKey, JSON.stringify({
     elapsedMs: elapsedMs.value,
     running: isTimerRunning.value,
     savedAt: Date.now()
@@ -458,7 +469,7 @@ function resetTimer() {
   stopTimer();
   elapsedMs.value = 0;
   try {
-    localStorage.removeItem(timerKey());
+    if (timerStorageKey) localStorage.removeItem(timerStorageKey);
   } catch {
     // ignore storage failures
   }

@@ -4,7 +4,11 @@ import {
   LearningAssetStatus,
   type LearningAssetRecord
 } from '@/modules/content/public';
-import { normalizeEssayQuestionSetMode } from '@/domain/essayQuestionSet';
+import {
+  normalizeEssayQuestionSetMode,
+  normalizeEssayQuestionSetPurpose,
+  type EssayQuestionSetPurpose
+} from '@/domain/essayQuestionSet';
 
 export type EssayPracticeMode = 'tutor' | 'self' | 'true';
 
@@ -14,6 +18,7 @@ export interface EssayPracticeContext {
   readonly topic: string;
   readonly type: 'short' | 'long';
   readonly entryMode?: EssayPracticeMode;
+  readonly purpose?: EssayQuestionSetPurpose;
 }
 
 export interface EssayPracticeSet {
@@ -37,7 +42,8 @@ function contextFromAsset(asset: LearningAssetRecord): EssayPracticeContext {
     date: typeof record.date === 'string' ? record.date : today(),
     topic: typeof record.topic === 'string' ? record.topic : '申论',
     type: record.type === 'long' ? 'long' : 'short',
-    entryMode: normalizeEssayQuestionSetMode(record.entryMode)
+    entryMode: normalizeEssayQuestionSetMode(record.entryMode),
+    purpose: normalizeEssayQuestionSetPurpose(record.purpose, record.entryMode)
   };
 }
 
@@ -66,6 +72,7 @@ export class EssayPracticeCenterFeature {
     const latest = new Map<string, LearningAssetRecord>();
     for (const asset of assets) if (!latest.has(asset.businessKey)) latest.set(asset.businessKey, asset);
     return [...latest.values()]
+      .filter((asset) => contextFromAsset(asset).purpose !== 'mock')
       .map((asset) => ({
         key: asset.businessKey,
         updatedAt: asset.updatedAt,

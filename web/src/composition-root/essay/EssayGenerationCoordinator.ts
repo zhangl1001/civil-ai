@@ -1,6 +1,10 @@
 import type { TutorDatabaseRuntime } from '../database/TutorDatabaseRuntime';
 import type { AgentRunView } from '@/modules/agent/public';
-import { essayFlowService, type EssayContext } from '@/services/EssayFlowService';
+import {
+  essayFlowService,
+  type EssayContext,
+  type EssayGenerationContext
+} from '@/services/EssayFlowService';
 
 /**
  * Composition-root adapter for the essay generation workflow.
@@ -9,7 +13,7 @@ import { essayFlowService, type EssayContext } from '@/services/EssayFlowService
 export class EssayGenerationCoordinator {
   constructor(private readonly runtime: TutorDatabaseRuntime) {}
 
-  async start(context: EssayContext, questionCount: number): Promise<AgentRunView> {
+  async start(context: EssayGenerationContext, questionCount: number): Promise<AgentRunView> {
     const result = await essayFlowService.enqueueQuestionGeneration(context, { questionCount });
     return result.task;
   }
@@ -20,6 +24,7 @@ export class EssayGenerationCoordinator {
       isEssayGenerationTask(task)
       && task.isActive
       && (!mode || (task.actionParams.entryMode || task.actionParams.mode) === mode)
+      && task.actionParams.purpose !== 'mock'
     ));
   }
 
@@ -41,4 +46,4 @@ function isEssayGenerationTask(task: AgentRunView): boolean {
   return task.intent === 'mock' && task.actionRoute === '/vue/essay';
 }
 
-export type { EssayContext };
+export type { EssayContext, EssayGenerationContext };

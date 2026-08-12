@@ -41,7 +41,9 @@ export function generationTaskActionParams(input: GenerationTaskInput): JsonObje
       entryMode: text(input.payload?.entryMode) || 'self',
       ...(text(input.payload?.questionSetId) ? { questionSetId: text(input.payload?.questionSetId)! } : {}),
       topic: text(input.payload?.essayTopic) || '申论',
-      date: text(input.payload?.essayDate) || ''
+      date: text(input.payload?.essayDate) || '',
+      type: text(input.payload?.essayType) === 'long' ? 'long' : 'short',
+      purpose: text(input.payload?.purpose) || 'practice'
     };
   }
   if (input.intent === 'mock' && input.payload?.subject === '申论') {
@@ -51,6 +53,8 @@ export function generationTaskActionParams(input: GenerationTaskInput): JsonObje
       ...(text(input.payload?.questionSetId) ? { questionSetId: text(input.payload?.questionSetId)! } : {}),
       topic: text(input.payload?.essayTopic) || '申论',
       date: text(input.payload?.date) || '',
+      type: text(input.payload?.essayType) === 'long' ? 'long' : 'short',
+      purpose: text(input.payload?.purpose) || 'practice',
       questionCount: Number(input.payload?.essayQuestionCount || 1)
     };
   }
