@@ -28,7 +28,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/essay',
-    redirect: '/vue/essay'
+    redirect: { path: '/vue/practice', query: { subject: 'essay', mode: 'tutor' } }
   },
   {
     path: '/calendar',

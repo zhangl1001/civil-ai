@@ -99,6 +99,7 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
 import { digestService } from '@/services/DigestService';
 import { studyService, type StudyDashboard, type StudyPoint } from '@/services/StudyService';
+import { essayCenterLocation } from '@/features/practice/EssayNavigation';
 
 const router = useRouter();
 const studyDashboard = ref<StudyDashboard | null>(null);
@@ -131,7 +132,7 @@ const learningItems = [
   { title: '考点精讲', description: '按知识点学习概念、边界和方法', icon: BookOpenIcon, tone: 'green', to: '/vue/study/lecture' },
   { title: '每日积累', description: '沉淀时政热点和公考知识', icon: LandmarkIcon, tone: 'blue', to: '/vue/digest' },
   { title: '知识地图', description: '按大纲查看知识结构和掌握情况', icon: MapIcon, tone: 'purple', to: '/vue/knowledge-graph' },
-  { title: '申论学习', description: '学习材料阅读、题型方法和表达结构', icon: FileTextIcon, tone: 'orange', to: '/vue/essay' }
+  { title: '申论学习', description: '学习材料阅读、题型方法和表达结构', icon: FileTextIcon, tone: 'orange', to: essayCenterLocation('tutor') }
 ];
 
 const practiceItems = [

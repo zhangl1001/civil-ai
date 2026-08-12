@@ -110,6 +110,7 @@ import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import type { AgentRunView } from '@/modules/agent/public';
 import { EssayGenerationCoordinator, initializeTutorRuntime, type EssayContext } from '@/composition-root/public';
 import { EssayPracticeCenterFeature, type EssayPracticeMode, type EssayPracticeSet } from './EssayPracticeCenterFeature';
+import { essayQuestionSetLocation } from './EssayNavigation';
 
 type Mode = EssayPracticeMode;
 const props = defineProps<{ modelValue: Mode }>();
@@ -185,14 +186,9 @@ async function openPractice() {
     await startGeneration({ entryMode: 'tutor', topic: '归纳概括', count: 1 });
     return;
   }
-  opening.value = true;
-  try {
-    const query = {
-      source: 'practice-center',
-      entryMode: props.modelValue,
-    };
-    await router.push({ path: '/vue/essay', query });
-  } finally { opening.value = false; }
+  const latestTrueSet = sets.value[0];
+  if (latestTrueSet) await openSet(latestTrueSet);
+  else error.value = '当前还没有可练习的申论真题。请先完成申论真题导入。';
 }
 
 async function submitCustom() {
@@ -218,6 +214,7 @@ async function startGeneration(input: { entryMode: Mode; topic: string; count: n
   pendingQuestionCount.value = input.count;
   try {
     activeTask.value = await coordinator.value.start(context, input.count);
+    pendingContext.value = contextFromTask(activeTask.value) || context;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申论生成失败';
   } finally {
@@ -273,10 +270,20 @@ async function retryGeneration() {
 function openHistory() { showHistory.value = true; }
 async function openSet(item: EssayPracticeSet) {
   showHistory.value = false;
-  await router.push({ path: '/vue/essay', query: { source: 'practice-center', entryMode: normalizedMode(item.context.entryMode), date: item.context.date, topic: item.context.topic } });
+  await router.push(essayQuestionSetLocation({
+    questionSetId: item.context.questionSetId || item.key,
+    entryMode: normalizedMode(item.context.entryMode),
+    date: item.context.date,
+    topic: item.context.topic,
+    type: item.context.type
+  }));
 }
 async function openLatestSet(context: EssayContext) {
-  const item = allStates.value.find((candidate) => candidate.context.date === context.date && candidate.context.topic === context.topic && normalizedMode(candidate.context.entryMode) === context.entryMode);
+  const item = allStates.value.find((candidate) => (
+    context.questionSetId
+      ? candidate.context.questionSetId === context.questionSetId
+      : candidate.context.date === context.date && candidate.context.topic === context.topic && normalizedMode(candidate.context.entryMode) === context.entryMode
+  ));
   if (item) {
     await openSet(item);
   } else {
@@ -284,11 +291,12 @@ async function openLatestSet(context: EssayContext) {
   }
 }
 function contextFromTask(task: AgentRunView): EssayContext | undefined {
-  const mode = task.actionParams.mode;
+  const mode = task.actionParams.entryMode || task.actionParams.mode;
   const topic = task.actionParams.topic;
   const date = task.actionParams.date;
+  const questionSetId = task.actionParams.questionSetId;
   if ((mode !== 'tutor' && mode !== 'self' && mode !== 'true') || typeof topic !== 'string' || typeof date !== 'string') return undefined;
-  return { entryMode: mode, topic, date, type: topic === '申发论述' ? 'long' : 'short' };
+  return { questionSetId: typeof questionSetId === 'string' && questionSetId ? questionSetId : undefined, entryMode: mode, topic, date, type: topic === '申发论述' ? 'long' : 'short' };
 }
 function normalizedMode(value?: EssayPracticeMode): Mode { return value === 'tutor' || value === 'true' ? value : 'self'; }
 function modeLabelFor(value?: EssayPracticeMode): string { return modes.find((item) => item.value === normalizedMode(value))?.label || '自主刷题'; }

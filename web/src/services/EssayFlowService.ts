@@ -1,7 +1,13 @@
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
+import {
+  createEssayQuestionSetId,
+  essayQuestionSetGenerationScope,
+  normalizeEssayQuestionSetMode
+} from '@/domain/essayQuestionSet';
 
 export interface EssayContext {
+  questionSetId?: string;
   date: string;
   topic: string;
   type: 'short' | 'long';
@@ -49,12 +55,14 @@ export class EssayFlowService {
       intent: 'essayGrade',
       title: '申论批改',
       detail: `${context.topic} · ${context.date}`,
-      sourceId: `${context.topic}:${context.date}`,
+      sourceId: context.questionSetId || `${context.topic}:${context.date}`,
       payload: {
         content,
+        questionSetId: context.questionSetId,
         essayDate: context.date,
         essayTopic: context.topic,
-        essayType: context.type
+        essayType: context.type,
+        entryMode: normalizeEssayQuestionSetMode(context.entryMode)
       }
     });
   }
@@ -64,19 +72,23 @@ export class EssayFlowService {
     options: { questionCount?: number; title?: string; idempotencyKey?: string } = {}
   ): Promise<AgentTaskEnqueueResult> {
     const count = Math.max(1, Math.min(3, Number(options.questionCount || 1)));
+    const questionSetId = context.questionSetId?.trim() || createEssayQuestionSetId();
+    const entryMode = normalizeEssayQuestionSetMode(context.entryMode);
     return generationTaskService.enqueue({
       idempotencyKey: options.idempotencyKey,
       intent: 'mock',
       title: options.title || '生成申论题目',
       detail: `${context.topic} · ${count} 题 · ${context.date}`,
       module: '申论',
-      sourceId: `essay:${context.entryMode || 'self'}:${context.topic}:${context.date}:${context.type}:${count}`,
+      sourceId: questionSetId,
+      scopeId: essayQuestionSetGenerationScope({ ...context, questionSetId, entryMode }),
       payload: {
         subject: '申论',
+        questionSetId,
         date: context.date,
         essayTopic: context.topic,
         essayType: context.type,
-        entryMode: context.entryMode || 'self',
+        entryMode,
         essayQuestionCount: count
       }
     });

@@ -3,6 +3,7 @@ import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public
 import { generationTaskService } from './GenerationTaskService';
 import { essayFlowService } from './EssayFlowService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
+import { normalizeEssayQuestionSetMode, type EssayQuestionSetMode } from '@/domain/essayQuestionSet';
 
 export type ExamSubject = '行测' | '申论';
 export type EssayMockType = 'short' | 'long';
@@ -33,6 +34,10 @@ export interface ExamHistoryItem {
   durationMs?: number;
   createdAt: number;
   manifestId?: string;
+  questionSetId?: string;
+  essayEntryMode?: EssayQuestionSetMode;
+  essayTopic?: string;
+  essayType?: EssayMockType;
 }
 
 export interface ExamStats {
@@ -153,6 +158,10 @@ export class ExamFlowService {
             subject,
             date,
             title: asset.title,
+            questionSetId: asset.businessKey,
+            essayEntryMode: normalizeEssayQuestionSetMode(essayContext.entryMode),
+            essayTopic: typeof essayContext.topic === 'string' ? essayContext.topic : asset.title,
+            essayType: essayContext.type === 'long' ? 'long' : 'short',
             questionCount: 1,
             correctCount: 0,
             accuracy: 0,
@@ -217,25 +226,12 @@ export class ExamFlowService {
     }
 
     const topic = normalized.essayType === 'long' ? '申发论述' : '申论小题';
-    essayFlowService.writeContext({
+    return essayFlowService.enqueueQuestionGeneration({
       date: normalized.date,
       topic,
-      type: normalized.essayType
-    });
-    return generationTaskService.enqueue({
-      idempotencyKey,
-      intent: 'mock',
-      title: '申论模考',
-      detail: `${topic} · ${normalized.date}`,
-      module: '申论',
-      sourceId: `mock:申论:${normalized.date}:${normalized.essayType}`,
-      payload: {
-        subject: '申论',
-        date: normalized.date,
-        essayTopic: topic,
-        essayType: normalized.essayType
-      }
-    });
+      type: normalized.essayType,
+      entryMode: 'self'
+    }, { questionCount: 1, title: '申论模考', idempotencyKey });
   }
 
 }

@@ -1,4 +1,4 @@
-import { initializeTutorRuntime } from '@/composition-root/public';
+import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import type { ExamCycleId, JsonObject } from '@/kernel/public';
 import {
   LearningAssetKind,
@@ -6,6 +6,7 @@ import {
   type LearningAssetRecord
 } from '@/modules/content/public';
 import type { EssayContext } from './EssayFlowService';
+import { essayQuestionSetBusinessKey, normalizeEssayQuestionSetMode } from '@/domain/essayQuestionSet';
 
 export interface EssayQuestionRecord {
   id: string;
@@ -69,8 +70,7 @@ function normalizeContext(context?: EssayContext): EssayContext {
 }
 
 function businessKey(context: EssayContext): string {
-  const mode = context.entryMode && context.entryMode !== 'self' ? `:${context.entryMode}` : '';
-  return `essay:${context.date}:${context.topic}:${context.type}${mode}`;
+  return essayQuestionSetBusinessKey(context);
 }
 
 function asQuestion(value: unknown): EssayQuestionRecord | null {
@@ -109,19 +109,13 @@ function historyFromAsset(asset: LearningAssetRecord): EssayHistoryRecord | unde
   };
 }
 
-async function currentCycleId(): Promise<ExamCycleId> {
-  const runtime = await initializeTutorRuntime();
-  const cycle = await runtime.candidateRepository.findCurrentCycle();
-  if (!cycle) throw new Error('请先完成备考档案。');
-  return cycle.examCycle.id;
-}
-
 export class EssayRepository {
+  constructor(private readonly runtimeProvider: () => Promise<TutorDatabaseRuntime> = defaultRuntimeProvider) {}
+
   async getState(context?: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
     const key = businessKey(normalized);
-    const runtime = await initializeTutorRuntime();
-    const examCycleId = await currentCycleId();
+    const { runtime, examCycleId } = await this.activeCycle();
     const [questionAsset, draftAsset, attemptAssets] = await Promise.all([
       runtime.learningAssetStore.findLatest(examCycleId, LearningAssetKind.EssayQuestion, key),
       runtime.learningAssetStore.findLatest(examCycleId, LearningAssetKind.EssayDraft, key),
@@ -148,9 +142,9 @@ export class EssayRepository {
 
   async saveDraft(draft: string, context?: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
-    const runtime = await initializeTutorRuntime();
+    const { runtime, examCycleId } = await this.activeCycle();
     await runtime.learningAssetStore.saveDraft({
-      examCycleId: await currentCycleId(),
+      examCycleId,
       kind: LearningAssetKind.EssayDraft,
       businessKey: businessKey(normalized),
       title: `${normalized.topic}草稿 · ${normalized.date}`,
@@ -161,8 +155,7 @@ export class EssayRepository {
 
   async saveQuestion(question: EssayQuestionRecord, context?: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
-    const runtime = await initializeTutorRuntime();
-    const examCycleId = await currentCycleId();
+    const { runtime, examCycleId } = await this.activeCycle();
     await runtime.learningAssetStore.save({
       examCycleId,
       kind: LearningAssetKind.EssayQuestion,
@@ -191,9 +184,9 @@ export class EssayRepository {
     const normalized = normalizeContext(context);
     const current = await this.getState(normalized);
     if (!current.question) throw new Error('当前没有申论题目，无法保存批改记录');
-    const runtime = await initializeTutorRuntime();
+    const { runtime, examCycleId } = await this.activeCycle();
     await runtime.learningAssetStore.save({
-      examCycleId: await currentCycleId(),
+      examCycleId,
       kind: LearningAssetKind.EssayAttempt,
       businessKey: businessKey(normalized),
       title: `${current.question.title} · 批改`,
@@ -218,8 +211,7 @@ export class EssayRepository {
 
   async deleteState(context?: EssayContext): Promise<EssayLocalState> {
     const normalized = normalizeContext(context);
-    const runtime = await initializeTutorRuntime();
-    const examCycleId = await currentCycleId();
+    const { runtime, examCycleId } = await this.activeCycle();
     await Promise.all([
       runtime.learningAssetStore.retireBusinessKey(examCycleId, LearningAssetKind.EssayQuestion, businessKey(normalized)),
       runtime.learningAssetStore.retireBusinessKey(examCycleId, LearningAssetKind.EssayDraft, businessKey(normalized)),
@@ -229,8 +221,7 @@ export class EssayRepository {
   }
 
   async listStates(): Promise<EssayStateHistoryItem[]> {
-    const runtime = await initializeTutorRuntime();
-    const examCycleId = await currentCycleId();
+    const { runtime, examCycleId } = await this.activeCycle();
     const assets = await runtime.learningAssetStore.list({
       examCycleId,
       kinds: [LearningAssetKind.EssayQuestion],
@@ -241,25 +232,44 @@ export class EssayRepository {
     assets.forEach((asset) => {
       if (!latest.has(asset.businessKey)) latest.set(asset.businessKey, asset);
     });
-    const items = await Promise.all(Array.from(latest.values()).map(async (asset) => {
+    const items = Array.from(latest.values()).map((asset) => {
       const rawContext = asset.payload.essayContext;
       const record = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
         ? rawContext as Record<string, unknown>
         : {};
       const itemContext: EssayContext = {
+        questionSetId: asset.businessKey,
         date: typeof record.date === 'string' ? record.date : today(),
         topic: typeof record.topic === 'string' ? record.topic : '申论',
         type: record.type === 'long' ? 'long' : 'short',
-        entryMode: record.entryMode === 'tutor' || record.entryMode === 'true' ? record.entryMode : 'self'
+        entryMode: normalizeEssayQuestionSetMode(record.entryMode)
       };
       return {
         key: asset.businessKey,
         context: itemContext,
-        state: await this.getState(itemContext)
+        state: {
+          question: asQuestion(asset.payload.question),
+          draft: '',
+          feedback: null,
+          history: [],
+          updatedAt: asset.updatedAt
+        }
       };
-    }));
+    });
     return items.sort((left, right) => right.state.updatedAt - left.state.updatedAt);
   }
+
+  private async activeCycle(): Promise<{ runtime: TutorDatabaseRuntime; examCycleId: ExamCycleId }> {
+    const runtime = await this.runtimeProvider();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    return { runtime, examCycleId: cycle.examCycle.id };
+  }
+}
+
+async function defaultRuntimeProvider(): Promise<TutorDatabaseRuntime> {
+  const { initializeTutorRuntime } = await import('@/composition-root/public');
+  return initializeTutorRuntime();
 }
 
 export const essayRepository = new EssayRepository();

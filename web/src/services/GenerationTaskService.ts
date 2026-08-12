@@ -13,28 +13,19 @@ import {
   MessageSeverity,
   MessageSourceType
 } from '@/modules/message-center/public';
+import {
+  generationTaskActionParams,
+  generationTaskScope,
+  type GenerationIntent,
+  type GenerationTaskInput
+} from './GenerationTaskContract';
 
-export type GenerationIntent =
-  | 'daily'
-  | 'practice'
-  | 'essayGrade'
-  | 'mock'
-  | 'redo'
-  | 'digest'
-  | 'monthlyDigest'
-  | 'study'
-  | 'interviewReview'
-  | 'trueQuestionResearch';
-
-export interface GenerationTaskInput {
-  readonly intent: GenerationIntent;
-  readonly idempotencyKey?: string;
-  readonly title?: string;
-  readonly detail?: string;
-  readonly module?: string;
-  readonly sourceId?: string;
-  readonly payload?: Record<string, unknown>;
-}
+export {
+  generationTaskActionParams,
+  generationTaskScope,
+  type GenerationIntent,
+  type GenerationTaskInput
+} from './GenerationTaskContract';
 
 export interface AgentTaskEnqueueResult {
   readonly task: AgentRunView;
@@ -63,7 +54,7 @@ export class GenerationTaskService {
       throw new Error('当前还没有完整备考档案，请先补全目标、现状和学习时间。');
     }
     const projectId = cycle?.project.id ?? 'unbound';
-    const scopeKey = taskScope(projectId, input);
+    const scopeKey = generationTaskScope(projectId, input);
     const active = await runtime.getAgentRunViews.findActiveByTarget(TaskTargetType.BusinessOperation, scopeKey);
     if (active) {
       agentWorkerCoordinator.start(runtime);
@@ -73,7 +64,7 @@ export class GenerationTaskService {
     const title = input.title || TITLE_BY_INTENT[input.intent];
     const detail = input.detail || input.module || '准备执行';
     const actionRoute = routeForInput(input);
-    const actionParams = actionParamsForInput(input);
+    const actionParams = generationTaskActionParams(input);
     const dailyPlanItemId = optionalText(input.payload?.dailyPlanItemId);
     const capabilityNodeId = optionalText(input.payload?.capabilityNodeId);
     const aggregate = await runtime.createAgentRun.execute({
@@ -127,11 +118,6 @@ async function requireRunView(runtime: TutorDatabaseRuntime, id: AgentRunView['i
   return run;
 }
 
-function taskScope(projectId: string, input: GenerationTaskInput): string {
-  const source = input.sourceId || input.module || input.intent;
-  return `${input.intent}:${projectId}:${source}`;
-}
-
 function runTypeForIntent(intent: GenerationIntent): AgentRunType {
   if (intent === 'daily' || intent === 'monthlyDigest') return AgentRunType.TeachingPlan;
   if (intent === 'essayGrade' || intent === 'interviewReview') return AgentRunType.TutorTurn;
@@ -159,25 +145,6 @@ function routeForInput(input: GenerationTaskInput): string {
   if (intent === 'trueQuestionResearch') return '/vue/practice';
   if (intent === 'daily' || intent === 'digest') return '/vue/digest';
   return '/vue/study';
-}
-
-function actionParamsForInput(input: GenerationTaskInput): JsonObject {
-  const linkage = {
-    ...(optionalText(input.payload?.dailyPlanItemId) ? { dailyPlanItemId: optionalText(input.payload?.dailyPlanItemId)! } : {}),
-    ...(optionalText(input.payload?.capabilityNodeId) ? { capabilityNodeId: optionalText(input.payload?.capabilityNodeId)! } : {}),
-    ...(optionalText(input.payload?.reviewQueueItemId) ? { reviewQueueItemId: optionalText(input.payload?.reviewQueueItemId)! } : {})
-  };
-  if (input.intent === 'trueQuestionResearch') return { mode: 'true', ...linkage };
-  if (input.intent === 'mock' && input.payload?.subject === '申论') {
-    return {
-      ...linkage,
-      mode: optionalText(input.payload?.entryMode) || 'self',
-      topic: optionalText(input.payload?.essayTopic) || '申论',
-      date: optionalText(input.payload?.date) || '',
-      questionCount: Number(input.payload?.essayQuestionCount || 1)
-    };
-  }
-  return linkage;
 }
 
 function optionalText(value: unknown): string | undefined {

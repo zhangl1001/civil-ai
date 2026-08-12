@@ -16,7 +16,11 @@ export class EssayGenerationCoordinator {
 
   async findActive(mode?: EssayContext['entryMode']): Promise<AgentRunView | undefined> {
     const tasks = await this.runtime.getAgentRunViews.execute({ limit: 50 });
-    return tasks.find((task) => isEssayGenerationTask(task) && task.isActive && (!mode || task.actionParams.mode === mode));
+    return tasks.find((task) => (
+      isEssayGenerationTask(task)
+      && task.isActive
+      && (!mode || (task.actionParams.entryMode || task.actionParams.mode) === mode)
+    ));
   }
 
   async find(taskId: string): Promise<AgentRunView | undefined> {

@@ -196,7 +196,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ChevronDownIcon, Clock3Icon, Edit3Icon, FileClockIcon, HistoryIcon, Trash2Icon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
@@ -208,9 +208,15 @@ import type { EssayHistoryRecord, EssayLecture, EssayStateHistoryItem } from '@/
 import { essayRepository } from '@/services/EssayRepository';
 import { useEssayStore } from '@/stores/essay';
 import { essayFlowService } from '@/services/EssayFlowService';
+import {
+  essayCenterLocation,
+  essayQuestionSetLocation,
+  essayQuestionSetTargetFromQuery
+} from '@/features/practice/EssayNavigation';
 
 const store = useEssayStore();
 const route = useRoute();
+const router = useRouter();
 const activeMode = ref<'lecture' | 'question'>('lecture');
 const isAnswerSheetOpen = ref(false);
 const showHistorySheet = ref(false);
@@ -225,16 +231,17 @@ let timerId: number | null = null;
 let resizeStartY = 0;
 let resizeStartHeight = 0;
 
-onMounted(() => {
-  const routeEntryMode = route.query.entryMode === 'tutor' || route.query.entryMode === 'self' || route.query.entryMode === 'true'
-    ? route.query.entryMode
-    : undefined;
+onMounted(async () => {
+  const target = essayQuestionSetTargetFromQuery(route.query);
+  if (!target) {
+    await router.replace(essayCenterLocation());
+    return;
+  }
   const routeContext = essayFlowService.writeContext({
-    ...(typeof route.query.date === 'string' ? { date: route.query.date } : {}),
-    ...(typeof route.query.topic === 'string' ? { topic: route.query.topic } : {}),
-    ...(routeEntryMode ? { entryMode: routeEntryMode } : {})
+    ...target
   });
-  store.fetchQuestion(routeContext).then(() => restoreTimer());
+  await store.fetchQuestion(routeContext);
+  restoreTimer();
   document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 
@@ -321,6 +328,13 @@ async function openQuestionHistoryItem(item: EssayStateHistoryItem) {
   const context = essayFlowService.writeContext(item.context);
   resetTimer();
   await store.fetchQuestion(context);
+  await router.replace(essayQuestionSetLocation({
+    questionSetId: context.questionSetId || item.key,
+    entryMode: context.entryMode,
+    date: context.date,
+    topic: context.topic,
+    type: context.type
+  }));
 }
 
 function openAnswerSheet() {
@@ -385,7 +399,7 @@ function splitRequirement(requirement: string): string[] {
 
 function timerKey() {
   const context = store.context || essayFlowService.readContext();
-  return `essay-timer:${context.topic}:${context.date}`;
+  return `essay-timer:${context.questionSetId || `${context.topic}:${context.date}`}`;
 }
 
 function restoreTimer() {
