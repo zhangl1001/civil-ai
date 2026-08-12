@@ -139,8 +139,10 @@ export type {
 } from './contracts/QuestionContent';
 export {
   LearningAssetKind,
+  LearningAssetPurpose,
   LearningAssetStatus,
   type LearningAssetKind as LearningAssetKindCode,
+  type LearningAssetPurpose as LearningAssetPurposeCode,
   type LearningAssetStatus as LearningAssetStatusCode
 } from './domain/LearningAssetCodes';
 export type {

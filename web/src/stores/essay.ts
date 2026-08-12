@@ -87,13 +87,13 @@ export const useEssayStore = defineStore('essay', {
       this.submitMessage = '';
     },
 
-    reset() {
+    reset(options: { loading?: boolean } = {}) {
       this.question = null;
       this.submission = { content: '', feedback: null, isSubmitting: false };
       this.history = [];
       this.context = null;
       this.submitMessage = '';
-      this.isLoading = false;
+      this.isLoading = options.loading ?? false;
       this.error = null;
     }
   },

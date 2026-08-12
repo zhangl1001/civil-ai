@@ -368,6 +368,7 @@ async function executeBusinessOperation(
         businessKey: input.businessKey,
         title: input.title,
         payload: toJsonObject(input.payload),
+        purpose: input.purpose,
         sourceAgentRunId: run.run.id
       });
       executionSignal.throwIfAborted();

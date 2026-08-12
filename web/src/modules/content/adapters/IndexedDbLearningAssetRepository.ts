@@ -57,13 +57,28 @@ export class IndexedDbLearningAssetRepository implements LearningAssetRepository
     }
     const offset = query.offset ?? 0;
     if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Learning asset query offset must be a non-negative integer');
-    return (await this.database.getAll<LearningAssetRecord>(TutorIndexedDbStore.LearningAssets))
+    const source = await this.querySource(query);
+    const filtered = source
       .filter((item) => item.examCycleId === query.examCycleId)
       .filter((item) => !query.kinds?.length || query.kinds.includes(item.kind))
       .filter((item) => !query.businessKey || item.businessKey === query.businessKey)
       .filter((item) => !query.status || item.status === query.status)
-      .sort(compareLatest)
+      .filter((item) => !query.purposes?.length || (item.purpose && query.purposes.includes(item.purpose)))
+      .sort(compareLatest);
+    return (query.latestPerBusinessKey ? latestPerBusinessKey(filtered) : filtered)
       .slice(offset, offset + query.limit);
+  }
+
+  async count(query: Omit<LearningAssetQuery, 'limit' | 'offset'>): Promise<number> {
+    const source = await this.querySource(query);
+    const filtered = source
+      .filter((item) => item.examCycleId === query.examCycleId)
+      .filter((item) => !query.kinds?.length || query.kinds.includes(item.kind))
+      .filter((item) => !query.businessKey || item.businessKey === query.businessKey)
+      .filter((item) => !query.status || item.status === query.status)
+      .filter((item) => !query.purposes?.length || (item.purpose && query.purposes.includes(item.purpose)))
+      .sort(compareLatest);
+    return (query.latestPerBusinessKey ? latestPerBusinessKey(filtered) : filtered).length;
   }
 
   async listAll(examCycleId: ExamCycleId): Promise<readonly LearningAssetRecord[]> {
@@ -105,8 +120,28 @@ export class IndexedDbLearningAssetRepository implements LearningAssetRepository
         });
       });
   }
+
+  private async querySource(
+    query: Pick<LearningAssetQuery, 'examCycleId' | 'kinds' | 'purposes' | 'status'>
+  ): Promise<readonly LearningAssetRecord[]> {
+    if (query.kinds?.length === 1 && query.purposes?.length && query.status) {
+      const pages = await Promise.all(query.purposes.map((purpose) => this.database.getAllByIndex<LearningAssetRecord>(
+        TutorIndexedDbStore.LearningAssets,
+        'by_cycle_kind_purpose_status',
+        [query.examCycleId, query.kinds![0], purpose, query.status!]
+      )));
+      return pages.flat();
+    }
+    return this.database.getAll<LearningAssetRecord>(TutorIndexedDbStore.LearningAssets);
+  }
 }
 
 function compareLatest(left: LearningAssetRecord, right: LearningAssetRecord): number {
   return right.updatedAt - left.updatedAt || right.version - left.version || right.id.localeCompare(left.id);
+}
+
+function latestPerBusinessKey(items: readonly LearningAssetRecord[]): LearningAssetRecord[] {
+  const latest = new Map<string, LearningAssetRecord>();
+  for (const item of items) if (!latest.has(item.businessKey)) latest.set(item.businessKey, item);
+  return [...latest.values()];
 }

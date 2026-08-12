@@ -21,6 +21,7 @@ export {
 } from './domain/TaskCenterCodes';
 export { AgentRunMachine } from './domain/AgentRunMachine';
 export {
+  AgentRunInputIncompatibleError,
   AgentRunLeaseLostError,
   AgentRunSuspendedError,
   isAgentRunLeaseLost,

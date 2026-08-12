@@ -7,7 +7,7 @@ import type {
   LearningAssetRecord,
   LearningAssetRepository
 } from '../contracts/LearningAssetRepository';
-import type { LearningAssetKind, LearningAssetStatus } from '../domain/LearningAssetCodes';
+import type { LearningAssetKind, LearningAssetPurpose, LearningAssetStatus } from '../domain/LearningAssetCodes';
 
 interface LearningAssetRow extends SqlRow {
   id: string;
@@ -16,6 +16,7 @@ interface LearningAssetRow extends SqlRow {
   business_key: string;
   title: string;
   status: LearningAssetStatus;
+  purpose: LearningAssetPurpose | null;
   payload_json: string;
   source_agent_run_id: string | null;
   version: number;
@@ -32,8 +33,8 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
   async save(asset: LearningAssetRecord, context: TransactionContext): Promise<void> {
     await this.scope.resolve(context).run(
       `INSERT INTO learning_assets(
-        id,exam_cycle_id,kind,business_key,title,status,payload_json,source_agent_run_id,version,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        id,exam_cycle_id,kind,business_key,title,status,purpose,payload_json,source_agent_run_id,version,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         asset.id,
         asset.examCycleId,
@@ -41,6 +42,7 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
         asset.businessKey,
         asset.title,
         asset.status,
+        asset.purpose ?? null,
         JSON.stringify(asset.payload),
         asset.sourceAgentRunId ?? null,
         asset.version,
@@ -53,10 +55,10 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
   async saveDraft(asset: LearningAssetRecord, context: TransactionContext): Promise<void> {
     await this.scope.resolve(context).run(
       `INSERT INTO learning_assets(
-        id,exam_cycle_id,kind,business_key,title,status,payload_json,source_agent_run_id,version,created_at,updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        id,exam_cycle_id,kind,business_key,title,status,purpose,payload_json,source_agent_run_id,version,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
-        title=excluded.title,status=excluded.status,payload_json=excluded.payload_json,
+        title=excluded.title,status=excluded.status,purpose=excluded.purpose,payload_json=excluded.payload_json,
         source_agent_run_id=excluded.source_agent_run_id,updated_at=excluded.updated_at`,
       [
         asset.id,
@@ -65,6 +67,7 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
         asset.businessKey,
         asset.title,
         asset.status,
+        asset.purpose ?? null,
         JSON.stringify(asset.payload),
         asset.sourceAgentRunId ?? null,
         asset.version,
@@ -102,27 +105,59 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
     }
     const offset = query.offset ?? 0;
     if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Learning asset query offset must be a non-negative integer');
-    const conditions = ['exam_cycle_id=?'];
+    const conditions = ['asset.exam_cycle_id=?'];
     const parameters: Array<string | number> = [query.examCycleId];
     if (query.kinds?.length) {
-      conditions.push(`kind IN (${query.kinds.map(() => '?').join(',')})`);
+      conditions.push(`asset.kind IN (${query.kinds.map(() => '?').join(',')})`);
       parameters.push(...query.kinds);
     }
     if (query.businessKey) {
-      conditions.push('business_key=?');
+      conditions.push('asset.business_key=?');
       parameters.push(query.businessKey);
     }
     if (query.status) {
-      conditions.push('status=?');
+      conditions.push('asset.status=?');
       parameters.push(query.status);
+    }
+    if (query.purposes?.length) {
+      conditions.push(`asset.purpose IN (${query.purposes.map(() => '?').join(',')})`);
+      parameters.push(...query.purposes);
     }
     parameters.push(query.limit, offset);
     const rows = await this.database.query<LearningAssetRow>(
-      `SELECT * FROM learning_assets WHERE ${conditions.join(' AND ')}
-       ORDER BY updated_at DESC,version DESC,id DESC LIMIT ? OFFSET ?`,
+      `SELECT asset.* FROM learning_assets asset WHERE ${conditions.join(' AND ')}
+       ${latestPredicate(query)}
+       ORDER BY asset.updated_at DESC,asset.version DESC,asset.id DESC LIMIT ? OFFSET ?`,
       parameters
     );
     return rows.map(mapRow);
+  }
+
+  async count(query: Omit<LearningAssetQuery, 'limit' | 'offset'>): Promise<number> {
+    const conditions = ['asset.exam_cycle_id=?'];
+    const parameters: Array<string | number> = [query.examCycleId];
+    if (query.kinds?.length) {
+      conditions.push(`asset.kind IN (${query.kinds.map(() => '?').join(',')})`);
+      parameters.push(...query.kinds);
+    }
+    if (query.businessKey) {
+      conditions.push('asset.business_key=?');
+      parameters.push(query.businessKey);
+    }
+    if (query.status) {
+      conditions.push('asset.status=?');
+      parameters.push(query.status);
+    }
+    if (query.purposes?.length) {
+      conditions.push(`asset.purpose IN (${query.purposes.map(() => '?').join(',')})`);
+      parameters.push(...query.purposes);
+    }
+    const rows = await this.database.query<{ total: number } & SqlRow>(
+      `SELECT COUNT(*) AS total FROM learning_assets asset WHERE ${conditions.join(' AND ')}
+       ${latestPredicate(query)}`,
+      parameters
+    );
+    return Number(rows[0]?.total || 0);
   }
 
   async listAll(examCycleId: ExamCycleId): Promise<readonly LearningAssetRecord[]> {
@@ -155,6 +190,17 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
   }
 }
 
+function latestPredicate(query: Pick<LearningAssetQuery, 'latestPerBusinessKey'>): string {
+  if (!query.latestPerBusinessKey) return '';
+  return `AND NOT EXISTS (
+    SELECT 1 FROM learning_assets newer
+    WHERE newer.exam_cycle_id=asset.exam_cycle_id
+      AND newer.kind=asset.kind
+      AND newer.business_key=asset.business_key
+      AND (newer.version>asset.version OR (newer.version=asset.version AND newer.id>asset.id))
+  )`;
+}
+
 function mapRow(row: LearningAssetRow): LearningAssetRecord {
   return {
     id: row.id,
@@ -163,6 +209,7 @@ function mapRow(row: LearningAssetRow): LearningAssetRecord {
     businessKey: row.business_key,
     title: row.title,
     status: row.status,
+    purpose: row.purpose ?? undefined,
     payload: JSON.parse(row.payload_json) as JsonObject,
     sourceAgentRunId: row.source_agent_run_id ?? undefined,
     version: row.version,

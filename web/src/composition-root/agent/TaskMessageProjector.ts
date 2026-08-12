@@ -136,6 +136,9 @@ function detail(run: AgentRunAggregate, fallback: string): string {
 }
 
 function taskErrorText(code: string, diagnostic?: string): string {
+  if (code === 'agent_run.input_incompatible') {
+    return diagnostic || '该任务来自旧版本，无法安全恢复，请在对应页面重新发起。';
+  }
   if (code === 'agent.AbortError' || code === 'generation.process_interrupted') {
     return '模型连接意外中断，请重新执行任务';
   }

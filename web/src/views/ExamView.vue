@@ -53,14 +53,14 @@
       <section class="history-section">
         <div class="section-title">
           <strong>我的模考记录</strong>
-          <span>最近 30 条</span>
+          <span>{{ stats.total ? `共 ${stats.total} 条` : '暂无记录' }}</span>
         </div>
 
         <AppStateView v-if="isLoading" compact state="loading" title="加载模考记录" />
         <AppStateView v-else-if="!history.length" compact :title="`还没有${subject}模考记录`" description="完成一次模考后，成绩会自动回流到这里。">
           <template #icon><BookOpenIcon /></template>
         </AppStateView>
-        <InfiniteScrollPagination v-else :has-more="historyVisibleCount < history.length" :has-items="Boolean(history.length)" :on-load-more="loadMoreHistory">
+        <InfiniteScrollPagination v-else :has-more="historyVisibleCount < history.length || (subject === '申论' && history.length < stats.total)" :has-items="Boolean(history.length)" :on-load-more="loadMoreHistory">
         <div class="history-groups">
           <div v-for="group in groupedHistory" :key="group.month" class="history-group">
             <div class="month-label">
@@ -176,6 +176,7 @@ import BottomSheet from '@/components/layout/BottomSheet.vue';
 import { AppStateView, InfiniteScrollPagination, PullToRefresh } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { essayHistoryLocation } from '@/features/practice/EssayNavigation';
+import { durationText, groupHistoryByMonth } from '@/features/exam/ExamHistoryPresentation';
 const router = useRouter();
 const subjects: ExamSubject[] = ['行测', '申论'];
 const initial = examFlowService.readContext();
@@ -217,7 +218,16 @@ async function loadDashboard() {
     isLoading.value = false;
   }
 }
-function loadMoreHistory() { historyVisibleCount.value = Math.min(history.value.length, historyVisibleCount.value + 30); }
+async function loadMoreHistory() {
+  if (historyVisibleCount.value < history.value.length) {
+    historyVisibleCount.value = Math.min(history.value.length, historyVisibleCount.value + 30);
+    return;
+  }
+  if (subject.value !== '申论' || !dashboard.value || history.value.length >= stats.value.total) return;
+  const next = await examFlowService.listEssayMockHistory(history.value.length, 30);
+  dashboard.value = { ...dashboard.value, history: [...dashboard.value.history, ...next] };
+  historyVisibleCount.value = dashboard.value.history.length;
+}
 async function switchSubject(next: ExamSubject) {
   if (subject.value === next) return;
   subject.value = next;
@@ -284,33 +294,6 @@ function openHistory(item: ExamHistoryItem) {
   router.push(practiceDetailLocation({ mode: 'self' }));
 }
 
-function durationText(durationMs?: number): string {
-  if (!durationMs) return '未记录时长';
-  return `${Math.max(1, Math.round(durationMs / 60000))} 分钟`;
-}
-
-function monthKey(date: string): string {
-  return /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : 'unknown';
-}
-
-function monthLabel(month: string): string {
-  if (month === 'unknown') return '未记录月份';
-  const [year, value] = month.split('-');
-  return `${year}年${Number(value)}月`;
-}
-
-function groupHistoryByMonth(items: ExamHistoryItem[]): Array<{ month: string; label: string; items: ExamHistoryItem[] }> {
-  const grouped = new Map<string, ExamHistoryItem[]>();
-  items.forEach((item) => {
-    const key = monthKey(item.date);
-    grouped.set(key, [...(grouped.get(key) || []), item]);
-  });
-  return Array.from(grouped.entries()).map(([month, groupItems]) => ({
-    month,
-    label: monthLabel(month),
-    items: groupItems
-  }));
-}
 </script>
 
 <style scoped>

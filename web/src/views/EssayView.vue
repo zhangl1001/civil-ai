@@ -174,9 +174,9 @@
     </BottomSheet>
 
     <BottomSheet v-model="showQuestionHistorySheet" title="历史题目" subtitle="按题型和日期选择" variant="actions">
-      <InfiniteScrollPagination :has-more="questionHistoryVisibleCount < questionHistory.length" :has-items="Boolean(questionHistory.length)" :on-load-more="loadMoreQuestionHistory">
+      <InfiniteScrollPagination :has-more="questionHistoryHasMore" :has-items="Boolean(questionHistory.length)" :on-load-more="loadMoreQuestionHistory">
         <div v-if="questionHistory.length" class="essay-history-list">
-          <button v-for="item in visibleQuestionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)"><span>{{ item.question?.title }}</span><em>{{ item.context.date }} · {{ item.context.topic }}</em>
+          <button v-for="item in questionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)"><span>{{ item.question?.title }}</span><em>{{ item.context.date }} · {{ item.context.topic }}</em>
           </button>
         </div>
       </InfiniteScrollPagination>
@@ -222,8 +222,9 @@ const isAnswerSheetOpen = ref(false);
 const showHistorySheet = ref(false);
 const showQuestionHistorySheet = ref(false);
 const showDeleteConfirmSheet = ref(false);
-const questionHistory = ref<EssayQuestionSetSummary[]>([]); const questionHistoryVisibleCount = ref(20);
-const visibleQuestionHistory = computed(() => questionHistory.value.slice(0, questionHistoryVisibleCount.value));
+const questionHistory = ref<EssayQuestionSetSummary[]>([]);
+const questionHistoryTotal = ref(0);
+const questionHistoryHasMore = computed(() => questionHistory.value.length < questionHistoryTotal.value);
 const answerSheetHeight = ref(42);
 const elapsedMs = ref(0);
 const isTimerRunning = ref(false);
@@ -237,7 +238,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
   const target = essayQuestionSetTargetFromQuery(route.query);
   if (!target) {
-    store.reset();
+    store.reset({ loading: true });
     await router.replace(essayCenterLocation());
     return;
   }
@@ -306,8 +307,8 @@ async function confirmDeleteCurrentEssay() {
   showDeleteConfirmSheet.value = false;
   isAnswerSheetOpen.value = false;
   activeMode.value = 'lecture';
-  resetTimer();
   if (!store.context) return;
+  resetTimer();
   const state = await essayRepository.deleteState(store.context);
   store.question = state.question;
   store.submission.content = state.draft;
@@ -323,9 +324,19 @@ function openHistoryItem(item: EssayHistoryRecord) {
 }
 
 async function openQuestionHistory() {
-  questionHistory.value = await essayRepository.listStates(); questionHistoryVisibleCount.value = 20; showQuestionHistorySheet.value = true;
+  const [items, total] = await Promise.all([
+    essayRepository.listStates({ limit: 20 }),
+    essayRepository.countStates()
+  ]);
+  questionHistory.value = items;
+  questionHistoryTotal.value = total;
+  showQuestionHistorySheet.value = true;
 }
-function loadMoreQuestionHistory() { questionHistoryVisibleCount.value = Math.min(questionHistory.value.length, questionHistoryVisibleCount.value + 20); }
+async function loadMoreQuestionHistory() {
+  if (!questionHistoryHasMore.value) return;
+  const next = await essayRepository.listStates({ offset: questionHistory.value.length, limit: 20 });
+  questionHistory.value = [...questionHistory.value, ...next];
+}
 async function openQuestionHistoryItem(item: EssayQuestionSetSummary) {
   showQuestionHistorySheet.value = false;
   isAnswerSheetOpen.value = false;

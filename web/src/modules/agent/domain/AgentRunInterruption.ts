@@ -16,6 +16,16 @@ export class AgentRunLeaseLostError extends Error {
   }
 }
 
+/** Persisted work created by an older input contract cannot be executed safely. */
+export class AgentRunInputIncompatibleError extends Error {
+  readonly code = 'agent_run.input_incompatible';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'AgentRunInputIncompatibleError';
+  }
+}
+
 export function isAgentRunSuspended(error: unknown): error is AgentRunSuspendedError {
   return error instanceof AgentRunSuspendedError
     || (

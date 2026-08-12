@@ -7,6 +7,7 @@ import type {
 } from '../contracts/LearningAssetRepository';
 import {
   LearningAssetKind,
+  LearningAssetPurpose,
   LearningAssetStatus
 } from '../domain/LearningAssetCodes';
 
@@ -18,6 +19,7 @@ export interface SaveLearningAssetCommand {
   readonly payload: JsonObject;
   readonly sourceAgentRunId?: string;
   readonly status?: LearningAssetStatus;
+  readonly purpose?: LearningAssetPurpose;
 }
 
 export class LearningAssetStore {
@@ -44,6 +46,7 @@ export class LearningAssetStore {
         businessKey,
         title: command.title.trim() || command.kind,
         status: command.status ?? LearningAssetStatus.Ready,
+        purpose: resolvePurpose(command),
         payload: command.payload,
         sourceAgentRunId: command.sourceAgentRunId,
         version: (previous?.version ?? 0) + 1,
@@ -74,6 +77,7 @@ export class LearningAssetStore {
       businessKey,
       title: command.title.trim() || command.kind,
       status: LearningAssetStatus.Draft,
+      purpose: resolvePurpose(command),
       payload: command.payload,
       sourceAgentRunId: command.sourceAgentRunId,
       version: previous?.version ?? 1,
@@ -98,6 +102,10 @@ export class LearningAssetStore {
     return this.repository.list(query);
   }
 
+  count(query: Omit<LearningAssetQuery, 'limit' | 'offset'>): Promise<number> {
+    return this.repository.count(query);
+  }
+
   async retire(id: string): Promise<void> {
     await this.unitOfWork.run(async (context) => {
       await this.repository.retire(id, this.clock.now(), context);
@@ -109,6 +117,23 @@ export class LearningAssetStore {
       await this.repository.retireBusinessKey(examCycleId, kind, businessKey, this.clock.now(), context);
     });
   }
+}
+
+function resolvePurpose(command: SaveLearningAssetCommand): LearningAssetPurpose | undefined {
+  if (command.purpose) return command.purpose;
+  if (command.kind !== LearningAssetKind.EssayQuestion) return undefined;
+  const rawContext = command.payload.essayContext;
+  const context = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
+    ? rawContext as JsonObject
+    : {};
+  if (context.purpose === LearningAssetPurpose.Mock) return LearningAssetPurpose.Mock;
+  if (context.purpose === LearningAssetPurpose.TrueQuestion || context.entryMode === 'true') {
+    return LearningAssetPurpose.TrueQuestion;
+  }
+  if (context.purpose === LearningAssetPurpose.Practice || context.entryMode === 'self' || context.entryMode === 'tutor') {
+    return LearningAssetPurpose.Practice;
+  }
+  return LearningAssetPurpose.LegacyUnknown;
 }
 
 function isVersionConflict(error: unknown): boolean {

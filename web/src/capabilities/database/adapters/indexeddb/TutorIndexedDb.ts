@@ -1,7 +1,7 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
-export const TUTOR_INDEXEDDB_VERSION = 30;
+export const TUTOR_INDEXEDDB_VERSION = 31;
 
 export const TutorIndexedDbStore = {
   CandidateCycleBundles: 'candidate_cycle_bundles',
@@ -339,8 +339,18 @@ export class TutorIndexedDb {
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.ProactiveSignals)) {
           database.createObjectStore(TutorIndexedDbStore.ProactiveSignals, { keyPath: 'id' });
         }
-        if (!database.objectStoreNames.contains(TutorIndexedDbStore.LearningAssets)) {
-          database.createObjectStore(TutorIndexedDbStore.LearningAssets, { keyPath: 'id' });
+        const learningAssetStore = database.objectStoreNames.contains(TutorIndexedDbStore.LearningAssets)
+          ? request.transaction?.objectStore(TutorIndexedDbStore.LearningAssets)
+          : database.createObjectStore(TutorIndexedDbStore.LearningAssets, { keyPath: 'id' });
+        if (learningAssetStore && !learningAssetStore.indexNames.contains('by_cycle_kind_purpose_status')) {
+          learningAssetStore.createIndex(
+            'by_cycle_kind_purpose_status',
+            ['examCycleId', 'kind', 'purpose', 'status'],
+            { unique: false }
+          );
+        }
+        if (event.oldVersion < 31 && learningAssetStore) {
+          migrateLearningAssetPurposes(learningAssetStore, agentRunStore);
         }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionSources)) {
           const sourceStore = database.createObjectStore(TutorIndexedDbStore.QuestionSources, { keyPath: 'id' });
@@ -441,4 +451,56 @@ export class TutorIndexedDb {
     if (!this.database) throw new Error('Tutor IndexedDB is not open');
     return this.database;
   }
+}
+
+function migrateLearningAssetPurposes(store: IDBObjectStore, agentRunStore?: IDBObjectStore): void {
+  if (!agentRunStore) {
+    migrateLearningAssetPurposeRecords(store, new Map());
+    return;
+  }
+  const runRequest = agentRunStore.getAll();
+  runRequest.onsuccess = () => {
+    const sourceByRunId = new Map<string, string>();
+    for (const raw of runRequest.result as Array<Record<string, unknown>>) {
+      const run = objectValue(raw.run);
+      const snapshot = objectValue(run.inputSnapshot);
+      if (typeof run.id === 'string' && typeof snapshot.sourceId === 'string') {
+        sourceByRunId.set(run.id, snapshot.sourceId);
+      }
+    }
+    migrateLearningAssetPurposeRecords(store, sourceByRunId);
+  };
+}
+
+function migrateLearningAssetPurposeRecords(store: IDBObjectStore, sourceByRunId: ReadonlyMap<string, string>): void {
+  const request = store.openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const asset = cursor.value as Record<string, unknown>;
+    if (asset.kind === 'essay_question' && !asset.purpose) {
+      const payload = objectValue(asset.payload);
+      const context = objectValue(payload.essayContext);
+      const sourceId = typeof asset.sourceAgentRunId === 'string'
+        ? sourceByRunId.get(asset.sourceAgentRunId)
+        : undefined;
+      cursor.update({ ...asset, purpose: inferLegacyEssayPurpose(context, sourceId) });
+    }
+    cursor.continue();
+  };
+}
+
+function inferLegacyEssayPurpose(context: Record<string, unknown>, sourceId?: string): string {
+  if (context.purpose === 'mock') return 'mock';
+  if (context.purpose === 'true_question' || context.entryMode === 'true') return 'true_question';
+  if (context.purpose === 'practice' || context.entryMode === 'tutor') return 'practice';
+  if (sourceId?.startsWith('mock:申论:')) return 'mock';
+  if (sourceId?.startsWith('essay:')) return 'practice';
+  return 'legacy_unknown';
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }

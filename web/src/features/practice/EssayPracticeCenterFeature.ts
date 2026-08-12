@@ -1,6 +1,7 @@
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import {
   LearningAssetKind,
+  LearningAssetPurpose,
   LearningAssetStatus,
   type LearningAssetRecord
 } from '@/modules/content/public';
@@ -67,12 +68,11 @@ export class EssayPracticeCenterFeature {
       examCycleId: cycle.examCycle.id,
       kinds: [LearningAssetKind.EssayQuestion],
       status: LearningAssetStatus.Ready,
+      purposes: [LearningAssetPurpose.Practice, LearningAssetPurpose.TrueQuestion],
+      latestPerBusinessKey: true,
       limit: 200
     });
-    const latest = new Map<string, LearningAssetRecord>();
-    for (const asset of assets) if (!latest.has(asset.businessKey)) latest.set(asset.businessKey, asset);
-    return [...latest.values()]
-      .filter((asset) => contextFromAsset(asset).purpose !== 'mock')
+    return assets
       .map((asset) => ({
         key: asset.businessKey,
         updatedAt: asset.updatedAt,

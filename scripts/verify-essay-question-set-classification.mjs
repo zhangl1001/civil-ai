@@ -13,18 +13,20 @@ const server = await createServer({
 });
 
 try {
-  const [identity, navigation, tasks, featureModule, repositoryModule] = await Promise.all([
+  const [identity, navigation, tasks, featureModule, repositoryModule, indexedRepositoryModule] = await Promise.all([
     server.ssrLoadModule('/src/domain/essayQuestionSet.ts'),
     server.ssrLoadModule('/src/features/practice/EssayNavigation.ts'),
     server.ssrLoadModule('/src/services/GenerationTaskContract.ts'),
     server.ssrLoadModule('/src/features/practice/EssayPracticeCenterFeature.ts'),
-    server.ssrLoadModule('/src/services/EssayRepository.ts')
+    server.ssrLoadModule('/src/services/EssayRepository.ts'),
+    server.ssrLoadModule('/src/modules/content/adapters/IndexedDbLearningAssetRepository.ts')
   ]);
 
   verifyIdentityAndTaskScope(identity, tasks);
   verifyNavigation(navigation);
   await verifyClassificationAndOrdering(featureModule, identity);
   await verifyHistorySummaryQuery(repositoryModule);
+  await verifyIndexedPurposeQuery(indexedRepositoryModule);
 
   console.log('Essay question-set classification verification passed.');
 } finally {
@@ -131,6 +133,8 @@ async function verifyClassificationAndOrdering({ EssayPracticeCenterFeature }, {
   assert(sets.every((item) => item.context.questionSetId === item.key));
   assert.equal(isEssayMockContext(assets.at(-1).payload.essayContext), true);
   assert.equal(isEssayMockContext(assets[0].payload.essayContext), false);
+  assert.deepEqual(runtime.queries[0].purposes, ['practice', 'true_question']);
+  assert.equal(runtime.queries[0].latestPerBusinessKey, true);
 }
 
 async function verifyHistorySummaryQuery({ EssayRepository }) {
@@ -145,10 +149,39 @@ async function verifyHistorySummaryQuery({ EssayRepository }) {
   assert.deepEqual(history.map((item) => item.key), ['EssayQuestionSetId:2', 'EssayQuestionSetId:1']);
   assert(history.every((item) => 'question' in item && 'updatedAt' in item && !('state' in item)));
   assert.deepEqual(counters, { cycle: 1, list: 1, findLatest: 0 }, 'history summaries must not load every set detail');
+  assert.deepEqual(runtime.queries[0].purposes, ['practice', 'true_question']);
+  assert.equal(runtime.queries[0].latestPerBusinessKey, true);
+}
+
+async function verifyIndexedPurposeQuery({ IndexedDbLearningAssetRepository }) {
+  const calls = { indexed: 0, full: 0 };
+  const database = {
+    getAllByIndex: async (_store, index, key) => {
+      calls.indexed += 1;
+      assert.equal(index, 'by_cycle_kind_purpose_status');
+      return [asset(`EssayQuestionSetId:${key[2]}`, key[2] === 'true_question' ? 'true' : 'self', String(key[2]), 100, key[2])];
+    },
+    getAll: async () => {
+      calls.full += 1;
+      return [];
+    }
+  };
+  const repository = new IndexedDbLearningAssetRepository(database, {});
+  const result = await repository.list({
+    examCycleId: 'ExamCycleId:test',
+    kinds: ['essay_question'],
+    purposes: ['practice', 'true_question'],
+    status: 'ready',
+    latestPerBusinessKey: true,
+    limit: 20
+  });
+  assert.equal(result.length, 2);
+  assert.deepEqual(calls, { indexed: 2, full: 0 }, 'purpose history must use the compound index instead of loading the full asset table');
 }
 
 function runtimeWithAssets(assets, counters = { cycle: 0, list: 0, findLatest: 0 }) {
-  return {
+  const runtime = {
+    queries: [],
     candidateRepository: {
       findCurrentCycle: async () => {
         counters.cycle += 1;
@@ -156,16 +189,29 @@ function runtimeWithAssets(assets, counters = { cycle: 0, list: 0, findLatest: 0
       }
     },
     learningAssetStore: {
-      list: async () => {
+      list: async (query) => {
         counters.list += 1;
-        return assets;
+        runtime.queries.push(query);
+        const filtered = assets
+          .filter((item) => !query.kinds?.length || query.kinds.includes(item.kind))
+          .filter((item) => !query.status || item.status === query.status)
+          .filter((item) => !query.purposes?.length || query.purposes.includes(item.purpose))
+          .sort((left, right) => right.updatedAt - left.updatedAt);
+        const latest = new Map();
+        filtered.forEach((item) => {
+          if (!latest.has(item.businessKey)) latest.set(item.businessKey, item);
+        });
+        const deduped = query.latestPerBusinessKey ? [...latest.values()] : filtered;
+        return deduped.slice(query.offset || 0, (query.offset || 0) + query.limit);
       },
+      count: async (query) => (await runtime.learningAssetStore.list({ ...query, limit: 500 })).length,
       findLatest: async () => {
         counters.findLatest += 1;
         return undefined;
       }
     }
   };
+  return runtime;
 }
 
 function asset(businessKey, entryMode, title, updatedAt, purpose = entryMode === 'true' ? 'true_question' : 'practice') {
@@ -176,6 +222,7 @@ function asset(businessKey, entryMode, title, updatedAt, purpose = entryMode ===
     businessKey,
     title,
     status: 'ready',
+    purpose,
     payload: {
       essayContext: { date: '2026-08-12', topic: '归纳概括', type: 'short', entryMode, purpose },
       question: { id: `question:${title}`, title, material: '材料', requirement: '要求' }

@@ -1,17 +1,14 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
   LearningAssetKind,
+  LearningAssetPurpose,
   LearningAssetStatus,
   type LearningAssetRecord
 } from '@/modules/content/public';
 import { generationTaskService } from './GenerationTaskService';
 import { essayFlowService } from './EssayFlowService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
-import {
-  normalizeEssayQuestionSetMode,
-  isEssayMockContext,
-  type EssayQuestionSetMode
-} from '@/domain/essayQuestionSet';
+import { normalizeEssayQuestionSetMode, type EssayQuestionSetMode } from '@/domain/essayQuestionSet';
 
 export type ExamSubject = '行测' | '申论';
 export type EssayMockType = 'short' | 'long';
@@ -146,40 +143,23 @@ export class ExamFlowService {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
-    const assets = subject === '行测'
+    const [assets, essayMockTotal] = subject === '行测'
       ? await runtime.learningAssetStore.list({
         examCycleId: cycle.examCycle.id,
         kinds: [LearningAssetKind.MockManifest],
         status: LearningAssetStatus.Ready,
         limit: 100
-      })
-      : await listEssayMockAssets(runtime, cycle.examCycle.id, 30);
+      }).then((items) => [items, 0] as const)
+      : await Promise.all([
+        listEssayMockAssets(runtime, cycle.examCycle.id, 0, 30),
+        countEssayMockAssets(runtime, cycle.examCycle.id)
+      ]);
     const recentSessions = subject === '行测'
       ? await runtime.learningSessionRepository.listRecent(cycle.examCycle.id, 500)
       : [];
     const history = assets
       .map((asset): ExamHistoryItem | undefined => {
-        if (subject === '申论') {
-          const essayContext = asset.payload.essayContext && typeof asset.payload.essayContext === 'object' && !Array.isArray(asset.payload.essayContext)
-            ? asset.payload.essayContext as Record<string, unknown>
-            : {};
-          const date = typeof essayContext.date === 'string' ? essayContext.date : new Date(asset.createdAt).toISOString().slice(0, 10);
-          return {
-            id: asset.id,
-            subject,
-            date,
-            title: asset.title,
-            questionSetId: asset.businessKey,
-            essayEntryMode: normalizeEssayQuestionSetMode(essayContext.entryMode),
-            essayTopic: typeof essayContext.topic === 'string' ? essayContext.topic : asset.title,
-            essayType: essayContext.type === 'long' ? 'long' : 'short',
-            essayPurpose: 'mock',
-            questionCount: 1,
-            correctCount: 0,
-            accuracy: 0,
-            createdAt: asset.createdAt
-          };
-        }
+        if (subject === '申论') return essayMockHistoryItem(asset);
         const sections = Array.isArray(asset.payload.sections) ? asset.payload.sections : [];
         const setIds = new Set(sections.flatMap((item) => {
           const record = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {};
@@ -211,8 +191,18 @@ export class ExamFlowService {
       schemes: SCHEMES,
       focusTags: FOCUS_TAGS,
       history,
-      stats: statsFrom(history)
+      stats: subject === '申论'
+        ? { ...statsFrom(history), total: essayMockTotal }
+        : statsFrom(history)
     };
+  }
+
+  async listEssayMockHistory(offset: number, limit: number): Promise<ExamHistoryItem[]> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const assets = await listEssayMockAssets(runtime, cycle.examCycle.id, offset, limit);
+    return assets.map(essayMockHistoryItem);
   }
 
   async startMock(context: ExamStartContext, idempotencyKey?: string): Promise<AgentTaskEnqueueResult> {
@@ -254,30 +244,57 @@ export const examFlowService = new ExamFlowService();
 async function listEssayMockAssets(
   runtime: Awaited<ReturnType<typeof initializeTutorRuntime>>,
   examCycleId: Parameters<typeof runtime.learningAssetStore.list>[0]['examCycleId'],
-  targetCount: number
+  offset: number,
+  limit: number
 ) {
-  const pageSize = 100;
-  const matches: LearningAssetRecord[] = [];
-  const seenBusinessKeys = new Set<string>();
-  for (let offset = 0; matches.length < targetCount; offset += pageSize) {
-    const page = await runtime.learningAssetStore.list({
-      examCycleId,
-      kinds: [LearningAssetKind.EssayQuestion],
-      status: LearningAssetStatus.Ready,
-      offset,
-      limit: pageSize
-    });
-    for (const asset of page) {
-      if (!isEssayMockAsset(asset) || seenBusinessKeys.has(asset.businessKey)) continue;
-      seenBusinessKeys.add(asset.businessKey);
-      matches.push(asset);
-      if (matches.length >= targetCount) break;
-    }
-    if (page.length < pageSize) break;
-  }
-  return matches.slice(0, targetCount);
+  return runtime.learningAssetStore.list({
+    examCycleId,
+    kinds: [LearningAssetKind.EssayQuestion],
+    status: LearningAssetStatus.Ready,
+    purposes: [LearningAssetPurpose.Mock],
+    latestPerBusinessKey: true,
+    offset,
+    limit
+  });
 }
 
 export function isEssayMockAsset(asset: LearningAssetRecord): boolean {
-  return isEssayMockContext(asset.payload.essayContext);
+  return asset.purpose === LearningAssetPurpose.Mock;
+}
+
+function countEssayMockAssets(
+  runtime: Awaited<ReturnType<typeof initializeTutorRuntime>>,
+  examCycleId: Parameters<typeof runtime.learningAssetStore.list>[0]['examCycleId']
+): Promise<number> {
+  return runtime.learningAssetStore.count({
+    examCycleId,
+    kinds: [LearningAssetKind.EssayQuestion],
+    status: LearningAssetStatus.Ready,
+    purposes: [LearningAssetPurpose.Mock],
+    latestPerBusinessKey: true
+  });
+}
+
+function essayMockHistoryItem(asset: LearningAssetRecord): ExamHistoryItem {
+  const rawContext = asset.payload.essayContext;
+  const essayContext = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
+    ? rawContext as Record<string, unknown>
+    : {};
+  return {
+    id: asset.id,
+    subject: '申论',
+    date: typeof essayContext.date === 'string'
+      ? essayContext.date
+      : new Date(asset.createdAt).toISOString().slice(0, 10),
+    title: asset.title,
+    questionSetId: asset.businessKey,
+    essayEntryMode: normalizeEssayQuestionSetMode(essayContext.entryMode),
+    essayTopic: typeof essayContext.topic === 'string' ? essayContext.topic : asset.title,
+    essayType: essayContext.type === 'long' ? 'long' : 'short',
+    essayPurpose: 'mock',
+    questionCount: 1,
+    correctCount: 0,
+    accuracy: 0,
+    createdAt: asset.createdAt
+  };
 }

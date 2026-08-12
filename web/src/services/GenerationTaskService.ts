@@ -75,6 +75,7 @@ export class GenerationTaskService {
       targetResourceType: TaskTargetType.BusinessOperation,
       targetResourceId: scopeKey,
       inputSnapshot: {
+        taskSchemaVersion: 2,
         projectId,
         intent: input.intent,
         title,
