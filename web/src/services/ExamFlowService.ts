@@ -105,6 +105,17 @@ function statsFrom(history: ExamHistoryItem[]): ExamStats {
   };
 }
 
+function essayMockStats(total: number, history: ExamHistoryItem[]): ExamStats {
+  // Essay mock question assets are not scored records yet. Keep the aggregate
+  // explicitly unscored instead of deriving misleading values from page one.
+  return {
+    total,
+    averageAccuracy: 0,
+    bestAccuracy: 0,
+    latest: history[0]
+  };
+}
+
 export class ExamFlowService {
   readContext(): ExamStartContext {
     const subject = normalizeSubject(localStorage.getItem('exam-subject') || '行测');
@@ -192,7 +203,7 @@ export class ExamFlowService {
       focusTags: FOCUS_TAGS,
       history,
       stats: subject === '申论'
-        ? { ...statsFrom(history), total: essayMockTotal }
+        ? essayMockStats(essayMockTotal, history)
         : statsFrom(history)
     };
   }

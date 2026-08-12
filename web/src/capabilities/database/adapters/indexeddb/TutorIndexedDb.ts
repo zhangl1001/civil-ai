@@ -239,7 +239,14 @@ export class TutorIndexedDb {
   private openDatabase(): Promise<void> {
     if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB is not available in this environment'));
     return new Promise((resolve, reject) => {
+      let upgradeError: Error | undefined;
       const request = globalThis.indexedDB.open(TUTOR_INDEXEDDB_NAME, TUTOR_INDEXEDDB_VERSION);
+      const failUpgrade = (stage: string, cause: unknown) => {
+        if (upgradeError) return;
+        const detail = cause instanceof Error ? cause.message : String(cause || 'unknown error');
+        upgradeError = new Error(`Tutor IndexedDB upgrade failed during ${stage}: ${detail}`);
+        request.transaction?.abort();
+      };
       request.onupgradeneeded = (event) => {
         const database = request.result;
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.CandidateCycleBundles)) {
@@ -350,7 +357,7 @@ export class TutorIndexedDb {
           );
         }
         if (event.oldVersion < 31 && learningAssetStore) {
-          migrateLearningAssetPurposes(learningAssetStore, agentRunStore);
+          migrateLearningAssetPurposes(learningAssetStore, agentRunStore, failUpgrade);
         }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionSources)) {
           const sourceStore = database.createObjectStore(TutorIndexedDbStore.QuestionSources, { keyPath: 'id' });
@@ -442,7 +449,7 @@ export class TutorIndexedDb {
         this.database.onversionchange = () => this.close();
         resolve();
       };
-      request.onerror = () => reject(request.error ?? new Error('Tutor IndexedDB failed to open'));
+      request.onerror = () => reject(upgradeError ?? request.error ?? new Error('Tutor IndexedDB failed to open'));
       request.onblocked = () => reject(new Error('Tutor IndexedDB upgrade is blocked by another tab'));
     });
   }
@@ -453,47 +460,65 @@ export class TutorIndexedDb {
   }
 }
 
-function migrateLearningAssetPurposes(store: IDBObjectStore, agentRunStore?: IDBObjectStore): void {
-  if (!agentRunStore) {
-    migrateLearningAssetPurposeRecords(store, new Map());
-    return;
-  }
-  const runRequest = agentRunStore.getAll();
-  runRequest.onsuccess = () => {
-    const sourceByRunId = new Map<string, string>();
-    for (const raw of runRequest.result as Array<Record<string, unknown>>) {
-      const run = objectValue(raw.run);
-      const snapshot = objectValue(run.inputSnapshot);
-      if (typeof run.id === 'string' && typeof snapshot.sourceId === 'string') {
-        sourceByRunId.set(run.id, snapshot.sourceId);
-      }
-    }
-    migrateLearningAssetPurposeRecords(store, sourceByRunId);
-  };
-}
-
-function migrateLearningAssetPurposeRecords(store: IDBObjectStore, sourceByRunId: ReadonlyMap<string, string>): void {
+function migrateLearningAssetPurposes(
+  store: IDBObjectStore,
+  agentRunStore: IDBObjectStore | undefined,
+  onError: (stage: string, cause: unknown) => void
+): void {
   const request = store.openCursor();
+  request.onerror = () => onError('learning asset cursor', request.error);
   request.onsuccess = () => {
     const cursor = request.result;
     if (!cursor) return;
     const asset = cursor.value as Record<string, unknown>;
-    if (asset.kind === 'essay_question' && !asset.purpose) {
-      const payload = objectValue(asset.payload);
-      const context = objectValue(payload.essayContext);
-      const sourceId = typeof asset.sourceAgentRunId === 'string'
-        ? sourceByRunId.get(asset.sourceAgentRunId)
-        : undefined;
-      cursor.update({ ...asset, purpose: inferLegacyEssayPurpose(context, sourceId) });
+    if (asset.kind !== 'essay_question' || asset.purpose) {
+      cursor.continue();
+      return;
     }
-    cursor.continue();
+    const payload = objectValue(asset.payload);
+    const context = objectValue(payload.essayContext);
+    const sourceAgentRunId = typeof asset.sourceAgentRunId === 'string' ? asset.sourceAgentRunId : undefined;
+    if (!agentRunStore || !sourceAgentRunId || purposeFromContext(context)) {
+      updateLegacyPurpose(cursor, asset, inferLegacyEssayPurpose(context), onError);
+      return;
+    }
+    const runRequest = agentRunStore.get(sourceAgentRunId);
+    runRequest.onerror = () => onError(`Agent run lookup for ${sourceAgentRunId}`, runRequest.error);
+    runRequest.onsuccess = () => {
+      const sourceId = sourceIdFromAgentRun(runRequest.result);
+      updateLegacyPurpose(cursor, asset, inferLegacyEssayPurpose(context, sourceId), onError);
+    };
   };
 }
 
-function inferLegacyEssayPurpose(context: Record<string, unknown>, sourceId?: string): string {
+function updateLegacyPurpose(
+  cursor: IDBCursorWithValue,
+  asset: Record<string, unknown>,
+  purpose: string,
+  onError: (stage: string, cause: unknown) => void
+): void {
+  const updateRequest = cursor.update({ ...asset, purpose });
+  updateRequest.onerror = () => onError(`learning asset update for ${String(asset.id || cursor.primaryKey)}`, updateRequest.error);
+  updateRequest.onsuccess = () => cursor.continue();
+}
+
+function sourceIdFromAgentRun(value: unknown): string | undefined {
+  const aggregate = objectValue(value);
+  const run = objectValue(aggregate.run);
+  const snapshot = objectValue(run.inputSnapshot);
+  return typeof snapshot.sourceId === 'string' ? snapshot.sourceId : undefined;
+}
+
+function purposeFromContext(context: Record<string, unknown>): string | undefined {
   if (context.purpose === 'mock') return 'mock';
   if (context.purpose === 'true_question' || context.entryMode === 'true') return 'true_question';
   if (context.purpose === 'practice' || context.entryMode === 'tutor') return 'practice';
+  return undefined;
+}
+
+function inferLegacyEssayPurpose(context: Record<string, unknown>, sourceId?: string): string {
+  const explicitPurpose = purposeFromContext(context);
+  if (explicitPurpose) return explicitPurpose;
   if (sourceId?.startsWith('mock:申论:')) return 'mock';
   if (sourceId?.startsWith('essay:')) return 'practice';
   return 'legacy_unknown';

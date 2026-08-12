@@ -25,6 +25,7 @@ export interface EssayPracticeContext {
 export interface EssayPracticeSet {
   readonly key: string;
   readonly updatedAt: number;
+  readonly classification: LearningAssetPurpose;
   readonly context: EssayPracticeContext;
   readonly question?: { readonly id: string; readonly title: string };
 }
@@ -68,7 +69,11 @@ export class EssayPracticeCenterFeature {
       examCycleId: cycle.examCycle.id,
       kinds: [LearningAssetKind.EssayQuestion],
       status: LearningAssetStatus.Ready,
-      purposes: [LearningAssetPurpose.Practice, LearningAssetPurpose.TrueQuestion],
+      purposes: [
+        LearningAssetPurpose.Practice,
+        LearningAssetPurpose.TrueQuestion,
+        LearningAssetPurpose.LegacyUnknown
+      ],
       latestPerBusinessKey: true,
       limit: 200
     });
@@ -76,6 +81,7 @@ export class EssayPracticeCenterFeature {
       .map((asset) => ({
         key: asset.businessKey,
         updatedAt: asset.updatedAt,
+        classification: asset.purpose ?? LearningAssetPurpose.LegacyUnknown,
         context: contextFromAsset(asset),
         question: questionFromAsset(asset)
       }))

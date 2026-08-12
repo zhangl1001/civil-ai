@@ -48,7 +48,7 @@ export class IndexedDbLearningAssetRepository implements LearningAssetRepository
         && item.businessKey === businessKey
         && item.status !== LearningAssetStatus.Retired
       ))
-      .sort(compareLatest)[0];
+      .sort(compareBusinessVersion)[0];
   }
 
   async list(query: LearningAssetQuery): Promise<readonly LearningAssetRecord[]> {
@@ -58,33 +58,22 @@ export class IndexedDbLearningAssetRepository implements LearningAssetRepository
     const offset = query.offset ?? 0;
     if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Learning asset query offset must be a non-negative integer');
     const source = await this.querySource(query);
-    const filtered = source
-      .filter((item) => item.examCycleId === query.examCycleId)
-      .filter((item) => !query.kinds?.length || query.kinds.includes(item.kind))
-      .filter((item) => !query.businessKey || item.businessKey === query.businessKey)
-      .filter((item) => !query.status || item.status === query.status)
-      .filter((item) => !query.purposes?.length || (item.purpose && query.purposes.includes(item.purpose)))
-      .sort(compareLatest);
-    return (query.latestPerBusinessKey ? latestPerBusinessKey(filtered) : filtered)
+    const filtered = source.filter((item) => matchesQuery(item, query));
+    return (query.latestPerBusinessKey ? latestPerBusinessKey(filtered) : [...filtered])
+      .sort(compareTimeline)
       .slice(offset, offset + query.limit);
   }
 
   async count(query: Omit<LearningAssetQuery, 'limit' | 'offset'>): Promise<number> {
     const source = await this.querySource(query);
-    const filtered = source
-      .filter((item) => item.examCycleId === query.examCycleId)
-      .filter((item) => !query.kinds?.length || query.kinds.includes(item.kind))
-      .filter((item) => !query.businessKey || item.businessKey === query.businessKey)
-      .filter((item) => !query.status || item.status === query.status)
-      .filter((item) => !query.purposes?.length || (item.purpose && query.purposes.includes(item.purpose)))
-      .sort(compareLatest);
+    const filtered = source.filter((item) => matchesQuery(item, query));
     return (query.latestPerBusinessKey ? latestPerBusinessKey(filtered) : filtered).length;
   }
 
   async listAll(examCycleId: ExamCycleId): Promise<readonly LearningAssetRecord[]> {
     return (await this.database.getAll<LearningAssetRecord>(TutorIndexedDbStore.LearningAssets))
       .filter((item) => item.examCycleId === examCycleId)
-      .sort(compareLatest);
+      .sort(compareTimeline);
   }
 
   async retire(id: string, updatedAt: InstantMs, context: TransactionContext): Promise<void> {
@@ -136,12 +125,30 @@ export class IndexedDbLearningAssetRepository implements LearningAssetRepository
   }
 }
 
-function compareLatest(left: LearningAssetRecord, right: LearningAssetRecord): number {
+function matchesQuery(
+  item: LearningAssetRecord,
+  query: Pick<LearningAssetQuery, 'examCycleId' | 'kinds' | 'businessKey' | 'status' | 'purposes'>
+): boolean {
+  return item.examCycleId === query.examCycleId
+    && (!query.kinds?.length || query.kinds.includes(item.kind))
+    && (!query.businessKey || item.businessKey === query.businessKey)
+    && (!query.status || item.status === query.status)
+    && (!query.purposes?.length || Boolean(item.purpose && query.purposes.includes(item.purpose)));
+}
+
+function compareTimeline(left: LearningAssetRecord, right: LearningAssetRecord): number {
   return right.updatedAt - left.updatedAt || right.version - left.version || right.id.localeCompare(left.id);
+}
+
+function compareBusinessVersion(left: LearningAssetRecord, right: LearningAssetRecord): number {
+  return right.version - left.version || right.updatedAt - left.updatedAt || right.id.localeCompare(left.id);
 }
 
 function latestPerBusinessKey(items: readonly LearningAssetRecord[]): LearningAssetRecord[] {
   const latest = new Map<string, LearningAssetRecord>();
-  for (const item of items) if (!latest.has(item.businessKey)) latest.set(item.businessKey, item);
+  for (const item of items) {
+    const current = latest.get(item.businessKey);
+    if (!current || compareBusinessVersion(item, current) < 0) latest.set(item.businessKey, item);
+  }
   return [...latest.values()];
 }

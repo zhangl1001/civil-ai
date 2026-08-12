@@ -27,6 +27,11 @@ export interface LearningAssetQuery {
   readonly businessKey?: string;
   readonly status?: LearningAssetStatus;
   readonly purposes?: readonly LearningAssetPurpose[];
+  /**
+   * Select the highest version among records that match the other query filters.
+   * Results are always ordered by the repository timeline order:
+   * updatedAt DESC, version DESC, id DESC.
+   */
   readonly latestPerBusinessKey?: boolean;
   readonly offset?: number;
   readonly limit: number;

@@ -105,56 +105,41 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
     }
     const offset = query.offset ?? 0;
     if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Learning asset query offset must be a non-negative integer');
-    const conditions = ['asset.exam_cycle_id=?'];
-    const parameters: Array<string | number> = [query.examCycleId];
-    if (query.kinds?.length) {
-      conditions.push(`asset.kind IN (${query.kinds.map(() => '?').join(',')})`);
-      parameters.push(...query.kinds);
-    }
-    if (query.businessKey) {
-      conditions.push('asset.business_key=?');
-      parameters.push(query.businessKey);
-    }
-    if (query.status) {
-      conditions.push('asset.status=?');
-      parameters.push(query.status);
-    }
-    if (query.purposes?.length) {
-      conditions.push(`asset.purpose IN (${query.purposes.map(() => '?').join(',')})`);
-      parameters.push(...query.purposes);
-    }
+    const { conditions, parameters } = buildFilteredQuery(query);
     parameters.push(query.limit, offset);
     const rows = await this.database.query<LearningAssetRow>(
-      `SELECT asset.* FROM learning_assets asset WHERE ${conditions.join(' AND ')}
-       ${latestPredicate(query)}
-       ORDER BY asset.updated_at DESC,asset.version DESC,asset.id DESC LIMIT ? OFFSET ?`,
+      query.latestPerBusinessKey
+        ? `WITH ranked AS (
+             SELECT asset.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY asset.exam_cycle_id,asset.kind,asset.business_key
+                 ORDER BY asset.version DESC,asset.updated_at DESC,asset.id DESC
+               ) AS asset_rank
+             FROM learning_assets asset
+             WHERE ${conditions.join(' AND ')}
+           )
+           SELECT * FROM ranked WHERE asset_rank=1
+           ORDER BY updated_at DESC,version DESC,id DESC LIMIT ? OFFSET ?`
+        : `SELECT asset.* FROM learning_assets asset WHERE ${conditions.join(' AND ')}
+           ORDER BY asset.updated_at DESC,asset.version DESC,asset.id DESC LIMIT ? OFFSET ?`,
       parameters
     );
     return rows.map(mapRow);
   }
 
   async count(query: Omit<LearningAssetQuery, 'limit' | 'offset'>): Promise<number> {
-    const conditions = ['asset.exam_cycle_id=?'];
-    const parameters: Array<string | number> = [query.examCycleId];
-    if (query.kinds?.length) {
-      conditions.push(`asset.kind IN (${query.kinds.map(() => '?').join(',')})`);
-      parameters.push(...query.kinds);
-    }
-    if (query.businessKey) {
-      conditions.push('asset.business_key=?');
-      parameters.push(query.businessKey);
-    }
-    if (query.status) {
-      conditions.push('asset.status=?');
-      parameters.push(query.status);
-    }
-    if (query.purposes?.length) {
-      conditions.push(`asset.purpose IN (${query.purposes.map(() => '?').join(',')})`);
-      parameters.push(...query.purposes);
-    }
+    const { conditions, parameters } = buildFilteredQuery(query);
     const rows = await this.database.query<{ total: number } & SqlRow>(
-      `SELECT COUNT(*) AS total FROM learning_assets asset WHERE ${conditions.join(' AND ')}
-       ${latestPredicate(query)}`,
+      query.latestPerBusinessKey
+        ? `SELECT COUNT(*) AS total FROM (
+             SELECT ROW_NUMBER() OVER (
+               PARTITION BY asset.exam_cycle_id,asset.kind,asset.business_key
+               ORDER BY asset.version DESC,asset.updated_at DESC,asset.id DESC
+             ) AS asset_rank
+             FROM learning_assets asset
+             WHERE ${conditions.join(' AND ')}
+           ) ranked WHERE asset_rank=1`
+        : `SELECT COUNT(*) AS total FROM learning_assets asset WHERE ${conditions.join(' AND ')}`,
       parameters
     );
     return Number(rows[0]?.total || 0);
@@ -190,15 +175,28 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
   }
 }
 
-function latestPredicate(query: Pick<LearningAssetQuery, 'latestPerBusinessKey'>): string {
-  if (!query.latestPerBusinessKey) return '';
-  return `AND NOT EXISTS (
-    SELECT 1 FROM learning_assets newer
-    WHERE newer.exam_cycle_id=asset.exam_cycle_id
-      AND newer.kind=asset.kind
-      AND newer.business_key=asset.business_key
-      AND (newer.version>asset.version OR (newer.version=asset.version AND newer.id>asset.id))
-  )`;
+function buildFilteredQuery(
+  query: Pick<LearningAssetQuery, 'examCycleId' | 'kinds' | 'businessKey' | 'status' | 'purposes'>
+): { conditions: string[]; parameters: Array<string | number> } {
+  const conditions = ['asset.exam_cycle_id=?'];
+  const parameters: Array<string | number> = [query.examCycleId];
+  if (query.kinds?.length) {
+    conditions.push(`asset.kind IN (${query.kinds.map(() => '?').join(',')})`);
+    parameters.push(...query.kinds);
+  }
+  if (query.businessKey) {
+    conditions.push('asset.business_key=?');
+    parameters.push(query.businessKey);
+  }
+  if (query.status) {
+    conditions.push('asset.status=?');
+    parameters.push(query.status);
+  }
+  if (query.purposes?.length) {
+    conditions.push(`asset.purpose IN (${query.purposes.map(() => '?').join(',')})`);
+    parameters.push(...query.purposes);
+  }
+  return { conditions, parameters };
 }
 
 function mapRow(row: LearningAssetRow): LearningAssetRecord {

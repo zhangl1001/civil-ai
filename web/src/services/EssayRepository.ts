@@ -62,6 +62,7 @@ export interface EssayLocalState {
 
 export interface EssayQuestionSetSummary {
   key: string;
+  classification: LearningAssetPurpose;
   context: EssayContext;
   question: EssayQuestionRecord | null;
   updatedAt: number;
@@ -153,7 +154,8 @@ export class EssayRepository {
     };
   }
 
-  async saveDraft(draft: string, context: EssayContext): Promise<EssayLocalState> {
+  /** Write-only so autosave never pays for a full state read on the typing path. */
+  async saveDraft(draft: string, context: EssayContext): Promise<void> {
     const normalized = normalizeContext(context);
     const { runtime, examCycleId } = await this.activeCycle();
     await runtime.learningAssetStore.saveDraft({
@@ -163,11 +165,11 @@ export class EssayRepository {
       title: `${normalized.topic}草稿 · ${normalized.date}`,
       payload: { draft, essayContext: normalized } as unknown as JsonObject
     });
-    return this.getState(normalized);
   }
 
   async resetDraft(context: EssayContext): Promise<EssayLocalState> {
-    return this.saveDraft('', context);
+    await this.saveDraft('', context);
+    return this.getState(context);
   }
 
   async deleteState(context: EssayContext): Promise<EssayLocalState> {
@@ -187,7 +189,11 @@ export class EssayRepository {
       examCycleId,
       kinds: [LearningAssetKind.EssayQuestion],
       status: LearningAssetStatus.Ready,
-      purposes: [LearningAssetPurpose.Practice, LearningAssetPurpose.TrueQuestion],
+      purposes: [
+        LearningAssetPurpose.Practice,
+        LearningAssetPurpose.TrueQuestion,
+        LearningAssetPurpose.LegacyUnknown
+      ],
       latestPerBusinessKey: true,
       offset: options.offset ?? 0,
       limit: options.limit ?? 20
@@ -207,12 +213,13 @@ export class EssayRepository {
       };
       return {
         key: asset.businessKey,
+        classification: asset.purpose ?? LearningAssetPurpose.LegacyUnknown,
         context: itemContext,
         question: asQuestion(asset.payload.question),
         updatedAt: asset.updatedAt
       };
     });
-    return items.sort((left, right) => right.updatedAt - left.updatedAt);
+    return items;
   }
 
   async countStates(): Promise<number> {
@@ -221,7 +228,11 @@ export class EssayRepository {
       examCycleId,
       kinds: [LearningAssetKind.EssayQuestion],
       status: LearningAssetStatus.Ready,
-      purposes: [LearningAssetPurpose.Practice, LearningAssetPurpose.TrueQuestion],
+      purposes: [
+        LearningAssetPurpose.Practice,
+        LearningAssetPurpose.TrueQuestion,
+        LearningAssetPurpose.LegacyUnknown
+      ],
       latestPerBusinessKey: true
     });
   }

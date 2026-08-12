@@ -33,6 +33,7 @@ export class LearningAssetStore {
   async save(command: SaveLearningAssetCommand): Promise<LearningAssetRecord> {
     const businessKey = command.businessKey.trim();
     if (!businessKey) throw new Error('Learning asset businessKey is required');
+    assertPurposeBoundary(command);
     // A generation retry can race with a previous completion between the
     // read and insert. Re-read the version once instead of failing the whole
     // Agent run on the expected UNIQUE(version) conflict.
@@ -68,6 +69,7 @@ export class LearningAssetStore {
   async saveDraft(command: SaveLearningAssetCommand): Promise<LearningAssetRecord> {
     const businessKey = command.businessKey.trim();
     if (!businessKey) throw new Error('Learning asset businessKey is required');
+    assertPurposeBoundary(command);
     const previous = await this.repository.findLatest(command.examCycleId, command.kind, businessKey);
     const now = this.clock.now();
     const asset: LearningAssetRecord = {
@@ -120,20 +122,13 @@ export class LearningAssetStore {
 }
 
 function resolvePurpose(command: SaveLearningAssetCommand): LearningAssetPurpose | undefined {
-  if (command.purpose) return command.purpose;
-  if (command.kind !== LearningAssetKind.EssayQuestion) return undefined;
-  const rawContext = command.payload.essayContext;
-  const context = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
-    ? rawContext as JsonObject
-    : {};
-  if (context.purpose === LearningAssetPurpose.Mock) return LearningAssetPurpose.Mock;
-  if (context.purpose === LearningAssetPurpose.TrueQuestion || context.entryMode === 'true') {
-    return LearningAssetPurpose.TrueQuestion;
+  return command.purpose;
+}
+
+function assertPurposeBoundary(command: SaveLearningAssetCommand): void {
+  if (command.kind === LearningAssetKind.EssayQuestion && !command.purpose) {
+    throw new TypeError('Essay question assets require an explicit purpose');
   }
-  if (context.purpose === LearningAssetPurpose.Practice || context.entryMode === 'self' || context.entryMode === 'tutor') {
-    return LearningAssetPurpose.Practice;
-  }
-  return LearningAssetPurpose.LegacyUnknown;
 }
 
 function isVersionConflict(error: unknown): boolean {

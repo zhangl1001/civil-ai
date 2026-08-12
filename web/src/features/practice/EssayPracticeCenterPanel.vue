@@ -68,7 +68,7 @@
       <div class="essay-history">
         <button v-for="item in allStates" :key="item.key" type="button" @click="openSet(item)">
           <span>{{ item.question?.title || item.context.topic }}</span>
-          <em>{{ modeLabelFor(item.context.entryMode) }} · {{ item.context.date }}</em>
+            <em>{{ item.classification === 'legacy_unknown' ? '历史未分类' : modeLabelFor(item.context.entryMode) }} · {{ item.context.date }}</em>
         </button>
         <AppStateView v-if="!allStates.length" compact title="暂无历史题组" description="完成一次申论生成后会显示在这里。" />
       </div>
@@ -147,7 +147,10 @@ const modeCopy = computed(() => {
   if (props.modelValue === 'true') return { eyebrow: '真题校准', title: '用真实申论材料校准作答能力', description: '按年份、地区和题型练习真题，批改结果进入同一套能力证据链。' };
   return { eyebrow: '当前私教主线', title: '申论讲解、作答与复盘', description: '私教根据备考阶段、薄弱维度和剩余时间安排材料学习、作答训练与批改。' };
 });
-const modeStates = computed(() => allStates.value.filter((item) => normalizedMode(item.context.entryMode) === props.modelValue));
+const modeStates = computed(() => allStates.value.filter((item) => (
+  item.classification !== 'legacy_unknown'
+  && normalizedMode(item.context.entryMode) === props.modelValue
+)));
 const sets = computed(() => modeStates.value);
 const mainlineDescription = computed(() => props.modelValue === 'tutor' ? '根据今日计划和能力证据安排' : props.modelValue === 'self' ? '选择题型后生成独立题组' : '导入或整理真实申论材料后练习');
 const actionEyebrow = computed(() => props.modelValue === 'tutor' ? '今日教学动作' : props.modelValue === 'self' ? '自主出题' : '真题入口');
