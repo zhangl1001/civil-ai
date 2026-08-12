@@ -17,7 +17,8 @@ export const PracticeModuleCode = {
   Quantity: 'quantity',
   CommonSense: 'common_sense',
   Aptitude: 'aptitude',
-  Essay: 'essay'
+  Essay: 'essay',
+  Interview: 'interview'
 } as const;
 
 export type PracticeModuleCode = typeof PracticeModuleCode[keyof typeof PracticeModuleCode];
@@ -30,6 +31,7 @@ export const PRACTICE_MODULE_LABELS: Readonly<Record<string, string>> = {
   [PracticeModuleCode.CommonSense]: '常识判断',
   [PracticeModuleCode.Aptitude]: '行测',
   [PracticeModuleCode.Essay]: '申论',
+  [PracticeModuleCode.Interview]: '面试',
   行测模考: '行测模考'
 };
 

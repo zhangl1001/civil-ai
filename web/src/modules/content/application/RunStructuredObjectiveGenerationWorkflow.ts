@@ -45,6 +45,7 @@ import { GenerationModelInvoker } from './GenerationModelInvoker';
 import {
   createPracticeGenerationPlan,
   coreGenerationTokenBudget,
+  practiceQuestionAcceptanceRatio,
   practiceCoreResponseSchema,
   practiceCoreSystem,
   shouldGeneratePracticeBlocksInParallel
@@ -491,7 +492,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
     if (
       expectedCount < 1
       || retainedQuestions.length < 1
-      || retainedQuestions.length / expectedCount < 0.8
+      || retainedQuestions.length / expectedCount
+        < practiceQuestionAcceptanceRatio(expectedCapabilityCode)
     ) return undefined;
     try {
       return {

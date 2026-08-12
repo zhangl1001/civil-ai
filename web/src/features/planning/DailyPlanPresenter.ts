@@ -1,4 +1,5 @@
 import type { CapabilityNodeId, JsonObject } from '@/kernel/public';
+import { practiceModuleLabel } from '@/domain/labels';
 import type {
   DailyPlanAggregate,
   DailyPlanBlockRecord,
@@ -41,7 +42,7 @@ export function buildDailyPlanGroups(
       item,
       block,
       capabilityName:capability?.name || '待诊断能力点',
-      moduleName:block?.module || capability?.module || '综合'
+      moduleName: practiceModuleLabel(block?.module || capability?.module || '')
     });
     groups.set(item.category, entries);
   }

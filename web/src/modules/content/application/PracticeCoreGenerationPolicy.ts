@@ -18,6 +18,7 @@ export interface PracticeGenerationPlan {
 const LARGE_BATCH_THRESHOLD = 5;
 const DEFAULT_SHARD_SIZE = 5;
 const COMPLEX_SHARD_SIZE = 4;
+const GRAPHICAL_SHARD_SIZE = 3;
 // Large batches use short independent provider calls. This is separate from
 // the user's Agent task concurrency and remains bounded by the global gate.
 const DEFAULT_SHARD_CONCURRENCY = 6;
@@ -44,7 +45,8 @@ export function createPracticeGenerationPlan(
   capabilityCode = ''
 ): PracticeGenerationPlan {
   const totalCount = Math.max(1, Math.floor(questionCount));
-  if (totalCount <= LARGE_BATCH_THRESHOLD) {
+  const graphical = isGraphicalGenerationCapability(capabilityCode);
+  if (totalCount <= LARGE_BATCH_THRESHOLD && !(graphical && totalCount > GRAPHICAL_SHARD_SIZE)) {
     return {
       totalCount,
       // Three- and four-question tutor drills are the latency-sensitive path.
@@ -55,7 +57,11 @@ export function createPracticeGenerationPlan(
     };
   }
   const complex = isComplexVisualStructure(capabilityCode);
-  const shardSize = complex ? COMPLEX_SHARD_SIZE : DEFAULT_SHARD_SIZE;
+  const shardSize = graphical
+    ? GRAPHICAL_SHARD_SIZE
+    : complex
+      ? COMPLEX_SHARD_SIZE
+      : DEFAULT_SHARD_SIZE;
   const shards: PracticeGenerationShard[] = [];
   for (let offset = 0, index = 0; offset < totalCount; offset += shardSize, index += 1) {
     shards.push({
@@ -71,11 +77,25 @@ export function createPracticeGenerationPlan(
   };
 }
 
+/**
+ * Graphical questions carry several independent SVG documents per question.
+ * They can publish a smaller valid subset without exposing malformed questions.
+ * Other capabilities retain the established 80% boundary.
+ */
+export function practiceQuestionAcceptanceRatio(capabilityCode = ''): number {
+  return isGraphicalGenerationCapability(capabilityCode) ? 0.6 : 0.8;
+}
+
+export function isGraphicalGenerationCapability(capabilityCode: string): boolean {
+  return capabilityCode === 'aptitude.judgment.graphical'
+    || capabilityCode.startsWith('aptitude.judgment.graphical.');
+}
+
 export function shouldGeneratePracticeBlocksInParallel(
   plan: PracticeGenerationPlan
 ): boolean {
   return (plan.totalCount >= 3 && plan.totalCount <= 4)
-    || plan.totalCount > LARGE_BATCH_THRESHOLD;
+    || plan.shards.length > 1;
 }
 
 export function practiceCoreSystem(system: string, capabilityCode = ''): string {
@@ -208,7 +228,7 @@ function capabilityStructuralContract(capabilityCode: string): string {
       '题干只保留当前小题的设问，选项只保留当前小题的候选答案，不要把资料表重复写入各题。'
     ].join('\n');
   }
-  if (capabilityCode.startsWith('aptitude.judgment.graphical.')) {
+  if (isGraphicalGenerationCapability(capabilityCode)) {
     return [
       '本次是图形推理题。每道题必须提供一个完整、可独立渲染的 SVG visual，并包含 viewBox。',
       '图形顺序必须与规律顺序一致，使用 preserveAspectRatio 或等价的等比布局，不得拉伸、裁断或依赖横向滚动。',
@@ -220,14 +240,14 @@ function capabilityStructuralContract(capabilityCode: string): string {
 
 function isComplexVisualStructure(capabilityCode: string): boolean {
   return capabilityCode.startsWith('aptitude.data_analysis.')
-    || capabilityCode.startsWith('aptitude.judgment.graphical.');
+    || isGraphicalGenerationCapability(capabilityCode);
 }
 
 function questionShardLatencyContract(capabilityCode: string): string {
   if (capabilityCode.startsWith('aptitude.data_analysis.')) {
     return '首轮只交付作答核心块。公共资料集中放入一个 materialGroup，题目不得重复资料；每个小题设问与选项保持简洁。';
   }
-  if (capabilityCode.startsWith('aptitude.judgment.graphical.')) {
+  if (isGraphicalGenerationCapability(capabilityCode)) {
     return '首轮只交付作答核心块。SVG 仅保留表达规律所需的图元和属性，不添加装饰、注释、元数据或重复图层。';
   }
   if (capabilityCode.startsWith('aptitude.verbal.')) {

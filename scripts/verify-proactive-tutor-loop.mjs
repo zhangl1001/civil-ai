@@ -13,10 +13,11 @@ const server = await createServer({
 });
 
 try {
-  const [tutoring, agent, planNavigation] = await Promise.all([
+  const [tutoring, agent, planNavigation, planPresenter] = await Promise.all([
     server.ssrLoadModule('/src/modules/tutoring/public.ts'),
     server.ssrLoadModule('/src/modules/agent/public.ts'),
-    server.ssrLoadModule('/src/features/planning/DailyPlanNavigation.ts')
+    server.ssrLoadModule('/src/features/planning/DailyPlanNavigation.ts'),
+    server.ssrLoadModule('/src/features/planning/DailyPlanPresenter.ts')
   ]);
   assert(agent.tutorToolCatalog.some((tool) => tool.name === 'tutor.read_daily_context'));
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('lecture')).path, '/vue/study/lecture');
@@ -29,8 +30,12 @@ try {
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('digest')).path, '/vue/digest');
   const practiceLocation = planNavigation.dailyPlanItemLocation(planItem('review'));
   assert.equal(practiceLocation.path, '/vue/practice');
+  assert.equal(practiceLocation.query.subject, 'aptitude');
   assert.equal(practiceLocation.query.dailyPlanItemId, 'DailyPlanItemId:navigation');
   assert.equal(practiceLocation.query.start, '1');
+  assert.equal(planPresenter.buildDailyPlanGroups(planForPresentation('judgment'), new Map())[0].items[0].moduleName, '判断推理');
+  assert.equal(planPresenter.buildDailyPlanGroups(planForPresentation('essay'), new Map())[0].items[0].moduleName, '申论');
+  assert.equal(planPresenter.buildDailyPlanGroups(planForPresentation('interview'), new Map())[0].items[0].moduleName, '面试');
 
   const now = 1_785_100_000_000;
   const clock = { now: () => now, monotonicNowMs: () => 1 };
@@ -207,6 +212,24 @@ function planItem(itemType) {
     reason: 'test',
     status: 'pending',
     actualMinutes: 0
+  };
+}
+
+function planForPresentation(module) {
+  return {
+    plan: {
+      id: 'DailyPlanId:presentation',
+      availableMinutes: 10
+    },
+    blocks: [{
+      id: 'DailyPlanBlockId:presentation',
+      module
+    }],
+    items: [{
+      ...planItem('review'),
+      dailyPlanBlockId: 'DailyPlanBlockId:presentation',
+      category: 'review'
+    }]
   };
 }
 

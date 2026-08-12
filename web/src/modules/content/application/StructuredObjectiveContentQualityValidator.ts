@@ -8,6 +8,10 @@ import {
   GeneratedContentValidationTier
 } from '../domain/GeneratedContentBlockPolicy';
 import type { GeneratedLectureQuestionSet } from './GeneratedContentParser';
+import {
+  isGraphicalGenerationCapability,
+  practiceQuestionAcceptanceRatio
+} from './PracticeCoreGenerationPolicy';
 
 export interface ContentQualityIssue {
   readonly code: string;
@@ -63,7 +67,6 @@ const pendingIssueCodes = new Set<string>([
   'quality.explanation_section_missing',
   'quality.option_analysis_incomplete'
 ]);
-const PARTIAL_ACCEPTANCE_RATIO = 0.8;
 
 export class StructuredObjectiveContentQualityValidator {
   validate(output: GeneratedLectureQuestionSet, expectedCount: number, expectedCapabilityCode?: string): ContentQualityReport {
@@ -73,7 +76,11 @@ export class StructuredObjectiveContentQualityValidator {
       issue(issues, 'quality.lecture_empty', '$.lecture', 'Generated lecture must contain renderable teaching content');
     }
     if (output.questions.length !== expectedCount) {
-      const code = isAcceptablePartialCount(output.questions.length, expectedCount)
+      const code = isAcceptablePartialCount(
+        output.questions.length,
+        expectedCount,
+        expectedCapabilityCode
+      )
         ? 'quality.question_count_partial'
         : 'quality.question_count_mismatch';
       issue(issues, code, '$.questions', `Expected ${expectedCount} questions, got ${output.questions.length}`);
@@ -122,11 +129,15 @@ function isBlockingIssue(code: string): boolean {
   return blockingIssueCodes.has(code);
 }
 
-function isAcceptablePartialCount(actualCount: number, expectedCount: number): boolean {
+function isAcceptablePartialCount(
+  actualCount: number,
+  expectedCount: number,
+  expectedCapabilityCode = ''
+): boolean {
   return expectedCount > 0
     && actualCount > 0
     && actualCount < expectedCount
-    && actualCount / expectedCount >= PARTIAL_ACCEPTANCE_RATIO;
+    && actualCount / expectedCount >= practiceQuestionAcceptanceRatio(expectedCapabilityCode);
 }
 
 function validateMaterialGroups(
@@ -246,9 +257,7 @@ function compactLength(value: string): number {
   return value.replace(/\s+/g, '').length;
 }
 
-function isGraphicCapability(value: string): boolean {
-  return /(?:visual|graphic|figure|sequence|图形|图推)/i.test(value);
-}
+const isGraphicCapability = isGraphicalGenerationCapability;
 
 function hasUnresolvedContextReference(prompt: string): boolean {
   const normalized = prompt.replace(/\s+/g, '');

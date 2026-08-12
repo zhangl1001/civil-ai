@@ -27,7 +27,12 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord, subject?: Subje
     }
     return {
       path: '/vue/practice',
-      query: { ...context, ...(subject === 'essay' ? { subject: 'essay' } : {}), mode: 'tutor', start: '1' }
+      query: {
+        ...context,
+        subject: subject === 'essay' ? 'essay' : 'aptitude',
+        mode: 'tutor',
+        start: '1'
+      }
     };
   }
   if (item.itemType === DailyPlanItemType.Lecture) {
