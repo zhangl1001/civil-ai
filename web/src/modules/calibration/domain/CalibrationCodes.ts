@@ -15,4 +15,4 @@ export const ScoreForecastBasis = {
 } as const;
 export type ScoreForecastBasis = typeof ScoreForecastBasis[keyof typeof ScoreForecastBasis];
 
-export const ABILITY_CALIBRATION_ALGORITHM_VERSION = 'ability-calibration:v1';
+export const ABILITY_CALIBRATION_ALGORITHM_VERSION = 'ability-calibration:v2';

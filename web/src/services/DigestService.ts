@@ -2,6 +2,7 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
 import type { DigestSection, DigestTab } from '@/domain/digest';
 import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
+import { LearningProgressStatus, LearningResourceType } from '@/modules/learning-progress/public';
 import { decidePreparationStrategy, prescribeDailyLearningLoad } from '@/modules/planning/public';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
@@ -13,7 +14,13 @@ export interface DigestDashboard {
   content: string;
   sections: DigestSection[];
   taskScopeKey: string;
+  isCompleted: boolean;
   history: Array<{ date: string; tab: DigestTab; path: string; updatedAt: number }>;
+}
+
+export interface DigestLearningSummary {
+  contentCount: number;
+  isCompleted: boolean;
 }
 
 const TITLE_BY_TAB: Record<DigestTab, string> = {
@@ -68,15 +75,55 @@ export class DigestService {
     localStorage.setItem('digest-active-tab', tab);
   }
 
+  async learningSummary(date = today()): Promise<DigestLearningSummary> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return { contentCount: 0, isCompleted: false };
+    const tabs: readonly DigestTab[] = ['news', 'tips'];
+    const entries = await Promise.all(tabs.map(async (tab) => {
+      const [asset, progress] = await Promise.all([
+        runtime.learningAssetStore.findLatest(
+          cycle.examCycle.id,
+          LearningAssetKind.DigestDaily,
+          businessKey(tab, date)
+        ),
+        runtime.learningProgressRepository.find(
+          cycle.examCycle.id,
+          LearningResourceType.Digest,
+          digestResourceKey(tab, date)
+        )
+      ]);
+      const content = typeof asset?.payload.content === 'string'
+        ? normalizeMarkdownSource(asset.payload.content)
+        : '';
+      return {
+        contentCount: parseSections(content, asset?.id || businessKey(tab, date)).length,
+        isCompleted: progress?.status === LearningProgressStatus.Completed
+      };
+    }));
+    const available = entries.filter((entry) => entry.contentCount > 0);
+    return {
+      contentCount: available.reduce((sum, entry) => sum + entry.contentCount, 0),
+      isCompleted: available.length > 0 && available.every((entry) => entry.isCompleted)
+    };
+  }
+
   async dashboard(tab = this.readActiveTab(), date = today()): Promise<DigestDashboard> {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
-    if (!cycle) return { date, tab, content: '', sections: [], taskScopeKey: '', history: [] };
-    const current = await runtime.learningAssetStore.findLatest(
-      cycle.examCycle.id,
-      LearningAssetKind.DigestDaily,
-      businessKey(tab, date)
-    );
+    if (!cycle) return { date, tab, content: '', sections: [], taskScopeKey: '', isCompleted: false, history: [] };
+    const [current, progress] = await Promise.all([
+      runtime.learningAssetStore.findLatest(
+        cycle.examCycle.id,
+        LearningAssetKind.DigestDaily,
+        businessKey(tab, date)
+      ),
+      runtime.learningProgressRepository.find(
+        cycle.examCycle.id,
+        LearningResourceType.Digest,
+        digestResourceKey(tab, date)
+      )
+    ]);
     const content = typeof current?.payload.content === 'string'
       ? normalizeMarkdownSource(current.payload.content)
       : '';
@@ -107,8 +154,20 @@ export class DigestService {
       content,
       sections,
       taskScopeKey: digestTaskScope(cycle.project.id, tab, date),
+      isCompleted: progress?.status === LearningProgressStatus.Completed,
       history
     };
+  }
+
+  async markStarted(tab: DigestTab, date: string): Promise<void> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return;
+    await runtime.trackLearningProgress.start({
+      examCycleId: cycle.examCycle.id,
+      resourceType: LearningResourceType.Digest,
+      resourceKey: digestResourceKey(tab, date)
+    });
   }
 
   async saveGenerated(tab: DigestTab, date: string, content: string): Promise<void> {
@@ -198,14 +257,23 @@ export class DigestService {
     });
   }
 
-  async completeDailyPlanDigest(input: {
-    readonly dailyPlanItemId: string;
+  async completeDigest(input: {
+    readonly dailyPlanItemId?: string;
     readonly tab: DigestTab;
     readonly date: string;
     readonly actualMinutes?: number;
   }) {
     const runtime = await initializeTutorRuntime();
-    return runtime.completeDailyPlanItem.execute({
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    await runtime.trackLearningProgress.complete({
+      examCycleId: cycle.examCycle.id,
+      resourceType: LearningResourceType.Digest,
+      resourceKey: digestResourceKey(input.tab, input.date),
+      dailyPlanItemId: input.dailyPlanItemId
+    });
+    if (!input.dailyPlanItemId) return;
+    await runtime.completeDailyPlanItem.execute({
       dailyPlanItemId: input.dailyPlanItemId,
       actualMinutes: input.actualMinutes,
       resultSummary: { tab: input.tab, date: input.date, contentConsumed: true },
@@ -237,6 +305,10 @@ export const digestService = new DigestService();
 
 function digestTaskScope(projectId: string, tab: DigestTab, date: string): string {
   return `daily:${projectId}:${tab}:${date}`;
+}
+
+function digestResourceKey(tab: DigestTab, date: string): string {
+  return `${tab}:${date}`;
 }
 
 function availableMinutesForDate(date: string, weekdayMinutes: number, weekendMinutes: number): number {

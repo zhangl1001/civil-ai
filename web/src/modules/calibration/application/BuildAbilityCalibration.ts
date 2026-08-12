@@ -94,7 +94,16 @@ export class BuildAbilityCalibration {
       trainable.filter((node) => node.module === moduleNode.module).map((node) => trackByCapability.get(node.id)).filter(isTrack)
     ));
     const baseline = baselineProjection(moduleNodes, trainable, evidence, capabilities, now);
-    const scoreForecasts = buildScoreForecasts(cycle.scoreTargets, cycle.scoreMeasurements, modules, baseline);
+    const subjectByCapability = new Map(curriculum.capabilityNodes.map((node) => [node.id, node.subject]));
+    const scoreForecasts = buildScoreForecasts(
+      cycle.scoreTargets,
+      cycle.scoreMeasurements,
+      modules,
+      baseline,
+      evidence,
+      subjectByCapability,
+      now
+    );
     const changes = buildChanges(previous?.modules ?? [], modules);
     const snapshot: AbilityCalibrationSnapshot = {
       id: this.ids.next('AbilityCalibrationSnapshotId'),
@@ -239,11 +248,20 @@ function buildScoreForecasts(
   }[],
   measurements: readonly ScoreMeasurement[],
   modules: readonly ModuleCalibrationProjection[],
-  baseline: BaselineCoverageProjection
+  baseline: BaselineCoverageProjection,
+  evidence: readonly LearningEvidenceRecord[],
+  subjectByCapability: ReadonlyMap<string, string>,
+  now: number
 ): ScoreForecastProjection[] {
   return targets.filter((target) => target.status === 'active').map((target) => {
     const measurement = latestMeasurement(measurements, target.subject);
-    if (target.subject !== 'aptitude') return measurementForecast(target, measurement);
+    if (target.subject !== 'aptitude') {
+      const subjectiveEvidence = evidence.filter((item) => (
+        subjectByCapability.get(item.capabilityNodeId) === target.subject
+        && item.metadata.evidenceKind === 'subjective_rubric'
+      ));
+      return subjectiveEvidenceForecast(target, measurement, subjectiveEvidence, now);
+    }
     const available = modules.filter((item) => item.calibratedAccuracy !== undefined);
     const totalModuleWeight = modules.reduce((sum, item) => sum + item.scoreWeight, 0) || 1;
     const evidenceWeight = available.reduce((sum, item) => sum + item.scoreWeight, 0);
@@ -268,6 +286,29 @@ function buildScoreForecasts(
         : measuredNormalized === undefined ? ScoreForecastBasis.TrainingEvidence : ScoreForecastBasis.Blended;
     return forecast(target, center, confidence, baseline.coverageRatio, basis, forecastExplanation(basis, trueSample, baseline));
   });
+}
+
+function subjectiveEvidenceForecast(
+  target: { readonly subject: string; readonly targetScore: number; readonly maxScore: number },
+  measurement: ScoreMeasurement | undefined,
+  evidence: readonly LearningEvidenceRecord[],
+  now: number
+): ScoreForecastProjection {
+  const assessment = aggregate(evidence, now);
+  if (!assessment.present) return measurementForecast(target, measurement);
+  const evidenceScore = assessment.value * target.maxScore;
+  const evidenceConfidence = clamp((1 - Math.exp(-assessment.sample / 10)) * .85);
+  const measuredScore = measurement ? measurement.score / measurement.maxScore * target.maxScore : undefined;
+  const measurementConfidence = measurement?.confidence ?? 0;
+  const denominator = evidenceConfidence + measurementConfidence;
+  const center = measuredScore === undefined || denominator <= 0
+    ? evidenceScore
+    : (evidenceScore * evidenceConfidence + measuredScore * measurementConfidence) / denominator;
+  const confidence = clamp(1 - (1 - evidenceConfidence) * (1 - measurementConfidence * .7));
+  const coverageRatio = clamp(assessment.sample / 20);
+  const basis = measuredScore === undefined ? ScoreForecastBasis.TrainingEvidence : ScoreForecastBasis.Blended;
+  const explanation = `预测已参考申论批改维度证据；当前有效维度样本 ${round(assessment.sample)}。`;
+  return forecast(target, center, confidence, coverageRatio, basis, explanation);
 }
 
 function measurementForecast(

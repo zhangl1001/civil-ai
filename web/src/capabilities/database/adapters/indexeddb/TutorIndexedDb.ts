@@ -1,7 +1,7 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
-export const TUTOR_INDEXEDDB_VERSION = 31;
+export const TUTOR_INDEXEDDB_VERSION = 32;
 
 export const TutorIndexedDbStore = {
   CandidateCycleBundles: 'candidate_cycle_bundles',
@@ -29,6 +29,7 @@ export const TutorIndexedDbStore = {
   LearningEvidenceAggregates: 'learning_evidence_aggregates',
   SystemMessages: 'system_messages',
   ProactiveSignals: 'proactive_signals',
+  LearningProgress: 'learning_progress',
   LearningAssets: 'learning_assets',
   QuestionSources: 'question_sources',
   QuestionSourceLinks: 'question_source_links',
@@ -345,6 +346,18 @@ export class TutorIndexedDb {
         }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.ProactiveSignals)) {
           database.createObjectStore(TutorIndexedDbStore.ProactiveSignals, { keyPath: 'id' });
+        }
+        if (!database.objectStoreNames.contains(TutorIndexedDbStore.LearningProgress)) {
+          const progressStore = database.createObjectStore(
+            TutorIndexedDbStore.LearningProgress,
+            { keyPath: 'id' }
+          );
+          progressStore.createIndex('by_cycle', 'examCycleId', { unique: false });
+          progressStore.createIndex(
+            'by_resource',
+            ['examCycleId', 'resourceType', 'resourceKey'],
+            { unique: true }
+          );
         }
         const learningAssetStore = database.objectStoreNames.contains(TutorIndexedDbStore.LearningAssets)
           ? request.transaction?.objectStore(TutorIndexedDbStore.LearningAssets)

@@ -13,6 +13,8 @@ import { EvidenceSource, EvidenceType } from '../domain/EvidenceCodes';
 
 export interface SubjectiveAssessmentDimension {
   readonly capabilityNodeId: CapabilityNodeId;
+  /** Stable rubric dimension identity, independent from the broader capability node. */
+  readonly dimensionKey: string;
   readonly score: number;
   readonly confidence: number;
   readonly metadata: JsonObject;
@@ -46,7 +48,8 @@ export class RecordSubjectiveAssessment {
     const evidence: LearningEvidenceRecord[] = [];
     const fresh: LearningEvidenceRecord[] = [];
     for (const dimension of command.dimensions) {
-      const idempotencyKey = `subjective:${command.sourceAssetId}:${dimension.capabilityNodeId}:${command.rubricVersion}`;
+      if (!dimension.dimensionKey.trim()) throw new Error('Subjective assessment dimension key is required');
+      const idempotencyKey = `subjective:${command.sourceAssetId}:${dimension.capabilityNodeId}:${dimension.dimensionKey}:${command.rubricVersion}`;
       const existing = await this.repository.findByIdempotencyKey(idempotencyKey);
       if (existing) {
         evidence.push(existing);
@@ -69,6 +72,7 @@ export class RecordSubjectiveAssessment {
         metadata: {
           ...dimension.metadata,
           evidenceKind: 'subjective_rubric',
+          dimensionKey: dimension.dimensionKey,
           sourceAssetId: command.sourceAssetId,
           rubricVersion: command.rubricVersion
         }

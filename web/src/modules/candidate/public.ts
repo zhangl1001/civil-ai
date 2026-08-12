@@ -67,5 +67,8 @@ export {
   type ScoreTargetChange,
   type UpdateScoreTargetsCommand
 } from './application/UpdateScoreTargets';
-export { UpdateLearningPreferences } from './application/UpdateLearningPreferences';
+export {
+  UpdateLearningPreferences,
+  type CapabilityRecommendationPreferenceCommand
+} from './application/UpdateLearningPreferences';
 export { AlignCandidateCurriculum } from './application/AlignCandidateCurriculum';

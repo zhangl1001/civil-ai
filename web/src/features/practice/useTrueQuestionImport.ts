@@ -1,12 +1,15 @@
 import { ref } from 'vue';
 import { enqueueBusinessAgentTask, importAgentAttachments } from '@/composition-root/public';
 import { useAIChatStore } from '@/stores/aiChat';
-import { TrueQuestionImportFeature } from './TrueQuestionImportFeature';
+import { TrueQuestionImportFeature, type TrueQuestionImportSubject } from './TrueQuestionImportFeature';
 import { trueQuestionResearchScope, type TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteria';
 
 const trueQuestionImportFeature = new TrueQuestionImportFeature(importAgentAttachments);
 
-export function useTrueQuestionImport(reportError: (message: string) => void) {
+export function useTrueQuestionImport(
+  reportError: (message: string) => void,
+  subject: TrueQuestionImportSubject = 'aptitude'
+) {
   const chat = useAIChatStore();
   const importingTrueQuestion = ref(false);
   const researchingTrueQuestion = ref(false);
@@ -16,7 +19,7 @@ export function useTrueQuestionImport(reportError: (message: string) => void) {
     importingTrueQuestion.value = true;
     reportError('');
     try {
-      const prepared = await trueQuestionImportFeature.prepare(files);
+      const prepared = await trueQuestionImportFeature.prepare(files, subject);
       await chat.open(prepared.prompt, prepared.attachments, prepared.invocation);
     } catch (cause) {
       reportError(cause instanceof Error ? cause.message : '导入真题失败');

@@ -4,6 +4,7 @@ import type { CapabilityNode } from '@/modules/curriculum/public';
 import type { ObjectiveSessionFacts } from '@/modules/evidence/public';
 import type { MasteryTrack, ReviewQueueItem } from '@/modules/mastery/public';
 import type { AbilityCalibrationSnapshot } from '@/modules/calibration/public';
+import type { CandidateHomeSnapshot } from '@/modules/candidate/public';
 
 export type DiagnosisType =
   | 'insufficient_sample'
@@ -58,7 +59,7 @@ export interface QualityModule {
   total: number;
   correct: number;
   accuracy: number;
-  mastery: number;
+  stability: number;
   confidence: number;
   avgSeconds: number;
   openWrongCount: number;
@@ -82,6 +83,7 @@ export interface QualityDashboard {
   weekMinutes: number;
   avgSecondsPerQuestion: number;
   weakestModule?: QualityModule;
+  priorityModules: QualityModule[];
   modules: QualityModule[];
   trend: QualityTrendPoint[];
   openWrongCount: number;
@@ -99,8 +101,10 @@ interface SessionSlice {
   readonly module: string;
 }
 
+const RELIABLE_MODULE_SAMPLE_MIN = 20;
+
 export class QualityDashboardService {
-  async dashboard(): Promise<QualityDashboard> {
+  async dashboard(options: { candidateHome?: CandidateHomeSnapshot | null } = {}): Promise<QualityDashboard> {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先建立备考档案。');
@@ -110,7 +114,9 @@ export class QualityDashboardService {
       runtime.learningSessionRepository.listAll(cycle.examCycle.id),
       runtime.masteryRepository.listAllTracks(cycle.examCycle.id),
       runtime.masteryRepository.listAllReviews(cycle.examCycle.id),
-      runtime.getCandidateHome.execute(),
+      options.candidateHome === undefined
+        ? runtime.getCandidateHome.execute()
+        : Promise.resolve(options.candidateHome),
       runtime.buildAbilityCalibration.execute({ persist: false })
     ]);
     if (!curriculum) throw new Error('当前考试大纲不可用。');
@@ -151,10 +157,10 @@ export class QualityDashboardService {
       module,
       curriculum.capabilityNodes.filter((node) => node.module === module.code)
     )).sort((left, right) => right.priority - left.priority);
-    const weakestModule = modules
-      .filter((module) => module.total > 0)
-      .slice()
-      .sort((left, right) => left.mastery - right.mastery || left.accuracy - right.accuracy)[0];
+    const priorityModules = moduleDiagnoses
+      .filter((item) => item.diagnosisType !== 'insufficient_sample' && item.diagnosisType !== 'stable')
+      .flatMap((item) => modules.find((module) => module.name === item.module) || []);
+    const weakestModule = priorityModules[0];
     const remainingDays = daysUntil(cycle.examCycle.examDate);
     const diagnosis: AbilityDiagnosis = {
       projectId: cycle.project.id,
@@ -170,7 +176,10 @@ export class QualityDashboardService {
       },
       modules: moduleDiagnoses,
       recommendation: {
-        focusModules: moduleDiagnoses.filter((item) => item.diagnosisType !== 'stable').slice(0, 3).map((item) => item.module),
+        focusModules: moduleDiagnoses
+          .filter((item) => item.diagnosisType !== 'insufficient_sample' && item.diagnosisType !== 'stable')
+          .slice(0, 3)
+          .map((item) => item.module),
         dailyQuestionTarget: dailyQuestionTarget(cycle.studyConstraints.weekdayMinutes),
         reviewRatio: reviewDueCount > 0 || openWrongCount >= 10 ? 0.4 : 0.25,
         mockFrequencyDays: remainingDays !== undefined && remainingDays <= 45 ? 7 : 14,
@@ -188,6 +197,7 @@ export class QualityDashboardService {
       weekMinutes: Math.round(weekSessions.reduce((sum, item) => sum + item.session.elapsedMs, 0) / 60_000),
       avgSecondsPerQuestion,
       weakestModule,
+      priorityModules,
       modules,
       trend: trend(sessions),
       openWrongCount,
@@ -262,7 +272,7 @@ function buildModules(
       total: values.total,
       correct: values.correct,
       accuracy: values.total ? Math.round(values.correct / values.total * 100) : 0,
-      mastery: Math.round(weightedAverage(moduleTracks, 'stability') * 100),
+      stability: Math.round(weightedAverage(moduleTracks, 'stability') * 100),
       confidence: weightedAverage(moduleTracks, 'confidence'),
       avgSeconds: values.total ? Math.round(values.elapsedMs / values.total / 1000) : 0,
       openWrongCount: [...values.latestResultByQuestion.values()].filter((result) => result === 'incorrect').length,
@@ -279,13 +289,13 @@ function diagnoseModule(module: QualityModule, nodes: readonly CapabilityNode[])
   const accuracyGap = Math.max(0, targetAccuracy - module.accuracy);
   const speedGap = Math.max(0, module.avgSeconds - targetSeconds);
   const reasonCodes: string[] = [];
-  if (module.total < 20) reasonCodes.push('sample_insufficient');
+  if (module.total < RELIABLE_MODULE_SAMPLE_MIN) reasonCodes.push('sample_insufficient');
   if (accuracyGap >= 12) reasonCodes.push('accuracy_below_target');
   if (speedGap >= Math.max(10, targetSeconds * 0.2)) reasonCodes.push('speed_below_target');
   if (module.repeatWrongRate >= 25) reasonCodes.push('repeat_wrong_high');
-  if (module.confidence < 0.45 && module.total >= 20) reasonCodes.push('evidence_unstable');
+  if (module.confidence < 0.45 && module.total >= RELIABLE_MODULE_SAMPLE_MIN) reasonCodes.push('evidence_unstable');
   let diagnosisType: DiagnosisType = 'stable';
-  if (module.total < 20) diagnosisType = 'insufficient_sample';
+  if (module.total < RELIABLE_MODULE_SAMPLE_MIN) diagnosisType = 'insufficient_sample';
   else if (accuracyGap >= 12 && speedGap >= Math.max(10, targetSeconds * 0.2)) diagnosisType = 'accuracy_and_speed_weak';
   else if (accuracyGap >= 12) diagnosisType = 'weak_accuracy';
   else if (speedGap >= Math.max(10, targetSeconds * 0.2)) diagnosisType = 'slow_speed';
@@ -331,7 +341,7 @@ function adviceFor(input: {
 }): string[] {
   const result: string[] = [];
   if (input.totalQuestions < 30) result.push('真实作答样本不足，先完成几组针对性练习再判断长期能力。');
-  if (input.weakestModule) result.push(`优先补强${input.weakestModule.name}，当前证据掌握度 ${input.weakestModule.mastery}%。`);
+  if (input.weakestModule) result.push(`优先补强${input.weakestModule.name}，当前证据稳定度 ${input.weakestModule.stability}%。`);
   if (input.reviewDueCount) result.push(`${input.reviewDueCount} 个知识点已到复习窗口，建议先复习再做新题。`);
   if (input.avgSecondsPerQuestion > 90) result.push('平均作答速度偏慢，后续训练需要加入限时证据。');
   return result.length ? result : ['当前证据表现稳定，继续按计划巩固并补充迁移样本。'];

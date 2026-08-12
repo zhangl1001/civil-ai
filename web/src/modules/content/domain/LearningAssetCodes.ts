@@ -2,6 +2,7 @@ export const LearningAssetKind = {
   EssayQuestion: 'essay_question',
   EssayDraft: 'essay_draft',
   EssayAttempt: 'essay_attempt',
+  InterviewQuestionPool: 'interview_question_pool',
   InterviewSession: 'interview_session',
   DigestDaily: 'digest_daily',
   DigestMonthly: 'digest_monthly',

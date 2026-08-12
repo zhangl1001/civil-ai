@@ -24,6 +24,7 @@ const cycleStores = [
   TutorIndexedDbStore.DailyPlanAggregates,
   TutorIndexedDbStore.LearningEvidenceAggregates,
   TutorIndexedDbStore.ProactiveSignals,
+  TutorIndexedDbStore.LearningProgress,
   TutorIndexedDbStore.LearningAssets,
   TutorIndexedDbStore.QuestionImportDrafts,
   TutorIndexedDbStore.QuestionReferencePacks,

@@ -58,7 +58,11 @@ export {
   type SubmitObjectiveSessionCommand
 } from './application/SubmitObjectiveSession';
 export { CorrectLearningEvidence, type CorrectLearningEvidenceCommand } from './application/CorrectLearningEvidence';
-export { ConfirmErrorDiagnosis, type ConfirmErrorDiagnosisCommand } from './application/ConfirmErrorDiagnosis';
+export {
+  ConfirmErrorDiagnosis,
+  type ConfirmErrorDiagnosisCommand,
+  type ConfirmedDiagnosisMasteryRefresher
+} from './application/ConfirmErrorDiagnosis';
 export {
   RunAiErrorDiagnosis,
   type AiErrorDiagnosisCompletionObserver

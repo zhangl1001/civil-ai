@@ -25,7 +25,7 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>错因分布</strong></div>
+          <SectionHeading title="错因分布" />
           <div v-for="item in distributionRows" :key="item.key" class="dist-row">
             <span>{{ item.label }}</span>
             <div><i :class="item.tone" :style="{ width: `${item.percent}%` }"></i></div>
@@ -34,7 +34,7 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>模块拆解</strong><span>{{ report.modules.length }} 个模块</span></div>
+          <SectionHeading title="模块拆解" :meta="`${report.modules.length} 个模块`" />
           <div v-if="!report.modules.length" class="inline-empty">暂无错题数据</div>
           <article v-for="module in report.modules" :key="module.name" class="module-card">
             <div class="module-head">
@@ -49,7 +49,7 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>改进建议</strong></div>
+          <SectionHeading title="改进建议" />
           <p v-for="item in report.recommendations" :key="item" class="advice">{{ item }}</p>
         </section>
       </template>
@@ -66,7 +66,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ArrowLeftIcon, RotateCcwIcon, TargetIcon, ZapIcon } from 'lucide-vue-next';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { goBackOrHome } from '@/router/navigation';
 import { errorReportService, type ErrorCategory, type ErrorReport } from '@/services/ErrorReportService';
@@ -124,7 +124,7 @@ function goBack() {
 </script>
 
 <style scoped>
-.title-row,.section-title,.dist-row,.module-head,.point-row,.footer-actions{display:flex;align-items:center}
+.title-row,.dist-row,.module-head,.point-row,.footer-actions{display:flex;align-items:center}
 .title-row{justify-content:space-between;gap:10px}
 .header-spacer{width:36px;height:36px;flex:0 0 auto}
 .title-row>div{text-align:center;min-width:0}
@@ -139,8 +139,7 @@ h3{margin:0;font-size: var(--type-size-section-title)}
 .metric-row article{padding:10px 4px;border-radius:12px;background:rgba(255,255,255,.72);text-align:center}
 .metric-row b,.metric-row em{display:block}.metric-row b{font-size: var(--type-size-page-title)}.metric-row em{margin-top:2px;color:var(--text-secondary-color);font-size: var(--type-size-micro);font-style:normal;font-weight: var(--type-weight-semibold)}
 .panel{margin:16px;padding:14px}
-.section-title{justify-content:space-between;margin-bottom:10px}
-.section-title strong{font-size: var(--type-size-body-large)}.section-title span{color:var(--text-secondary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
+.section-heading{margin-bottom:10px}
 .dist-row{gap:10px;padding:9px 0;border-top:1px solid rgba(var(--color-ink-rgb), .06)}
 .dist-row span{width:52px;color:var(--text-secondary-color);font-size: var(--type-size-caption);font-weight: var(--type-weight-semibold)}
 .dist-row div{flex:1;height:18px;border-radius:6px;overflow:hidden;background:rgba(var(--color-ink-rgb), .08)}

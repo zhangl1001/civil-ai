@@ -14,12 +14,16 @@ import { TutorDailyPracticeFeature } from './TutorDailyPracticeFeature';
 export class PracticeCenterFeature {
   constructor(private readonly runtime: TutorDatabaseRuntime) {}
 
-  async load(preferredPlanItemId?: string) {
+  async load(preference: {
+    readonly planItemId?: string;
+    readonly capabilityNodeId?: string;
+    readonly module?: string;
+  } = {}) {
     const cycle = await this.runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
     const [curriculum, prescription, tutorPage, selfPage, trueQuestionPage, trueQuestionFacets, runs] = await Promise.all([
       this.runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
-      new TutorDailyPracticeFeature(this.runtime).prepare(preferredPlanItemId),
+      new TutorDailyPracticeFeature(this.runtime).prepare(preference),
       queryQuestionSetPage(this.runtime, {
         examCycleId: cycle.examCycle.id,
         originTypes: GENERATED_ORIGIN_TYPES,

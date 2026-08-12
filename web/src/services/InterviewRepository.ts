@@ -6,15 +6,19 @@ import type {
   InterviewDifficulty,
   InterviewQuestion,
   InterviewQuestionType,
-  InterviewScore,
   InterviewSession,
   InterviewStats,
   InterviewType
 } from '@/domain/interview';
+import {
+  INTERVIEW_QUESTION_TYPES,
+  pickInterviewQuestions,
+  prepareInterviewAnswers
+} from '@/domain/interview';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 
-export const INTERVIEW_QUESTION_TYPES: InterviewQuestionType[] = ['综合分析', '计划组织', '人际沟通', '应急应变', '岗位匹配'];
+export { INTERVIEW_QUESTION_TYPES } from '@/domain/interview';
 
 const BANK: Record<InterviewQuestionType, Array<{ text: string; hint: string }>> = {
   综合分析: [
@@ -57,75 +61,88 @@ function businessKey(sessionId: string): string {
   return `interview:${sessionId}`;
 }
 
-function shuffle<T>(items: T[]): T[] {
-  const next = [...items];
-  for (let i = next.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [next[i], next[j]] = [next[j], next[i]];
-  }
-  return next;
-}
-
-function fluencyScore(answer: InterviewAnswer): number | undefined {
-  if (!answer.speechMetrics) return undefined;
-  const { wordsPerMinute, fillerCount, durationSeconds } = answer.speechMetrics;
-  let score = 3;
-  if (wordsPerMinute >= 120 && wordsPerMinute <= 220) score += 1;
-  if (durationSeconds >= 45) score += 1;
-  if (fillerCount >= 6) score -= 1;
-  return Math.max(1, Math.min(5, score));
-}
-
-function scoreAnswer(answer: InterviewAnswer): InterviewScore {
-  const fluency = fluencyScore(answer);
-  const maxTotal = fluency ? 20 : 15;
-  const rawAnswer = answer.transcript || answer.answer;
-  const text = rawAnswer.trim();
-  if (!text) return { content: 1, expression: 1, logic: 1, fluency, total: 3, feedback: '未作答，建议先按“观点-分析-对策-总结”补齐基本框架。' };
-  const hasStructure = /首先|其次|再次|最后|第一|第二|第三|一方面|另一方面/.test(text);
-  const hasExample = /比如|例如|举例|案例|经验|经历/.test(text);
-  const hasSummary = /总之|综上|因此|所以|总的来说/.test(text);
-  const content = Math.min(5, 2 + (text.length > 60 ? 1 : 0) + (text.length > 160 ? 1 : 0) + (hasExample ? 1 : 0));
-  const expression = Math.min(5, 2 + (text.length > 40 ? 1 : 0) + (hasStructure ? 1 : 0) + (text.length > 120 && hasStructure ? 1 : 0));
-  const logic = Math.min(5, 2 + (hasStructure ? 1 : 0) + (hasSummary ? 1 : 0) + (hasExample && hasStructure ? 1 : 0));
-  const total = content + expression + logic + (fluency || 0);
-  const feedback = total >= 12
-    ? `作答优秀，内容充实、条理清晰${fluency ? '，语音表达可继续控制口头语。' : '，后续可继续提升表达亮点。'}`
-    : total >= Math.round(maxTotal * 0.6)
-      ? '作答良好，建议增加具体案例和结尾升华。'
-      : '作答偏薄，建议加强结构化表达，并补充原因分析、对策和总结。';
-  return { content, expression, logic, fluency, total, feedback };
-}
-
-function averageScore(scores: InterviewScore[]): InterviewScore {
-  if (!scores.length) return { content: 1, expression: 1, logic: 1, total: 3, feedback: '暂无有效作答。' };
-  const content = Math.round(scores.reduce((sum, score) => sum + score.content, 0) / scores.length);
-  const expression = Math.round(scores.reduce((sum, score) => sum + score.expression, 0) / scores.length);
-  const logic = Math.round(scores.reduce((sum, score) => sum + score.logic, 0) / scores.length);
-  const fluencyScores = scores.map((score) => score.fluency).filter((score): score is number => typeof score === 'number');
-  const fluency = fluencyScores.length ? Math.round(fluencyScores.reduce((sum, score) => sum + score, 0) / fluencyScores.length) : undefined;
-  const total = content + expression + logic + (fluency || 0);
-  const feedback = scores[scores.length - 1]?.feedback || '已完成本次面试模拟。';
-  return { content, expression, logic, fluency, total, feedback };
-}
-
 export class InterviewRepository {
-  pickQuestions(types: InterviewQuestionType[], count = 3): InterviewQuestion[] {
+  pickQuestions(
+    types: InterviewQuestionType[],
+    count = 3,
+    excludedIds: ReadonlySet<string> = new Set(),
+    generatedQuestions: readonly InterviewQuestion[] = []
+  ): InterviewQuestion[] {
     const selected: InterviewQuestionType[] = types.length ? types : ['综合分析'];
-    const pool = selected.flatMap((type) => BANK[type].map((item, index) => ({
+    const builtInPool = selected.flatMap((type) => BANK[type].map((item, index) => ({
       id: `${type}:${index}`,
       type,
       text: item.text,
       hint: item.hint
     })));
-    return shuffle(pool).slice(0, count);
+    return pickInterviewQuestions({
+      selectedTypes: selected,
+      count,
+      excludedIds,
+      generatedQuestions,
+      fallbackQuestions: builtInPool
+    });
   }
 
-  scoreAnswers(answers: InterviewAnswer[]): InterviewAnswer[] {
-    return answers.map((answer) => ({
-      ...answer,
-      score: scoreAnswer(answer.skipped ? { ...answer, answer: '', transcript: '' } : answer)
-    }));
+  async questionPool(limit = 160): Promise<InterviewQuestion[]> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return [];
+    const assets = await runtime.learningAssetStore.list({
+      examCycleId: cycle.examCycle.id,
+      kinds: [LearningAssetKind.InterviewQuestionPool],
+      status: LearningAssetStatus.Ready,
+      limit: 20
+    });
+    const seen = new Set<string>();
+    return assets.flatMap((asset) => {
+      const payload = asset.payload as { questions?: unknown };
+      if (!Array.isArray(payload.questions)) return [];
+      return payload.questions.flatMap((value) => {
+        const question = value as Partial<InterviewQuestion>;
+        const fingerprint = typeof question.text === 'string' ? question.text.replace(/\s+/g, '') : '';
+        if (
+          !question.id
+          || !question.type
+          || !INTERVIEW_QUESTION_TYPES.includes(question.type)
+          || !question.text
+          || !question.hint
+          || !fingerprint
+          || seen.has(fingerprint)
+        ) return [];
+        seen.add(fingerprint);
+        return [question as InterviewQuestion];
+      });
+    }).slice(0, limit);
+  }
+
+  async ensureQuestionPool(
+    types: InterviewQuestionType[],
+    difficulty: InterviewDifficulty,
+    excludedIds: ReadonlySet<string>
+  ): Promise<AgentTaskEnqueueResult | undefined> {
+    const generatedQuestions = await this.questionPool();
+    const selectedTypes = types.length ? types : INTERVIEW_QUESTION_TYPES;
+    const reusableCount = generatedQuestions.filter((question) => (
+      selectedTypes.includes(question.type) && !excludedIds.has(question.id)
+    )).length;
+    if (reusableCount >= 12) return undefined;
+    return generationTaskService.enqueue({
+      intent: 'interviewQuestions',
+      title: '补充面试题库',
+      detail: '后台准备新的结构化面试训练题',
+      sourceId: 'interview-question-pool',
+      payload: {
+        questionTypes: selectedTypes,
+        difficulty,
+        questionCount: 15,
+        recentQuestions: generatedQuestions.slice(0, 40).map((question) => question.text)
+      }
+    });
+  }
+
+  prepareAnswers(answers: InterviewAnswer[]): InterviewAnswer[] {
+    return prepareInterviewAnswers(answers);
   }
 
   async saveSession(input: {
@@ -138,8 +155,7 @@ export class InterviewRepository {
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
     const now = Date.now();
-    const scoredAnswers = this.scoreAnswers(input.answers);
-    const score = averageScore(scoredAnswers.map((answer) => answer.score).filter(Boolean) as InterviewScore[]);
+    const preparedAnswers = this.prepareAnswers(input.answers);
     const session: InterviewSession = {
       id: id('interview_session'),
       projectId: cycle.project.id,
@@ -148,8 +164,8 @@ export class InterviewRepository {
       difficulty: input.difficulty,
       questionTypes: input.questionTypes,
       questionCount: input.answers.length,
-      answers: scoredAnswers,
-      score,
+      answers: preparedAnswers,
+      reviewStatus: 'pending',
       createdAt: now,
       updatedAt: now
     };
@@ -175,12 +191,17 @@ export class InterviewRepository {
     return asset?.payload as unknown as InterviewSession | undefined;
   }
 
-  async saveAiFeedback(sessionId: string, aiFeedback: string): Promise<InterviewSession | undefined> {
+  async updateReviewState(
+    sessionId: string,
+    reviewStatus: InterviewSession['reviewStatus'],
+    reviewTaskId?: string
+  ): Promise<InterviewSession | undefined> {
     const current = await this.getSession(sessionId);
     if (!current) return undefined;
     const next: InterviewSession = {
       ...current,
-      aiFeedback,
+      reviewStatus,
+      ...(reviewTaskId ? { reviewTaskId } : {}),
       updatedAt: Date.now()
     };
     const runtime = await initializeTutorRuntime();
@@ -197,14 +218,36 @@ export class InterviewRepository {
   }
 
   async enqueueAiReview(session: InterviewSession): Promise<AgentTaskEnqueueResult> {
-    return generationTaskService.enqueue({
+    const result = await generationTaskService.enqueue({
       intent: 'interviewReview',
       title: '面试深度点评',
-      detail: `${session.date} · ${session.questionCount} 题 · ${session.score.total}分`,
+      detail: `${session.date} · ${session.questionCount} 题`,
       sourceId: session.id,
       payload: {
         sessionId: session.id
       }
+    });
+    await this.attachReviewTask(session.id, result.task.id);
+    return result;
+  }
+
+  private async attachReviewTask(sessionId: string, reviewTaskId: string): Promise<void> {
+    const current = await this.getSession(sessionId);
+    if (!current || current.reviewTaskId === reviewTaskId) return;
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const next: InterviewSession = {
+      ...current,
+      reviewTaskId,
+      updatedAt: Date.now()
+    };
+    await runtime.learningAssetStore.save({
+      examCycleId: cycle.examCycle.id,
+      kind: LearningAssetKind.InterviewSession,
+      businessKey: businessKey(sessionId),
+      title: `面试训练 · ${next.date}`,
+      payload: next as unknown as JsonObject
     });
   }
 
@@ -231,7 +274,10 @@ export class InterviewRepository {
 
   async stats(): Promise<InterviewStats> {
     const sessions = await this.latest(500);
-    const averageScore = sessions.length ? Math.round(sessions.reduce((sum, session) => sum + session.score.total, 0) / sessions.length) : 0;
+    const reviewed = sessions.filter((session) => session.reviewStatus === 'completed' && session.score);
+    const averageScore = reviewed.length
+      ? Math.round(reviewed.reduce((sum, session) => sum + (session.score?.total ?? 0), 0) / reviewed.length)
+      : 0;
     return {
       totalSessions: sessions.length,
       averageScore,

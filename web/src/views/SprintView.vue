@@ -21,7 +21,7 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>今日任务</strong><span>{{ dashboard.dailyQuestions }} 题/日</span></div>
+          <SectionHeading title="今日任务" :meta="`${dashboard.dailyQuestions} 题/日`" />
           <div v-if="!dashboard.todayMission" class="inline-empty">暂无冲刺任务，请先完成练习建立能力画像</div>
           <article v-else class="mission">
             <b>{{ dashboard.todayMission.focusModule }}</b>
@@ -38,7 +38,7 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>薄弱知识点排名</strong><span>{{ dashboard.weakPoints.length }} 项</span></div>
+          <SectionHeading title="薄弱知识点排名" :meta="`${dashboard.weakPoints.length} 项`" />
           <div v-if="!dashboard.weakPoints.length" class="inline-empty">暂无薄弱点数据</div>
           <button v-for="(point, index) in dashboard.weakPoints" :key="`${point.module}-${point.name}`" type="button" class="weak-row" @click="startWeakPractice(point)">
             <i :class="rankTone(point)">{{ index + 1 }}</i>
@@ -48,7 +48,7 @@
         </section>
 
         <section v-if="dashboard.emergencyReview.length" class="panel app-card urgent-panel">
-          <div class="section-title"><strong>紧急复习</strong><span>{{ dashboard.emergencyReview.length }} 项</span></div>
+          <SectionHeading title="紧急复习" :meta="`${dashboard.emergencyReview.length} 项`" />
           <p v-for="point in dashboard.emergencyReview" :key="`${point.module}-${point.name}`">{{ point.module }} / {{ point.name }}</p>
         </section>
       </template>
@@ -60,7 +60,7 @@
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ArrowLeftIcon, PieChartIcon, RotateCcwIcon, TimerIcon, ZapIcon } from 'lucide-vue-next';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { goBackOrHome } from '@/router/navigation';
 import { sprintService, type SprintDashboard, type SprintIntensity, type SprintWeakPoint } from '@/services/SprintService';
@@ -113,7 +113,7 @@ function goBack() {
 </script>
 
 <style scoped>
-.title-row,.section-title,.weak-row{display:flex;align-items:center}
+.title-row,.weak-row{display:flex;align-items:center}
 .title-row{justify-content:space-between;gap:10px}
 .header-spacer{width:36px;height:36px;flex:0 0 auto}
 .title-row>div{text-align:center;min-width:0}
@@ -126,7 +126,7 @@ h3{margin:0;font-size: var(--type-size-section-title)}
 .intensity{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px;padding:4px;border-radius:12px;background:rgba(var(--color-ink-rgb), .06)}
 .intensity button{height:34px;border:0;border-radius:9px;background:transparent;color:var(--text-secondary-color);font-weight: var(--type-weight-semibold)}.intensity button.active{background:#fff;color:#d97706;box-shadow:0 3px 10px rgba(var(--color-ink-rgb), .08)}
 .panel{margin:16px;padding:14px}
-.section-title{justify-content:space-between;margin-bottom:10px}.section-title strong{font-size: var(--type-size-body-large)}.section-title span{color:var(--text-secondary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
+.section-heading{margin-bottom:10px}
 .inline-empty{padding:14px;color:var(--text-secondary-color);font-size: var(--type-size-secondary);text-align:center}
 .mission b,.mission span{display:block}.mission b{font-size: var(--type-size-control)}.mission span{margin-top:4px;color:var(--text-secondary-color);font-size: var(--type-size-caption);font-weight: var(--type-weight-semibold)}.mission div{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.mission em{max-width:100%;padding:5px 8px;border-radius:999px;background:rgba(37,99,235,.1);color:var(--color-brand);font-size: var(--type-size-micro);font-style:normal;font-weight: var(--type-weight-semibold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .action-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px}

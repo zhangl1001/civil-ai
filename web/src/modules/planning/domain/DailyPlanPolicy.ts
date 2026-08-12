@@ -12,6 +12,7 @@ import {
   type DailyLearningLoadPrescription,
   type PlanningCapabilitySignal
 } from './DailyLearningLoadPolicy';
+import { LearnerPriorityAction, type LearnerPriorityAction as LearnerPriorityActionCode } from '@/modules/mastery/public';
 import { PreparationHorizon, type PreparationStrategy } from './PreparationStrategyPolicy';
 
 export const DailyPlanReasonCode = {
@@ -49,6 +50,8 @@ export interface DailyPlanCapabilitySignal extends PlanningCapabilitySignal {
   readonly name: string;
   readonly scoreWeight: number;
   readonly scoreGapRatio: number;
+  readonly learnerPriority: number;
+  readonly recommendedAction: LearnerPriorityActionCode;
   readonly speed: number;
   readonly retention: number;
   readonly transfer: number;
@@ -201,7 +204,11 @@ export function proposeDailyPlan(input: {
   }
   if (blocks.length) rationaleCodes.push(DailyPlanRationaleCode.ReviewsFirst);
 
-  for (const signal of input.prioritySignals) {
+  const rankedSignals = input.prioritySignals.slice().sort((left, right) => (
+    capabilityPriority(right, input.strategy) - capabilityPriority(left, input.strategy)
+    || left.capabilityNodeId.localeCompare(right.capabilityNodeId)
+  ));
+  for (const signal of rankedSignals) {
     if (usedCapabilities.has(signal.capabilityNodeId) || remainingMinutes < 5) continue;
     const priority = capabilityPriority(signal, input.strategy);
     appendBlock(blockForSignal(signal, priority, input));
@@ -302,7 +309,16 @@ function blockForSignal(
   priority: number,
   input: { readonly strategy: PreparationStrategy; readonly teachingOrder?: string; readonly explanationDepth?: string }
 ): BlockDraft {
-  if (signal.state === 'regressed' || signal.state === 'learning') {
+  if (signal.recommendedAction === LearnerPriorityAction.Diagnose) {
+    return {
+      capability: signal,
+      teachingGoalCode: DailyPlanGoalCode.CapabilityBaseline,
+      priority,
+      required: true,
+      items: [{ action: DailyPlanItemType.Diagnosis, targetMinutes: 12, reasonCode: DailyPlanReasonCode.IndependentEvidenceNeeded }]
+    };
+  }
+  if (signal.recommendedAction === LearnerPriorityAction.Learn) {
     const practiceFirst = input.teachingOrder === 'practice_then_explain';
     const actions: BlockDraft['items'] = practiceFirst
       ? [
@@ -315,7 +331,16 @@ function blockForSignal(
         ];
     return { capability: signal, teachingGoalCode: DailyPlanGoalCode.MasteryRepair, priority, required: true, items: actions };
   }
-  if (signal.state === 'consolidating') {
+  if (signal.recommendedAction === LearnerPriorityAction.Review) {
+    return {
+      capability: signal,
+      teachingGoalCode: DailyPlanGoalCode.RetentionMaintenance,
+      priority,
+      required: true,
+      items: [{ action: DailyPlanItemType.Review, targetMinutes: 12, reasonCode: DailyPlanReasonCode.DueReview }]
+    };
+  }
+  if (signal.state === 'consolidating' || signal.transfer < 0.65) {
     return {
       capability: signal,
       teachingGoalCode: DailyPlanGoalCode.TransferValidation,
@@ -339,9 +364,7 @@ function blockForSignal(
 }
 
 function capabilityPriority(signal: DailyPlanCapabilitySignal, strategy: PreparationStrategy): number {
-  const weakness = 1 - (signal.accuracy + signal.stability + signal.retention + signal.transfer) / 4;
-  const evidenceNeed = 1 - Math.min(1, signal.confidence * Math.min(1, signal.effectiveSample / 8));
-  return clampPriority(40 + signal.scoreWeight * 70 + signal.scoreGapRatio * 20 + weakness * 25 + evidenceNeed * 10 + strategy.urgency * 5);
+  return clampPriority(signal.learnerPriority + strategy.urgency * 5);
 }
 
 function categoryFor(action: DailyPlanItemTypeCode): DailyPlanItemCategoryCode {

@@ -9,6 +9,7 @@ export type GenerationIntent =
   | 'digest'
   | 'monthlyDigest'
   | 'study'
+  | 'interviewQuestions'
   | 'interviewReview'
   | 'trueQuestionResearch';
 

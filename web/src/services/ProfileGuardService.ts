@@ -6,7 +6,8 @@ const PROFILE_REQUIRED_INTENTS: ReadonlySet<GenerationIntent> = new Set([
   'mock',
   'redo',
   'essayGrade',
-  'interviewReview'
+  'interviewReview',
+  'interviewQuestions'
 ]);
 
 export class ProfileRequiredError extends Error {

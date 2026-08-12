@@ -1,9 +1,17 @@
 import type { UnitOfWork } from '@/capabilities/database/public';
-import type { Clock, ErrorDiagnosisId, IdGenerator, JsonObject } from '@/kernel/public';
+import { AssessmentRole, type Clock, type ErrorDiagnosisId, type IdGenerator, type JsonObject } from '@/kernel/public';
 import type { OutboxRepository } from '@/modules/task/public';
-import type { ErrorDiagnosisCurrentProjection } from '../contracts/LearningFacts';
-import type { ErrorDiagnosisRepository } from '../contracts/LearningRepositories';
-import { ErrorDiagnosisConfirmationAction } from '../domain/EvidenceCodes';
+import type { ErrorDiagnosisCurrentProjection, ErrorDiagnosisRecord, LearningEvidenceRecord } from '../contracts/LearningFacts';
+import type { ErrorDiagnosisRepository, LearningEvidenceRepository } from '../contracts/LearningRepositories';
+import {
+  ErrorCauseCode,
+  ErrorDiagnosisConfirmationAction,
+  ErrorDiagnosisDimensionCode,
+  ErrorDiagnosisDimensionStatus,
+  EvidenceSource,
+  EvidenceType
+} from '../domain/EvidenceCodes';
+import { EvidenceValidity } from '../domain/EvidenceValidity';
 
 export interface ConfirmErrorDiagnosisCommand {
   readonly idempotencyKey: string;
@@ -15,6 +23,13 @@ export interface ConfirmErrorDiagnosisCommand {
   readonly payload?: JsonObject;
 }
 
+export interface ConfirmedDiagnosisMasteryRefresher {
+  execute(command: {
+    readonly examCycleId: ErrorDiagnosisRecord['examCycleId'];
+    readonly capabilityNodeId: ErrorDiagnosisRecord['capabilityNodeId'];
+  }): Promise<unknown>;
+}
+
 /**
  * Keeps the original diagnosis immutable. The projection is only a query cache
  * over confirmation facts and is guarded with optimistic versioning.
@@ -23,6 +38,8 @@ export class ConfirmErrorDiagnosis {
   constructor(
     private readonly unitOfWork: UnitOfWork,
     private readonly diagnosisRepository: ErrorDiagnosisRepository,
+    private readonly evidenceRepository: LearningEvidenceRepository,
+    private readonly refreshMastery: ConfirmedDiagnosisMasteryRefresher,
     private readonly outboxRepository: OutboxRepository,
     private readonly clock: Clock,
     private readonly ids: IdGenerator
@@ -65,9 +82,20 @@ export class ConfirmErrorDiagnosis {
       updatedAt: now,
       version: (current?.version ?? 0) + 1
     };
+    const evidence = confirmedDiagnosisEvidence(diagnosis, command, confirmation.id, now, this.ids);
     try {
       await this.unitOfWork.run(async (context) => {
         await this.diagnosisRepository.appendConfirmation(confirmation, projection, current?.version, context);
+        await this.evidenceRepository.append(
+          evidence,
+          evidence.map((item) => ({
+            evidenceId: item.id,
+            validityStatus: EvidenceValidity.Valid,
+            updatedAt: now,
+            version: 1
+          })),
+          context
+        );
         await this.outboxRepository.append({
           id: this.ids.next('OutboxEventId'),
           aggregateType: 'error_diagnosis',
@@ -86,12 +114,18 @@ export class ConfirmErrorDiagnosis {
           idempotencyKey: `${command.idempotencyKey}:outbox`
         }, context);
       });
-      return projection;
     } catch (error) {
       const concurrent = await this.diagnosisRepository.findConfirmationByIdempotencyKey(command.idempotencyKey);
       if (concurrent) return this.requireProjection(command.diagnosisId);
       throw error;
     }
+    if (evidence.length) {
+      await this.refreshMastery.execute({
+        examCycleId: diagnosis.examCycleId,
+        capabilityNodeId: diagnosis.capabilityNodeId
+      });
+    }
+    return projection;
   }
 
   private async requireProjection(diagnosisId: ErrorDiagnosisId): Promise<ErrorDiagnosisCurrentProjection> {
@@ -99,6 +133,109 @@ export class ConfirmErrorDiagnosis {
     if (!projection) throw new Error(`Error diagnosis confirmation projection is unavailable: ${diagnosisId}`);
     return projection;
   }
+}
+
+function confirmedDiagnosisEvidence(
+  diagnosis: ErrorDiagnosisRecord,
+  command: ConfirmErrorDiagnosisCommand,
+  confirmationId: string,
+  now: ReturnType<Clock['now']>,
+  ids: IdGenerator
+): readonly LearningEvidenceRecord[] {
+  if (command.action === ErrorDiagnosisConfirmationAction.Reject) return [];
+  const effectiveCause = command.action === ErrorDiagnosisConfirmationAction.Correct
+    ? command.correctedCauseCode!
+    : diagnosis.causeCode;
+  const dimensions = command.action === ErrorDiagnosisConfirmationAction.Correct
+    ? [{ code: dimensionForCause(effectiveCause), status: ErrorDiagnosisDimensionStatus.Risk }]
+    : diagnosis.dimensions;
+  const dimensionEvidence = dimensions.flatMap((dimension, index) => {
+    const value = diagnosisDimensionValue(dimension.status);
+    if (value === undefined) return [];
+    const mapped = evidenceTypeForDimension(dimension.code, effectiveCause);
+    if (!mapped) return [];
+    return [{
+      id: ids.next('EvidenceId'),
+      examCycleId: diagnosis.examCycleId,
+      capabilityNodeId: diagnosis.capabilityNodeId,
+      attemptId: diagnosis.attemptId,
+      assessmentRole: AssessmentRole.Practice,
+      evidenceType: mapped.evidenceType,
+      value,
+      weight: 0.55,
+      quality: Math.min(1, Math.max(0.45, diagnosis.confidence)),
+      source: EvidenceSource.UserConfirmation,
+      validationPolicyVersion: 'confirmed-error-diagnosis:v1',
+      occurredAt: now,
+      idempotencyKey: `${command.idempotencyKey}:evidence:${mapped.masteryDimension}:${index}`,
+      metadata: {
+        diagnosisId: diagnosis.id,
+        confirmationId,
+        causeCode: effectiveCause,
+        diagnosisDimension: dimension.code,
+        diagnosisStatus: dimension.status,
+        masteryDimension: mapped.masteryDimension
+      }
+    } satisfies LearningEvidenceRecord];
+  });
+  return [
+    ...dimensionEvidence,
+    {
+      id: ids.next('EvidenceId'),
+      examCycleId: diagnosis.examCycleId,
+      capabilityNodeId: diagnosis.capabilityNodeId,
+      attemptId: diagnosis.attemptId,
+      assessmentRole: AssessmentRole.Practice,
+      evidenceType: EvidenceType.UserConfirmation,
+      value: 1,
+      weight: 0.2,
+      quality: 1,
+      source: EvidenceSource.UserConfirmation,
+      validationPolicyVersion: 'confirmed-error-diagnosis:v1',
+      occurredAt: now,
+      idempotencyKey: `${command.idempotencyKey}:evidence:user-confirmation`,
+      metadata: { diagnosisId: diagnosis.id, confirmationId, causeCode: effectiveCause }
+    }
+  ];
+}
+
+function diagnosisDimensionValue(status: string): number | undefined {
+  if (status === ErrorDiagnosisDimensionStatus.Gap) return 0.15;
+  if (status === ErrorDiagnosisDimensionStatus.Risk) return 0.4;
+  if (status === ErrorDiagnosisDimensionStatus.Adequate) return 0.85;
+  return undefined;
+}
+
+function evidenceTypeForDimension(
+  code: string,
+  cause: ErrorDiagnosisRecord['causeCode']
+): { readonly evidenceType: LearningEvidenceRecord['evidenceType']; readonly masteryDimension: string } | undefined {
+  if (code === ErrorDiagnosisDimensionCode.KnowledgeConcept) {
+    return { evidenceType: EvidenceType.TeachingComprehension, masteryDimension: 'concept' };
+  }
+  if (code === ErrorDiagnosisDimensionCode.QuestionRecognition) {
+    return { evidenceType: EvidenceType.MethodRecognition, masteryDimension: 'recognition' };
+  }
+  if (code === ErrorDiagnosisDimensionCode.MethodSelection) {
+    return { evidenceType: EvidenceType.MethodRecognition, masteryDimension: 'method' };
+  }
+  if (code === ErrorDiagnosisDimensionCode.TransferRetention && cause === ErrorCauseCode.RetentionFailure) {
+    return { evidenceType: EvidenceType.Retention, masteryDimension: 'retention' };
+  }
+  if (code === ErrorDiagnosisDimensionCode.TransferRetention && cause === ErrorCauseCode.TransferFailure) {
+    return { evidenceType: EvidenceType.Transfer, masteryDimension: 'transfer' };
+  }
+  return undefined;
+}
+
+function dimensionForCause(cause: ErrorDiagnosisRecord['causeCode']): string {
+  if (cause === ErrorCauseCode.ConceptGap) return ErrorDiagnosisDimensionCode.KnowledgeConcept;
+  if (cause === ErrorCauseCode.RecognitionError) return ErrorDiagnosisDimensionCode.QuestionRecognition;
+  if (cause === ErrorCauseCode.MethodSelectionError) return ErrorDiagnosisDimensionCode.MethodSelection;
+  if (cause === ErrorCauseCode.RetentionFailure || cause === ErrorCauseCode.TransferFailure) {
+    return ErrorDiagnosisDimensionCode.TransferRetention;
+  }
+  return ErrorDiagnosisDimensionCode.ReasoningProcess;
 }
 
 function validateCommand(command: ConfirmErrorDiagnosisCommand): void {

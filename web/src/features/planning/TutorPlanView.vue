@@ -20,7 +20,7 @@
             </header>
             <div class="plan-list">
               <article v-for="entry in group.items" :key="entry.item.id" :class="['plan-item', entry.item.status]">
-                <button class="plan-item-main" type="button" :disabled="openingItemId === entry.item.id || entry.item.status === 'completed' || entry.item.status === 'skipped'" @click="openItem(entry.item)">
+                <button class="plan-item-main" type="button" :disabled="openingItemId === entry.item.id || entry.item.status === 'completed' || entry.item.status === 'skipped'" @click="openItem(entry)">
                   <span :class="['item-icon', entry.item.itemType]"><component :is="iconFor(entry.item.itemType)" /></span>
                   <span class="item-copy">
                     <strong>{{ planItemActionLabel(entry.item) }} · {{ entry.capabilityName }}</strong>
@@ -73,7 +73,8 @@ import {
   preparationHorizonLabel,
   statusLabel,
   targetCountLabel,
-  type DailyPlanCapabilityMeta
+  type DailyPlanCapabilityMeta,
+  type DailyPlanViewItem
 } from './DailyPlanPresenter';
 import { dailyPlanItemLocation } from './DailyPlanNavigation';
 import { PlanFeature } from './PlanFeature';
@@ -118,11 +119,12 @@ function iconFor(type: DailyPlanItemRecord['itemType']) {
   if (type === 'independent_practice' || type === 'timed') return Clock3Icon;
   return TargetIcon;
 }
-async function openItem(item: DailyPlanItemRecord) {
+async function openItem(entry: DailyPlanViewItem) {
+  const { item, block } = entry;
   if (openingItemId.value) return;
   openingItemId.value = item.id; error.value = '';
   try {
-    await router.push(dailyPlanItemLocation(item));
+    await router.push(dailyPlanItemLocation(item, block?.subject));
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '打开计划项失败'; }
   finally { openingItemId.value = ''; }
 }

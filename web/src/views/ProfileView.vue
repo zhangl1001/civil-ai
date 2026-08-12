@@ -19,15 +19,27 @@
       />
 
       <section v-else-if="candidateHome" class="profile-section">
-        <div class="profile-section-title">
-          <strong>目标与现状</strong>
-          <span>{{ diagnosisLabel }}</span>
-        </div>
-        <div class="stats-grid">
-          <article v-for="score in candidateHome.scores" :key="score.subject" class="stat-card">
-            <strong>{{ score.currentScore ?? '待诊断' }} → {{ score.targetScore }}</strong>
-            <span>{{ subjectLabel(score.subject) }} · {{ evidenceLabel(score.evidenceLabel) }}</span>
-          </article>
+        <SectionHeading class="profile-section-title" title="学习目标" meta="现状与目标分" />
+        <div class="menu-list">
+          <button
+            v-for="score in profileScores"
+            :key="score.subject"
+            class="menu-item"
+            type="button"
+            @click="openProfileSheet(score.subject)"
+          >
+            <GaugeIcon v-if="score.subject === 'aptitude'" />
+            <FilePenLineIcon v-else />
+            <span>{{ subjectLabel(score.subject) }}</span>
+            <em>{{ score.currentScore ?? '待诊断' }} → {{ score.targetScore }}</em>
+            <ChevronRightIcon />
+          </button>
+          <button class="menu-item" type="button" @click="openProfileSheet()">
+            <TargetIcon />
+            <span>备考档案</span>
+            <em>{{ profileArchiveLabel }}</em>
+            <ChevronRightIcon />
+          </button>
         </div>
       </section>
 
@@ -38,17 +50,8 @@
       </section>
 
       <section class="profile-section">
-        <div class="profile-section-title">
-          <strong>AI 与数据</strong>
-          <span>模型、工程和本地数据</span>
-        </div>
+        <SectionHeading class="profile-section-title" title="AI 与数据" meta="模型与本地存储" />
         <div class="menu-list">
-          <button class="menu-item" type="button" @click="openProfileSheet">
-            <TargetIcon />
-            <span>备考档案</span>
-            <em>{{ profileCardLabel }}</em>
-            <ChevronRightIcon />
-          </button>
           <button class="menu-item" type="button" @click="openAISheet">
             <CpuIcon />
             <span>AI 模型配置</span>
@@ -61,20 +64,16 @@
             <em>导入导出</em>
             <ChevronRightIcon />
           </button>
-          <button class="menu-item" type="button">
+          <div class="menu-item static-item" aria-label="数据模式为纯本地">
             <HardDriveIcon />
             <span>数据模式</span>
             <em>纯本地</em>
-            <ChevronRightIcon />
-          </button>
+          </div>
         </div>
       </section>
 
       <section class="profile-section">
-        <div class="profile-section-title">
-          <strong>系统设置</strong>
-          <span>提醒和本地状态</span>
-        </div>
+        <SectionHeading class="profile-section-title" title="系统设置" meta="外观、提醒与支持" />
         <div class="menu-list">
           <button class="menu-item" type="button" @click="openAppearanceSheet">
             <PaletteIcon />
@@ -88,7 +87,19 @@
             <em>{{ reminderCardLabel }}</em>
             <ChevronRightIcon />
           </button>
-          <div class="menu-item version-item" aria-label="当前版本">
+          <a class="menu-item" :href="privacyPolicyUrl" target="_blank" rel="noopener noreferrer">
+            <ShieldCheckIcon />
+            <span>隐私政策</span>
+            <em>数据与权限说明</em>
+            <ChevronRightIcon />
+          </a>
+          <a class="menu-item" :href="supportUrl" target="_blank" rel="noopener noreferrer">
+            <MessageCircleIcon />
+            <span>帮助与反馈</span>
+            <em>问题与建议</em>
+            <ChevronRightIcon />
+          </a>
+          <div class="menu-item static-item version-item" aria-label="当前版本">
             <BadgeInfoIcon />
             <span>版本信息</span>
             <em>{{ appVersionInfo.label }} · {{ appVersionInfo.buildLabel }}</em>
@@ -110,12 +121,12 @@
                   <strong>{{ candidateHome.examName }}</strong>
                   <span>{{ candidateHome.examDate }} · {{ candidateHome.projectName }}</span>
                 </div>
-                <div v-if="candidateHome" class="time-grid">
-                  <label>
+                <div v-if="candidateHome" :class="['time-grid', { 'single-field': targetEditSubject }]">
+                  <label v-if="!targetEditSubject || targetEditSubject === 'aptitude'">
                     <span>目标行测</span>
                     <input v-model.number="targetForm.aptitude" type="number" min="0" max="100" step="0.5" />
                   </label>
-                  <label>
+                  <label v-if="!targetEditSubject || targetEditSubject === 'essay'">
                     <span>目标申论</span>
                     <input v-model.number="targetForm.essay" type="number" min="0" max="100" step="0.5" />
                   </label>
@@ -307,7 +318,7 @@ import WebResearchSettingsFields from '@/components/settings/WebResearchSettings
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import AppearanceSettings from '@/components/settings/AppearanceSettings.vue';
-import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
+import { AppStateView, InitialRefreshState, SectionHeading } from '@/capabilities/design-system/public';
 import {
   BellRingIcon,
   BadgeInfoIcon,
@@ -315,8 +326,12 @@ import {
   CpuIcon,
   DatabaseIcon,
   DownloadIcon,
+  FilePenLineIcon,
+  GaugeIcon,
   HardDriveIcon,
+  MessageCircleIcon,
   PaletteIcon,
+  ShieldCheckIcon,
   TargetIcon,
   Trash2Icon,
   UploadIcon
@@ -342,7 +357,6 @@ import { appVersionInfo } from '@/services/AppVersionService';
 import { profileStatsRepository } from '@/services/ProfileStatsRepository';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
-  InitialDiagnosisStatus,
   ProactiveLevel,
   type CandidateHomeSnapshot
 } from '@/modules/candidate/public';
@@ -370,6 +384,7 @@ const reminderStatus = ref<LearningNotificationStatus | null>(null);
 const candidateHome = ref<CandidateHomeSnapshot | null>(cachedCandidateSnapshot?.home || null);
 const candidateHomeLoaded = ref(Boolean(cachedCandidateSnapshot));
 const candidateHomeError = ref('');
+const targetEditSubject = ref<SubjectCode | null>(null);
 const profileStats = ref<Awaited<ReturnType<typeof profileStatsRepository.getStats>> | null>(null);
 const activeSheet = ref<'profile' | 'reminder' | 'ai' | 'data' | 'appearance' | null>(null);
 const appearanceSettings = ref<ThemeSettings>(themeService.getCurrent());
@@ -412,6 +427,8 @@ const proactiveOptions = [
   { value: ProactiveLevel.Active, label: '主动' }
 ] as const;
 const targetForm = reactive({ aptitude: 80, essay: 70, reason: '' });
+const privacyPolicyUrl = 'https://github.com/zhangl1001/civil-ai/blob/main/PRIVACY.md';
+const supportUrl = 'https://github.com/zhangl1001/civil-ai/issues/new/choose';
 
 const secureLabel = computed(() => aiConfigService.isNativeSecure() ? 'iOS Keychain' : '本地开发存储');
 const profileHeaderTitle = computed(() => candidateHome.value?.projectName || 'AI 私教档案');
@@ -434,27 +451,29 @@ const reminderCardLabel = computed(() => {
   if (!reminderForm.enabled) return '未开启';
   return `${reminderForm.morningTime} / ${reminderForm.eveningTime}`;
 });
-const profileCardLabel = computed(() => {
-  const aptitude = candidateHome.value?.scores.find((score) => score.subject === 'aptitude');
-  if (!aptitude) return '未建立';
-  return `行测 ${aptitude.currentScore ?? '待诊断'}→${aptitude.targetScore}`;
-});
-const diagnosisLabel = computed(() => candidateHome.value?.diagnosisStatus === InitialDiagnosisStatus.Sufficient
-  ? '可信基线'
-  : '数据不足');
+const profileScores = computed(() => candidateHome.value?.scores
+  .filter((score) => score.subject === 'aptitude' || score.subject === 'essay')
+  .sort((left, right) => Number(right.subject === 'aptitude') - Number(left.subject === 'aptitude')) ?? []);
+const profileArchiveLabel = computed(() => candidateHome.value
+  ? `${candidateHome.value.examName} · ${candidateHome.value.examDate}`
+  : '未建立');
 const appearanceLabel = computed(() => {
   const preset = THEME_PRESETS.find((item) => item.id === appearanceSettings.value.preset);
   return appearanceSettings.value.backgroundImage ? `${preset?.name || '主题'} · 自定义背景` : (preset?.name || '清朗蓝');
 });
 const sheetTitle = computed(() => {
-  if (activeSheet.value === 'profile') return '备考档案';
+  if (activeSheet.value === 'profile') {
+    return targetEditSubject.value ? `${subjectLabel(targetEditSubject.value)}学习目标` : '备考档案';
+  }
   if (activeSheet.value === 'reminder') return '学习提醒';
   if (activeSheet.value === 'data') return '数据管理';
   if (activeSheet.value === 'appearance') return '外观与主题';
   return 'AI 配置';
 });
 const sheetSubtitle = computed(() => {
-  if (activeSheet.value === 'profile') return '目标、现状和学习时间';
+  if (activeSheet.value === 'profile') {
+    return targetEditSubject.value ? '调整目标分，历史版本会保留' : '目标、现状和学习时间';
+  }
   if (activeSheet.value === 'reminder') return reminderStatusLabel.value;
   if (activeSheet.value === 'data') return '本地备份与清理';
   if (activeSheet.value === 'appearance') return '颜色、字体和个性背景';
@@ -496,12 +515,6 @@ function retryCandidateHome() {
 
 function subjectLabel(subject: SubjectCode): string {
   return subject === 'aptitude' ? '行测' : subject === 'essay' ? '申论' : subject;
-}
-
-function evidenceLabel(source: CandidateHomeSnapshot['scores'][number]['evidenceLabel']): string {
-  if (source === 'measured') return '测评证据';
-  if (source === 'self_report') return '自报基线';
-  return '待诊断';
 }
 
 async function loadAIConfig() {
@@ -619,8 +632,9 @@ function openAISheet() {
   activeSheet.value = 'ai';
 }
 
-async function openProfileSheet() {
+async function openProfileSheet(subject: SubjectCode | null = null) {
   profileMessage.value = '';
+  targetEditSubject.value = subject;
   await loadCandidateHome();
   activeSheet.value = 'profile';
 }
@@ -648,6 +662,7 @@ async function openDataSheet() {
 
 function closeSheet() {
   activeSheet.value = null;
+  targetEditSubject.value = null;
 }
 
 function handleSheetVisibleChange(value: boolean) {
@@ -836,17 +851,14 @@ async function confirmClearLearningData() {
   flex-direction: column;
   gap: 8px;
 }
+/* Settings groups sit tighter and one step larger than the app-wide section heading. */
 .profile-section-title {
   padding: 0 2px;
-  display: flex;
   align-items: flex-end;
-  justify-content: space-between;
   gap: 12px;
 }
 .profile-section-title strong {
-  color: var(--text-color);
   font-size: var(--type-size-control);
-  font-weight: var(--type-weight-semibold);
   line-height: 1.2;
 }
 .profile-section-title span {
@@ -858,12 +870,6 @@ async function confirmClearLearningData() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
 .profile-onboarding {
   padding: 16px;
   border-radius: var(--radius-card);
@@ -873,33 +879,11 @@ async function confirmClearLearningData() {
 .profile-onboarding > strong { font-size: var(--type-size-body-large); }
 .profile-onboarding p { margin: 5px 0 13px; color: var(--text-secondary-color); font-size: var(--type-size-secondary); line-height: 1.5; }
 .profile-onboarding button { min-height: 38px; border: none; border-radius: var(--radius-pill); padding: 0 15px; background: var(--primary-color); color: #fff; font: inherit; font-weight: var(--type-weight-semibold); }
-
 .candidate-summary { padding: 12px 13px; border-radius: var(--radius-card); background: var(--surface-muted); }
 .candidate-summary strong,
 .candidate-summary span { display: block; }
 .candidate-summary strong { font-size: var(--type-size-body); }
 .candidate-summary span { margin-top: 3px; color: var(--text-secondary-color); font-size: var(--type-size-caption); }
-.stat-card {
-  min-height: 86px;
-  padding: 14px;
-  border: 0;
-  border-radius: var(--radius-card);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  background: var(--surface-card);
-  box-shadow: var(--shadow-card);
-}
-.stat-card strong {
-  font-size: var(--type-size-display);
-  font-weight: var(--type-weight-semibold);
-  color: var(--primary-color);
-}
-.stat-card span {
-  margin-top: 4px;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-caption);
-}
 .menu-list {
   display: flex;
   flex-direction: column;
@@ -923,6 +907,7 @@ async function confirmClearLearningData() {
   color: var(--text-color);
   text-align: left;
   font-family: inherit;
+  text-decoration: none;
 }
 .menu-item:last-child {
   border-bottom: none;
@@ -941,7 +926,7 @@ async function confirmClearLearningData() {
   white-space: nowrap;
 }
 .menu-item em {
-  max-width: 116px;
+  max-width: min(160px, 44vw);
   color: var(--text-secondary-color);
   font-size: var(--type-size-caption);
   font-style: normal;
@@ -950,28 +935,17 @@ async function confirmClearLearningData() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.static-item {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+}
+.static-item em {
+  max-width: min(210px, 54vw);
+}
 .version-item {
   cursor: default;
 }
-.version-item em {
-  max-width: min(210px, 54vw);
-}
 .spin {
   animation: spin .8s linear infinite;
-}
-.section-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-.section-title strong {
-  font-size: var(--type-size-body-large);
-}
-.section-title span {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-micro);
-  font-weight: var(--type-weight-semibold);
 }
 .data-summary {
   padding: 14px;

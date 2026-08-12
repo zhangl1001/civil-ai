@@ -34,11 +34,85 @@ try {
   });
   assert.equal(proven.state, 'mastered');
 
+  const aiOnlyProven = mastery.projectMastery({
+    now,
+    evidence: [
+      ...Array.from({ length: 24 }, (_, index) => evidence(`ai-anchor:${index}`, 1, 'anchor')),
+      evidence('ai-retention:1', 1, 'retention', 'retention'),
+      evidence('ai-transfer:1', 1, 'transfer', 'transfer')
+    ]
+  });
+  assert.equal(aiOnlyProven.state, 'mastered', 'diverse AI assessments must be able to prove mastery without a hard source ceiling');
+
+  const partialStructuredEvidence = mastery.projectMastery({
+    now,
+    evidence: [
+      ...Array.from({ length: 8 }, (_, index) => evidence(`partial:${index}`, 0.8)),
+      evidence('concept-only', 0.8, 'teaching', 'teaching_comprehension')
+    ]
+  });
+  assert.notEqual(partialStructuredEvidence.state, 'learning', 'missing structured dimensions must remain unknown instead of becoming zero scores');
+
+  const splitDecisionDimensions = mastery.projectMastery({
+    now,
+    evidence: [
+      ...Array.from({ length: 8 }, (_, index) => evidence(`split:${index}`, 0.8)),
+      { ...evidence('recognition-gap', 0.2, 'practice', 'method_recognition'), metadata: { questionOriginType: 'ai_generated', masteryDimension: 'recognition' } },
+      { ...evidence('method-adequate', 0.9, 'practice', 'method_recognition'), metadata: { questionOriginType: 'ai_generated', masteryDimension: 'method' } }
+    ]
+  });
+  assert.equal(splitDecisionDimensions.recognition, 0.2);
+  assert.equal(splitDecisionDimensions.method, 0.9);
+  assert.equal(splitDecisionDimensions.state, 'learning');
+
+  assert.equal(mastery.reviewIntervalDays({
+    state: 'practicing', accuracy: 0.8, retention: 0, transfer: 0, stability: 0.2, confidence: 0.6, effectiveSample: 12
+  }) <= 7, true);
+  assert.equal(mastery.reviewIntervalDays({
+    state: 'consolidating', accuracy: 0.88, retention: 0.85, transfer: 0.8, stability: 0.75, confidence: 0.82, effectiveSample: 24
+  }) > 30, true, 'strong memory evidence must unlock long spaced-review intervals before a terminal state');
+
   const regressed = mastery.projectMastery({
     now,
     evidence: Array.from({ length: 8 }, (_, index) => evidence(`error:${index}`, 0))
   });
   assert.equal(regressed.state, 'regressed');
+
+  const prioritySignal = (id, overrides = {}) => ({
+    capabilityNodeId: id, subject: 'aptitude', module: 'judgment', name: id,
+    scoreWeight: 0.1, scoreGapRatio: 0.2, state: 'practicing', accuracy: 0.75,
+    speed: 0.7, retention: 0.7, transfer: 0.65, stability: 0.7, confidence: 0.8,
+    effectiveSample: 10, lastEvidenceAt: now - 2 * 86_400_000, ...overrides
+  });
+  const rankedPriorities = mastery.rankLearnerPriorities([
+    prioritySignal('node:strong', { accuracy: 0.9, stability: 0.85 }),
+    prioritySignal('node:weak', { accuracy: 0.4, stability: 0.45 })
+  ], now);
+  assert.equal(rankedPriorities[0].capabilityNodeId, 'node:weak', 'accuracy gaps must affect the shared learner ranking');
+  const sampleAwarePriorities = mastery.rankLearnerPriorities([
+    prioritySignal('node:single-error', {
+      accuracy: 0, stability: 0, retention: 0, transfer: 0, confidence: 0.8, effectiveSample: 1
+    }),
+    prioritySignal('node:confirmed-gap', {
+      accuracy: 0.45, stability: 0.5, retention: 0.5, transfer: 0.5, confidence: 0.8, effectiveSample: 30
+    })
+  ], now);
+  assert.equal(sampleAwarePriorities[0].capabilityNodeId, 'node:confirmed-gap', 'one failed sample must not outrank a reliable ability gap');
+  const learnedPriority = mastery.evaluateLearnerPriority(prioritySignal('node:learned', {
+    learningStatus: 'completed', learningCompletedAt: now, lastEvidenceAt: now - 86_400_000
+  }), now);
+  assert.equal(learnedPriority.action, 'practice', 'completed learning must request validation instead of repeating the lecture');
+  assert.ok(learnedPriority.reasonCodes.includes('learning_needs_validation'));
+  const agedPriority = mastery.evaluateLearnerPriority(prioritySignal('node:aged', {
+    retention: 0.8, lastEvidenceAt: now - 50 * 86_400_000
+  }), now);
+  assert.equal(agedPriority.action, 'review', 'aging evidence must trigger review');
+  const pausedPriorities = mastery.rankLearnerPriorities([
+    prioritySignal('node:paused', { preference: { mode: 'paused', pausedUntil: now + 86_400_000 } }),
+    prioritySignal('node:active')
+  ], now);
+  assert.deepEqual(pausedPriorities.map((item) => item.capabilityNodeId), ['node:active']);
+
   const planning = await server.ssrLoadModule('/src/modules/planning/public.ts');
   const strategy = planning.decidePreparationStrategy({
     remainingDays: 120,
@@ -51,8 +125,8 @@ try {
     dueReviews: [{ id: 'review:1', examCycleId: 'cycle:1', capabilityNodeId: 'node:review', masteryTrackId: 'track:1', reviewType: 'retention', dueAt: now, priority: 1, intervalDays: 1, stabilityBefore: 0.3, status: 'scheduled', reason: 'spaced_retention_maintenance', updatedAt: now }],
     strategy,
     prioritySignals: [
-      { capabilityNodeId: 'node:review', subject: 'aptitude', module: '判断推理', name: '复习节点', scoreWeight: 0.1, scoreGapRatio: 0.3, state: 'maintaining', accuracy: 0.8, speed: 0.7, retention: 0.5, transfer: 0.5, stability: 0.5, confidence: 0.7, effectiveSample: 8 },
-      { capabilityNodeId: 'node:weak', subject: 'aptitude', module: '判断推理', name: '薄弱节点', scoreWeight: 0.2, scoreGapRatio: 0.3, state: 'regressed', accuracy: 0.2, speed: 0, retention: 0, transfer: 0, stability: 0.1, confidence: 0.6, effectiveSample: 8 }
+      { capabilityNodeId: 'node:review', subject: 'aptitude', module: '判断推理', name: '复习节点', scoreWeight: 0.1, scoreGapRatio: 0.3, learnerPriority: 70, recommendedAction: 'review', state: 'maintaining', accuracy: 0.8, speed: 0.7, retention: 0.5, transfer: 0.5, stability: 0.5, confidence: 0.7, effectiveSample: 8 },
+      { capabilityNodeId: 'node:weak', subject: 'aptitude', module: '判断推理', name: '薄弱节点', scoreWeight: 0.2, scoreGapRatio: 0.3, learnerPriority: 95, recommendedAction: 'learn', state: 'regressed', accuracy: 0.2, speed: 0, retention: 0, transfer: 0, stability: 0.1, confidence: 0.6, effectiveSample: 8 }
     ],
     coverageCandidates: [],
     currentAffairsCapability: {

@@ -19,10 +19,28 @@ export interface PreparedTrueQuestionImport {
   readonly invocation: AgentWorkflowInvocation;
 }
 
+export type TrueQuestionImportSubject = 'aptitude' | 'essay';
+
+/** 申论 papers carry 给定资料 and 作答要求 instead of options, so the ingestion brief differs. */
+const SUBJECT_BRIEF: Record<TrueQuestionImportSubject, { readonly label: string; readonly structure: string }> = {
+  aptitude: {
+    label: '行测真题',
+    structure: '恢复题干、共用材料、小题、选项、图表和题目边界。'
+  },
+  essay: {
+    label: '申论真题',
+    structure: '恢复给定资料的分则编号与正文、每道小题的作答任务、字数限制和评分要求；申论没有选项，不要臆造选项。'
+  }
+};
+
 export class TrueQuestionImportFeature {
   constructor(private readonly importAttachment: TrueQuestionAttachmentImporter) {}
 
-  async prepare(files: readonly File[]): Promise<PreparedTrueQuestionImport> {
+  async prepare(
+    files: readonly File[],
+    subject: TrueQuestionImportSubject = 'aptitude'
+  ): Promise<PreparedTrueQuestionImport> {
+    const brief = SUBJECT_BRIEF[subject];
     const attachment = await this.importAttachment(files);
     const importMethod = attachment.method === 'image_vision' || attachment.method === 'image_ocr'
       ? QuestionImportMethod.ImageOcr
@@ -33,20 +51,20 @@ export class TrueQuestionImportFeature {
       attachment,
       attachments: attachment.imageParts || [],
       prompt: [
-        '请把这份资料整理为可确认的真题导入草稿。图片原图已经作为临时多模态附件提供；支持视觉输入时优先理解原图版面，不支持时读取本地 OCR 文本继续处理。',
+        `请把这份资料整理为可确认的${brief.label}导入草稿。图片原图已经作为临时多模态附件提供；支持视觉输入时优先理解原图版面，不支持时读取本地 OCR 文本继续处理。`,
         '',
         `【已导入本地文件：${attachment.name}】`,
         `本地路径：${attachment.path}`,
         `建议导入方式：${importMethod}`,
         `输入方式：${attachment.method}，共 ${attachment.pageCount} 页。`,
         attachment.imageParts?.length
-          ? `本次包含 ${attachment.imageParts.length} 张图片；请按图片顺序结合原图和本地提取文本，恢复题干、共用材料、小题、选项、图表和题目边界。`
-          : '请按需分段读取文本，并形成待确认草稿。',
+          ? `本次包含 ${attachment.imageParts.length} 张图片；请按图片顺序结合原图和本地提取文本，${brief.structure}`
+          : `请按需分段读取文本，${brief.structure}并形成待确认草稿。`,
         '图片中没有答案或解析时保持缺失并标记待确认；来源、年份、地区、模块或题目边界不确定时先向我确认，不得补造或直接发布。'
       ].join('\n'),
       invocation: {
         skillNames: ['tutor.question_bank_ingestion'],
-        systemConstraint: '用户从“导入真题”工作流提交了资料。目标是先形成待确认草稿；只有真实工具成功后才能说明扫描或导入已完成。'
+        systemConstraint: `用户从“导入${brief.label}”工作流提交了资料。目标是先形成待确认草稿；只有真实工具成功后才能说明扫描或导入已完成。`
       }
     };
   }

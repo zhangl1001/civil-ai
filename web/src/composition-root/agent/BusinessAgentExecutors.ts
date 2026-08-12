@@ -45,10 +45,6 @@ function digestBusinessKey(tab: DigestTab, date: string): string {
   return `digest:${tab}:${date}`;
 }
 
-function interviewBusinessKey(sessionId: string): string {
-  return `interview:${sessionId}`;
-}
-
 function buildEssayJsonRewritePrompt(rawText: string, issues: string[]): string {
   return [
     '# 命题质检与重写任务：申论题',
@@ -104,51 +100,6 @@ function parseEssayFeedback(text: string): {
     };
   } catch {
     return { feedback: text, confidence: 0.4, dimensions: [] };
-  }
-}
-
-function parseInterviewReview(text: string, localScore: Record<string, unknown>): {
-  feedback: string;
-  score: number;
-  confidence: number;
-  dimensions: Array<{ code: string; name: string; score: number; comment: string; evidence?: string }>;
-  suggestions: string[];
-} {
-  try {
-    const parsed = parseStructuredJson<{
-      feedbackMarkdown?: string;
-      score?: number;
-      confidence?: number;
-      dimensions?: Array<{ code?: string; name?: string; score?: number; comment?: string; evidence?: string }>;
-      suggestions?: string[];
-    }>(text);
-    return {
-      feedback: parsed.feedbackMarkdown || text,
-      score: normalizePercent(Number(parsed.score ?? 0)),
-      confidence: clamp01(Number(parsed.confidence ?? 0.65)),
-      dimensions: (parsed.dimensions || []).flatMap((item) => (
-        item.code && item.name && typeof item.score === 'number' && item.comment
-          ? [{
-              code: item.code,
-              name: item.name,
-              score: normalizePercent(item.score),
-              comment: item.comment,
-              evidence: item.evidence
-            }]
-          : []
-      )),
-      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter(Boolean) : []
-    };
-  } catch {
-    const total = Number(localScore.total || 0);
-    const max = localScore.fluency === undefined ? 15 : 20;
-    return {
-      feedback: text,
-      score: max ? Math.round(total / max * 100) : 0,
-      confidence: 0.45,
-      dimensions: [],
-      suggestions: []
-    };
   }
 }
 
@@ -333,115 +284,28 @@ export const essayGradeExecutor: BusinessAgentExecutor = async (task, context) =
     }
   });
   const overallScore = normalizePercent(parsed.score ?? 0) / 100;
-  const materialScore = dimensionScore(parsed.dimensions, ['relevance', 'evidence_extraction'], overallScore);
-  const expressionScore = dimensionScore(parsed.dimensions, ['structure', 'reasoning', 'expression'], overallScore);
+  const essayRubricDimensions = [
+    { code: 'relevance', capabilityCode: 'essay.material_analysis' },
+    { code: 'evidence_extraction', capabilityCode: 'essay.material_analysis' },
+    { code: 'structure', capabilityCode: 'essay.structured_expression' },
+    { code: 'reasoning', capabilityCode: 'essay.structured_expression' },
+    { code: 'expression', capabilityCode: 'essay.structured_expression' }
+  ] as const;
   await context.recordSubjectiveAssessment({
     sourceAssetId: saved.id,
     rubricVersion: 'essay_rubric@1.0.0',
-    dimensions: [
-      {
-        capabilityCode: 'essay.material_analysis',
-        score: materialScore,
-        confidence: parsed.confidence,
-        metadata: { dimensionCodes: ['relevance', 'evidence_extraction'], questionAssetId: questionAsset.id }
-      },
-      {
-        capabilityCode: 'essay.structured_expression',
-        score: expressionScore,
-        confidence: parsed.confidence,
-        metadata: { dimensionCodes: ['structure', 'reasoning', 'expression'], questionAssetId: questionAsset.id }
-      }
-    ]
+    dimensions: essayRubricDimensions.map(({ code, capabilityCode }) => ({
+      capabilityCode,
+      dimensionKey: code,
+      score: dimensionScore(parsed.dimensions, [code], overallScore),
+      confidence: parsed.confidence,
+      metadata: { dimensionCode: code, questionAssetId: questionAsset.id }
+    }))
   });
   await context.setResult({
     resultRef: saved.id,
     payload: { assetId: saved.id, essayContext }
   });
-};
-
-export const interviewReviewExecutor: BusinessAgentExecutor = async (task, context) => {
-  const sessionId = asString(task.payload?.sessionId) || asString(task.payload?.sourceId);
-  if (!sessionId) throw new Error('面试点评任务缺少 sessionId');
-  await context.update(18, '读取面试记录');
-  const sessionAsset = await context.findLatestLearningAsset({
-    kind: LearningAssetKind.InterviewSession,
-    businessKey: interviewBusinessKey(sessionId)
-  });
-  if (!sessionAsset) throw new Error('面试记录不存在');
-  const session = sessionAsset.payload;
-  const answersSource = Array.isArray(session.answers) ? session.answers : [];
-
-  const answers = answersSource.map((rawAnswer, index) => {
-    const answer = asRecord(rawAnswer);
-    const question = asRecord(answer.question);
-    const speechMetrics = asRecord(answer.speechMetrics);
-    const score = asRecord(answer.score);
-    return [
-    `第 ${index + 1} 题（${asString(question.type)}）：${asString(question.text)}`,
-    `提示：${asString(question.hint)}`,
-    `作答：${answer.skipped ? '已跳过' : asString(answer.answer) || asString(answer.transcript) || '未作答'}`,
-    Object.keys(speechMetrics).length
-      ? `语音指标：${Number(speechMetrics.durationSeconds || 0)} 秒，${Number(speechMetrics.wordsPerMinute || 0)} 字/分，口头语 ${Number(speechMetrics.fillerCount || 0)} 次`
-      : '',
-    Object.keys(score).length ? `本地评分：${Number(score.total || 0)} 分，${asString(score.feedback)}` : ''
-  ].filter(Boolean).join('\n');
-  }).join('\n\n');
-  const sessionScore = asRecord(session.score);
-
-  await context.update(38, '生成深度点评');
-  const prompt = context.compilePrompt(BusinessTutorPromptCode.InterviewReview, {
-    interviewType: asString(session.interviewType),
-    difficulty: asString(session.difficulty),
-    questionTypes: Array.isArray(session.questionTypes) ? session.questionTypes.map(String) : [],
-    localScore: {
-      total: Number(sessionScore.total || 0),
-      feedback: asString(sessionScore.feedback)
-    },
-    answers
-  });
-  const rawFeedback = await context.complete([
-    { role: 'system', content: prompt.system },
-    { role: 'user', content: prompt.user }
-  ], { temperature: 0.15, responseSchema: prompt.responseSchema });
-  const review = parseInterviewReview(rawFeedback, sessionScore);
-
-  await context.update(86, '写入面试点评');
-  const saved = await context.saveLearningAsset({
-    kind: LearningAssetKind.InterviewSession,
-    businessKey: interviewBusinessKey(sessionId),
-    title: asString(session.title) || `面试训练 · ${asString(session.date)}`,
-    payload: {
-      ...session,
-      aiFeedback: review.feedback,
-      aiScore: review.score,
-      aiConfidence: review.confidence,
-      aiDimensions: review.dimensions,
-      aiSuggestions: review.suggestions,
-      rubricVersion: 'interview_rubric@1.0.0',
-      updatedAt: Date.now()
-    }
-  });
-  const interviewDimensions = ['content', 'structure', 'expression', 'fluency'].map((code) => {
-    const dimension = review.dimensions.find((item) => item.code === code);
-    return {
-      capabilityCode: `interview.${code}`,
-      score: normalizePercent(dimension?.score ?? review.score) / 100,
-      confidence: dimension ? review.confidence : review.confidence * 0.7,
-      metadata: {
-        dimensionCode: code,
-        comment: dimension?.comment ?? '',
-        evidence: dimension?.evidence ?? '',
-        sessionId
-      }
-    };
-  });
-  await context.recordSubjectiveAssessment({
-    sourceAssetId: saved.id,
-    rubricVersion: 'interview_rubric@1.0.0',
-    dimensions: interviewDimensions
-  });
-  await context.setResult({ resultRef: saved.id, payload: { sessionId, assetId: saved.id } });
-  await context.update(96, '面试点评已生成');
 };
 
 export const generatePracticeExecutor: BusinessAgentExecutor = async (task, context) => {
@@ -771,6 +635,7 @@ async function collectDailyDigestResearch(
 export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
   const topic = asString(task.payload?.topic) || task.detail || '公考考点';
   const module = asString(task.payload?.module) || '公考';
+  const capabilityNodeId = asString(task.payload?.capabilityNodeId);
   const userRequest = asString(task.payload?.prompt) || `请系统讲解公考${module}考点「${topic}」。`;
   await context.update(18, '整理考点上下文');
   const recentAssets = await context.listLearningAssets({
@@ -791,8 +656,16 @@ export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
     kind: LearningAssetKind.StudyLecture,
     businessKey: `study:${module}:${topic}`,
     title: `${module} · ${topic}`,
-    payload: { module, topic, content: normalizeMarkdownSource(result) }
+    payload: {
+      module,
+      topic,
+      content: normalizeMarkdownSource(result),
+      ...(capabilityNodeId ? { capabilityNodeId } : {})
+    }
   });
-  await context.setResult({ resultRef: saved.id, payload: { assetId: saved.id, module, topic } });
+  await context.setResult({
+    resultRef: saved.id,
+    payload: { assetId: saved.id, module, topic, ...(capabilityNodeId ? { capabilityNodeId } : {}) }
+  });
   await context.update(94, '考点精讲已生成');
 };

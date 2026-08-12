@@ -7,5 +7,9 @@ export {
 } from './domain/TutorCycleCodes';
 export type { TutorCycleConclusion, TutorCycleRepository } from './contracts/TutorCycleRepository';
 export { BuildTutorDailyContext, type TutorDailyContext } from './application/BuildTutorDailyContext';
+export {
+  BuildLearnerPrioritySnapshot,
+  type LearnerPrioritySnapshot
+} from './application/BuildLearnerPrioritySnapshot';
 export { RecordObjectiveTutorConclusion } from './application/RecordObjectiveTutorConclusion';
 export { FinalizeObjectiveTutorConclusion } from './application/FinalizeObjectiveTutorConclusion';

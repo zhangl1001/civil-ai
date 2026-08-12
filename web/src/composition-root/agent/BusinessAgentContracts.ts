@@ -85,6 +85,7 @@ export interface BusinessAgentExecutionContext {
     readonly rubricVersion: string;
     readonly dimensions: readonly {
       readonly capabilityCode: string;
+      readonly dimensionKey: string;
       readonly score: number;
       readonly confidence: number;
       readonly metadata: Record<string, unknown>;

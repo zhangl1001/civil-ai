@@ -54,7 +54,10 @@
       <button class="essay-retry" type="button" @click="reload">重试</button>
     </section>
 
-    <div v-else-if="store.question" class="content-area app-page-scroll">
+    <div
+      v-else-if="store.question"
+      :class="['content-area', 'app-page-scroll', { 'with-floating-action': activeMode === 'question' }]"
+    >
       <section v-if="activeMode === 'lecture' && activeLecture" class="lecture-section">
         <div class="lecture-head">
           <span>{{ activeTopic }} · {{ activeLecture.knowledgePoint || '知识点讲义' }}</span>
@@ -140,12 +143,13 @@
       <p>请返回刷题中心，从私教学习、自主刷题或真题练习入口开始。</p>
     </section>
 
-    <StickyActionBar v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen">
-      <button class="primary essay-start-button" type="button" @click="openAnswerSheet">
-        <Edit3Icon />
-        {{ store.submission.content ? '继续作答' : '开始作答' }}
-      </button>
-    </StickyActionBar>
+    <FloatingActionButton
+      v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen"
+      :label="store.submission.content ? '继续作答' : '开始作答'"
+      @click="openAnswerSheet"
+    >
+      <NotebookPenIcon />
+    </FloatingActionButton>
 
     <Transition name="answer-backdrop">
       <button v-if="isAnswerSheetOpen" class="answer-backdrop" type="button" aria-label="收起作答区" @click="isAnswerSheetOpen = false"></button>
@@ -220,13 +224,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ChevronDownIcon, Clock3Icon, Edit3Icon, FileClockIcon, HistoryIcon, LoaderCircleIcon, Trash2Icon } from 'lucide-vue-next';
+import { ChevronDownIcon, Clock3Icon, FileClockIcon, HistoryIcon, LoaderCircleIcon, NotebookPenIcon, Trash2Icon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
-import { InfiniteScrollPagination, StickyActionBar } from '@/capabilities/design-system/public';
+import { FloatingActionButton, InfiniteScrollPagination } from '@/capabilities/design-system/public';
 import { countEssayWords, describeEssayWordCount } from '@/domain/essayAnswer';
 import { splitEssayMaterial, splitEssayRequirement } from '@/domain/essayQuestionText';
 import type { EssayHistoryRecord, EssayQuestionSetSummary } from '@/services/EssayRepository';
@@ -623,15 +627,15 @@ function formatTime(time: number): string {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 18px;
   padding-bottom: 10px;
 }
+.content-area.with-floating-action {
+  padding-bottom: calc(var(--app-floating-action-reserved) + var(--app-safe-bottom));
+  scroll-padding-bottom: calc(var(--app-floating-action-reserved) + var(--app-safe-bottom));
+}
 .lecture-section {
-  padding: 13px;
-  border-radius: var(--radius-card);
-  background: var(--surface-card-strong);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-card);
+  padding: 2px 0 0;
 }
 .lecture-head {
   display: flex;
@@ -646,45 +650,55 @@ function formatTime(time: number): string {
 .lecture-head h4 {
   margin: 0;
   color: var(--text-color);
-  font-size: var(--type-size-control);
+  font-size: var(--type-size-section-title);
+  line-height: 1.4;
 }
 .lecture-head p {
   margin: 0;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-secondary);
-  line-height: 1.6;
+  color: var(--text-color);
+  font-size: var(--type-size-body);
+  line-height: 1.7;
 }
 .lecture-grid {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
+  margin-top: 14px;
 }
 .lecture-grid article {
-  padding: 10px 11px;
-  border-radius: var(--radius-card);
+  padding: 13px 0;
+  border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  background: var(--surface-muted);
+  gap: 7px;
 }
 .lecture-grid strong {
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+  letter-spacing: 0;
+}
+/* Six undifferentiated grey lists are unscannable; each point gets a mark to land on. */
+.lecture-grid em {
+  position: relative;
+  padding-left: 13px;
   color: var(--text-color);
   font-size: var(--type-size-secondary);
-}
-.lecture-grid em {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-caption);
   font-style: normal;
-  line-height: 1.48;
+  line-height: 1.62;
+}
+.lecture-grid em::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: .62em;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--color-brand-rgb), .38);
 }
 .question-section {
   margin: 0;
-  padding: 13px 14px;
-  border-radius: var(--radius-card);
-  background: var(--surface-card-strong);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-card);
+  padding: 2px 0 0;
 }
 .question-meta {
   display: flex;
@@ -714,36 +728,36 @@ function formatTime(time: number): string {
   background: var(--surface-muted);
 }
 .question-section h4 {
-  margin: 0 0 8px;
-  line-height: 1.42;
-  font-size: var(--type-size-body-large);
+  margin: 0 0 10px;
+  line-height: 1.4;
+  font-size: var(--type-size-section-title);
 }
 .material-block,
 .requirement-block {
-  margin-top: 10px;
-  padding: 11px;
-  border-radius: var(--radius-card);
-  background: var(--surface-muted);
+  margin-top: 14px;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border-subtle);
 }
 .material-block strong,
 .requirement-block strong {
   display: block;
-  margin-bottom: 7px;
-  color: var(--text-color);
-  font-size: var(--type-size-secondary);
+  margin-bottom: 8px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+  letter-spacing: 0;
 }
+/* This is the prose the candidate reads for minutes at a time, so it is primary text. */
 .material-block p,
 .requirement-block p,
 .requirement-block li {
   margin: 0;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-body);
-  line-height: 1.72;
+  color: var(--text-color);
+  font-size: var(--type-size-body-large);
+  line-height: 1.78;
 }
 .material-block p + p {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px dashed var(--border-control);
+  margin-top: 12px;
 }
 .requirement-block ol {
   margin: 0;
@@ -788,28 +802,31 @@ function formatTime(time: number): string {
   font-weight: var(--type-weight-semibold);
 }
 .attempt-preview-answer {
-  padding: 11px;
-  border-radius: var(--radius-card);
-  background: var(--surface-muted);
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-subtle);
 }
 .attempt-preview-answer strong {
   display: block;
-  margin-bottom: 6px;
-  font-size: var(--type-size-secondary);
+  margin-bottom: 8px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+  letter-spacing: 0;
 }
 .attempt-preview-answer p {
   margin: 0;
-  color: var(--text-secondary-color);
+  color: var(--text-color);
   font-size: var(--type-size-body);
-  line-height: 1.72;
+  line-height: 1.78;
   white-space: pre-wrap;
 }
 .feedback-section { padding: 16px; background: var(--soft-blue); border-radius: var(--radius-card); line-height: 1.7; }
 .feedback-section h4 { margin: 0 0 8px; }
 .feedback-section :deep(p) { margin: 0; }
-.history-section { padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card-strong); box-shadow: var(--shadow-card); }
+/* A supporting block, deliberately lighter than the question so the page has one subject. */
+.history-section { padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
 .history-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.history-title strong { font-size: var(--type-size-body-large); }
+.history-title strong { font-size: var(--type-size-body); }
 .history-title span { color: var(--text-secondary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
 .history-row { padding: 10px 0; border-top: 1px solid var(--border-subtle); }
 .history-row:first-of-type { border-top: none; padding-top: 0; }
@@ -818,23 +835,11 @@ function formatTime(time: number): string {
 .history-row span { flex-shrink: 0; color: var(--text-secondary-color); font-size: var(--type-size-micro); }
 .history-feedback { margin: 6px 0 0; color: var(--text-secondary-color); font-size: var(--type-size-caption); line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .dimension-list { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
-.dimension-list li { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 6px; align-items: center; color: var(--text-secondary-color); font-size: var(--type-size-micro); }
-.dimension-list b { color: var(--text-color); }
-.dimension-list em { font-style: normal; color: var(--primary-color); font-weight: var(--type-weight-semibold); }
-.dimension-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.essay-start-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 50px;
-  font-size: var(--type-size-control);
-  font-weight: var(--type-weight-semibold);
-}
-.essay-start-button svg {
-  width: 18px;
-  height: 18px;
-}
+/* Name and score share a line; the comment gets its own so a score never reads as part of the prose. */
+.dimension-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; color: var(--text-secondary-color); font-size: var(--type-size-micro); }
+.dimension-list b { color: var(--text-color); font-weight: var(--type-weight-semibold); }
+.dimension-list em { font-style: normal; color: var(--primary-color); font-weight: var(--type-weight-semibold); font-variant-numeric: tabular-nums; }
+.dimension-list span { flex-basis: 100%; min-width: 0; font-size: var(--type-size-caption); line-height: 1.5; }
 .answer-backdrop {
   position: fixed;
   inset: 0;

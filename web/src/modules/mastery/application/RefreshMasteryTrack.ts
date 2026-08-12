@@ -55,20 +55,38 @@ export class RefreshMasteryTrack {
 
 function nextReview(track: MasteryTrack, now: number, ids: IdGenerator) {
   const repair = track.state === MasteryState.Regressed || track.accuracy < 0.55;
-  const stable = track.state === MasteryState.Mastered || track.state === MasteryState.Maintaining;
-  const intervalDays = repair ? 0 : stable ? Math.round(3 + track.stability * 27) : 1;
+  const hasMemoryEvidence = track.retention > 0 || track.transfer > 0;
+  const intervalDays = reviewIntervalDays(track);
   return {
     id: ids.next('ReviewQueueItemId'), examCycleId: track.examCycleId, capabilityNodeId: track.capabilityNodeId,
-    masteryTrackId: track.id, reviewType: repair ? ReviewType.Repair : stable ? ReviewType.Retention : ReviewType.Anchor,
+    masteryTrackId: track.id, reviewType: repair ? ReviewType.Repair : hasMemoryEvidence ? ReviewType.Retention : ReviewType.Anchor,
     dueAt: (now + intervalDays * 86_400_000) as typeof track.updatedAt,
     priority: Math.round((1 - track.stability + (repair ? 0.5 : 0)) * 10_000) / 10_000,
     intervalDays, stabilityBefore: track.stability, status: ReviewStatus.Scheduled,
     reason: repair
       ? ReviewReasonCode.RecentPerformanceRegression
-      : stable
+      : hasMemoryEvidence
         ? ReviewReasonCode.SpacedRetentionMaintenance
         : ReviewReasonCode.MasteryEvidenceIncomplete,
     version: 1,
     updatedAt: now as typeof track.updatedAt
   };
+}
+
+/**
+ * Builds a progressive 1-60 day interval from actual evidence rather than
+ * requiring a terminal mastery state before spaced review can expand.
+ */
+export function reviewIntervalDays(track: Pick<MasteryTrack,
+  'state' | 'accuracy' | 'retention' | 'transfer' | 'stability' | 'confidence' | 'effectiveSample'
+>): number {
+  if (track.state === MasteryState.Regressed || track.accuracy < 0.55) return 0;
+  const maturity = Math.min(1, track.effectiveSample / 18);
+  const memoryStrength = track.accuracy * 0.2
+    + track.retention * 0.35
+    + track.transfer * 0.2
+    + track.stability * 0.25;
+  const confidenceFactor = 0.35 + track.confidence * 0.65;
+  const interval = Math.max(1, Math.min(60, Math.round(1 + 59 * memoryStrength * maturity * confidenceFactor)));
+  return track.retention <= 0 && track.transfer <= 0 ? Math.min(7, interval) : interval;
 }

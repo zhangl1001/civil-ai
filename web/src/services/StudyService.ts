@@ -1,16 +1,28 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
 import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
+import { LearningProgressStatus, LearningResourceType } from '@/modules/learning-progress/public';
+import {
+  CapabilityRecommendationMode,
+  LearnerPriorityAction,
+  type CapabilityRecommendationMode as CapabilityRecommendationModeCode,
+  type LearnerPriorityResult
+} from '@/modules/mastery/public';
 import { generationTaskService } from './GenerationTaskService';
 
 export interface StudyPoint {
+  capabilityNodeId: string;
+  subject: string;
   module: string;
   group: string;
   name: string;
   wrongCount: number;
-  proficiency: number;
+  evidenceScore: number;
   priority: number;
+  recommendationAction: LearnerPriorityResult['action'];
   reason: string;
+  hasLearningEvidence: boolean;
+  learningStatus: 'not_started' | 'started' | 'completed';
 }
 
 export interface StudyModule {
@@ -22,6 +34,9 @@ export interface StudyModule {
 export interface StudyDashboard {
   modules: StudyModule[];
   weakPoints: StudyPoint[];
+  completedPointCount: number;
+  trackedPointCount: number;
+  hasLearningEvidence: boolean;
 }
 
 export interface StudyLectureSummary {
@@ -29,6 +44,7 @@ export interface StudyLectureSummary {
   title: string;
   module: string;
   topic: string;
+  capabilityNodeId?: string;
   updatedAt: number;
 }
 
@@ -64,21 +80,24 @@ export class StudyService {
   async dashboard(): Promise<StudyDashboard> {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
-    if (!cycle) return { modules: [], weakPoints: [] };
-    const [curriculum, tracks] = await Promise.all([
+    if (!cycle) return { modules: [], weakPoints: [], completedPointCount: 0, trackedPointCount: 0, hasLearningEvidence: false };
+    const [curriculum, prioritySnapshot] = await Promise.all([
       runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId),
-      runtime.masteryRepository.listTracks(cycle.examCycle.id, 100)
+      runtime.buildLearnerPrioritySnapshot.execute()
     ]);
-    if (!curriculum) return { modules: [], weakPoints: [] };
+    if (!curriculum) return { modules: [], weakPoints: [], completedPointCount: 0, trackedPointCount: 0, hasLearningEvidence: false };
     const byId = new Map(curriculum.capabilityNodes.map((node) => [node.id, node]));
-    const trackByNode = new Map(tracks.map((track) => [track.capabilityNodeId, track]));
+    const priorities = prioritySnapshot?.priorities ?? [];
+    const priorityByNode = new Map(priorities.map((priority) => [priority.capabilityNodeId, priority]));
     const pointNodes = curriculum.capabilityNodes.filter((node) => (
       node.status === 'active'
-      && node.subject === 'aptitude'
       && (
         node.nodeType === CapabilityNodeType.KnowledgePoint
         || node.nodeType === CapabilityNodeType.SubPoint
         || node.nodeType === CapabilityNodeType.QuestionType
+        || node.nodeType === CapabilityNodeType.CognitiveSkill
+        || node.nodeType === CapabilityNodeType.ProblemSolvingSkill
+        || node.nodeType === CapabilityNodeType.ExpressionSkill
       )
     ));
     const moduleMap = new Map<string, Map<string, StudyPoint[]>>();
@@ -86,25 +105,29 @@ export class StudyService {
       const module = moduleAncestor(node, byId);
       if (!module) return;
       const group = groupAncestor(node, module, byId);
-      const track = trackByNode.get(node.id);
-      const proficiency = track
-        ? Math.round((score(track.concept) + score(track.method) + score(track.accuracy) + score(track.retention)) / 4)
-        : 0;
-      const wrongCount = track ? Math.max(0, Math.round(track.effectiveSample * (1 - track.accuracy))) : 0;
-      const confidencePenalty = track ? Math.round((1 - track.confidence) * 30) : 35;
-      const priority = Math.round((100 - proficiency) * 0.7 + confidencePenalty + wrongCount * 4);
+      const priority = priorityByNode.get(node.id);
+      if (!priority) return;
+      const evidenceScore = Math.round((
+        priority.accuracy * 0.35
+        + priority.stability * 0.25
+        + priority.retention * 0.2
+        + priority.transfer * 0.2
+      ) * 100);
+      const wrongCount = Math.max(0, Math.round(priority.effectiveSample * (1 - priority.accuracy)));
+      const hasLearningEvidence = priority.effectiveSample > 0;
       const point: StudyPoint = {
+        capabilityNodeId: node.id,
+        subject: node.subject,
         module: module.name,
         group: group.name,
         name: node.name,
         wrongCount,
-        proficiency,
-        priority,
-        reason: !track
-          ? '尚未形成学习证据'
-          : wrongCount
-            ? `近阶段约错 ${wrongCount} 次`
-            : `掌握可信度 ${score(track.confidence)}%`
+        evidenceScore,
+        priority: priority.priority,
+        recommendationAction: priority.action,
+        reason: studyReason(priority, wrongCount),
+        hasLearningEvidence,
+        learningStatus: priority.learningStatus ?? 'not_started'
       };
       const groups = moduleMap.get(module.name) ?? new Map<string, StudyPoint[]>();
       groups.set(group.name, [...(groups.get(group.name) ?? []), point]);
@@ -120,14 +143,40 @@ export class StudyService {
     }));
     const weakPoints = modules
       .flatMap((module) => module.groups.flatMap((group) => group.points))
-      .filter((point) => point.proficiency < 75 || point.wrongCount > 0)
-      .sort((a, b) => b.priority - a.priority || a.proficiency - b.proficiency)
+      .filter((point) => (
+        point.hasLearningEvidence || point.learningStatus === LearningProgressStatus.Completed
+      ) && point.recommendationAction !== LearnerPriorityAction.Maintain)
+      .sort((a, b) => b.priority - a.priority || a.evidenceScore - b.evidenceScore)
       .slice(0, 6);
-    return { modules, weakPoints };
+    return {
+      modules,
+      weakPoints,
+      completedPointCount: priorities.filter((priority) => priority.learningStatus === LearningProgressStatus.Completed).length,
+      trackedPointCount: priorities.filter((priority) => Boolean(priority.learningStatus)).length,
+      hasLearningEvidence: priorities.some((priority) => priority.effectiveSample > 0)
+    };
+  }
+
+  async setRecommendationPreference(input: {
+    readonly capabilityNodeId: string;
+    readonly mode: CapabilityRecommendationModeCode;
+  }): Promise<void> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const pausedUntil = input.mode === CapabilityRecommendationMode.Paused
+      ? (Date.now() + 7 * 86_400_000) as Parameters<typeof runtime.updateLearningPreferences.setCapabilityRecommendation>[0]['pausedUntil']
+      : undefined;
+    await runtime.updateLearningPreferences.setCapabilityRecommendation({
+      examCycleId: cycle.examCycle.id,
+      capabilityNodeId: input.capabilityNodeId as Parameters<typeof runtime.updateLearningPreferences.setCapabilityRecommendation>[0]['capabilityNodeId'],
+      mode: input.mode,
+      ...(pausedUntil === undefined ? {} : { pausedUntil })
+    });
   }
 
   async startLearning(
-    point: Pick<StudyPoint, 'module' | 'name'> | { module?: string; name: string },
+    point: Pick<StudyPoint, 'module' | 'name' | 'capabilityNodeId'> | { module?: string; name: string; capabilityNodeId?: string },
     planContext?: DailyPlanLearningContext
   ) {
     const module = point.module || '公考';
@@ -140,6 +189,7 @@ export class StudyService {
       payload: {
         topic: point.name,
         prompt: `请系统讲解公考${module}考点「${point.name}」，包括核心概念、常见陷阱、典型例题、解题步骤和复盘提问。`,
+        capabilityNodeId: point.capabilityNodeId ?? planContext?.capabilityNodeId ?? null,
         ...(planContext ? {
           dailyPlanItemId: planContext.dailyPlanItemId,
           capabilityNodeId: planContext.capabilityNodeId ?? null
@@ -159,17 +209,48 @@ export class StudyService {
     const byId = new Map(curriculum.capabilityNodes.map((candidate) => [candidate.id, candidate]));
     return this.startLearning({
       module: moduleAncestor(node, byId)?.name || node.module || '公考',
-      name: node.name
+      name: node.name,
+      capabilityNodeId: node.id
     }, context);
   }
 
-  async completeDailyPlanLecture(input: {
-    readonly dailyPlanItemId: string;
+  async markLectureStarted(input: {
     readonly assetId: string;
-    readonly actualMinutes?: number;
+    readonly capabilityNodeId?: string;
+    readonly dailyPlanItemId?: string;
   }) {
     const runtime = await initializeTutorRuntime();
-    return runtime.completeDailyPlanItem.execute({
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return undefined;
+    return runtime.trackLearningProgress.start({
+      examCycleId: cycle.examCycle.id,
+      resourceType: LearningResourceType.Lecture,
+      resourceKey: lectureResourceKey(input.assetId, input.capabilityNodeId),
+      assetId: input.assetId,
+      capabilityNodeId: input.capabilityNodeId,
+      dailyPlanItemId: input.dailyPlanItemId
+    });
+  }
+
+  async completeLecture(input: {
+    readonly assetId: string;
+    readonly capabilityNodeId?: string;
+    readonly dailyPlanItemId?: string;
+    readonly actualMinutes?: number;
+  }): Promise<void> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    await runtime.trackLearningProgress.complete({
+      examCycleId: cycle.examCycle.id,
+      resourceType: LearningResourceType.Lecture,
+      resourceKey: lectureResourceKey(input.assetId, input.capabilityNodeId),
+      assetId: input.assetId,
+      capabilityNodeId: input.capabilityNodeId,
+      dailyPlanItemId: input.dailyPlanItemId
+    });
+    if (!input.dailyPlanItemId) return;
+    await runtime.completeDailyPlanItem.execute({
       dailyPlanItemId: input.dailyPlanItemId,
       actualMinutes: input.actualMinutes,
       resultSummary: { assetId: input.assetId, contentConsumed: true },
@@ -197,6 +278,7 @@ export class StudyService {
         title: asset.title,
         module: payloadString(asset.payload.module) || '公考',
         topic: payloadString(asset.payload.topic) || asset.title,
+        capabilityNodeId: payloadString(asset.payload.capabilityNodeId) || undefined,
         updatedAt: asset.updatedAt
       }];
     }).slice(0, boundedLimit);
@@ -206,6 +288,18 @@ export class StudyService {
 
 function payloadString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function lectureResourceKey(assetId: string, capabilityNodeId?: string): string {
+  return capabilityNodeId ? `capability:${capabilityNodeId}` : `asset:${assetId}`;
+}
+
+function studyReason(priority: LearnerPriorityResult, wrongCount: number): string {
+  if (priority.reasonCodes.includes('learning_needs_validation')) return '讲义已学，等待练习验证';
+  if (!priority.reliable) return '有效样本不足，建议先诊断';
+  if (priority.action === LearnerPriorityAction.Review) return '证据已衰减，需要及时复习';
+  if (wrongCount) return `近阶段约错 ${wrongCount} 次`;
+  return `证据置信度 ${score(priority.evidenceConfidence)}%`;
 }
 
 export const studyService = new StudyService();

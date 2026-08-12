@@ -39,8 +39,8 @@
 import { ref } from 'vue';
 import { CameraIcon, ListFilterIcon, LoaderCircleIcon, Repeat2Icon, SearchIcon, TargetIcon, UploadIcon } from 'lucide-vue-next';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
-import { CameraPermissionError, cameraCaptureService } from '@/platform/CameraCaptureService';
 import { DOCUMENT_FILE_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
+import { useTrueQuestionCapture } from './useTrueQuestionCapture';
 
 const props = defineProps<{
   filterSummary: string;
@@ -61,45 +61,24 @@ const emit = defineEmits<{
   captureError: [message: string];
 }>();
 const fileInput = ref<HTMLInputElement | null>(null);
-const takingPhoto = ref(false);
-const showCameraPermissionDialog = ref(false);
-const cameraPermissionDescription = ref('请在系统设置中允许访问相机，然后返回继续拍摄真题。');
-const nativeCameraAvailable = cameraCaptureService.isNativeCameraAvailable();
+const {
+  nativeCameraAvailable,
+  takingPhoto,
+  permissionDescription: cameraPermissionDescription,
+  showPermissionDialog: showCameraPermissionDialog,
+  capturePhoto: takePhoto,
+  openCameraSettings
+} = useTrueQuestionCapture({
+  onCaptured: (files) => emit('importFile', files),
+  onError: (message) => emit('captureError', message),
+  isBusy: () => props.importing
+});
 
 function selectFiles(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = input.files ? [...input.files] : [];
   input.value = '';
   if (files.length) emit('importFile', files);
-}
-
-async function takePhoto() {
-  if (takingPhoto.value || props.importing) return;
-  takingPhoto.value = true;
-  try {
-    const file = await cameraCaptureService.capturePhoto();
-    if (file) emit('importFile', [file]);
-  } catch (cause) {
-    if (cause instanceof CameraPermissionError) {
-      cameraPermissionDescription.value = cause.permissionStatus === 'restricted'
-        ? '相机权限受到系统或家长控制限制，请检查系统设置后再试。'
-        : '请在系统设置中允许访问相机，然后返回继续拍摄真题。';
-      showCameraPermissionDialog.value = true;
-    } else {
-      emit('captureError', cause instanceof Error ? cause.message : '打开相机失败，请稍后重试。');
-    }
-  } finally {
-    takingPhoto.value = false;
-  }
-}
-
-async function openCameraSettings() {
-  showCameraPermissionDialog.value = false;
-  try {
-    await cameraCaptureService.openAppSettings();
-  } catch (cause) {
-    emit('captureError', cause instanceof Error ? cause.message : '无法打开系统设置。');
-  }
 }
 </script>
 

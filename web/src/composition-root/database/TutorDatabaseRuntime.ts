@@ -92,6 +92,10 @@ import type {
   ProactiveSignalRepository
 } from '@/modules/proactive/public';
 import type {
+  LearningProgressRepository,
+  TrackLearningProgress
+} from '@/modules/learning-progress/public';
+import type {
   CreateLearningThread,
   LearningThreadRepository,
   RequestStructuredPractice,
@@ -100,6 +104,7 @@ import type {
 } from '@/modules/teaching/public';
 import type { CommandReceiptRepository, OutboxRepository } from '@/modules/task/public';
 import type {
+  BuildLearnerPrioritySnapshot,
   BuildTutorDailyContext,
   TutorCycleRepository
 } from '@/modules/tutoring/public';
@@ -144,6 +149,8 @@ export interface TutorDatabaseRuntime {
   readonly messageCenterRepository: MessageCenterRepository;
   readonly messageCenter: MessageCenter;
   readonly proactiveSignalRepository: ProactiveSignalRepository;
+  readonly learningProgressRepository: LearningProgressRepository;
+  readonly trackLearningProgress: TrackLearningProgress;
   readonly evaluateProactiveSignals: EvaluateProactiveSignals;
   readonly deliverProactiveSignals: DeliverProactiveSignals;
   readonly masteryRepository: MasteryRepository;
@@ -177,6 +184,7 @@ export interface TutorDatabaseRuntime {
   readonly completeObjectivePractice: CompleteObjectivePractice;
   readonly processObjectiveSubmissionOutbox: ProcessObjectiveSubmissionOutbox;
   readonly recordSubjectiveAssessment: RecordSubjectiveAssessment;
+  readonly buildLearnerPrioritySnapshot: BuildLearnerPrioritySnapshot;
   readonly buildTutorDailyContext: BuildTutorDailyContext;
   readonly buildAbilityCalibration: BuildAbilityCalibration;
   readonly createAgentRun: CreateAgentRun;

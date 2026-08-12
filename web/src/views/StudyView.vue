@@ -36,15 +36,15 @@
       <template v-else-if="lectureContent">
         <LectureContent :markdown="lectureContent" surface />
         <button
-          v-if="dailyPlanItemId && !planItemCompleted"
+          v-if="!lectureCompleted"
           type="button"
           class="complete-learning-button"
           :disabled="isCompleting"
-          @click="completePlanLecture"
+          @click="completeLecture"
         >
           <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成本节' }}
         </button>
-        <p v-else-if="planItemCompleted" class="completion-notice"><CheckCircle2Icon />本节已完成，今日计划已更新</p>
+        <p v-else class="completion-notice"><CheckCircle2Icon />本节已完成，下一步请用练习验证掌握</p>
       </template>
       <template v-else-if="dashboard">
         <section class="study-hero app-card">
@@ -60,7 +60,7 @@
         </section>
 
         <section class="panel app-card lecture-library">
-          <div class="section-title"><strong>我的讲义</strong><span>{{ lectures.length }} 份</span></div>
+          <SectionHeading title="我的讲义" :meta="`${lectures.length} 份`" />
           <AppStateView
             v-if="!lectures.length"
             compact
@@ -68,7 +68,7 @@
             description="从薄弱考点或搜索框发起精讲，生成完成后会保存在这里。"
           />
           <template v-else>
-            <button v-for="lecture in lectures" :key="lecture.id" type="button" class="lecture-row" @click="openLecture(lecture.id)">
+            <button v-for="lecture in lectures" :key="lecture.id" type="button" class="lecture-row" @click="openLecture(lecture.id, lecture.capabilityNodeId)">
               <i><BookOpenIcon /></i>
               <span>
                 <strong>{{ lecture.title }}</strong>
@@ -80,17 +80,17 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>薄弱考点</strong><span>{{ dashboard.weakPoints.length }} 个需加强</span></div>
+          <SectionHeading title="薄弱考点" :meta="`${dashboard.weakPoints.length} 个需加强`" />
           <div v-if="!dashboard.weakPoints.length" class="inline-empty">完成练习后自动显示薄弱考点</div>
           <button v-for="(point, index) in dashboard.weakPoints" :key="`${point.module}-${point.name}`" type="button" class="weak-card" @click="learn(point)">
             <i :class="index === 0 ? 'danger' : index < 3 ? 'warn' : 'info'">{{ index + 1 }}</i>
             <div><strong>{{ point.name }}</strong><span>{{ point.module }} · {{ point.reason }}</span></div>
-            <em>{{ point.proficiency }}%</em>
+            <em>{{ point.evidenceScore }}%</em>
           </button>
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>知识体系</strong><span>{{ visibleModules.length }} 个模块</span></div>
+          <SectionHeading title="知识体系" :meta="`${visibleModules.length} 个模块`" />
           <article v-for="module in visibleModules" :key="module.name" class="tree-module">
             <button type="button" class="tree-head" @click="toggle(module.name)">
               <BookOpenIcon /><strong>{{ module.name }}</strong><span>{{ module.total }} 个考点</span>
@@ -118,16 +118,14 @@ import { useRoute, useRouter } from 'vue-router';
 import { BookOpenIcon, CheckCircle2Icon, ChevronRightIcon, SearchIcon } from 'lucide-vue-next';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { studyService, type StudyDashboard, type StudyLectureSummary, type StudyPoint } from '@/services/StudyService';
-import { useAIChatStore } from '@/stores/aiChat';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import LectureContent from '@/components/content/LectureContent.vue';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import type { AgentRunView } from '@/modules/agent/public';
 import { useTaskCenterStore } from '@/stores/taskCenter';
 
-const chat = useAIChatStore();
 const taskCenter = useTaskCenterStore();
 const route = useRoute();
 const router = useRouter();
@@ -143,7 +141,8 @@ const trackedTaskId = ref('');
 const taskSnapshot = ref<AgentRunView>();
 const isDispatching = ref(false);
 const isCompleting = ref(false);
-const planItemCompleted = ref(false);
+const lectureCompleted = ref(false);
+const loadedCapabilityNodeId = ref('');
 
 const dailyPlanItemId = computed(() => typeof route.query.dailyPlanItemId === 'string' ? route.query.dailyPlanItemId : '');
 const capabilityNodeId = computed(() => typeof route.query.capabilityNodeId === 'string' ? route.query.capabilityNodeId : '');
@@ -165,12 +164,15 @@ onMounted(async () => {
 
 onBeforeUnmount(() => taskCenter.disconnect());
 
-watch(() => [route.query.assetId, route.query.dailyPlanItemId, route.query.start], load, { immediate: true });
+watch(() => [route.query.assetId, route.query.dailyPlanItemId, route.query.start, route.query.taskId], load, { immediate: true });
 watch(() => taskCenter.runs.find((task) => task.id === trackedTaskId.value), async (task) => {
   if (!task) return;
   taskSnapshot.value = task;
   if (task.status !== 'completed') return;
   const assetId = typeof task.actionParams.assetId === 'string' ? task.actionParams.assetId : '';
+  const nextCapabilityNodeId = typeof task.actionParams.capabilityNodeId === 'string'
+    ? task.actionParams.capabilityNodeId
+    : capabilityNodeId.value;
   trackedTaskId.value = '';
   taskSnapshot.value = undefined;
   if (!assetId) return;
@@ -179,7 +181,7 @@ watch(() => taskCenter.runs.find((task) => task.id === trackedTaskId.value), asy
     query: {
       assetId,
       ...(dailyPlanItemId.value ? { dailyPlanItemId: dailyPlanItemId.value } : {}),
-      ...(capabilityNodeId.value ? { capabilityNodeId: capabilityNodeId.value } : {}),
+      ...(nextCapabilityNodeId ? { capabilityNodeId: nextCapabilityNodeId } : {}),
       source: route.query.source || 'daily-plan'
     }
   });
@@ -188,15 +190,34 @@ watch(() => taskCenter.runs.find((task) => task.id === trackedTaskId.value), asy
 async function load() {
   isLoading.value = true;
   try {
+    const taskId = typeof route.query.taskId === 'string' ? route.query.taskId : '';
+    if (taskId) {
+      trackedTaskId.value = taskId;
+      taskSnapshot.value = taskCenter.runs.find((task) => task.id === taskId);
+    }
     lectureContent.value = '';
     lectureTitle.value = '';
+    lectureCompleted.value = false;
+    loadedCapabilityNodeId.value = '';
     const assetId = typeof route.query.assetId === 'string' ? route.query.assetId : '';
     if (assetId) {
       const runtime = await initializeTutorRuntime();
       const asset = await runtime.learningAssetStore.find(assetId);
       lectureContent.value = typeof asset?.payload.content === 'string' ? asset.payload.content : '';
       lectureTitle.value = asset?.title || '';
-      if (lectureContent.value) return;
+      const assetCapabilityNodeId = typeof asset?.payload.capabilityNodeId === 'string'
+        ? asset.payload.capabilityNodeId
+        : capabilityNodeId.value || undefined;
+      loadedCapabilityNodeId.value = assetCapabilityNodeId || '';
+      if (lectureContent.value) {
+        const progress = await studyService.markLectureStarted({
+          assetId,
+          capabilityNodeId: assetCapabilityNodeId,
+          dailyPlanItemId: dailyPlanItemId.value || undefined
+        });
+        lectureCompleted.value = progress?.status === 'completed';
+        return;
+      }
     }
     if (route.query.start === '1' && dailyPlanItemId.value) {
       await startPlanLecture();
@@ -240,20 +261,27 @@ async function cancelGeneration() {
   await taskCenter.refresh();
 }
 
-async function completePlanLecture() {
+async function completeLecture() {
   const assetId = typeof route.query.assetId === 'string' ? route.query.assetId : '';
-  if (!dailyPlanItemId.value || !assetId || isCompleting.value) return;
+  if (!assetId || isCompleting.value) return;
   isCompleting.value = true;
   try {
-    await studyService.completeDailyPlanLecture({ dailyPlanItemId: dailyPlanItemId.value, assetId });
-    planItemCompleted.value = true;
+    await studyService.completeLecture({
+      dailyPlanItemId: dailyPlanItemId.value || undefined,
+      capabilityNodeId: loadedCapabilityNodeId.value || capabilityNodeId.value || undefined,
+      assetId
+    });
+    lectureCompleted.value = true;
   } finally {
     isCompleting.value = false;
   }
 }
 
-async function openLecture(assetId: string) {
-  await router.push({ path: '/vue/study/lecture', query: { assetId } });
+async function openLecture(assetId: string, capabilityNodeId?: string) {
+  await router.push({
+    path: '/vue/study/lecture',
+    query: { assetId, ...(capabilityNodeId ? { capabilityNodeId } : {}) }
+  });
 }
 
 function formatLectureTime(value: number): string {
@@ -271,15 +299,19 @@ function toggle(moduleName: string) {
 }
 
 async function learn(point: StudyPoint) {
-  await studyService.startLearning(point);
+  const result = await studyService.startLearning(point);
+  trackedTaskId.value = result.task.id;
+  taskSnapshot.value = result.task;
   query.value = point.name;
-  await chat.open();
+  await taskCenter.refresh();
 }
 
 async function learnQuery() {
   if (!query.value) return;
-  await studyService.startLearning({ module: activeModule.value || undefined, name: query.value });
-  await chat.open();
+  const result = await studyService.startLearning({ module: activeModule.value || undefined, name: query.value });
+  trackedTaskId.value = result.task.id;
+  taskSnapshot.value = result.task;
+  await taskCenter.refresh();
 }
 
 </script>
@@ -301,10 +333,8 @@ async function learnQuery() {
 .module-filter-options button.active { background:rgba(var(--color-brand-rgb), .12); color:var(--primary-color); }
 .empty-state { min-height: 180px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.72); color: var(--text-secondary-color); font-size: var(--type-size-secondary); }
 .panel { padding: 14px; }
-.section-title,.weak-card,.tree-head { display:flex; align-items:center; }
-.section-title { justify-content:space-between; margin-bottom:10px; }
-.section-title strong { font-size: var(--type-size-body-large); }
-.section-title span { color:var(--text-secondary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
+.weak-card,.tree-head { display:flex; align-items:center; }
+.section-heading { margin-bottom:10px; }
 .inline-empty { padding:14px; text-align:center; color:var(--text-secondary-color); font-size: var(--type-size-secondary); }
 .lecture-library { overflow:hidden; }
 .lecture-row { width:100%; min-height:62px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.06); padding:10px 0; display:flex; align-items:center; gap:10px; color:inherit; background:transparent; text-align:left; font:inherit; }
