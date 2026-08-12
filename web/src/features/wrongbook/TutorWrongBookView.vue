@@ -98,17 +98,17 @@
       <p v-if="error && entries.length" class="sync-error">{{ error }}</p>
     </PullToRefresh>
 
-    <StickyActionBar v-if="mode === 'review' && loaded && !error && filtered.length" avoid-bottom-nav>
-      <button
-        class="primary start-review"
-        type="button"
-        :disabled="startingReview || !selectedReviewEntries.length"
-        @click="startReview"
-      >
-        <RotateCcwIcon />
-        {{ startingReview ? '正在准备错题...' : selectedReviewEntries.length ? `开始重做 ${selectedReviewEntries.length} 道` : '请选择要重做的错题' }}
-      </button>
-    </StickyActionBar>
+    <FloatingActionButton
+      v-if="mode === 'review' && loaded && !error && filtered.length"
+      :label="startingReview ? '正在准备错题' : selectedReviewEntries.length ? `开始重做 ${selectedReviewEntries.length} 道` : '请选择要重做的错题'"
+      :disabled="startingReview || !selectedReviewEntries.length"
+      :busy="startingReview"
+      :has-status="Boolean(selectedReviewEntries.length)"
+      avoid-bottom-nav
+      @click="startReview"
+    >
+      <NotebookPenIcon />
+    </FloatingActionButton>
 
     <BottomSheet v-model="showFilter" title="错题筛选" subtitle="按训练模块与已确认错因过滤" variant="filter">
       <div class="filter-form">
@@ -164,8 +164,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { CheckIcon, ChevronDownIcon, FilterIcon, LayersIcon, MinusIcon, RotateCcwIcon } from 'lucide-vue-next';
-import { AppStateView, InfiniteScrollPagination, InitialRefreshState, PullToRefresh, SegmentedControl, StickyActionBar } from '@/capabilities/design-system/public';
+import { CheckIcon, ChevronDownIcon, FilterIcon, LayersIcon, MinusIcon, NotebookPenIcon } from 'lucide-vue-next';
+import { AppStateView, FloatingActionButton, InfiniteScrollPagination, InitialRefreshState, PullToRefresh, SegmentedControl } from '@/capabilities/design-system/public';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import CenterDialog from '@/components/layout/CenterDialog.vue';
 import QuestionContentTemplate from '@/components/question/QuestionContentTemplate.vue';
@@ -368,6 +368,4 @@ function feature(): Promise<WrongBookFeature> {
 /* Two lines: one truncated line makes near-identical stems impossible to tell apart. */
 .review-copy strong { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; color:var(--text-color); font-size:var(--type-size-body); font-weight:var(--type-weight-medium); line-height:1.5; }
 .review-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-secondary-color); font-size:var(--type-size-micro); }
-.start-review { flex:1; display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:46px; font-weight:var(--type-weight-semibold); }
-.start-review svg { width:17px; height:17px; }
 </style>

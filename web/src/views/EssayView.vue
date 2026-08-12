@@ -140,12 +140,14 @@
       <p>请返回刷题中心，从私教学习、自主刷题或真题练习入口开始。</p>
     </section>
 
-    <StickyActionBar v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen">
-      <button class="primary essay-start-button" type="button" @click="openAnswerSheet">
-        <Edit3Icon />
-        {{ store.submission.content ? '继续作答' : '开始作答' }}
-      </button>
-    </StickyActionBar>
+    <FloatingActionButton
+      v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen"
+      :label="store.submission.content ? '继续作答' : '开始作答'"
+      :has-status="Boolean(store.submission.content)"
+      @click="openAnswerSheet"
+    >
+      <NotebookPenIcon />
+    </FloatingActionButton>
 
     <Transition name="answer-backdrop">
       <button v-if="isAnswerSheetOpen" class="answer-backdrop" type="button" aria-label="收起作答区" @click="isAnswerSheetOpen = false"></button>
@@ -220,13 +222,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ChevronDownIcon, Clock3Icon, Edit3Icon, FileClockIcon, HistoryIcon, LoaderCircleIcon, Trash2Icon } from 'lucide-vue-next';
+import { ChevronDownIcon, Clock3Icon, FileClockIcon, HistoryIcon, LoaderCircleIcon, NotebookPenIcon, Trash2Icon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
-import { InfiniteScrollPagination, StickyActionBar } from '@/capabilities/design-system/public';
+import { FloatingActionButton, InfiniteScrollPagination } from '@/capabilities/design-system/public';
 import { countEssayWords, describeEssayWordCount } from '@/domain/essayAnswer';
 import { splitEssayMaterial, splitEssayRequirement } from '@/domain/essayQuestionText';
 import type { EssayHistoryRecord, EssayQuestionSetSummary } from '@/services/EssayRepository';
@@ -832,19 +834,6 @@ function formatTime(time: number): string {
 .dimension-list b { color: var(--text-color); font-weight: var(--type-weight-semibold); }
 .dimension-list em { font-style: normal; color: var(--primary-color); font-weight: var(--type-weight-semibold); font-variant-numeric: tabular-nums; }
 .dimension-list span { flex-basis: 100%; min-width: 0; font-size: var(--type-size-caption); line-height: 1.5; }
-.essay-start-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 50px;
-  font-size: var(--type-size-control);
-  font-weight: var(--type-weight-semibold);
-}
-.essay-start-button svg {
-  width: 18px;
-  height: 18px;
-}
 .answer-backdrop {
   position: fixed;
   inset: 0;
