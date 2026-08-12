@@ -37,7 +37,7 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord): RouteLocationR
     return { path: '/vue/exam', query: context };
   }
   if (item.itemType === DailyPlanItemType.Essay) {
-    return { path: '/vue/essay', query: { ...context, entryMode: 'tutor' } };
+    return { path: '/vue/practice', query: { ...context, subject: 'essay', mode: 'tutor' } };
   }
   return {
     path: '/vue/digest',

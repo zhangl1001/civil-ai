@@ -69,7 +69,8 @@ function normalizeContext(context?: EssayContext): EssayContext {
 }
 
 function businessKey(context: EssayContext): string {
-  return `essay:${context.date}:${context.topic}:${context.type}`;
+  const mode = context.entryMode && context.entryMode !== 'self' ? `:${context.entryMode}` : '';
+  return `essay:${context.date}:${context.topic}:${context.type}${mode}`;
 }
 
 function asQuestion(value: unknown): EssayQuestionRecord | null {
@@ -248,7 +249,8 @@ export class EssayRepository {
       const itemContext: EssayContext = {
         date: typeof record.date === 'string' ? record.date : today(),
         topic: typeof record.topic === 'string' ? record.topic : '申论',
-        type: record.type === 'long' ? 'long' : 'short'
+        type: record.type === 'long' ? 'long' : 'short',
+        entryMode: record.entryMode === 'tutor' || record.entryMode === 'true' ? record.entryMode : 'self'
       };
       return {
         key: asset.businessKey,

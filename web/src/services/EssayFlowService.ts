@@ -5,7 +5,10 @@ export interface EssayContext {
   date: string;
   topic: string;
   type: 'short' | 'long';
+  entryMode?: EssayEntryMode;
 }
+
+export type EssayEntryMode = 'tutor' | 'self' | 'true';
 
 function today(): string {
   const now = new Date();
@@ -67,12 +70,13 @@ export class EssayFlowService {
       title: options.title || '生成申论题目',
       detail: `${context.topic} · ${count} 题 · ${context.date}`,
       module: '申论',
-      sourceId: `essay:${context.topic}:${context.date}:${context.type}:${count}`,
+      sourceId: `essay:${context.entryMode || 'self'}:${context.topic}:${context.date}:${context.type}:${count}`,
       payload: {
         subject: '申论',
         date: context.date,
         essayTopic: context.topic,
         essayType: context.type,
+        entryMode: context.entryMode || 'self',
         essayQuestionCount: count
       }
     });

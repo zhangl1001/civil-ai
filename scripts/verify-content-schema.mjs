@@ -16,7 +16,10 @@ const server = await createServer({
 });
 
 try {
-  const content = await server.ssrLoadModule('/src/modules/content/public.ts');
+  const [content, rendering] = await Promise.all([
+    server.ssrLoadModule('/src/modules/content/public.ts'),
+    server.ssrLoadModule('/src/capabilities/content-rendering/public.ts')
+  ]);
   const fixturePath = path.join(webRoot, 'src/modules/content/fixtures/single-choice-weakening-v2.json');
   const fixture = JSON.parse(await fs.readFile(fixturePath, 'utf8'));
   const validator = new content.ContentSchemaValidator();
@@ -130,6 +133,20 @@ try {
   });
   assert.equal(invalidImage.ok, false);
   assert(invalidImage.error.issues.some((issue) => issue.code === 'content.image_ref_invalid'));
+
+  assert.equal(rendering.resolveImageSource('/assets/question.png').kind, rendering.ImageSourceKind.Local);
+  assert.equal(
+    rendering.resolveImageSource('data:image/png;base64,iVBORw0KGgo=').kind,
+    rendering.ImageSourceKind.Inline
+  );
+  assert.equal(
+    rendering.resolveImageSource('https://tracker.example/pixel.png').kind,
+    rendering.ImageSourceKind.Remote
+  );
+  assert.equal(
+    rendering.resolveImageSource('javascript:alert(1)').kind,
+    rendering.ImageSourceKind.Blocked
+  );
 
   const parser = new content.GeneratedContentParser();
   const embeddedLecture = parser.parseObject({

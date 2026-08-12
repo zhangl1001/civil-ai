@@ -14,6 +14,7 @@ import type {
 import type { SingleChoiceOption, SingleChoiceQuestionContent } from '../contracts/QuestionContent';
 import { CalloutKind, ContentAlignment, ContentBlockType, QuestionTemplateCode } from '../domain/ContentCodes';
 import { resolveQuestionPresentation } from '../domain/QuestionPresentation';
+import { ImageSourceKind, resolveImageSource } from '@/capabilities/content-rendering/public';
 
 export interface ContentValidationIssue {
   readonly code: string;
@@ -147,7 +148,7 @@ function parseBlock(
     const alt = readString(record.alt, `${path}.alt`, issues);
     const caption = readOptionalString(record.caption, `${path}.caption`, issues);
     if (assetRef && !isRenderableImageRef(assetRef)) {
-      issue(issues, 'content.image_ref_invalid', `${path}.assetRef`, 'Image reference must use https, an app path, or an inline image data URI');
+      issue(issues, 'content.image_ref_invalid', `${path}.assetRef`, 'Image reference must use HTTPS, an app path, or a supported inline image data URI');
     }
     return assetRef && alt ? { id, type, assetRef, alt, caption } satisfies ImageBlock : undefined;
   }
@@ -323,5 +324,5 @@ function hasSvgViewBox(markup: string): boolean {
 }
 
 function isRenderableImageRef(value: string): boolean {
-  return /^(https:\/\/|\/|data:image\/)/i.test(value);
+  return resolveImageSource(value).kind !== ImageSourceKind.Blocked;
 }

@@ -1,58 +1,29 @@
 <template>
   <div class="essay-page app-page">
-    <PageHeader class="essay-header">
-      <template #default>
-        <button
-          v-if="store.question"
-          :class="['essay-timer', { running: isTimerRunning }]"
-          type="button"
-          @click="toggleTimer"
-        >
-          <ClockIcon />
-          {{ elapsedText }}
-        </button>
-      </template>
-      <template #title>
-        <div class="essay-title">
-          <button class="essay-topic-trigger" type="button" @click.stop="showTopicPicker = !showTopicPicker">
-            <strong>{{ activeTopic }}</strong>
-            <ChevronDownIcon :class="{ open: showTopicPicker }" />
+    <PageHeader class="essay-header" :title="essayHeaderTitle">
+      <template #meta>
+        <div class="essay-header-meta">
+          <span>{{ essaySessionMeta }}</span>
+          <button
+            v-if="activeMode === 'question' && store.question && !store.submission.feedback"
+            :class="['essay-session-timer', { running: isTimerRunning }]"
+            type="button"
+            title="暂停或继续计时"
+            @click="toggleTimer"
+          >
+            <Clock3Icon />{{ elapsedText }}
           </button>
-          <Transition name="topic-pop">
-            <div v-if="showTopicPicker" class="essay-topic-popover" @click.stop>
-              <section v-for="group in topicGroups" :key="group.label">
-                <em>{{ group.label }}</em>
-                <button
-                  v-for="topic in group.children"
-                  :key="topic"
-                  type="button"
-                  :class="{ active: activeTopic === topic }"
-                  @click="switchTopic(topic)"
-                >
-                  {{ topic }}
-                </button>
-              </section>
-            </div>
-          </Transition>
         </div>
       </template>
       <template #actions>
-        <HeaderMoreMenu title="申论操作" subtitle="生成和历史">
-          <button class="menu-row" type="button" :disabled="isGenerating" @click="generateEssay">
-            <SparklesIcon />
-            重新生成
-          </button>
-          <button class="menu-row" type="button" :disabled="isGenerating" @click="showGenerateSheet = true">
-            <SettingsIcon />
-            自定义生题
-          </button>
-          <button class="menu-row" type="button" @click="showHistorySheet = true">
-            <HistoryIcon />
-            历史批改
-          </button>
+        <HeaderMoreMenu title="题目操作" subtitle="当前题目与作答">
           <button class="menu-row" type="button" @click="openQuestionHistory">
             <FileClockIcon />
             历史题目
+          </button>
+          <button class="menu-row" type="button" @click="showHistorySheet = true">
+            <HistoryIcon />
+            本题批改记录
           </button>
           <button class="menu-row danger" type="button" @click="deleteCurrentEssay">
             <Trash2Icon />
@@ -70,19 +41,7 @@
         <button type="button" :class="{ active: activeMode === 'question' }" @click="activeMode = 'question'">题目</button>
       </div>
 
-      <AiTaskPendingState
-        v-if="visibleGenerationTask"
-        :task="visibleGenerationTask"
-        title="AI 正在生成申论题"
-        :description="visibleGenerationTask.message || visibleGenerationTask.detail || '生成完成后会自动刷新题目和讲义。'"
-        ready-action-label="重新生成"
-        retry-action-label="重新生成"
-        @start="generateEssay"
-        @retry="generateEssay"
-        @cancel="cancelEssayGeneration"
-      />
-
-      <section v-else-if="activeMode === 'lecture'" class="lecture-section">
+      <section v-if="activeMode === 'lecture'" class="lecture-section">
         <div class="lecture-head">
           <span>{{ activeTopic }} · {{ lecture.knowledgePoint || '知识点讲义' }}</span>
           <h4>{{ lecture.title }}</h4>
@@ -153,28 +112,10 @@
       </section>
     </div>
 
-    <AiTaskPendingState
-      v-else
-      class="app-page-scroll"
-      :task="visibleGenerationTask"
-      :title="emptyEssayTitle"
-      :description="emptyEssayDescription"
-      :disabled="isGenerating"
-      hide-primary-action
-      ready-action-label="每日计划"
-      retry-action-label="重新生成"
-      @retry="generateEssay"
-      @cancel="cancelEssayGeneration"
-    >
-      <button class="pending-choice primary" type="button" :disabled="isGenerating" @click="generateEssay">
-        <SparklesIcon />
-        每日计划
-      </button>
-      <button class="pending-choice" type="button" :disabled="isGenerating" @click="showGenerateSheet = true">
-        <SettingsIcon />
-        自定义生题
-      </button>
-    </AiTaskPendingState>
+    <section v-else class="essay-empty app-page-scroll">
+      <strong>暂无申论题目</strong>
+      <p>请返回刷题中心，从私教学习、自主刷题或真题练习入口开始。</p>
+    </section>
 
     <div v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen" class="essay-start-bar">
       <button type="button" @click="openAnswerSheet">
@@ -222,36 +163,6 @@
       </section>
     </Transition>
 
-    <BottomSheet v-model="showGenerateSheet" title="申论自定义生题" :subtitle="`${customTopic} · ${customQuestionCount} 题`" variant="filter">
-      <div class="essay-generate-sheet">
-        <section>
-          <strong>题型</strong>
-          <button
-            v-for="topic in essayTopics"
-            :key="topic"
-            type="button"
-            :class="{ active: customTopic === topic }"
-            @click="customTopic = topic"
-          >
-            <span>{{ topic }}</span>
-            <em>{{ topicHint(topic) }}</em>
-          </button>
-        </section>
-        <section v-if="customTopic !== '申发论述'">
-          <strong>题目数量</strong>
-          <div class="count-options">
-            <button v-for="count in [1, 2, 3]" :key="count" type="button" :class="{ active: customQuestionCount === count }" @click="customQuestionCount = count">
-              {{ count }} 题
-            </button>
-          </div>
-        </section>
-        <button class="sheet-primary" type="button" :disabled="isGenerating" @click="generateCustomEssay">
-          <SparklesIcon />
-          {{ isGenerating ? '生成中...' : '开始生成' }}
-        </button>
-      </div>
-    </BottomSheet>
-
     <BottomSheet v-model="showHistorySheet" title="历史批改" subtitle="最近 10 条记录" variant="actions">
       <div v-if="store.history.length" class="essay-history-list">
         <button v-for="item in store.history" :key="item.id" type="button" @click="openHistoryItem(item)">
@@ -286,14 +197,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { ChevronDownIcon, ClockIcon, Edit3Icon, FileClockIcon, HistoryIcon, SettingsIcon, SparklesIcon, Trash2Icon } from 'lucide-vue-next';
-import type { AgentRunView } from '@/modules/agent/public';
-import { initializeTutorRuntime } from '@/composition-root/public';
+import { ChevronDownIcon, Clock3Icon, Edit3Icon, FileClockIcon, HistoryIcon, Trash2Icon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
-import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
 import { InfiniteScrollPagination } from '@/capabilities/design-system/public';
 import type { EssayHistoryRecord, EssayLecture, EssayStateHistoryItem } from '@/services/EssayRepository';
@@ -304,44 +212,34 @@ import { essayFlowService } from '@/services/EssayFlowService';
 const store = useEssayStore();
 const route = useRoute();
 const activeMode = ref<'lecture' | 'question'>('lecture');
-const showTopicPicker = ref(false);
 const isAnswerSheetOpen = ref(false);
-const showGenerateSheet = ref(false);
 const showHistorySheet = ref(false);
 const showQuestionHistorySheet = ref(false);
 const showDeleteConfirmSheet = ref(false);
-const isGenerating = ref(false);
-const pendingGenerationTaskId = ref('');
-const visibleGenerationTask = ref<AgentRunView | undefined>();
 const questionHistory = ref<EssayStateHistoryItem[]>([]); const questionHistoryVisibleCount = ref(20);
 const visibleQuestionHistory = computed(() => questionHistory.value.slice(0, questionHistoryVisibleCount.value));
-const customTopic = ref('归纳概括');
-const customQuestionCount = ref(1);
 const answerSheetHeight = ref(42);
 const elapsedMs = ref(0);
 const isTimerRunning = ref(false);
 let timerId: number | null = null;
-let taskPollId: number | null = null;
 let resizeStartY = 0;
 let resizeStartHeight = 0;
-const topicGroups = [
-  { label: '小题', children: ['归纳概括', '综合分析', '提出对策', '贯彻执行'] },
-  { label: '大作文', children: ['申发论述'] }
-];
-const essayTopics = topicGroups.flatMap((group) => group.children);
 
 onMounted(() => {
-  store.fetchQuestion(essayFlowService.readContext()).then(restoreTimer);
-  if (route.query.open === 'custom') showGenerateSheet.value = true;
-  document.addEventListener('click', closeTopicPicker);
+  const routeEntryMode = route.query.entryMode === 'tutor' || route.query.entryMode === 'self' || route.query.entryMode === 'true'
+    ? route.query.entryMode
+    : undefined;
+  const routeContext = essayFlowService.writeContext({
+    ...(typeof route.query.date === 'string' ? { date: route.query.date } : {}),
+    ...(typeof route.query.topic === 'string' ? { topic: route.query.topic } : {}),
+    ...(routeEntryMode ? { entryMode: routeEntryMode } : {})
+  });
+  store.fetchQuestion(routeContext).then(() => restoreTimer());
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  taskPollId = window.setInterval(() => void refreshVisibleTask(), 900);
 });
 
 onUnmounted(() => {
-  document.removeEventListener('click', closeTopicPicker);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  if (taskPollId !== null) window.clearInterval(taskPollId);
   window.removeEventListener('pointermove', resizeAnswerSheet);
   saveTimer();
   stopTimer();
@@ -354,6 +252,17 @@ const updateContent = (event: Event) => {
 
 const wordCount = computed(() => store.submission.content.length);
 const activeTopic = computed(() => store.context?.topic || '申论练习');
+const essayHeaderTitle = computed(() => `申论 · ${activeTopic.value}`);
+const essaySessionMeta = computed(() => {
+  const mode = store.context?.entryMode === 'tutor'
+    ? '私教训练'
+    : store.context?.entryMode === 'true'
+      ? '真题练习'
+      : '自主刷题';
+  if (activeMode.value === 'lecture') return `${mode} · 配套讲义`;
+  if (store.submission.feedback) return `${mode} · 批改结果`;
+  return `${mode} · ${store.submission.content ? '继续作答' : '未作答'}`;
+});
 const isLongEssay = computed(() => store.context?.type === 'long' || activeTopic.value === '申发论述');
 const lecture = computed<EssayLecture>(() => store.question?.lecture || {
   knowledgePoint: activeTopic.value,
@@ -377,96 +286,6 @@ const lectureSections = computed(() => [
 const elapsedText = computed(() => formatDuration(elapsedMs.value));
 const materialParagraphs = computed(() => splitMaterial(store.question?.material || ''));
 const requirementTasks = computed(() => splitRequirement(store.question?.requirement || ''));
-const emptyEssayTitle = computed(() => {
-  const task = visibleGenerationTask.value;
-  if (task?.status === 'failed') return '生成失败';
-  if (task?.status === 'cancelled') return '任务已取消';
-  if (task?.isActive) return 'AI 正在生成申论题';
-  return '暂无申论题目';
-});
-const emptyEssayDescription = computed(() => {
-  const task = visibleGenerationTask.value;
-  if (task?.status === 'failed') return task.detail || '生成失败，可以重新发起。';
-  if (task?.status === 'cancelled') return '任务已取消，可以重新生成。';
-  if (task?.isActive) {
-    return task.message || task.detail || '生成完成后会自动刷新题目和讲义。';
-  }
-  return '先生成一套申论题，系统会同步保存题目和对应讲义。';
-});
-
-async function switchTopic(topic: string) {
-  showTopicPicker.value = false;
-  activeMode.value = 'lecture';
-  customTopic.value = topic === '申论练习' ? '归纳概括' : topic;
-  resetTimer();
-  const context = essayFlowService.writeContext({
-    topic,
-    date: new Date().toISOString().slice(0, 10),
-    type: topic === '申发论述' ? 'long' : 'short'
-  });
-  await store.fetchQuestion(context);
-}
-
-async function generateEssay() {
-  const context = store.context || essayFlowService.readContext();
-  await enqueueEssayGeneration(context, context.topic === '申发论述' ? 1 : customQuestionCount.value);
-}
-
-async function generateCustomEssay() {
-  const topic = customTopic.value;
-  const context = essayFlowService.writeContext({
-    topic,
-    date: new Date().toISOString().slice(0, 10),
-    type: topic === '申发论述' ? 'long' : 'short'
-  });
-  showGenerateSheet.value = false;
-  activeMode.value = 'question';
-  resetTimer();
-  await store.fetchQuestion(context);
-  await enqueueEssayGeneration(context, topic === '申发论述' ? 1 : customQuestionCount.value);
-}
-
-async function enqueueEssayGeneration(context = essayFlowService.readContext(), count = 1) {
-  if (isGenerating.value) return;
-  isGenerating.value = true;
-  const result = await essayFlowService.enqueueQuestionGeneration(context, { questionCount: count });
-  pendingGenerationTaskId.value = result.task.id;
-  visibleGenerationTask.value = result.task;
-  await store.fetchQuestion(context);
-}
-
-async function handleTaskChanged(task: AgentRunView | undefined) {
-  visibleGenerationTask.value = task;
-  if (task?.status === 'completed') {
-    await store.fetchQuestion(store.context || essayFlowService.readContext());
-    activeMode.value = 'lecture';
-    isGenerating.value = false;
-    pendingGenerationTaskId.value = '';
-    visibleGenerationTask.value = undefined;
-  } else if (task?.status === 'failed' || task?.status === 'cancelled') {
-    isGenerating.value = false;
-    pendingGenerationTaskId.value = '';
-  }
-}
-
-async function refreshVisibleTask() {
-  if (!pendingGenerationTaskId.value) return;
-  const runtime = await initializeTutorRuntime();
-  const task = (await runtime.getAgentRunViews.execute({ limit: 50 }))
-    .find((item) => item.id === pendingGenerationTaskId.value);
-  await handleTaskChanged(task);
-}
-
-async function cancelEssayGeneration() {
-  if (!pendingGenerationTaskId.value) return;
-  const runtime = await initializeTutorRuntime();
-  await runtime.cancelAgentRun.execute({
-    agentRunId: pendingGenerationTaskId.value as Parameters<typeof runtime.cancelAgentRun.execute>[0]['agentRunId'],
-    reason: 'user_cancelled_essay_generation'
-  });
-  await refreshVisibleTask();
-  isGenerating.value = false;
-}
 
 async function deleteCurrentEssay() {
   showDeleteConfirmSheet.value = true;
@@ -502,14 +321,6 @@ async function openQuestionHistoryItem(item: EssayStateHistoryItem) {
   const context = essayFlowService.writeContext(item.context);
   resetTimer();
   await store.fetchQuestion(context);
-}
-
-function topicHint(topic: string): string {
-  return topic === '申发论述' ? '大作文' : topic === '贯彻执行' ? '公文类小题' : '申论小题';
-}
-
-function closeTopicPicker() {
-  showTopicPicker.value = false;
 }
 
 function openAnswerSheet() {
@@ -651,127 +462,44 @@ function handleVisibilityChange() {
 </script>
 
 <style scoped>
-.essay-timer {
-  height: 26px;
-  border: none;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 7px;
-  background: rgba(var(--color-ink-rgb), .06);
-  color: var(--text-secondary-color);
-  font-family: inherit;
-  font-size: var(--type-size-micro);
-  font-weight: var(--type-weight-semibold);
-  font-variant-numeric: tabular-nums;
-}
-.essay-timer.running {
-  background: rgba(var(--color-brand-rgb), .1);
-  color: var(--primary-color);
-}
-.essay-timer svg {
-  width: 12px;
-  height: 12px;
-}
-.essay-title {
+.essay-header-meta {
   min-width: 0;
-  position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  text-align: center;
+  gap: 6px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
 }
-.essay-topic-trigger {
-  width: 100%;
-  max-width: min(210px, 46vw);
+.essay-header-meta > span {
   min-width: 0;
-  height: 24px;
-  border: none;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  column-gap: 4px;
-  padding: 0 2px;
-  background: transparent;
-  color: var(--text-color);
-  font-family: inherit;
-}
-.essay-topic-trigger strong {
-  grid-column: 2;
-  min-width: 0;
-  color: var(--text-color);
-  font-size: var(--type-size-body-large);
-  line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.essay-topic-trigger svg {
-  grid-column: 3;
-  justify-self: start;
-  width: 14px;
-  height: 14px;
-  color: var(--text-secondary-color);
-  transition: transform .16s ease;
-}
-.essay-topic-trigger svg.open {
-  transform: rotate(180deg);
-}
-.essay-topic-popover {
-  position: fixed;
-  top: calc(var(--app-safe-top) + 48px);
-  left: 50vw;
-  z-index: 12;
-  width: min(256px, calc(100vw - 56px));
-  padding: 7px;
-  border-radius: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: rgba(255, 255, 255, .9);
-  box-shadow: 0 12px 30px rgba(28, 38, 58, .13);
-  transform: translateX(-50%);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-}
-.essay-topic-popover section {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-}
-.essay-topic-popover em {
-  grid-column: 1 / -1;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-micro);
-  font-style: normal;
-  font-weight: var(--type-weight-semibold);
-  text-align: left;
-  padding: 1px 4px;
-}
-.essay-topic-popover button {
-  height: 32px;
+.essay-session-timer {
+  flex: 0 0 auto;
+  height: 19px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   border: none;
-  border-radius: 11px;
+  border-radius: 999px;
+  padding: 0 6px;
   background: rgba(var(--color-ink-rgb), .045);
   color: var(--text-secondary-color);
-  font-family: inherit;
-  font-size: var(--type-size-caption);
+  font-size: var(--type-size-micro);
   font-weight: var(--type-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-family: inherit;
 }
-.essay-topic-popover button.active {
+.essay-session-timer.running {
   background: rgba(var(--color-brand-rgb), .1);
   color: var(--primary-color);
 }
-.topic-pop-enter-active,
-.topic-pop-leave-active {
-  transition: opacity .14s ease, transform .14s ease;
-}
-.topic-pop-enter-from,
-.topic-pop-leave-to {
-  opacity: 0;
-  transform: translate(-50%, -4px);
-}
+.essay-session-timer svg { width: 12px; height: 12px; }
+.essay-empty { min-height: 320px; display: grid; place-content: center; gap: 8px; padding: 30px 18px; text-align: center; color: var(--text-secondary-color); }
+.essay-empty strong { color: var(--text-color); font-size: var(--type-size-title); }
+.essay-empty p { margin: 0; line-height: 1.6; }
 .content-area {
   flex: 1;
   overflow-y: auto;
@@ -1125,89 +853,6 @@ function handleVisibilityChange() {
 }
 .answer-sheet-foot .primary:disabled {
   opacity: .48;
-}
-.essay-generate-sheet {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.essay-generate-sheet section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.essay-generate-sheet section > strong {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-caption);
-  font-weight: var(--type-weight-semibold);
-}
-.essay-generate-sheet section > button {
-  min-height: 52px;
-  border: none;
-  border-radius: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 0 12px;
-  background: rgba(var(--color-ink-rgb), .045);
-  color: var(--text-color);
-  font-family: inherit;
-  text-align: left;
-}
-.essay-generate-sheet section > button span {
-  font-size: var(--type-size-body);
-  font-weight: var(--type-weight-semibold);
-}
-.essay-generate-sheet section > button em {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-caption);
-  font-style: normal;
-  font-weight: var(--type-weight-semibold);
-}
-.essay-generate-sheet section > button.active {
-  background: rgba(var(--color-brand-rgb), .1);
-  color: var(--primary-color);
-}
-.count-options {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.count-options button {
-  height: 42px;
-  border: none;
-  border-radius: 12px;
-  background: rgba(var(--color-ink-rgb), .045);
-  color: var(--text-secondary-color);
-  font-family: inherit;
-  font-size: var(--type-size-body);
-  font-weight: var(--type-weight-semibold);
-}
-.count-options button.active {
-  background: rgba(var(--color-brand-rgb), .1);
-  color: var(--primary-color);
-}
-.sheet-primary {
-  min-height: 46px;
-  border: none;
-  border-radius: 13px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  background: var(--primary-color);
-  color: #fff;
-  font-family: inherit;
-  font-size: var(--type-size-body);
-  font-weight: var(--type-weight-semibold);
-}
-.sheet-primary:disabled {
-  opacity: .48;
-}
-.sheet-primary svg {
-  width: 17px;
-  height: 17px;
 }
 .essay-history-list {
   display: flex;

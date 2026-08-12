@@ -1,7 +1,7 @@
 <template>
   <div class="practice-center app-page">
     <PageHeader title="刷题中心" :meta="cycleName" />
-
+    <PracticeSubjectSwitcher v-model="activeSubject" />
     <PullToRefresh
       class="practice-scroll"
       :on-refresh="load"
@@ -10,6 +10,7 @@
       @touchend="handleModeTouchEnd"
       @touchcancel="resetModeTouch"
     >
+      <template v-if="activeSubject === PracticeSubject.Aptitude">
       <section class="section-block">
         <div :class="['mode-intro', `mode-${activeMode}`]">
           <div class="mode-intro-copy">
@@ -27,9 +28,8 @@
             <button type="button" :class="{ active: activeMode === 'true' }" @click="selectMode('true')">
               <LandmarkIcon />真题练习
             </button>
-          </nav>
+      </nav>
         </div>
-
         <AiTaskPendingState
           v-if="activeTask?.isActive"
           :task="activeTask"
@@ -38,7 +38,6 @@
           hide-primary-action
           @cancel="cancelCurrentTask"
         />
-
         <div v-else-if="activeMode !== 'true'" class="generation-panel">
           <button
             v-if="activeMode === 'tutor'"
@@ -103,7 +102,6 @@
         />
         <p v-if="error" class="page-error">{{ error }}</p>
       </section>
-
       <section class="section-block">
         <div class="section-heading">
           <div>
@@ -129,9 +127,15 @@
           @open="openSet"
         />
       </section>
+      </template>
+
+      <EssayPracticeCenterPanel
+        v-else
+        v-model="activeMode"
+      />
     </PullToRefresh>
 
-    <BottomSheet v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
+    <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
       <div class="custom-sheet">
         <label>
           <span>模块</span>
@@ -190,7 +194,7 @@
       </div>
     </BottomSheet>
 
-    <BottomSheet v-model="showTrueFilterSheet" title="筛选真题" subtitle="只筛选来源元数据，不读取题目正文" variant="filter">
+    <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showTrueFilterSheet" title="筛选真题" subtitle="只筛选来源元数据，不读取题目正文" variant="filter">
       <div class="custom-sheet">
         <label>
           <span>来源</span>
@@ -294,6 +298,9 @@ import { usePracticeQuestionSetPagination, type PracticeCenterMode } from './use
 import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteria';
 import { usePracticeModeSwipe } from './PracticeModeSwipe';
 import { practiceModeCopy } from './PracticeModePresentation';
+import PracticeSubjectSwitcher from './PracticeSubjectSwitcher.vue';
+import EssayPracticeCenterPanel from './EssayPracticeCenterPanel.vue';
+import { PracticeSubject, type PracticeSubject as PracticeSubjectCode } from './PracticeSubject';
 
 type PracticeMode = PracticeCenterMode;
 
@@ -314,6 +321,9 @@ const activeMode = ref<PracticeMode>(
   route.query.mode === 'true'
     ? 'true'
     : route.query.mode === QuestionSetEntryMode.Self ? QuestionSetEntryMode.Self : QuestionSetEntryMode.Tutor
+);
+const activeSubject = ref<PracticeSubjectCode>(
+  route.query.subject === PracticeSubject.Essay ? PracticeSubject.Essay : PracticeSubject.Aptitude
 );
 const tutorTask = ref<AgentRunView | null>(null);
 const selfTask = ref<AgentRunView | null>(null);
@@ -419,17 +429,24 @@ const trueQuestionFilterSummary = computed(() => {
   ].filter(Boolean);
   return filters.length ? filters.join(' · ') : `全部来源 · ${trueQuestionFacets.value.length}套`;
 });
-
 onMounted(async () => {
   await load();
   await loadResearchDraftFromRoute();
-  if (route.query.mode === 'self') showCustomSheet.value = true;
   if (route.query.mode === 'tutor' && route.query.start) await startTutorPractice();
   pollTimer = window.setInterval(() => void refreshTasks(), 1200);
 });
 
 watch(() => route.query.draftId, () => void loadResearchDraftFromRoute());
-
+watch(activeMode, (mode) => {
+  void router.replace({ query: { ...route.query, subject: activeSubject.value, mode } });
+});
+watch(activeSubject, (subject) => {
+  if (subject === PracticeSubject.Essay) {
+    showCustomSheet.value = false;
+    showTrueFilterSheet.value = false;
+  }
+  void router.replace({ query: { ...route.query, subject } });
+});
 watch([trueOriginFilter, trueYearFilter, trueProvinceFilter, trueModuleFilter, trueStatusFilter], () => {
   if (!loading.value) void reloadTrueQuestionSets();
 }, { flush: 'post' });
@@ -483,7 +500,6 @@ function restoreTasks(activeRuns: readonly AgentRunView[]) {
     void initializeTutorRuntime().then((runtime) => new StructuredPracticeTaskCenter(runtime).resume());
   }
 }
-
 async function startTrueQuestionResearch(criteria: TrueQuestionResearchCriteria) {
   const result = await researchTrueQuestions(criteria);
   if (!result) return;
@@ -732,11 +748,11 @@ const {
 
 function openEssayPractice() {
   void router.push({
-    path: '/vue/essay',
+    path: '/vue/practice',
     query: {
-      source: 'practice-center',
-      entryMode: QuestionSetEntryMode.Self,
-      open: 'custom'
+      ...route.query,
+      subject: PracticeSubject.Essay,
+      mode: QuestionSetEntryMode.Self
     }
   });
 }
