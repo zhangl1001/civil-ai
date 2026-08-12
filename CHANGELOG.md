@@ -8,6 +8,25 @@ Notable user-facing and maintainer-facing changes are documented here. The proje
 
 - Continue physical-device validation for iOS lifecycle recovery and long-running generation tasks.
 
+## [1.3.0] - 2026-08-12
+
+### Added
+
+- Learning progress tracking domain module and schema migration for lecture and digest completion status.
+- Priority-driven tutor learning loop with floating bubble switcher and ability radar calibrations.
+- Interview evaluation workflow with multidimensional scoring, rubric verification, and review state persistence.
+- Unified SectionHeading and MetricTile design-system components across mobile views.
+
+### Changed
+
+- Streamlined essay reading hierarchy, materials preview, and feedback history layout.
+- Compact floating action buttons for wrong-answer review and daily practice workflows.
+
+### Fixed
+
+- Interview score and speech metrics typing alignment with domain model contracts.
+- Study lecture library and question set classification lifecycle edge cases.
+
 ## [1.2.0] - 2026-08-11
 
 ### Added
@@ -53,7 +72,8 @@ No destructive migration is required. See [`docs/upgrade-v1.2.0.md`](docs/upgrad
 
 - Initial Vue, Capacitor, and local tutor foundation.
 
-[Unreleased]: https://github.com/zhangl1001/civil-ai/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/zhangl1001/civil-ai/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/zhangl1001/civil-ai/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/zhangl1001/civil-ai/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/zhangl1001/civil-ai/compare/v1.1.0-baseline...v1.1.1
 [1.1.0]: https://github.com/zhangl1001/civil-ai/compare/v1.0.0-foundation...v1.1.0-baseline

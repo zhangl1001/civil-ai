@@ -55,36 +55,21 @@
             </span>
             <ChevronRightIcon />
           </button>
-          <div v-else class="self-generation-options">
-            <button
-              type="button"
-              class="generation-card self"
-              :disabled="loading || !capabilities.length || launching"
-              @click="showCustomSheet = true"
-            >
-              <i><SlidersHorizontalIcon /></i>
-              <span>
-                <small>行测自定义</small>
-                <strong>选择模块和细分考点</strong>
-                <em>判断、言语、资料、数量与常识专项</em>
-              </span>
-              <ChevronRightIcon />
-            </button>
-            <button
-              type="button"
-              class="generation-card essay"
-              :disabled="launching"
-              @click="openEssayPractice"
-            >
-              <i><FilePenLineIcon /></i>
-              <span>
-                <small>申论训练</small>
-                <strong>材料阅读、作答与批改</strong>
-                <em>选择题型后生成对应讲义和练习</em>
-              </span>
-              <ChevronRightIcon />
-            </button>
-          </div>
+          <button
+            v-else
+            type="button"
+            class="generation-card self"
+            :disabled="loading || !capabilities.length || launching"
+            @click="showCustomSheet = true"
+          >
+            <i><SlidersHorizontalIcon /></i>
+            <span>
+              <small>行测自定义</small>
+              <strong>选择模块和细分考点</strong>
+              <em>判断、言语、资料、数量与常识专项</em>
+            </span>
+            <ChevronRightIcon />
+          </button>
         </div>
         <TrueQuestionLibraryActions
           v-else
@@ -263,7 +248,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ChevronRightIcon, FilePenLineIcon, LandmarkIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
+import { ChevronRightIcon, LandmarkIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
@@ -747,17 +732,6 @@ const {
   resetTouch: resetModeTouch
 } = usePracticeModeSwipe(() => activeMode.value, selectMode);
 
-function openEssayPractice() {
-  void router.push({
-    path: '/vue/practice',
-    query: {
-      ...route.query,
-      subject: PracticeSubject.Essay,
-      mode: QuestionSetEntryMode.Self
-    }
-  });
-}
-
 function taskMode(task: AgentRunView): PracticeMode {
   if (task.scopeKey?.startsWith('trueQuestionResearch:')) return 'true';
   if (task.actionParams.mode === QuestionSetEntryMode.Tutor) return QuestionSetEntryMode.Tutor;
@@ -816,12 +790,10 @@ function roleLabel(role: string) {
 .practice-tabs button { height:35px; border:0; border-radius:999px; display:flex; align-items:center; justify-content:center; gap:6px; color:rgba(var(--color-brand-rgb),.64); background:transparent; font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 .practice-tabs button.active { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.11); box-shadow:0 1px 6px rgba(var(--color-brand-rgb),.1); }
 .practice-tabs svg { width:15px; height:15px; }
-.self-generation-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .generation-card { width:100%; min-width:0; min-height:116px; border:0; border-radius:var(--radius-card); padding:14px; display:grid; grid-template-columns:38px minmax(0,1fr) 16px; gap:11px; align-items:center; color:inherit; background:rgba(var(--color-surface-rgb),.64); box-shadow:var(--shadow-card); text-align:left; font:inherit; }
 .generation-card:disabled { opacity:.55; }
 .generation-card>i { width:38px; height:38px; display:grid; place-items:center; border-radius:12px; color:var(--primary-color); background:rgba(var(--color-brand-rgb),.11); }
 .generation-card.self>i { color:var(--orange-color); background:rgba(255,149,0,.11); }
-.generation-card.essay>i { color:var(--green-color); background:rgba(52,199,89,.11); }
 .generation-card>i svg { width:18px; height:18px; }
 .generation-card>span { min-width:0; }
 .generation-card small,.generation-card strong,.generation-card em { display:block; }
@@ -844,8 +816,4 @@ function roleLabel(role: string) {
 .filter-reset { color:var(--text-secondary-color); background:var(--surface-control); }
 .filter-apply { color:#fff; background:var(--primary-color); }
 .generate-button svg { width:17px; height:17px; }
-@media (max-width:430px) {
-  .self-generation-options { grid-template-columns:1fr; }
-  .self-generation-options .generation-card { min-height:92px; }
-}
 </style>
