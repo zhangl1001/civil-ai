@@ -19,10 +19,7 @@
       />
 
       <section v-else-if="candidateHome" class="profile-section">
-        <div class="profile-section-title">
-          <strong>学习目标</strong>
-          <span>现状与目标分</span>
-        </div>
+        <SectionHeading class="profile-section-title" title="学习目标" meta="现状与目标分" />
         <div class="menu-list">
           <button
             v-for="score in profileScores"
@@ -53,10 +50,7 @@
       </section>
 
       <section class="profile-section">
-        <div class="profile-section-title">
-          <strong>AI 与数据</strong>
-          <span>模型与本地存储</span>
-        </div>
+        <SectionHeading class="profile-section-title" title="AI 与数据" meta="模型与本地存储" />
         <div class="menu-list">
           <button class="menu-item" type="button" @click="openAISheet">
             <CpuIcon />
@@ -79,10 +73,7 @@
       </section>
 
       <section class="profile-section">
-        <div class="profile-section-title">
-          <strong>系统设置</strong>
-          <span>外观、提醒与支持</span>
-        </div>
+        <SectionHeading class="profile-section-title" title="系统设置" meta="外观、提醒与支持" />
         <div class="menu-list">
           <button class="menu-item" type="button" @click="openAppearanceSheet">
             <PaletteIcon />
@@ -327,7 +318,7 @@ import WebResearchSettingsFields from '@/components/settings/WebResearchSettings
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import AppearanceSettings from '@/components/settings/AppearanceSettings.vue';
-import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
+import { AppStateView, InitialRefreshState, SectionHeading } from '@/capabilities/design-system/public';
 import {
   BellRingIcon,
   BadgeInfoIcon,
@@ -860,17 +851,14 @@ async function confirmClearLearningData() {
   flex-direction: column;
   gap: 8px;
 }
+/* Settings groups sit tighter and one step larger than the app-wide section heading. */
 .profile-section-title {
   padding: 0 2px;
-  display: flex;
   align-items: flex-end;
-  justify-content: space-between;
   gap: 12px;
 }
 .profile-section-title strong {
-  color: var(--text-color);
   font-size: var(--type-size-control);
-  font-weight: var(--type-weight-semibold);
   line-height: 1.2;
 }
 .profile-section-title span {
