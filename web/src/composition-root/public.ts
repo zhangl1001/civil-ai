@@ -14,6 +14,7 @@ export {
   type EssayContext,
   type EssayGenerationContext
 } from './essay/EssayGenerationCoordinator';
+export { EssayGradingCoordinator } from './essay/EssayGradingCoordinator';
 export {
   importAgentAttachment,
   importAgentAttachments,

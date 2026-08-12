@@ -1,5 +1,8 @@
 import type { JsonObject } from '@/kernel/public';
-import type { LearningAssetKind as LearningAssetKindCode } from '@/modules/content/public';
+import type {
+  LearningAssetKind as LearningAssetKindCode,
+  LearningAssetPurpose as LearningAssetPurposeCode
+} from '@/modules/content/public';
 import type { AITextMessage, AITextRequestOptions } from '../ai/ConfiguredAIClient';
 
 export type BusinessAgentTaskType =
@@ -61,6 +64,7 @@ export interface BusinessAgentExecutionContext {
     readonly businessKey: string;
     readonly title: string;
     readonly payload: Record<string, unknown>;
+    readonly purpose?: LearningAssetPurposeCode;
   }): Promise<{ readonly id: string; readonly version: number }>;
   findLatestLearningAsset(input: {
     readonly kind: LearningAssetKindCode;

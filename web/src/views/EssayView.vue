@@ -5,7 +5,7 @@
         <div class="essay-header-meta">
           <span>{{ essaySessionMeta }}</span>
           <button
-            v-if="activeMode === 'question' && store.question && !store.submission.feedback"
+            v-if="activeMode === 'question' && store.question"
             :class="['essay-session-timer', { running: isTimerRunning }]"
             type="button"
             title="暂停或继续计时"
@@ -33,19 +33,33 @@
       </template>
     </PageHeader>
 
-    <div v-if="store.isLoading" class="loading">加载题目中...</div>
+    <nav v-if="store.question && hasLecture" class="essay-tabs" aria-label="学习内容切换">
+      <button type="button" :class="{ active: activeMode === 'lecture' }" @click="activeMode = 'lecture'">讲义</button>
+      <button type="button" :class="{ active: activeMode === 'question' }" @click="activeMode = 'question'">题目</button>
+    </nav>
 
-    <div v-else-if="store.question" :class="['content-area', 'app-page-scroll', { 'with-start-bar': activeMode === 'question' }]">
-      <div class="mode-tabs">
-        <button type="button" :class="{ active: activeMode === 'lecture' }" @click="activeMode = 'lecture'">讲义</button>
-        <button type="button" :class="{ active: activeMode === 'question' }" @click="activeMode = 'question'">题目</button>
-      </div>
+    <p v-if="gradingStatusText" class="essay-status" role="status">
+      <LoaderCircleIcon />{{ gradingStatusText }}
+    </p>
+    <p v-else-if="pageAlert" class="essay-alert" role="alert">{{ pageAlert }}</p>
 
-      <section v-if="activeMode === 'lecture'" class="lecture-section">
+    <div v-if="store.isLoading" class="app-page-scroll essay-loading" aria-busy="true">
+      <div class="essay-loading-block" aria-hidden="true"></div>
+      <p class="essay-loading-label">正在读取申论题目...</p>
+    </div>
+
+    <section v-else-if="store.error && !store.question" class="essay-empty app-page-scroll">
+      <strong>题目加载失败</strong>
+      <p>{{ store.error }}</p>
+      <button class="essay-retry" type="button" @click="reload">重试</button>
+    </section>
+
+    <div v-else-if="store.question" class="content-area app-page-scroll">
+      <section v-if="activeMode === 'lecture' && activeLecture" class="lecture-section">
         <div class="lecture-head">
-          <span>{{ activeTopic }} · {{ lecture.knowledgePoint || '知识点讲义' }}</span>
-          <h4>{{ lecture.title }}</h4>
-          <p>{{ lecture.summary }}</p>
+          <span>{{ activeTopic }} · {{ activeLecture.knowledgePoint || '知识点讲义' }}</span>
+          <h4>{{ activeLecture.title }}</h4>
+          <p>{{ activeLecture.summary }}</p>
         </div>
         <div class="lecture-grid">
           <article v-for="section in lectureSections" :key="section.title">
@@ -60,6 +74,7 @@
           <div class="question-meta">
             <span>{{ activeTopic }}</span>
             <em>{{ store.context?.date }}</em>
+            <b v-if="hasWordBudget">{{ wordBudgetLabel }}</b>
           </div>
           <h4>{{ store.question.title }}</h4>
           <div class="material-block">
@@ -75,27 +90,35 @@
           </div>
         </div>
 
-        <div v-if="store.submission.isSubmitting" class="feedback-loading">
-          <span class="loading-dot"></span>
-          正在提交批改任务...
-        </div>
+        <section v-if="store.preview" class="attempt-preview">
+          <header>
+            <div>
+              <strong>历史批改</strong>
+              <span>{{ formatTime(store.preview.createdAt) }} · {{ countEssayWords(store.preview.content) }} 字</span>
+            </div>
+            <button type="button" @click="store.closePreview()">返回当前作答</button>
+          </header>
+          <div class="attempt-preview-answer">
+            <strong>当时的作答</strong>
+            <p>{{ store.preview.content }}</p>
+          </div>
+          <MarkdownContent :content="store.preview.feedback" />
+        </section>
 
-        <div v-if="store.submitMessage" class="submit-message">
-          {{ store.submitMessage }}
-        </div>
-
-        <div v-if="store.submission.feedback" class="feedback-section">
-          <h4>AI 批改反馈</h4>
-          <MarkdownContent :content="store.submission.feedback" />
-        </div>
+        <template v-else>
+          <div v-if="store.submission.feedback" class="feedback-section">
+            <h4>AI 批改反馈</h4>
+            <MarkdownContent :content="store.submission.feedback" />
+          </div>
+        </template>
       </template>
 
       <section v-if="store.history.length" class="history-section">
         <div class="history-title">
           <strong>最近批改</strong>
-          <span>最多 10 条</span>
+          <span>{{ historyCountLabel }}</span>
         </div>
-        <article v-for="item in store.history.slice(0, 3)" :key="item.id" class="history-row">
+        <article v-for="item in visibleHistory" :key="item.id" class="history-row">
           <div>
             <strong>{{ item.title }}</strong>
             <span>{{ formatTime(item.createdAt) }} · {{ item.wordCount }} 字<span v-if="item.score"> · {{ item.score }}分</span></span>
@@ -117,12 +140,12 @@
       <p>请返回刷题中心，从私教学习、自主刷题或真题练习入口开始。</p>
     </section>
 
-    <div v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen" class="essay-start-bar">
-      <button type="button" @click="openAnswerSheet">
+    <StickyActionBar v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen">
+      <button class="primary essay-start-button" type="button" @click="openAnswerSheet">
         <Edit3Icon />
         {{ store.submission.content ? '继续作答' : '开始作答' }}
       </button>
-    </div>
+    </StickyActionBar>
 
     <Transition name="answer-backdrop">
       <button v-if="isAnswerSheetOpen" class="answer-backdrop" type="button" aria-label="收起作答区" @click="isAnswerSheetOpen = false"></button>
@@ -153,17 +176,17 @@
           class="answer-textarea"
         ></textarea>
         <footer class="answer-sheet-foot">
-          <span>{{ wordCount }} 字</span>
+          <span :class="['answer-word-count', wordCount.tone]">{{ wordCount.label }}</span>
           <button class="ghost" type="button" @click="store.resetDraft">清空</button>
           <button class="ghost" type="button" @click="isAnswerSheetOpen = false">收起</button>
-          <button class="primary" type="button" :disabled="store.submission.isSubmitting || !store.submission.content" @click="store.submitForGrading">
-            {{ store.submission.isSubmitting ? '批改中...' : '提交批改' }}
+          <button class="primary" type="button" :disabled="store.submission.isSubmitting || !store.submission.content" @click="submitForGrading">
+            {{ store.submission.isSubmitting ? '提交中...' : '提交批改' }}
           </button>
         </footer>
       </section>
     </Transition>
 
-    <BottomSheet v-model="showHistorySheet" title="历史批改" subtitle="最近 10 条记录" variant="actions">
+    <BottomSheet v-model="showHistorySheet" title="历史批改" :subtitle="`共 ${store.history.length} 条`" variant="actions">
       <div v-if="store.history.length" class="essay-history-list">
         <button v-for="item in store.history" :key="item.id" type="button" @click="openHistoryItem(item)">
           <span>{{ item.title }}</span>
@@ -173,10 +196,10 @@
       <div v-else class="sheet-empty">暂无历史批改</div>
     </BottomSheet>
 
-    <BottomSheet v-model="showQuestionHistorySheet" title="历史题目" subtitle="按题型和日期选择" variant="actions">
-      <InfiniteScrollPagination :has-more="questionHistoryVisibleCount < questionHistory.length" :has-items="Boolean(questionHistory.length)" :on-load-more="loadMoreQuestionHistory">
+    <BottomSheet v-model="showQuestionHistorySheet" title="历史题目" :subtitle="`共 ${questionHistoryTotal} 套`" variant="actions">
+      <InfiniteScrollPagination :has-more="questionHistoryHasMore" :has-items="Boolean(questionHistory.length)" :on-load-more="loadMoreQuestionHistory">
         <div v-if="questionHistory.length" class="essay-history-list">
-          <button v-for="item in visibleQuestionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)"><span>{{ item.question?.title }}</span><em>{{ item.context.date }} · {{ item.context.topic }}</em>
+          <button v-for="item in questionHistory" :key="item.key" type="button" @click="openQuestionHistoryItem(item)"><span>{{ item.question?.title }}</span><em>{{ item.classification === 'legacy_unknown' ? '历史未分类 · ' : '' }}{{ item.context.date }} · {{ item.context.topic }}</em>
           </button>
         </div>
       </InfiniteScrollPagination>
@@ -195,73 +218,113 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed, ref } from 'vue';
+import { onMounted, onUnmounted, computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ChevronDownIcon, Clock3Icon, Edit3Icon, FileClockIcon, HistoryIcon, Trash2Icon } from 'lucide-vue-next';
+import { ChevronDownIcon, Clock3Icon, Edit3Icon, FileClockIcon, HistoryIcon, LoaderCircleIcon, Trash2Icon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
-import { InfiniteScrollPagination } from '@/capabilities/design-system/public';
-import type { EssayHistoryRecord, EssayLecture, EssayQuestionSetSummary } from '@/services/EssayRepository';
+import { InfiniteScrollPagination, StickyActionBar } from '@/capabilities/design-system/public';
+import { countEssayWords, describeEssayWordCount } from '@/domain/essayAnswer';
+import { splitEssayMaterial, splitEssayRequirement } from '@/domain/essayQuestionText';
+import type { EssayHistoryRecord, EssayQuestionSetSummary } from '@/services/EssayRepository';
 import { essayRepository } from '@/services/EssayRepository';
 import { useEssayStore } from '@/stores/essay';
-import { essayFlowService } from '@/services/EssayFlowService';
+import { essayFlowService, type EssayContext } from '@/services/EssayFlowService';
 import {
   essayCenterLocation,
   essayQuestionSetLocation,
   essayQuestionSetTargetFromQuery
 } from '@/features/practice/EssayNavigation';
+import { useEssayGradingWatcher } from '@/features/practice/useEssayGradingWatcher';
+import { useEssaySessionTimer } from '@/features/practice/useEssaySessionTimer';
+
+const HISTORY_PREVIEW_COUNT = 3;
+const QUESTION_HISTORY_PAGE_SIZE = 20;
 
 const store = useEssayStore();
 const route = useRoute();
 const router = useRouter();
-const activeMode = ref<'lecture' | 'question'>('lecture');
+const {
+  elapsedText,
+  isRunning: isTimerRunning,
+  activate: activateTimer,
+  restore: restoreTimer,
+  start: startTimer,
+  pause: pauseTimer,
+  toggle: toggleTimer,
+  clear: clearTimer
+} = useEssaySessionTimer();
+const {
+  isGrading,
+  progressText: gradingProgress,
+  failure: gradingFailure,
+  track: trackGrading,
+  resume: resumeGrading,
+  stop: stopGrading
+} = useEssayGradingWatcher({ onGraded: () => store.refresh() });
+
+const activeMode = ref<'lecture' | 'question'>('question');
 const isAnswerSheetOpen = ref(false);
 const showHistorySheet = ref(false);
 const showQuestionHistorySheet = ref(false);
 const showDeleteConfirmSheet = ref(false);
-const questionHistory = ref<EssayQuestionSetSummary[]>([]); const questionHistoryVisibleCount = ref(20);
-const visibleQuestionHistory = computed(() => questionHistory.value.slice(0, questionHistoryVisibleCount.value));
+const questionHistory = ref<EssayQuestionSetSummary[]>([]);
+const questionHistoryTotal = ref(0);
+const questionHistoryHasMore = computed(() => questionHistory.value.length < questionHistoryTotal.value);
 const answerSheetHeight = ref(42);
-const elapsedMs = ref(0);
-const isTimerRunning = ref(false);
-let timerId: number | null = null;
-let timerStorageKey: string | null = null;
-let disposed = false;
 let resizeStartY = 0;
 let resizeStartHeight = 0;
+let openedQuestionSetId = '';
 
-onMounted(async () => {
-  document.addEventListener('visibilitychange', handleVisibilityChange);
+onMounted(() => openRouteTarget());
+
+/**
+ * The route can change without remounting — a task card linking to another set reuses this
+ * component — so the query is the source of truth for which set is on screen.
+ */
+watch(() => route.query.questionSetId, () => {
   const target = essayQuestionSetTargetFromQuery(route.query);
-  if (!target) {
-    store.reset();
-    await router.replace(essayCenterLocation());
-    return;
-  }
-  const routeContext = essayFlowService.writeContext(target);
-  activateTimerOwner(routeContext);
-  await store.fetchQuestion(routeContext);
-  if (disposed) return;
-  restoreTimer();
+  if (target && target.questionSetId === openedQuestionSetId) return;
+  void openRouteTarget();
 });
 
 onUnmounted(() => {
-  disposed = true;
-  document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('pointermove', resizeAnswerSheet);
-  saveTimer();
-  stopTimer();
 });
+
+async function openRouteTarget() {
+  const target = essayQuestionSetTargetFromQuery(route.query);
+  if (!target) {
+    openedQuestionSetId = '';
+    store.reset({ loading: true });
+    await router.replace(essayCenterLocation());
+    return;
+  }
+  stopGrading();
+  await openContext(essayFlowService.writeContext(target));
+}
+
+async function openContext(context: EssayContext) {
+  openedQuestionSetId = context.questionSetId;
+  isAnswerSheetOpen.value = false;
+  activateTimer(context.questionSetId);
+  await store.fetchQuestion(context);
+  restoreTimer();
+  await resumeGrading(context.questionSetId);
+}
+
+function reload() {
+  return openRouteTarget();
+}
 
 const updateContent = (event: Event) => {
   const target = event.target as HTMLTextAreaElement;
   store.updateContent(target.value);
 };
 
-const wordCount = computed(() => store.submission.content.length);
 const activeTopic = computed(() => store.context?.topic || '申论练习');
 const essayHeaderTitle = computed(() => `申论 · ${activeTopic.value}`);
 const essaySessionMeta = computed(() => {
@@ -271,73 +334,117 @@ const essaySessionMeta = computed(() => {
       ? '真题练习'
       : '自主刷题';
   if (activeMode.value === 'lecture') return `${mode} · 配套讲义`;
+  if (store.preview) return `${mode} · 历史回顾`;
   if (store.submission.feedback) return `${mode} · 批改结果`;
   return `${mode} · ${store.submission.content ? '继续作答' : '未作答'}`;
 });
-const isLongEssay = computed(() => store.context?.type === 'long' || activeTopic.value === '申发论述');
-const lecture = computed<EssayLecture>(() => store.question?.lecture || {
-  knowledgePoint: activeTopic.value,
-  title: '暂无知识点讲义',
-  summary: '生成申论练习后，会同时生成一份围绕细分知识点的学习讲义，并让题目材料和作答要求服务于这个训练目标。',
-  clues: [],
-  methods: [],
-  structure: [],
-  warnings: [],
-  cases: [],
-  drills: []
+const gradingStatusText = computed(() => {
+  if (store.submission.isSubmitting) return '正在提交批改任务...';
+  if (isGrading.value) return gradingProgress.value || '正在批改，完成后会自动显示';
+  return '';
 });
-const lectureSections = computed(() => [
-  { title: '审题抓手', items: lecture.value.clues },
-  { title: '核心方法', items: lecture.value.methods },
-  { title: '作答结构', items: lecture.value.structure },
-  { title: '易错提醒', items: lecture.value.warnings },
-  { title: '规范表达', items: lecture.value.cases },
-  { title: '训练任务', items: lecture.value.drills }
-].filter((section) => section.items.length > 0));
-const elapsedText = computed(() => formatDuration(elapsedMs.value));
-const materialParagraphs = computed(() => splitMaterial(store.question?.material || ''));
-const requirementTasks = computed(() => splitRequirement(store.question?.requirement || ''));
+const pageAlert = computed(() => gradingFailure.value || (store.question ? store.error || '' : ''));
+const isLongEssay = computed(() => store.context?.type === 'long' || activeTopic.value === '申发论述');
+const activeLecture = computed(() => store.question?.lecture);
+const lectureSections = computed(() => {
+  const lecture = activeLecture.value;
+  if (!lecture) return [];
+  return [
+    { title: '审题抓手', items: lecture.clues },
+    { title: '核心方法', items: lecture.methods },
+    { title: '作答结构', items: lecture.structure },
+    { title: '易错提醒', items: lecture.warnings },
+    { title: '规范表达', items: lecture.cases },
+    { title: '训练任务', items: lecture.drills }
+  ].filter((section) => section.items?.length);
+});
+const hasLecture = computed(() => Boolean(activeLecture.value?.title || lectureSections.value.length));
+const materialParagraphs = computed(() => splitEssayMaterial(store.question?.material || ''));
+const requirementTasks = computed(() => splitEssayRequirement(store.question?.requirement || ''));
+const wordCount = computed(() => describeEssayWordCount(store.submission.content, store.question?.requirement || ''));
+const hasWordBudget = computed(() => Boolean(wordCount.value.limit.max || wordCount.value.limit.min));
+const wordBudgetLabel = computed(() => {
+  const { min, max } = wordCount.value.limit;
+  if (min && max) return `${min}–${max} 字`;
+  if (max) return `不超过 ${max} 字`;
+  return `不少于 ${min} 字`;
+});
+const visibleHistory = computed(() => store.history.slice(0, HISTORY_PREVIEW_COUNT));
+const historyCountLabel = computed(() => (
+  store.history.length > HISTORY_PREVIEW_COUNT
+    ? `最近 ${HISTORY_PREVIEW_COUNT} 条 · 共 ${store.history.length} 条`
+    : `共 ${store.history.length} 条`
+));
 
-async function deleteCurrentEssay() {
+async function submitForGrading() {
+  const submittedQuestionSetId = store.context?.questionSetId;
+  const run = await store.submitForGrading();
+  // A failed enqueue leaves the candidate still answering, so the clock keeps running.
+  if (!run || !submittedQuestionSetId || store.context?.questionSetId !== submittedQuestionSetId) return;
+  pauseTimer();
+  isAnswerSheetOpen.value = false;
+  trackGrading(run);
+}
+
+function deleteCurrentEssay() {
   showDeleteConfirmSheet.value = true;
 }
 
 async function confirmDeleteCurrentEssay() {
   showDeleteConfirmSheet.value = false;
+  const context = store.context;
+  if (!context) return;
   isAnswerSheetOpen.value = false;
-  activeMode.value = 'lecture';
-  resetTimer();
-  if (!store.context) return;
-  const state = await essayRepository.deleteState(store.context);
-  store.question = state.question;
-  store.submission.content = state.draft;
-  store.submission.feedback = state.feedback;
-  store.history = state.history;
+  activeMode.value = 'question';
+  stopGrading();
+  clearTimer();
+  try {
+    store.applyState(await essayRepository.deleteState(context));
+    store.closePreview();
+  } catch (cause) {
+    store.reportError(cause);
+  }
 }
 
 function openHistoryItem(item: EssayHistoryRecord) {
   showHistorySheet.value = false;
   activeMode.value = 'question';
-  store.submission.content = item.content;
-  store.submission.feedback = item.feedback;
+  store.previewAttempt(item);
 }
 
 async function openQuestionHistory() {
-  questionHistory.value = await essayRepository.listStates(); questionHistoryVisibleCount.value = 20; showQuestionHistorySheet.value = true;
+  try {
+    const [items, total] = await Promise.all([
+      essayRepository.listStates({ limit: QUESTION_HISTORY_PAGE_SIZE }),
+      essayRepository.countStates()
+    ]);
+    questionHistory.value = items;
+    questionHistoryTotal.value = total;
+    showQuestionHistorySheet.value = true;
+  } catch (cause) {
+    store.reportError(cause);
+  }
 }
-function loadMoreQuestionHistory() { questionHistoryVisibleCount.value = Math.min(questionHistory.value.length, questionHistoryVisibleCount.value + 20); }
+
+async function loadMoreQuestionHistory() {
+  if (!questionHistoryHasMore.value) return;
+  try {
+    const next = await essayRepository.listStates({
+      offset: questionHistory.value.length,
+      limit: QUESTION_HISTORY_PAGE_SIZE
+    });
+    questionHistory.value = [...questionHistory.value, ...next];
+  } catch (cause) {
+    store.reportError(cause);
+  }
+}
+
 async function openQuestionHistoryItem(item: EssayQuestionSetSummary) {
   showQuestionHistorySheet.value = false;
-  isAnswerSheetOpen.value = false;
-  activeMode.value = 'lecture';
+  activeMode.value = 'question';
+  stopGrading();
   const context = essayFlowService.writeContext(item.context);
-  saveTimer();
-  stopTimer();
-  elapsedMs.value = 0;
-  activateTimerOwner(context);
-  await store.fetchQuestion(context);
-  if (disposed) return;
-  restoreTimer();
+  await openContext(context);
   await router.replace(essayQuestionSetLocation({
     questionSetId: context.questionSetId,
     entryMode: context.entryMode,
@@ -350,6 +457,7 @@ async function openQuestionHistoryItem(item: EssayQuestionSetSummary) {
 
 function openAnswerSheet() {
   activeMode.value = 'question';
+  store.closePreview();
   answerSheetHeight.value = isLongEssay.value ? 62 : 42;
   isAnswerSheetOpen.value = true;
   startTimer();
@@ -382,108 +490,6 @@ function formatTime(time: number): string {
   });
 }
 
-function formatDuration(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(seconds / 60);
-  return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-}
-
-function splitMaterial(material: string): string[] {
-  const clean = material.trim();
-  if (!clean) return [];
-  const normalized = clean.replace(/^给定资料[:：]\s*/u, '');
-  return normalized
-    .split(/\n{2,}|(?=材料[一二三四五六七八九十\d]+[:：])|(?=资料[一二三四五六七八九十\d]+[:：])/u)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function splitRequirement(requirement: string): string[] {
-  const clean = requirement.trim().replace(/^要求[:：]\s*/u, '');
-  if (!clean) return [];
-  const parts = clean
-    .split(/(?:\n+|(?=[（(]?\d+[）).、])|(?=[一二三四五六七八九十]+[、.．]))/u)
-    .map((item) => item.replace(/^[（(]?\d+[）).、]\s*/u, '').replace(/^[一二三四五六七八九十]+[、.．]\s*/u, '').trim())
-    .filter(Boolean);
-  return parts.length ? parts : [clean];
-}
-
-function activateTimerOwner(context: { questionSetId: string }) {
-  timerStorageKey = `essay-timer:${context.questionSetId}`;
-}
-
-function restoreTimer() {
-  if (!timerStorageKey) return;
-  try {
-    const raw = localStorage.getItem(timerStorageKey);
-    if (!raw) return;
-    const saved = JSON.parse(raw) as { elapsedMs?: number; running?: boolean; savedAt?: number };
-    elapsedMs.value = saved.elapsedMs || 0;
-    if (saved.running && saved.savedAt) {
-      elapsedMs.value += Date.now() - saved.savedAt;
-      startTimer();
-    }
-  } catch {
-    elapsedMs.value = 0;
-  }
-}
-
-function saveTimer() {
-  if (!timerStorageKey) return;
-  localStorage.setItem(timerStorageKey, JSON.stringify({
-    elapsedMs: elapsedMs.value,
-    running: isTimerRunning.value,
-    savedAt: Date.now()
-  }));
-}
-
-function startTimer() {
-  if (timerId !== null) return;
-  isTimerRunning.value = true;
-  const startedAt = Date.now() - elapsedMs.value;
-  timerId = window.setInterval(() => {
-    elapsedMs.value = Date.now() - startedAt;
-    if (Math.floor(elapsedMs.value / 1000) % 10 === 0) saveTimer();
-  }, 1000);
-  saveTimer();
-}
-
-function stopTimer() {
-  if (timerId !== null) {
-    window.clearInterval(timerId);
-    timerId = null;
-  }
-  isTimerRunning.value = false;
-}
-
-function toggleTimer() {
-  if (isTimerRunning.value) {
-    stopTimer();
-    saveTimer();
-  } else {
-    startTimer();
-  }
-}
-
-function resetTimer() {
-  stopTimer();
-  elapsedMs.value = 0;
-  try {
-    if (timerStorageKey) localStorage.removeItem(timerStorageKey);
-  } catch {
-    // ignore storage failures
-  }
-}
-
-function handleVisibilityChange() {
-  if (document.hidden) {
-    saveTimer();
-    stopTimer();
-  } else {
-    restoreTimer();
-  }
-}
-
 </script>
 
 <style scoped>
@@ -508,23 +514,110 @@ function handleVisibilityChange() {
   align-items: center;
   gap: 3px;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 6px;
   background: rgba(var(--color-ink-rgb), .045);
   color: var(--text-secondary-color);
+  font: inherit;
   font-size: var(--type-size-micro);
   font-weight: var(--type-weight-semibold);
   font-variant-numeric: tabular-nums;
-  font-family: inherit;
 }
 .essay-session-timer.running {
-  background: rgba(var(--color-brand-rgb), .1);
+  background: var(--color-brand-soft);
   color: var(--primary-color);
 }
 .essay-session-timer svg { width: 12px; height: 12px; }
+.essay-tabs {
+  flex-shrink: 0;
+  align-self: center;
+  display: flex;
+  gap: 3px;
+  margin: 6px auto 0;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--color-ink-rgb), .055);
+}
+.essay-tabs button {
+  min-width: 74px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary-color);
+  background: transparent;
+  font: inherit;
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+}
+.essay-tabs button.active {
+  color: var(--text-color);
+  background: var(--surface-card-strong);
+  box-shadow: 0 1px 5px rgba(var(--color-ink-rgb), .08);
+}
+.essay-status,
+.essay-alert {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-control);
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+}
+.essay-status {
+  color: var(--primary-color);
+  background: var(--color-brand-soft);
+}
+.essay-status svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  animation: essaySpin 1.1s linear infinite;
+}
+.essay-alert {
+  color: var(--red-color);
+  background: var(--color-danger-soft);
+}
+.essay-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+}
+.essay-loading-block {
+  min-height: 280px;
+  border-radius: var(--radius-card);
+  background: linear-gradient(
+    rgba(var(--color-ink-rgb), .09) 0 18px, transparent 18px 30px,
+    rgba(var(--color-ink-rgb), .07) 30px 48px, transparent 48px 64px,
+    rgba(var(--color-ink-rgb), .055) 64px 132px, transparent 132px 148px,
+    rgba(var(--color-ink-rgb), .055) 148px 216px, transparent 216px
+  );
+  animation: essayLoadingPulse 1.25s ease-in-out infinite;
+}
+.essay-loading-label {
+  margin: 0;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-caption);
+  text-align: center;
+}
 .essay-empty { min-height: 320px; display: grid; place-content: center; gap: 8px; padding: 30px 18px; text-align: center; color: var(--text-secondary-color); }
-.essay-empty strong { color: var(--text-color); font-size: var(--type-size-title); }
+.essay-empty strong { color: var(--text-color); font-size: var(--type-size-section-title); }
 .essay-empty p { margin: 0; line-height: 1.6; }
+.essay-retry {
+  justify-self: center;
+  min-height: 38px;
+  margin-top: 4px;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: 0 18px;
+  color: var(--primary-color);
+  background: var(--color-brand-soft);
+  font: inherit;
+  font-weight: var(--type-weight-semibold);
+}
 .content-area {
   flex: 1;
   overflow-y: auto;
@@ -533,39 +626,12 @@ function handleVisibilityChange() {
   gap: 10px;
   padding-bottom: 10px;
 }
-.content-area.with-start-bar {
-  padding-bottom: 78px;
-}
-.mode-tabs {
-  padding: 3px;
-  border-radius: 11px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 3px;
-  background: rgba(var(--color-ink-rgb), .06);
-  flex-shrink: 0;
-}
-.mode-tabs button {
-  height: 32px;
-  border: none;
-  border-radius: 9px;
-  color: var(--text-secondary-color);
-  background: transparent;
-  font-family: inherit;
-  font-size: var(--type-size-secondary);
-  font-weight: var(--type-weight-semibold);
-}
-.mode-tabs button.active {
-  color: var(--primary-color);
-  background: rgba(255, 255, 255, .9);
-  box-shadow: 0 1px 5px rgba(28, 38, 58, .08);
-}
 .lecture-section {
   padding: 13px;
-  border-radius: 14px;
-  background: rgba(255,255,255,.82);
-  border: 1px solid rgba(var(--color-ink-rgb), .06);
-  box-shadow: 0 10px 26px rgba(28,38,58,.06);
+  border-radius: var(--radius-card);
+  background: var(--surface-card-strong);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
 }
 .lecture-head {
   display: flex;
@@ -596,11 +662,11 @@ function handleVisibilityChange() {
 }
 .lecture-grid article {
   padding: 10px 11px;
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   display: flex;
   flex-direction: column;
   gap: 5px;
-  background: rgba(var(--color-ink-rgb), .045);
+  background: var(--surface-muted);
 }
 .lecture-grid strong {
   color: var(--text-color);
@@ -612,33 +678,13 @@ function handleVisibilityChange() {
   font-style: normal;
   line-height: 1.48;
 }
-.start-answer-btn {
-  width: 100%;
-  min-height: 42px;
-  margin-top: 14px;
-  border: none;
-  border-radius: 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  background: var(--primary-color);
-  color: #fff;
-  font-family: inherit;
-  font-size: var(--type-size-body);
-  font-weight: var(--type-weight-semibold);
-}
-.start-answer-btn svg {
-  width: 16px;
-  height: 16px;
-}
 .question-section {
   margin: 0;
   padding: 13px 14px;
-  border-radius: 14px;
-  background: rgba(255,255,255,.84);
-  border: 1px solid rgba(var(--color-ink-rgb), .06);
-  box-shadow: 0 10px 26px rgba(28,38,58,.07);
+  border-radius: var(--radius-card);
+  background: var(--surface-card-strong);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
 }
 .question-meta {
   display: flex;
@@ -648,17 +694,24 @@ function handleVisibilityChange() {
 }
 .question-meta span {
   padding: 3px 9px;
-  border-radius: 999px;
-  background: rgba(var(--color-brand-rgb), .1);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-soft);
   color: var(--primary-color);
   font-size: var(--type-size-micro);
   font-weight: var(--type-weight-semibold);
 }
-.question-meta em {
+.question-meta em,
+.question-meta b {
   color: var(--text-secondary-color);
   font-size: var(--type-size-micro);
   font-style: normal;
   font-weight: var(--type-weight-semibold);
+}
+.question-meta b {
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
 }
 .question-section h4 {
   margin: 0 0 8px;
@@ -669,8 +722,8 @@ function handleVisibilityChange() {
 .requirement-block {
   margin-top: 10px;
   padding: 11px;
-  border-radius: 12px;
-  background: rgba(245, 246, 250, .72);
+  border-radius: var(--radius-card);
+  background: var(--surface-muted);
 }
 .material-block strong,
 .requirement-block strong {
@@ -690,7 +743,7 @@ function handleVisibilityChange() {
 .material-block p + p {
   margin-top: 9px;
   padding-top: 9px;
-  border-top: 1px dashed rgba(var(--color-ink-rgb), .08);
+  border-top: 1px dashed var(--border-control);
 }
 .requirement-block ol {
   margin: 0;
@@ -699,17 +752,66 @@ function handleVisibilityChange() {
 .requirement-block li + li {
   margin-top: 6px;
 }
-.feedback-loading { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 18px; font-size: var(--type-size-body-large); color: var(--primary-color); }
-.submit-message { margin-top: 14px; padding: 12px 14px; border-radius: 13px; background: rgba(var(--color-brand-rgb), .1); color: var(--primary-color); font-size: var(--type-size-secondary); font-weight: var(--type-weight-semibold); }
-.loading-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--primary-color); animation: essayPulse 1s ease-in-out infinite; }
-.feedback-section { margin-top: 16px; padding: 16px; background: var(--soft-blue); border-radius: 14px; line-height: 1.7; }
+.attempt-preview {
+  padding: 13px 14px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border-control);
+  background: var(--surface-card);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.attempt-preview header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.attempt-preview header div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.attempt-preview header strong { font-size: var(--type-size-secondary); }
+.attempt-preview header span { color: var(--text-secondary-color); font-size: var(--type-size-micro); }
+.attempt-preview header button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 0 11px;
+  color: var(--primary-color);
+  background: var(--color-brand-soft);
+  font: inherit;
+  font-size: var(--type-size-caption);
+  font-weight: var(--type-weight-semibold);
+}
+.attempt-preview-answer {
+  padding: 11px;
+  border-radius: var(--radius-card);
+  background: var(--surface-muted);
+}
+.attempt-preview-answer strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--type-size-secondary);
+}
+.attempt-preview-answer p {
+  margin: 0;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-body);
+  line-height: 1.72;
+  white-space: pre-wrap;
+}
+.feedback-section { padding: 16px; background: var(--soft-blue); border-radius: var(--radius-card); line-height: 1.7; }
 .feedback-section h4 { margin: 0 0 8px; }
 .feedback-section :deep(p) { margin: 0; }
-.history-section { margin-top: 16px; padding: 14px; border: 1px solid rgba(var(--color-ink-rgb), .06); border-radius: 14px; background: rgba(255,255,255,.82); box-shadow: 0 10px 26px rgba(28,38,58,.06); }
+.history-section { padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card-strong); box-shadow: var(--shadow-card); }
 .history-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .history-title strong { font-size: var(--type-size-body-large); }
 .history-title span { color: var(--text-secondary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
-.history-row { padding: 10px 0; border-top: 1px solid rgba(var(--color-ink-rgb), .06); }
+.history-row { padding: 10px 0; border-top: 1px solid var(--border-subtle); }
 .history-row:first-of-type { border-top: none; padding-top: 0; }
 .history-row div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .history-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-size-secondary); }
@@ -720,34 +822,16 @@ function handleVisibilityChange() {
 .dimension-list b { color: var(--text-color); }
 .dimension-list em { font-style: normal; color: var(--primary-color); font-weight: var(--type-weight-semibold); }
 .dimension-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.essay-start-bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 50;
-  padding: 8px var(--page-x) calc(8px + env(safe-area-inset-bottom));
-  background:
-    linear-gradient(180deg, rgba(247, 249, 252, 0), rgba(247, 249, 252, .94) 22%, rgba(247, 249, 252, .98));
-  box-shadow: 0 -10px 24px rgba(28,38,58,.06);
-}
-.essay-start-bar button {
-  width: 100%;
-  height: 50px;
-  border: none;
-  border-radius: 14px;
+.essay-start-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: var(--primary-color);
-  color: #fff;
-  font-family: inherit;
+  min-height: 50px;
   font-size: var(--type-size-control);
   font-weight: var(--type-weight-semibold);
-  box-shadow: 0 8px 18px rgba(var(--color-brand-rgb), .18);
 }
-.essay-start-bar svg {
+.essay-start-button svg {
   width: 18px;
   height: 18px;
 }
@@ -756,7 +840,7 @@ function handleVisibilityChange() {
   inset: 0;
   z-index: 70;
   border: none;
-  background: rgba(15, 23, 42, .34);
+  background: var(--app-overlay-bg);
   padding: 0;
 }
 .answer-sheet {
@@ -765,11 +849,11 @@ function handleVisibilityChange() {
   right: 0;
   bottom: 0;
   z-index: 71;
-  border-radius: 18px 18px 0 0;
+  border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
   display: flex;
   flex-direction: column;
   background: var(--app-sheet-bg);
-  box-shadow: 0 -18px 50px rgba(15, 23, 42, .24);
+  box-shadow: var(--shadow-dialog);
   overflow: hidden;
 }
 .answer-handle {
@@ -784,7 +868,7 @@ function handleVisibilityChange() {
   content: '';
   width: 36px;
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(var(--color-ink-rgb), .16);
 }
 .answer-sheet-head {
@@ -802,7 +886,7 @@ function handleVisibilityChange() {
 .answer-dot {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--primary-color);
 }
 .answer-sheet-head strong {
@@ -813,7 +897,7 @@ function handleVisibilityChange() {
   width: 30px;
   height: 30px;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -833,7 +917,7 @@ function handleVisibilityChange() {
   padding: 2px 16px 10px;
   background: transparent;
   color: var(--text-color);
-  font-family: inherit;
+  font: inherit;
   font-size: var(--type-size-body-large);
   line-height: 1.85;
   resize: none;
@@ -850,31 +934,34 @@ function handleVisibilityChange() {
   align-items: center;
   gap: 8px;
   padding: 9px 14px calc(9px + env(safe-area-inset-bottom));
-  border-top: 1px solid rgba(var(--color-ink-rgb), .06);
+  border-top: 1px solid var(--border-subtle);
 }
-.answer-sheet-foot span {
+.answer-word-count {
   min-width: 44px;
   color: var(--text-secondary-color);
   font-size: var(--type-size-caption);
   font-weight: var(--type-weight-semibold);
+  font-variant-numeric: tabular-nums;
 }
+.answer-word-count.warning { color: var(--orange-color); }
+.answer-word-count.danger { color: var(--red-color); }
 .answer-sheet-foot button {
   height: 38px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   padding: 0 13px;
-  font-family: inherit;
+  font: inherit;
   font-size: var(--type-size-secondary);
   font-weight: var(--type-weight-semibold);
 }
 .answer-sheet-foot .ghost {
-  background: rgba(var(--color-ink-rgb), .06);
+  background: var(--surface-control);
   color: var(--text-secondary-color);
 }
 .answer-sheet-foot .primary {
   flex: 1;
   background: var(--primary-color);
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 .answer-sheet-foot .primary:disabled {
   opacity: .48;
@@ -888,15 +975,15 @@ function handleVisibilityChange() {
   width: 100%;
   min-height: 52px;
   border: none;
-  border-radius: 13px;
+  border-radius: var(--radius-card);
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 4px;
   padding: 8px 12px;
-  background: rgba(255,255,255,.74);
+  background: var(--surface-card);
   color: var(--text-color);
-  font-family: inherit;
+  font: inherit;
   text-align: left;
 }
 .essay-history-list span,
@@ -925,7 +1012,7 @@ function handleVisibilityChange() {
 }
 .answer-backdrop-enter-active,
 .answer-backdrop-leave-active {
-  transition: opacity .18s ease;
+  transition: opacity var(--motion-fast) ease;
 }
 .answer-backdrop-enter-from,
 .answer-backdrop-leave-to {
@@ -933,11 +1020,12 @@ function handleVisibilityChange() {
 }
 .answer-sheet-enter-active,
 .answer-sheet-leave-active {
-  transition: transform .22s ease;
+  transition: transform var(--motion-normal) ease;
 }
 .answer-sheet-enter-from,
 .answer-sheet-leave-to {
   transform: translateY(100%);
 }
-@keyframes essayPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(1.35); } }
+@keyframes essaySpin { to { transform: rotate(360deg); } }
+@keyframes essayLoadingPulse { 50% { opacity: .48; } }
 </style>

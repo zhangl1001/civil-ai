@@ -7,6 +7,7 @@ import type {
 } from '../contracts/LearningAssetRepository';
 import {
   LearningAssetKind,
+  LearningAssetPurpose,
   LearningAssetStatus
 } from '../domain/LearningAssetCodes';
 
@@ -18,6 +19,7 @@ export interface SaveLearningAssetCommand {
   readonly payload: JsonObject;
   readonly sourceAgentRunId?: string;
   readonly status?: LearningAssetStatus;
+  readonly purpose?: LearningAssetPurpose;
 }
 
 export class LearningAssetStore {
@@ -31,6 +33,7 @@ export class LearningAssetStore {
   async save(command: SaveLearningAssetCommand): Promise<LearningAssetRecord> {
     const businessKey = command.businessKey.trim();
     if (!businessKey) throw new Error('Learning asset businessKey is required');
+    assertPurposeBoundary(command);
     // A generation retry can race with a previous completion between the
     // read and insert. Re-read the version once instead of failing the whole
     // Agent run on the expected UNIQUE(version) conflict.
@@ -44,6 +47,7 @@ export class LearningAssetStore {
         businessKey,
         title: command.title.trim() || command.kind,
         status: command.status ?? LearningAssetStatus.Ready,
+        purpose: resolvePurpose(command),
         payload: command.payload,
         sourceAgentRunId: command.sourceAgentRunId,
         version: (previous?.version ?? 0) + 1,
@@ -65,6 +69,7 @@ export class LearningAssetStore {
   async saveDraft(command: SaveLearningAssetCommand): Promise<LearningAssetRecord> {
     const businessKey = command.businessKey.trim();
     if (!businessKey) throw new Error('Learning asset businessKey is required');
+    assertPurposeBoundary(command);
     const previous = await this.repository.findLatest(command.examCycleId, command.kind, businessKey);
     const now = this.clock.now();
     const asset: LearningAssetRecord = {
@@ -74,6 +79,7 @@ export class LearningAssetStore {
       businessKey,
       title: command.title.trim() || command.kind,
       status: LearningAssetStatus.Draft,
+      purpose: resolvePurpose(command),
       payload: command.payload,
       sourceAgentRunId: command.sourceAgentRunId,
       version: previous?.version ?? 1,
@@ -98,6 +104,10 @@ export class LearningAssetStore {
     return this.repository.list(query);
   }
 
+  count(query: Omit<LearningAssetQuery, 'limit' | 'offset'>): Promise<number> {
+    return this.repository.count(query);
+  }
+
   async retire(id: string): Promise<void> {
     await this.unitOfWork.run(async (context) => {
       await this.repository.retire(id, this.clock.now(), context);
@@ -108,6 +118,16 @@ export class LearningAssetStore {
     await this.unitOfWork.run(async (context) => {
       await this.repository.retireBusinessKey(examCycleId, kind, businessKey, this.clock.now(), context);
     });
+  }
+}
+
+function resolvePurpose(command: SaveLearningAssetCommand): LearningAssetPurpose | undefined {
+  return command.purpose;
+}
+
+function assertPurposeBoundary(command: SaveLearningAssetCommand): void {
+  if (command.kind === LearningAssetKind.EssayQuestion && !command.purpose) {
+    throw new TypeError('Essay question assets require an explicit purpose');
   }
 }
 

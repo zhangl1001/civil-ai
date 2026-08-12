@@ -2,6 +2,7 @@ import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import type { ExamCycleId, JsonObject } from '@/kernel/public';
 import {
   LearningAssetKind,
+  LearningAssetPurpose,
   LearningAssetStatus,
   type LearningAssetRecord
 } from '@/modules/content/public';
@@ -61,6 +62,7 @@ export interface EssayLocalState {
 
 export interface EssayQuestionSetSummary {
   key: string;
+  classification: LearningAssetPurpose;
   context: EssayContext;
   question: EssayQuestionRecord | null;
   updatedAt: number;
@@ -152,7 +154,8 @@ export class EssayRepository {
     };
   }
 
-  async saveDraft(draft: string, context: EssayContext): Promise<EssayLocalState> {
+  /** Write-only so autosave never pays for a full state read on the typing path. */
+  async saveDraft(draft: string, context: EssayContext): Promise<void> {
     const normalized = normalizeContext(context);
     const { runtime, examCycleId } = await this.activeCycle();
     await runtime.learningAssetStore.saveDraft({
@@ -162,63 +165,11 @@ export class EssayRepository {
       title: `${normalized.topic}草稿 · ${normalized.date}`,
       payload: { draft, essayContext: normalized } as unknown as JsonObject
     });
-    return this.getState(normalized);
-  }
-
-  async saveQuestion(question: EssayQuestionRecord, context: EssayContext): Promise<EssayLocalState> {
-    const normalized = normalizeContext(context);
-    const { runtime, examCycleId } = await this.activeCycle();
-    await runtime.learningAssetStore.save({
-      examCycleId,
-      kind: LearningAssetKind.EssayQuestion,
-      businessKey: businessKey(normalized),
-      title: question.title,
-      payload: { question, essayContext: normalized } as unknown as JsonObject
-    });
-    await runtime.learningAssetStore.retireBusinessKey(
-      examCycleId,
-      LearningAssetKind.EssayDraft,
-      businessKey(normalized)
-    );
-    return this.getState(normalized);
-  }
-
-  async saveFeedback(
-    content: string,
-    feedback: string,
-    structured: {
-      score?: number;
-      dimensions?: EssayFeedbackDimension[];
-      suggestions?: string[];
-    } | undefined,
-    context: EssayContext
-  ): Promise<EssayLocalState> {
-    const normalized = normalizeContext(context);
-    const current = await this.getState(normalized);
-    if (!current.question) throw new Error('当前没有申论题目，无法保存批改记录');
-    const { runtime, examCycleId } = await this.activeCycle();
-    await runtime.learningAssetStore.save({
-      examCycleId,
-      kind: LearningAssetKind.EssayAttempt,
-      businessKey: businessKey(normalized),
-      title: `${current.question.title} · 批改`,
-      payload: {
-        question: current.question,
-        content,
-        feedback,
-        score: structured?.score,
-        dimensions: structured?.dimensions,
-        suggestions: structured?.suggestions,
-        wordCount: content.length,
-        essayContext: normalized
-      } as unknown as JsonObject
-    });
-    await this.saveDraft(content, normalized);
-    return this.getState(normalized);
   }
 
   async resetDraft(context: EssayContext): Promise<EssayLocalState> {
-    return this.saveDraft('', context);
+    await this.saveDraft('', context);
+    return this.getState(context);
   }
 
   async deleteState(context: EssayContext): Promise<EssayLocalState> {
@@ -232,19 +183,22 @@ export class EssayRepository {
     return this.getState(normalized);
   }
 
-  async listStates(): Promise<EssayQuestionSetSummary[]> {
+  async listStates(options: { offset?: number; limit?: number } = {}): Promise<EssayQuestionSetSummary[]> {
     const { runtime, examCycleId } = await this.activeCycle();
     const assets = await runtime.learningAssetStore.list({
       examCycleId,
       kinds: [LearningAssetKind.EssayQuestion],
       status: LearningAssetStatus.Ready,
-      limit: 200
+      purposes: [
+        LearningAssetPurpose.Practice,
+        LearningAssetPurpose.TrueQuestion,
+        LearningAssetPurpose.LegacyUnknown
+      ],
+      latestPerBusinessKey: true,
+      offset: options.offset ?? 0,
+      limit: options.limit ?? 20
     });
-    const latest = new Map<string, LearningAssetRecord>();
-    assets.forEach((asset) => {
-      if (!latest.has(asset.businessKey)) latest.set(asset.businessKey, asset);
-    });
-    const items = Array.from(latest.values()).map((asset) => {
+    const items = assets.map((asset) => {
       const rawContext = asset.payload.essayContext;
       const record = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
         ? rawContext as Record<string, unknown>
@@ -259,12 +213,28 @@ export class EssayRepository {
       };
       return {
         key: asset.businessKey,
+        classification: asset.purpose ?? LearningAssetPurpose.LegacyUnknown,
         context: itemContext,
         question: asQuestion(asset.payload.question),
         updatedAt: asset.updatedAt
       };
     });
-    return items.sort((left, right) => right.updatedAt - left.updatedAt);
+    return items;
+  }
+
+  async countStates(): Promise<number> {
+    const { runtime, examCycleId } = await this.activeCycle();
+    return runtime.learningAssetStore.count({
+      examCycleId,
+      kinds: [LearningAssetKind.EssayQuestion],
+      status: LearningAssetStatus.Ready,
+      purposes: [
+        LearningAssetPurpose.Practice,
+        LearningAssetPurpose.TrueQuestion,
+        LearningAssetPurpose.LegacyUnknown
+      ],
+      latestPerBusinessKey: true
+    });
   }
 
   private async activeCycle(): Promise<{ runtime: TutorDatabaseRuntime; examCycleId: ExamCycleId }> {

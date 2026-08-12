@@ -22,3 +22,12 @@ export const LearningAssetStatus = {
 } as const;
 
 export type LearningAssetStatus = typeof LearningAssetStatus[keyof typeof LearningAssetStatus];
+
+export const LearningAssetPurpose = {
+  Practice: 'practice',
+  Mock: 'mock',
+  TrueQuestion: 'true_question',
+  LegacyUnknown: 'legacy_unknown'
+} as const;
+
+export type LearningAssetPurpose = typeof LearningAssetPurpose[keyof typeof LearningAssetPurpose];

@@ -18,6 +18,7 @@ import {
   GenerationVariationKind,
   LearningAssetKind
 } from '@/modules/content/public';
+import { AgentRunInputIncompatibleError } from '@/modules/agent/public';
 import { completeFreshGeneratedContent, learningAssetReferences } from './FreshGeneratedContent';
 import type {
   BusinessAgentExecutionContext,
@@ -278,7 +279,9 @@ export const essayGradeExecutor: BusinessAgentExecutor = async (task, context) =
   const content = asString(task.payload?.content);
   if (!content.trim()) throw new Error('申论批改任务缺少作答内容');
   const questionSetId = asString(task.payload?.questionSetId).trim();
-  if (!questionSetId) throw new Error('申论批改任务缺少题组标识');
+  if (!questionSetId) {
+    throw new AgentRunInputIncompatibleError('该批改任务来自旧版本，缺少可靠的题组标识，已停止恢复。原作答数据不会被删除，请从对应题组重新提交批改。');
+  }
   const entryMode = normalizeEssayQuestionSetMode(task.payload?.entryMode);
   const essayContext = {
     questionSetId,
@@ -314,6 +317,7 @@ export const essayGradeExecutor: BusinessAgentExecutor = async (task, context) =
     kind: LearningAssetKind.EssayAttempt,
     businessKey: essayQuestionSetBusinessKey(essayContext),
     title: `${essayContext.topic}批改 · ${essayContext.date}`,
+    purpose: essayContext.purpose,
     payload: {
       questionAssetId: questionAsset.id,
       question,
@@ -543,6 +547,7 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
       kind: LearningAssetKind.EssayQuestion,
       businessKey: essayQuestionSetBusinessKey({ questionSetId, date, topic: essayTopic, type: essayType, entryMode, purpose }),
       title: question.title,
+      purpose,
       payload: {
         question,
         essayContext: { questionSetId, date, topic: essayTopic, type: essayType, entryMode, purpose }

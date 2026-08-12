@@ -1,7 +1,7 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
-export const TUTOR_INDEXEDDB_VERSION = 30;
+export const TUTOR_INDEXEDDB_VERSION = 31;
 
 export const TutorIndexedDbStore = {
   CandidateCycleBundles: 'candidate_cycle_bundles',
@@ -239,7 +239,14 @@ export class TutorIndexedDb {
   private openDatabase(): Promise<void> {
     if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB is not available in this environment'));
     return new Promise((resolve, reject) => {
+      let upgradeError: Error | undefined;
       const request = globalThis.indexedDB.open(TUTOR_INDEXEDDB_NAME, TUTOR_INDEXEDDB_VERSION);
+      const failUpgrade = (stage: string, cause: unknown) => {
+        if (upgradeError) return;
+        const detail = cause instanceof Error ? cause.message : String(cause || 'unknown error');
+        upgradeError = new Error(`Tutor IndexedDB upgrade failed during ${stage}: ${detail}`);
+        request.transaction?.abort();
+      };
       request.onupgradeneeded = (event) => {
         const database = request.result;
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.CandidateCycleBundles)) {
@@ -339,8 +346,18 @@ export class TutorIndexedDb {
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.ProactiveSignals)) {
           database.createObjectStore(TutorIndexedDbStore.ProactiveSignals, { keyPath: 'id' });
         }
-        if (!database.objectStoreNames.contains(TutorIndexedDbStore.LearningAssets)) {
-          database.createObjectStore(TutorIndexedDbStore.LearningAssets, { keyPath: 'id' });
+        const learningAssetStore = database.objectStoreNames.contains(TutorIndexedDbStore.LearningAssets)
+          ? request.transaction?.objectStore(TutorIndexedDbStore.LearningAssets)
+          : database.createObjectStore(TutorIndexedDbStore.LearningAssets, { keyPath: 'id' });
+        if (learningAssetStore && !learningAssetStore.indexNames.contains('by_cycle_kind_purpose_status')) {
+          learningAssetStore.createIndex(
+            'by_cycle_kind_purpose_status',
+            ['examCycleId', 'kind', 'purpose', 'status'],
+            { unique: false }
+          );
+        }
+        if (event.oldVersion < 31 && learningAssetStore) {
+          migrateLearningAssetPurposes(learningAssetStore, agentRunStore, failUpgrade);
         }
         if (!database.objectStoreNames.contains(TutorIndexedDbStore.QuestionSources)) {
           const sourceStore = database.createObjectStore(TutorIndexedDbStore.QuestionSources, { keyPath: 'id' });
@@ -432,7 +449,7 @@ export class TutorIndexedDb {
         this.database.onversionchange = () => this.close();
         resolve();
       };
-      request.onerror = () => reject(request.error ?? new Error('Tutor IndexedDB failed to open'));
+      request.onerror = () => reject(upgradeError ?? request.error ?? new Error('Tutor IndexedDB failed to open'));
       request.onblocked = () => reject(new Error('Tutor IndexedDB upgrade is blocked by another tab'));
     });
   }
@@ -441,4 +458,74 @@ export class TutorIndexedDb {
     if (!this.database) throw new Error('Tutor IndexedDB is not open');
     return this.database;
   }
+}
+
+function migrateLearningAssetPurposes(
+  store: IDBObjectStore,
+  agentRunStore: IDBObjectStore | undefined,
+  onError: (stage: string, cause: unknown) => void
+): void {
+  const request = store.openCursor();
+  request.onerror = () => onError('learning asset cursor', request.error);
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const asset = cursor.value as Record<string, unknown>;
+    if (asset.kind !== 'essay_question' || asset.purpose) {
+      cursor.continue();
+      return;
+    }
+    const payload = objectValue(asset.payload);
+    const context = objectValue(payload.essayContext);
+    const sourceAgentRunId = typeof asset.sourceAgentRunId === 'string' ? asset.sourceAgentRunId : undefined;
+    if (!agentRunStore || !sourceAgentRunId || purposeFromContext(context)) {
+      updateLegacyPurpose(cursor, asset, inferLegacyEssayPurpose(context), onError);
+      return;
+    }
+    const runRequest = agentRunStore.get(sourceAgentRunId);
+    runRequest.onerror = () => onError(`Agent run lookup for ${sourceAgentRunId}`, runRequest.error);
+    runRequest.onsuccess = () => {
+      const sourceId = sourceIdFromAgentRun(runRequest.result);
+      updateLegacyPurpose(cursor, asset, inferLegacyEssayPurpose(context, sourceId), onError);
+    };
+  };
+}
+
+function updateLegacyPurpose(
+  cursor: IDBCursorWithValue,
+  asset: Record<string, unknown>,
+  purpose: string,
+  onError: (stage: string, cause: unknown) => void
+): void {
+  const updateRequest = cursor.update({ ...asset, purpose });
+  updateRequest.onerror = () => onError(`learning asset update for ${String(asset.id || cursor.primaryKey)}`, updateRequest.error);
+  updateRequest.onsuccess = () => cursor.continue();
+}
+
+function sourceIdFromAgentRun(value: unknown): string | undefined {
+  const aggregate = objectValue(value);
+  const run = objectValue(aggregate.run);
+  const snapshot = objectValue(run.inputSnapshot);
+  return typeof snapshot.sourceId === 'string' ? snapshot.sourceId : undefined;
+}
+
+function purposeFromContext(context: Record<string, unknown>): string | undefined {
+  if (context.purpose === 'mock') return 'mock';
+  if (context.purpose === 'true_question' || context.entryMode === 'true') return 'true_question';
+  if (context.purpose === 'practice' || context.entryMode === 'tutor') return 'practice';
+  return undefined;
+}
+
+function inferLegacyEssayPurpose(context: Record<string, unknown>, sourceId?: string): string {
+  const explicitPurpose = purposeFromContext(context);
+  if (explicitPurpose) return explicitPurpose;
+  if (sourceId?.startsWith('mock:申论:')) return 'mock';
+  if (sourceId?.startsWith('essay:')) return 'practice';
+  return 'legacy_unknown';
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
