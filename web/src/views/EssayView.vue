@@ -646,13 +646,14 @@ function formatTime(time: number): string {
 .lecture-head h4 {
   margin: 0;
   color: var(--text-color);
-  font-size: var(--type-size-control);
+  font-size: var(--type-size-section-title);
+  line-height: 1.4;
 }
 .lecture-head p {
   margin: 0;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-secondary);
-  line-height: 1.6;
+  color: var(--text-color);
+  font-size: var(--type-size-body);
+  line-height: 1.7;
 }
 .lecture-grid {
   display: flex;
@@ -661,22 +662,37 @@ function formatTime(time: number): string {
   margin-top: 10px;
 }
 .lecture-grid article {
-  padding: 10px 11px;
-  border-radius: var(--radius-card);
+  padding: 11px 12px;
+  border-radius: var(--radius-inset);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 7px;
   background: var(--surface-muted);
 }
 .lecture-grid strong {
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+  letter-spacing: 0;
+}
+/* Six undifferentiated grey lists are unscannable; each point gets a mark to land on. */
+.lecture-grid em {
+  position: relative;
+  padding-left: 13px;
   color: var(--text-color);
   font-size: var(--type-size-secondary);
-}
-.lecture-grid em {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-caption);
   font-style: normal;
-  line-height: 1.48;
+  line-height: 1.62;
+}
+.lecture-grid em::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: .62em;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--color-brand-rgb), .38);
 }
 .question-section {
   margin: 0;
@@ -714,31 +730,34 @@ function formatTime(time: number): string {
   background: var(--surface-muted);
 }
 .question-section h4 {
-  margin: 0 0 8px;
-  line-height: 1.42;
-  font-size: var(--type-size-body-large);
+  margin: 0 0 10px;
+  line-height: 1.4;
+  font-size: var(--type-size-section-title);
 }
 .material-block,
 .requirement-block {
   margin-top: 10px;
-  padding: 11px;
-  border-radius: var(--radius-card);
+  padding: 12px;
+  border-radius: var(--radius-inset);
   background: var(--surface-muted);
 }
 .material-block strong,
 .requirement-block strong {
   display: block;
-  margin-bottom: 7px;
-  color: var(--text-color);
-  font-size: var(--type-size-secondary);
+  margin-bottom: 8px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+  letter-spacing: 0;
 }
+/* This is the prose the candidate reads for minutes at a time, so it is primary text. */
 .material-block p,
 .requirement-block p,
 .requirement-block li {
   margin: 0;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-body);
-  line-height: 1.72;
+  color: var(--text-color);
+  font-size: var(--type-size-body-large);
+  line-height: 1.78;
 }
 .material-block p + p {
   margin-top: 9px;
@@ -788,28 +807,32 @@ function formatTime(time: number): string {
   font-weight: var(--type-weight-semibold);
 }
 .attempt-preview-answer {
-  padding: 11px;
-  border-radius: var(--radius-card);
+  padding: 12px;
+  border-radius: var(--radius-inset);
   background: var(--surface-muted);
 }
 .attempt-preview-answer strong {
   display: block;
-  margin-bottom: 6px;
-  font-size: var(--type-size-secondary);
+  margin-bottom: 8px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-micro);
+  font-weight: var(--type-weight-semibold);
+  letter-spacing: 0;
 }
 .attempt-preview-answer p {
   margin: 0;
-  color: var(--text-secondary-color);
+  color: var(--text-color);
   font-size: var(--type-size-body);
-  line-height: 1.72;
+  line-height: 1.78;
   white-space: pre-wrap;
 }
 .feedback-section { padding: 16px; background: var(--soft-blue); border-radius: var(--radius-card); line-height: 1.7; }
 .feedback-section h4 { margin: 0 0 8px; }
 .feedback-section :deep(p) { margin: 0; }
-.history-section { padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card-strong); box-shadow: var(--shadow-card); }
+/* A supporting block, deliberately lighter than the question so the page has one subject. */
+.history-section { padding: 14px; border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
 .history-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-.history-title strong { font-size: var(--type-size-body-large); }
+.history-title strong { font-size: var(--type-size-body); }
 .history-title span { color: var(--text-secondary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
 .history-row { padding: 10px 0; border-top: 1px solid var(--border-subtle); }
 .history-row:first-of-type { border-top: none; padding-top: 0; }
@@ -818,10 +841,11 @@ function formatTime(time: number): string {
 .history-row span { flex-shrink: 0; color: var(--text-secondary-color); font-size: var(--type-size-micro); }
 .history-feedback { margin: 6px 0 0; color: var(--text-secondary-color); font-size: var(--type-size-caption); line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .dimension-list { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
-.dimension-list li { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 6px; align-items: center; color: var(--text-secondary-color); font-size: var(--type-size-micro); }
-.dimension-list b { color: var(--text-color); }
-.dimension-list em { font-style: normal; color: var(--primary-color); font-weight: var(--type-weight-semibold); }
-.dimension-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Name and score share a line; the comment gets its own so a score never reads as part of the prose. */
+.dimension-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; color: var(--text-secondary-color); font-size: var(--type-size-micro); }
+.dimension-list b { color: var(--text-color); font-weight: var(--type-weight-semibold); }
+.dimension-list em { font-style: normal; color: var(--primary-color); font-weight: var(--type-weight-semibold); font-variant-numeric: tabular-nums; }
+.dimension-list span { flex-basis: 100%; min-width: 0; font-size: var(--type-size-caption); line-height: 1.5; }
 .essay-start-button {
   display: inline-flex;
   align-items: center;
