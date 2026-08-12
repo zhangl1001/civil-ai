@@ -2,6 +2,7 @@ import { buildCompanionChatPrompt } from '@/ai/prompts';
 import { buildEssayRepairPrompt, validateEssayQuestion } from '@/ai/QuestionValidation';
 import { BusinessTutorPromptCode, parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
+import { practiceModuleLabel } from '@/domain/labels';
 import { abortableDelay, mapWithAbortableConcurrency } from '@/kernel/public';
 import type { DigestTab } from '@/domain/digest';
 import { aiChatRepository } from '@/services/AIChatRepository';
@@ -634,7 +635,12 @@ async function collectDailyDigestResearch(
 }
 export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
   const topic = asString(task.payload?.topic) || task.detail || '公考考点';
-  const module = asString(task.payload?.module) || '公考';
+  const moduleCode = asString(task.payload?.moduleCode)
+    || asString(task.payload?.module)
+    || '公考';
+  const module = practiceModuleLabel(
+    asString(task.payload?.moduleLabel) || moduleCode
+  );
   const capabilityNodeId = asString(task.payload?.capabilityNodeId);
   const userRequest = asString(task.payload?.prompt) || `请系统讲解公考${module}考点「${topic}」。`;
   await context.update(18, '整理考点上下文');
@@ -654,10 +660,12 @@ export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
   await context.update(82, '生成精讲内容');
   const saved = await context.saveLearningAsset({
     kind: LearningAssetKind.StudyLecture,
-    businessKey: `study:${module}:${topic}`,
+    businessKey: `study:${moduleCode}:${topic}`,
     title: `${module} · ${topic}`,
     payload: {
-      module,
+      module: moduleCode,
+      moduleCode,
+      moduleLabel: module,
       topic,
       content: normalizeMarkdownSource(result),
       ...(capabilityNodeId ? { capabilityNodeId } : {})

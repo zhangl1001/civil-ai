@@ -2,6 +2,7 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
 import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
 import { LearningProgressStatus, LearningResourceType } from '@/modules/learning-progress/public';
+import { practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
 import {
   CapabilityRecommendationMode,
   LearnerPriorityAction,
@@ -179,7 +180,9 @@ export class StudyService {
     point: Pick<StudyPoint, 'module' | 'name' | 'capabilityNodeId'> | { module?: string; name: string; capabilityNodeId?: string },
     planContext?: DailyPlanLearningContext
   ) {
-    const module = point.module || '公考';
+    const sourceModule = point.module || '公考';
+    const module = practiceModuleLabel(sourceModule);
+    const moduleCode = practiceModuleCode(sourceModule) || sourceModule;
     return generationTaskService.enqueue({
       intent: 'study',
       title: '生成考点精讲',
@@ -189,6 +192,8 @@ export class StudyService {
       payload: {
         topic: point.name,
         prompt: `请系统讲解公考${module}考点「${point.name}」，包括核心概念、常见陷阱、典型例题、解题步骤和复盘提问。`,
+        moduleCode,
+        moduleLabel: module,
         capabilityNodeId: point.capabilityNodeId ?? planContext?.capabilityNodeId ?? null,
         ...(planContext ? {
           dailyPlanItemId: planContext.dailyPlanItemId,
@@ -273,17 +278,34 @@ export class StudyService {
     return assets.flatMap((asset): StudyLectureSummary[] => {
       if (seen.has(asset.businessKey)) return [];
       seen.add(asset.businessKey);
+      const sourceModule = payloadString(asset.payload.moduleCode)
+        || payloadString(asset.payload.module);
+      const module = practiceModuleLabel(
+        payloadString(asset.payload.moduleLabel) || sourceModule || '公考'
+      );
+      const topic = payloadString(asset.payload.topic) || asset.title;
       return [{
         id: asset.id,
-        title: asset.title,
-        module: payloadString(asset.payload.module) || '公考',
-        topic: payloadString(asset.payload.topic) || asset.title,
+        title: studyLectureDisplayTitle(asset.title, sourceModule, module),
+        module,
+        topic,
         capabilityNodeId: payloadString(asset.payload.capabilityNodeId) || undefined,
         updatedAt: asset.updatedAt
       }];
     }).slice(0, boundedLimit);
   }
 
+}
+
+export function studyLectureDisplayTitle(title: string, sourceModule?: string, moduleLabel?: string): string {
+  const normalizedTitle = title.trim();
+  const normalizedSource = sourceModule?.trim() || '';
+  const normalizedLabel = moduleLabel?.trim() || practiceModuleLabel(normalizedSource);
+  if (!normalizedSource || normalizedSource === normalizedLabel) return normalizedTitle;
+  const sourcePrefix = `${normalizedSource} · `;
+  return normalizedTitle.startsWith(sourcePrefix)
+    ? `${normalizedLabel} · ${normalizedTitle.slice(sourcePrefix.length)}`
+    : normalizedTitle;
 }
 
 function payloadString(value: unknown): string {

@@ -1,6 +1,6 @@
 <template>
   <div class="study-page app-page">
-    <PageHeader :title="lectureTitle || '考点精讲'" :meta="lectureTitle ? 'AI 私教讲义' : activeModule || '按大纲学习和补弱'">
+    <PageHeader :title="lectureTitle || '考点精讲'" :meta="lectureTitle ? 'AI 私教讲义' : activeModuleLabel || '按大纲学习和补弱'">
       <template #actions>
         <HeaderMoreMenu title="精讲设置" subtitle="筛选模块">
           <div class="menu-field">
@@ -14,7 +14,7 @@
                 :class="{ active: activeModule === module.name }"
                 @click="activeModule = module.name"
               >
-                {{ module.name }}
+                {{ practiceModuleLabel(module.name) }}
               </button>
             </div>
           </div>
@@ -72,7 +72,7 @@
               <i><BookOpenIcon /></i>
               <span>
                 <strong>{{ lecture.title }}</strong>
-                <em>{{ lecture.module }} · {{ formatLectureTime(lecture.updatedAt) }}</em>
+                <em>{{ practiceModuleLabel(lecture.module) }} · {{ formatLectureTime(lecture.updatedAt) }}</em>
               </span>
               <ChevronRightIcon />
             </button>
@@ -84,7 +84,7 @@
           <div v-if="!dashboard.weakPoints.length" class="inline-empty">完成练习后自动显示薄弱考点</div>
           <button v-for="(point, index) in dashboard.weakPoints" :key="`${point.module}-${point.name}`" type="button" class="weak-card" @click="learn(point)">
             <i :class="index === 0 ? 'danger' : index < 3 ? 'warn' : 'info'">{{ index + 1 }}</i>
-            <div><strong>{{ point.name }}</strong><span>{{ point.module }} · {{ point.reason }}</span></div>
+            <div><strong>{{ point.name }}</strong><span>{{ practiceModuleLabel(point.module) }} · {{ point.reason }}</span></div>
             <em>{{ point.evidenceScore }}%</em>
           </button>
         </section>
@@ -93,7 +93,7 @@
           <SectionHeading title="知识体系" :meta="`${visibleModules.length} 个模块`" />
           <article v-for="module in visibleModules" :key="module.name" class="tree-module">
             <button type="button" class="tree-head" @click="toggle(module.name)">
-              <BookOpenIcon /><strong>{{ module.name }}</strong><span>{{ module.total }} 个考点</span>
+              <BookOpenIcon /><strong>{{ practiceModuleLabel(module.name) }}</strong><span>{{ module.total }} 个考点</span>
             </button>
             <div v-show="opened.has(module.name)" class="tree-body">
               <div v-for="group in module.groups" :key="group.name" class="tree-group">
@@ -117,7 +117,14 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import { BookOpenIcon, CheckCircle2Icon, ChevronRightIcon, SearchIcon } from 'lucide-vue-next';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { studyService, type StudyDashboard, type StudyLectureSummary, type StudyPoint } from '@/services/StudyService';
+import {
+  studyLectureDisplayTitle,
+  studyService,
+  type StudyDashboard,
+  type StudyLectureSummary,
+  type StudyPoint
+} from '@/services/StudyService';
+import { practiceModuleLabel } from '@/domain/labels';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
@@ -146,6 +153,7 @@ const loadedCapabilityNodeId = ref('');
 
 const dailyPlanItemId = computed(() => typeof route.query.dailyPlanItemId === 'string' ? route.query.dailyPlanItemId : '');
 const capabilityNodeId = computed(() => typeof route.query.capabilityNodeId === 'string' ? route.query.capabilityNodeId : '');
+const activeModuleLabel = computed(() => activeModule.value ? practiceModuleLabel(activeModule.value) : '');
 const visibleTask = computed(() => {
   const task = taskCenter.runs.find((candidate) => candidate.id === trackedTaskId.value)
     || (taskSnapshot.value?.id === trackedTaskId.value ? taskSnapshot.value : undefined);
@@ -204,7 +212,15 @@ async function load() {
       const runtime = await initializeTutorRuntime();
       const asset = await runtime.learningAssetStore.find(assetId);
       lectureContent.value = typeof asset?.payload.content === 'string' ? asset.payload.content : '';
-      lectureTitle.value = asset?.title || '';
+      const sourceModule = typeof asset?.payload.moduleCode === 'string'
+        ? asset.payload.moduleCode
+        : typeof asset?.payload.module === 'string' ? asset.payload.module : '';
+      const moduleLabel = typeof asset?.payload.moduleLabel === 'string'
+        ? asset.payload.moduleLabel
+        : practiceModuleLabel(sourceModule);
+      lectureTitle.value = asset?.title
+        ? studyLectureDisplayTitle(asset.title, sourceModule, moduleLabel)
+        : '';
       const assetCapabilityNodeId = typeof asset?.payload.capabilityNodeId === 'string'
         ? asset.payload.capabilityNodeId
         : capabilityNodeId.value || undefined;
