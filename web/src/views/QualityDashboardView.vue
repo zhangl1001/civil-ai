@@ -199,7 +199,7 @@ async function generateInsight() {
 
 function startWeakPractice() {
   router.push(practiceDetailLocation({
-    mode: 'self',
+    mode: 'tutor',
     module: dashboard.value?.weakestModule?.name
   }));
 }

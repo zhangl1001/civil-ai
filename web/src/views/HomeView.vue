@@ -10,8 +10,8 @@
       </template>
     </PageHeader>
 
-    <PullToRefresh class="home-scroll" :on-refresh="loadTutorHome">
-      <div v-if="isTutorLoading" class="loading-skeleton">
+    <PullToRefresh class="home-scroll" :on-refresh="refreshTutorHome">
+      <div v-if="isTutorLoading && !candidateHome" class="loading-skeleton">
         <div class="skeleton-card hero"></div>
         <div class="skeleton-card"></div>
         <div class="skeleton-card"></div>
@@ -19,7 +19,7 @@
 
       <div v-else class="home-content">
         <AppStateView
-          v-if="tutorLoadError"
+          v-if="tutorLoadError && !candidateHome"
           state="error"
           title="备考档案暂时无法读取"
           :description="tutorLoadError"
@@ -44,22 +44,23 @@
               <p>{{ tutorDecisionDetail }}</p>
             </div>
             <div class="hero-meter">
-              <strong>{{ aptitudeForecastText }}</strong>
-              <span>{{ aptitudeForecast ? '行测预测分' : quality?.grade || '待诊断' }}</span>
+              <strong>{{ heroMetric.value }}</strong>
+              <span>{{ heroMetric.label }}</span>
             </div>
+            <small class="hero-evidence">{{ tutorDecisionEvidence }}</small>
             <div class="hero-actions">
-              <button class="primary-action" type="button" @click="router.push('/vue/plan')">
-                <SparklesIcon />
-                今日计划
+              <button class="primary-action" type="button" @click="router.push(primaryTutorAction.to)">
+                <component :is="primaryTutorAction.icon" />
+                {{ primaryTutorAction.name }}
               </button>
-              <button type="button" @click="router.push({ path: '/vue/practice/session', query: { mode: 'tutor' } })">
+              <button type="button" @click="router.push('/vue/quality-dashboard')">
                 <TargetIcon />
-                针对性练习
+                查看判断依据
               </button>
             </div>
           </section>
 
-          <section class="portrait-section">
+          <section v-if="hasReliableAbilityProfile" class="portrait-section">
             <div class="section-title">
               <strong>个人能力画像</strong>
               <button type="button" @click="router.push('/vue/quality-dashboard')">完整报告</button>
@@ -77,7 +78,7 @@
                 <strong>能力雷达</strong>
                 <span>{{ radarModules.length ? '模块正确率' : '等待练习样本' }}</span>
               </div>
-              <div v-if="radarModules.length >= 3" class="radar-panel">
+              <div v-if="radarEvidenceCount >= 3" class="radar-panel">
                 <svg class="ability-radar" viewBox="0 0 200 200" role="img" aria-label="能力雷达图">
                   <polygon v-for="ring in radarGridPolygons" :key="ring" class="radar-ring" :points="ring" />
                   <line
@@ -134,7 +135,16 @@
             </div>
           </section>
 
-          <section class="section-group">
+          <section v-else class="baseline-card">
+            <div>
+              <span>能力校准</span>
+              <strong>先补齐可信样本，再判断薄弱点</strong>
+              <p>当前累计 {{ quality?.totalQuestions || 0 }} 题。系统不会用少量作答给你下确定结论。</p>
+            </div>
+            <button type="button" @click="router.push(primaryTutorAction.to)">开始校准</button>
+          </section>
+
+          <section v-if="weakModules.length" class="section-group">
             <div class="section-title">
               <strong>薄弱点与训练优先级</strong>
               <button type="button" @click="router.push('/vue/knowledge-graph')">知识地图</button>
@@ -149,33 +159,22 @@
                 <ChevronRightIcon />
               </button>
             </div>
-            <AppStateView v-else compact title="能力样本不足" description="先完成一组针对性练习，首页会生成薄弱点画像。" />
           </section>
 
-          <section class="coach-card">
+          <section v-if="recommendedActions.length" class="section-group">
             <div class="section-title">
-              <strong>私教解释</strong>
-              <span>{{ diagnosisStatusLabel }}</span>
-            </div>
-            <p>{{ quality?.diagnosisSummary || diagnosisStatusDetail }}</p>
-            <ul>
-              <li v-for="item in coachAdvice" :key="item">{{ item }}</li>
-            </ul>
-          </section>
-
-          <section class="section-group">
-            <div class="section-title">
-              <strong>今日行动</strong>
-              <span>指导 · 学习 · 训练</span>
+              <strong>接下来</strong>
+              <span>根据当前阶段动态排序</span>
             </div>
             <div class="action-grid">
-              <button v-for="action in actionCards" :key="action.name" type="button" class="action-card" @click="router.push(action.to)">
+              <button v-for="action in recommendedActions" :key="action.name" type="button" class="action-card" @click="router.push(action.to)">
                 <i :class="action.color"><component :is="action.icon" /></i>
                 <strong>{{ action.name }}</strong>
                 <span>{{ action.sub }}</span>
               </button>
             </div>
           </section>
+          <p v-if="tutorLoadError" class="refresh-note" role="status">{{ tutorLoadError }}</p>
         </template>
       </div>
     </PullToRefresh>
@@ -190,7 +189,6 @@ import {
   BookOpenIcon,
   CalendarIcon,
   ChevronRightIcon,
-  Edit3Icon,
   FileTextIcon,
   MonitorIcon,
   SparklesIcon,
@@ -200,6 +198,7 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { essayCenterLocation } from '@/features/practice/EssayNavigation';
+import { APTITUDE_PRACTICE_MODULE_OPTIONS } from '@/domain/labels';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
   InitialDiagnosisStatus,
@@ -213,26 +212,30 @@ const candidateHome = ref<CandidateHomeSnapshot | null>(null);
 const quality = ref<QualityDashboard | null>(null);
 const isTutorLoading = ref(true);
 const tutorLoadError = ref('');
-
 onMounted(loadTutorHome);
-
 async function loadTutorHome() {
-  isTutorLoading.value = true;
+  const showInitialLoading = !candidateHome.value;
+  if (showInitialLoading) isTutorLoading.value = true;
   tutorLoadError.value = '';
-  quality.value = null;
   try {
     const runtime = await initializeTutorRuntime();
-    candidateHome.value = await runtime.getCandidateHome.execute() || null;
-    if (candidateHome.value) {
-      quality.value = await qualityDashboardService.dashboard();
+    const nextCandidateHome = await runtime.getCandidateHome.execute() || null;
+    candidateHome.value = nextCandidateHome;
+    if (nextCandidateHome) {
+      isTutorLoading.value = false;
+      quality.value = await qualityDashboardService.dashboard({ candidateHome: nextCandidateHome });
+    } else {
+      quality.value = null;
     }
   } catch (error) {
-    candidateHome.value = null;
+    if (showInitialLoading) candidateHome.value = null;
     tutorLoadError.value = error instanceof Error ? error.message : '备考档案加载失败';
   } finally {
     isTutorLoading.value = false;
   }
 }
+
+const refreshTutorHome = loadTutorHome;
 
 const phaseLabels: Record<string, string> = {
   foundation: '基础阶段',
@@ -261,25 +264,25 @@ const aptitudeForecast = computed(() => quality.value?.calibration?.scoreForecas
   (item) => item.subject === 'aptitude' && item.center !== undefined
 ));
 
-const aptitudeForecastText = computed(() => aptitudeForecast.value
-  ? String(aptitudeForecast.value.center)
-  : quality.value?.score ?? '--');
-
-const weakModules = computed(() => {
-  return (quality.value?.modules || [])
-    .filter((item) => item.total > 0)
-    .slice()
-    .sort((left, right) => left.accuracy - right.accuracy || right.total - left.total)
-    .slice(0, 3);
+const heroMetric = computed(() => {
+  if (aptitudeForecast.value) return { value: String(aptitudeForecast.value.center), label: '行测预测分' };
+  if (quality.value?.totalQuestions) return { value: String(quality.value.score), label: '训练质量指数' };
+  return { value: '--', label: '待校准' };
 });
+
+const hasReliableAbilityProfile = computed(() => (quality.value?.moduleDiagnoses || []).some(
+  (item) => item.diagnosisType !== 'insufficient_sample'
+));
+
+const weakModules = computed(() => (quality.value?.priorityModules || []).slice(0, 3));
 
 const radarModules = computed(() => {
-  return (quality.value?.modules || [])
-    .filter((item) => item.total > 0)
-    .slice()
-    .sort((left, right) => right.total - left.total)
-    .slice(0, 5);
+  return APTITUDE_PRACTICE_MODULE_OPTIONS.map((option) => {
+    const module = quality.value?.modules.find((item) => item.code === option.code);
+    return { name: option.name, accuracy: module?.accuracy || 0, total: module?.total || 0 };
+  });
 });
+const radarEvidenceCount = computed(() => radarModules.value.filter((item) => item.total > 0).length);
 
 const radarAxis = computed(() => {
   const total = radarModules.value.length;
@@ -302,7 +305,7 @@ const radarPoints = computed(() => {
   const total = radarModules.value.length;
   return radarModules.value.map((module, index) => ({
     name: module.name,
-    ...radarPoint(index, total, Math.max(8, module.accuracy) / 100)
+    ...radarPoint(index, total, module.accuracy / 100)
   }));
 });
 
@@ -317,6 +320,7 @@ const radarGridPolygons = computed(() => [0.25, 0.5, 0.75, 1].map((scale) => (
 const tutorDecisionTitle = computed(() => {
   if (!quality.value?.totalQuestions) return '先建立可信能力基线';
   if ((quality.value.reviewDueCount || 0) > 0) return '先复盘到期错题，再做新题';
+  if (!hasReliableAbilityProfile.value) return '继续补齐样本，暂不判断薄弱点';
   if (quality.value.weakestModule) return `今天优先突破 ${quality.value.weakestModule.name}`;
   return '保持当前节奏，做一次轻量巩固';
 });
@@ -324,13 +328,9 @@ const tutorDecisionTitle = computed(() => {
 const tutorDecisionDetail = computed(() => {
   if (!quality.value?.totalQuestions) return '当前样本还少，先完成一组针对性练习，让 AI 私教确认你的真实起点。';
   if ((quality.value.reviewDueCount || 0) > 0) return `${quality.value.reviewDueCount} 道错题已到复习窗口，先闭环旧问题，训练效率更高。`;
+  if (!hasReliableAbilityProfile.value) return '已有作答还不足以形成可信模块结论，接下来优先补齐高信息量样本。';
   if (quality.value.weakestModule) return `${quality.value.weakestModule.name} 当前正确率 ${quality.value.weakestModule.accuracy}%，适合先讲解再配一组专项训练。`;
   return '近阶段训练状态稳定，继续用计划保持手感，并做少量迁移训练。';
-});
-
-const coachAdvice = computed(() => {
-  const advice = quality.value?.advice || [];
-  return advice.length ? advice.slice(0, 3) : [diagnosisStatusDetail.value];
 });
 
 const diagnosisStatusLabel = computed(() => ({
@@ -340,6 +340,10 @@ const diagnosisStatusLabel = computed(() => ({
   [InitialDiagnosisStatus.Sufficient]: '已建立可信基线'
 }[candidateHome.value?.diagnosisStatus || InitialDiagnosisStatus.NotStarted]));
 
+const tutorDecisionEvidence = computed(() => hasReliableAbilityProfile.value && quality.value?.diagnosisSummary
+  ? quality.value.diagnosisSummary
+  : `${diagnosisStatusLabel.value} · ${diagnosisStatusDetail.value}`);
+
 const diagnosisStatusDetail = computed(() => ({
   [InitialDiagnosisStatus.NotStarted]: '完成少量锚定题，建立能力起点。',
   [InitialDiagnosisStatus.InProgress]: '继续完成高信息量题目，校准能力判断。',
@@ -347,14 +351,42 @@ const diagnosisStatusDetail = computed(() => ({
   [InitialDiagnosisStatus.Sufficient]: '后续训练会持续校准能力判断。'
 }[candidateHome.value?.diagnosisStatus || InitialDiagnosisStatus.NotStarted]));
 
-const actionCards = [
-  { name: '学习中心', sub: '讲义、积累和路径', icon: BookOpenIcon, color: 'study', to: '/vue/study' },
-  { name: '针对性练习', sub: '围绕薄弱点刷题', icon: Edit3Icon, color: 'practice', to: { path: '/vue/practice/session', query: { mode: 'tutor' } } },
-  { name: '错题复盘', sub: '错因、闪卡、重做', icon: BookMarkedIcon, color: 'wrong', to: '/vue/wrongbook' },
-  { name: '申论练习', sub: '材料题和批改', icon: FileTextIcon, color: 'essay', to: essayCenterLocation('tutor') },
-  { name: '阶段模考', sub: '校准真实水平', icon: MonitorIcon, color: 'mock', to: '/vue/exam' },
-  { name: '完整画像', sub: '质量追踪报告', icon: TargetIcon, color: 'report', to: '/vue/quality-dashboard' }
-];
+const primaryTutorAction = computed(() => {
+  if ((quality.value?.reviewDueCount || 0) > 0) {
+    return { name: '复盘到期错题', icon: BookMarkedIcon, to: { path: '/vue/wrongbook', query: { mode: 'review' } } };
+  }
+  if (!hasReliableAbilityProfile.value) {
+    return { name: '建立能力样本', icon: SparklesIcon, to: practiceDetailLocation({ mode: 'tutor' }) };
+  }
+  if (quality.value?.weakestModule) {
+    return {
+      name: `突破${quality.value.weakestModule.name}`,
+      icon: TargetIcon,
+      to: practiceDetailLocation({ mode: 'tutor', module: quality.value.weakestModule.name })
+    };
+  }
+  return { name: '查看今日计划', icon: SparklesIcon, to: '/vue/plan' };
+});
+
+const recommendedActions = computed(() => {
+  const actions = [];
+  if (candidateHome.value?.phase === 'sprint') {
+    actions.push({ name: '阶段模考', sub: '用整卷校准冲刺状态', icon: MonitorIcon, color: 'mock', to: '/vue/exam' });
+  } else {
+    actions.push({ name: '学习中心', sub: '先理解知识，再进入训练', icon: BookOpenIcon, color: 'study', to: '/vue/study' });
+  }
+  const essayGap = candidateHome.value?.scores.find((item) => item.subject === 'essay')?.gap;
+  if (essayGap === undefined || essayGap > 0) {
+    actions.push({ name: '申论提升', sub: '材料阅读、作答与批改', icon: FileTextIcon, color: 'essay', to: essayCenterLocation('tutor') });
+  }
+  if ((quality.value?.openWrongCount || 0) > 0 && !(quality.value?.reviewDueCount || 0)) {
+    actions.push({ name: '错题复盘', sub: '关闭尚未解决的错误', icon: BookMarkedIcon, color: 'wrong', to: '/vue/wrongbook' });
+  }
+  if (primaryTutorAction.value.name !== '查看今日计划') {
+    actions.push({ name: '今日计划', sub: '查看学习、练习与复习安排', icon: SparklesIcon, color: 'practice', to: '/vue/plan' });
+  }
+  return actions.slice(0, 3);
+});
 
 function formatScore(score: CandidateHomeScore) {
   const label = subjectLabels[score.subject] || score.subject;
@@ -372,7 +404,7 @@ function daysUntil(value: string): number | undefined {
 }
 
 function startWeakPractice(module: string) {
-  void router.push(practiceDetailLocation({ mode: 'self', module }));
+  void router.push(practiceDetailLocation({ mode: 'tutor', module }));
 }
 
 function radarPoint(index: number, total: number, scale: number): { x: number; y: number } {
@@ -411,7 +443,7 @@ function roundChart(value: number): number {
 .onboarding-card,
 .tutor-hero,
 .portrait-section,
-.coach-card {
+.baseline-card {
   border-radius: var(--radius-card);
   padding: 16px;
   background: var(--surface-card);
@@ -447,7 +479,7 @@ function roundChart(value: number): number {
 
 .onboarding-card p,
 .hero-copy p,
-.coach-card p {
+.baseline-card p {
   margin: 6px 0 0;
   color: var(--text-secondary-color);
   font-size: var(--type-size-secondary);
@@ -478,6 +510,8 @@ function roundChart(value: number): number {
   gap: 12px;
   background: var(--surface-feature-tutor);
 }
+
+.hero-evidence { grid-column:1/-1; color:var(--text-secondary-color); font-size:var(--type-size-micro); line-height:1.45; }
 
 .hero-copy {
   min-width: 0;
@@ -518,6 +552,13 @@ function roundChart(value: number): number {
   width: 16px;
   height: 16px;
 }
+
+.baseline-card { display:flex; align-items:center; gap:12px; background:var(--surface-feature-highlight-soft); }
+
+.baseline-card div { min-width: 0; flex: 1; }
+.baseline-card span { color: var(--primary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
+.baseline-card strong { display: block; margin-top: 4px; font-size: var(--type-size-body-large); }
+.baseline-card button { min-height: 38px; flex: 0 0 auto; border: 0; border-radius: var(--radius-pill); padding: 0 13px; color: var(--primary-color); background: rgba(var(--color-brand-rgb), .1); font: inherit; font-size: var(--type-size-caption); font-weight: var(--type-weight-semibold); }
 
 .section-title {
   display: flex;
@@ -774,34 +815,6 @@ function roundChart(value: number): number {
   color: var(--text-secondary-color);
 }
 
-.coach-card ul {
-  margin: 12px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  list-style: none;
-}
-
-.coach-card li {
-  position: relative;
-  padding-left: 15px;
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-secondary);
-  line-height: 1.5;
-}
-
-.coach-card li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: .65em;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--primary-color);
-}
-
 .action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -851,6 +864,8 @@ function roundChart(value: number): number {
 .action-card .wrong { color: var(--red-color); background: rgba(255,59,48,.11); }
 .action-card .essay { color: var(--orange-color); background: rgba(255,149,0,.12); }
 .action-card .mock { color: #1e8e3e; background: rgba(30,142,62,.12); }
+
+.refresh-note { margin: 0; color: var(--text-secondary-color); font-size: var(--type-size-micro); text-align: center; }
 
 .loading-skeleton {
   display: flex;

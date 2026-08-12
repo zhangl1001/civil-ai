@@ -99,6 +99,8 @@ b {
   --app-bottom-nav-offset: max(var(--app-bottom-nav-gap), calc(var(--app-safe-bottom) - 8px));
   --app-bottom-nav-height: 58px;
   --app-bottom-nav-reserved: calc(var(--app-bottom-nav-height) + var(--app-bottom-nav-offset) + 12px);
+  --app-floating-action-height: 46px;
+  --app-floating-action-reserved: calc(var(--app-floating-action-height) + 16px);
 }
 
 .type-page-title {

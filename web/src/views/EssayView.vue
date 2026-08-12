@@ -54,7 +54,10 @@
       <button class="essay-retry" type="button" @click="reload">重试</button>
     </section>
 
-    <div v-else-if="store.question" class="content-area app-page-scroll">
+    <div
+      v-else-if="store.question"
+      :class="['content-area', 'app-page-scroll', { 'with-floating-action': activeMode === 'question' }]"
+    >
       <section v-if="activeMode === 'lecture' && activeLecture" class="lecture-section">
         <div class="lecture-head">
           <span>{{ activeTopic }} · {{ activeLecture.knowledgePoint || '知识点讲义' }}</span>
@@ -143,7 +146,6 @@
     <FloatingActionButton
       v-if="store.question && activeMode === 'question' && !isAnswerSheetOpen"
       :label="store.submission.content ? '继续作答' : '开始作答'"
-      :has-status="Boolean(store.submission.content)"
       @click="openAnswerSheet"
     >
       <NotebookPenIcon />
@@ -627,6 +629,10 @@ function formatTime(time: number): string {
   flex-direction: column;
   gap: 18px;
   padding-bottom: 10px;
+}
+.content-area.with-floating-action {
+  padding-bottom: calc(var(--app-floating-action-reserved) + var(--app-safe-bottom));
+  scroll-padding-bottom: calc(var(--app-floating-action-reserved) + var(--app-safe-bottom));
 }
 .lecture-section {
   padding: 2px 0 0;
