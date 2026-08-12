@@ -13,6 +13,7 @@
       <template v-if="activeSubject === PracticeSubject.Aptitude">
       <section class="section-block">
         <div :class="['mode-intro', `mode-${activeMode}`]">
+          <PracticeSubjectMark :subject="PracticeSubject.Aptitude" />
           <div class="mode-intro-copy">
             <small>{{ modeCopy.eyebrow }}</small>
             <strong>{{ modeCopy.title }}</strong>
@@ -299,11 +300,11 @@ import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteri
 import { usePracticeModeSwipe } from './PracticeModeSwipe';
 import { practiceModeCopy } from './PracticeModePresentation';
 import PracticeSubjectSwitcher from './PracticeSubjectSwitcher.vue';
+import PracticeSubjectMark from './PracticeSubjectMark.vue';
 import EssayPracticeCenterPanel from './EssayPracticeCenterPanel.vue';
 import { PracticeSubject, type PracticeSubject as PracticeSubjectCode } from './PracticeSubject';
 
 type PracticeMode = PracticeCenterMode;
-
 const route = useRoute();
 const router = useRouter();
 const loading = ref(true);
@@ -796,10 +797,10 @@ function roleLabel(role: string) {
 .practice-center { height:100%; min-height:0; overflow:hidden; }
 .practice-scroll { display:flex; flex-direction:column; gap:20px; padding-top:12px; }
 .section-block { display:flex; flex-direction:column; gap:10px; }
-.mode-intro { overflow:hidden; border-radius:var(--radius-card); padding:15px; display:flex; flex-direction:column; gap:13px; background:var(--surface-feature-tutor); box-shadow:var(--shadow-card); }
+.mode-intro { position:relative; overflow:hidden; border-radius:var(--radius-card); padding:15px; display:flex; flex-direction:column; gap:13px; background:var(--surface-feature-tutor); box-shadow:var(--shadow-card); }
 .mode-intro.mode-self { background:var(--surface-feature-self); }
 .mode-intro.mode-true { background:linear-gradient(135deg,rgba(var(--color-brand-rgb),.1),rgba(52,199,89,.09)); }
-.mode-intro-copy { min-width:0; }
+.mode-intro-copy { min-width:0; padding-right:38px; }
 .mode-intro-copy small,.mode-intro-copy strong { display:block; }
 .mode-intro-copy small { color:var(--primary-color); font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); }
 .mode-self .mode-intro-copy small { color:var(--orange-color); }

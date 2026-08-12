@@ -1,6 +1,7 @@
 <template>
   <div class="essay-center-panel">
     <div class="mode-intro mode-essay">
+      <PracticeSubjectMark :subject="PracticeSubject.Essay" />
       <div class="mode-intro-copy">
         <small>{{ modeCopy.eyebrow }}</small>
         <strong>{{ modeCopy.title }}</strong>
@@ -107,6 +108,8 @@ import { BookOpenCheckIcon, ChevronRightIcon, FileTextIcon, LandmarkIcon, Slider
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
+import PracticeSubjectMark from './PracticeSubjectMark.vue';
+import { PracticeSubject } from './PracticeSubject';
 import type { AgentRunView } from '@/modules/agent/public';
 import {
   EssayGenerationCoordinator,
@@ -329,8 +332,8 @@ function modeLabelFor(value?: EssayPracticeMode): string { return modes.find((it
 
 <style scoped>
 .essay-center-panel { display:flex; flex-direction:column; gap:14px; }
-.mode-intro { display:flex; flex-direction:column; gap:16px; padding:18px; border-radius:var(--radius-card); background:rgba(var(--color-brand-rgb),.11); }
-.mode-intro-copy { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.mode-intro { position:relative; display:flex; flex-direction:column; gap:16px; padding:18px; border-radius:var(--radius-card); background:rgba(var(--color-brand-rgb),.11); }
+.mode-intro-copy { display:flex; flex-direction:column; gap:6px; min-width:0; padding-right:38px; }
 .mode-intro-copy small { color:var(--primary-color); font-weight:var(--type-weight-semibold); }
 .mode-intro-copy strong { font-size:var(--type-size-title); line-height:1.25; }
 .mode-intro-copy p { margin:0; color:var(--text-secondary-color); line-height:1.5; }
