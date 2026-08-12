@@ -65,7 +65,7 @@
           <MarkdownContent class="digest-body" :content="section.body" variant="compact" />
         </article>
         <button
-          v-if="dailyPlanItemId && !planItemCompleted"
+          v-if="!planItemCompleted"
           type="button"
           class="complete-digest-button"
           :disabled="isCompleting"
@@ -73,7 +73,7 @@
         >
           <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成今日积累' }}
         </button>
-        <p v-else-if="planItemCompleted" class="completion-notice"><CheckCircle2Icon />今日积累已完成，计划已更新</p>
+        <p v-else class="completion-notice"><CheckCircle2Icon />今日积累已完成</p>
       </template>
     </PullToRefresh>
 
@@ -207,6 +207,8 @@ async function loadDashboard() {
   notice.value = '';
   try {
     dashboard.value = await digestService.dashboard(tab.value, date.value);
+    planItemCompleted.value = dashboard.value.isCompleted;
+    if (dashboard.value.sections.length) await digestService.markStarted(tab.value, date.value);
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '每日积累加载失败';
   } finally {
@@ -254,11 +256,11 @@ async function generate() {
 }
 
 async function completePlanDigest() {
-  if (!dailyPlanItemId.value || isCompleting.value) return;
+  if (isCompleting.value) return;
   isCompleting.value = true;
   try {
-    await digestService.completeDailyPlanDigest({
-      dailyPlanItemId: dailyPlanItemId.value,
+    await digestService.completeDigest({
+      dailyPlanItemId: dailyPlanItemId.value || undefined,
       tab: tab.value,
       date: date.value
     });

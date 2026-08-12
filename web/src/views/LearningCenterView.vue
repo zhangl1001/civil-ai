@@ -3,24 +3,43 @@
     <PageHeader title="学习中心" meta="知识学习、每日积累与学后巩固" />
 
     <PullToRefresh class="learning-scroll" :on-refresh="loadDashboard">
+      <AppStateView v-if="!studyDashboard && isLoading" state="loading" compact title="正在更新学习建议" />
+      <AppStateView
+        v-else-if="!studyDashboard && loadError"
+        state="error"
+        compact
+        title="学习建议暂时无法读取"
+        :description="loadError"
+      >
+        <template #actions><button class="retry-button" type="button" @click="loadDashboard">重新加载</button></template>
+      </AppStateView>
+      <template v-else-if="studyDashboard">
       <section class="learning-hero">
         <div>
           <span>今日学习建议</span>
           <strong>{{ learningDecision.title }}</strong>
           <p>{{ learningDecision.detail }}</p>
+          <button
+            v-if="!studyDashboard.hasLearningEvidence"
+            type="button"
+            class="baseline-action"
+            @click="router.push('/vue/practice?mode=tutor')"
+          >
+            开始能力诊断
+          </button>
         </div>
         <BookOpenCheckIcon />
       </section>
 
-      <section class="learning-overview">
+      <section v-if="studyDashboard.hasLearningEvidence" class="learning-overview">
         <article>
-          <span>知识模块</span>
-          <strong>{{ studyDashboard?.modules.length || 0 }}</strong>
-          <em>大纲学习路径</em>
+          <span>已学考点</span>
+          <strong>{{ studyDashboard.completedPointCount }}</strong>
+          <em>{{ studyDashboard.trackedPointCount }} 个有学习记录</em>
         </article>
         <article>
           <span>待学考点</span>
-          <strong>{{ studyDashboard?.weakPoints.length || 0 }}</strong>
+          <strong>{{ pendingWeakPoints.length }}</strong>
           <em>优先理解突破</em>
         </article>
         <article>
@@ -30,11 +49,12 @@
         </article>
       </section>
 
-      <section class="section-group">
+      <section v-if="studyDashboard.hasLearningEvidence" class="section-group">
         <div class="section-title">
           <strong>需要先学透</strong>
-          <button type="button" @click="router.push('/vue/study/lecture')">全部考点</button>
+          <button type="button" @click="router.push('/vue/study/lecture')">知识体系</button>
         </div>
+        <p class="section-context">首页按模块判断能力差距，这里下钻到细分考点安排讲解。</p>
         <div v-if="weakPoints.length" class="weak-list">
           <button v-for="point in weakPoints" :key="`${point.module}-${point.name}`" type="button" @click="learn(point)">
             <span>
@@ -44,7 +64,7 @@
             <b>{{ point.proficiency }}%</b>
           </button>
         </div>
-        <AppStateView v-else compact title="暂无明确薄弱考点" description="完成练习并积累证据后，系统会把需要先学透的知识点放在这里。" />
+        <AppStateView v-else compact title="当前重点已学" description="阅读完成不等于掌握，请到刷题中心用真实作答验证；新的薄弱考点会继续补入。" />
       </section>
 
       <section class="section-group">
@@ -63,8 +83,8 @@
 
       <section class="section-group">
         <div class="section-title">
-          <strong>学后巩固</strong>
-          <span>理解后再练</span>
+          <strong>回顾与巩固</strong>
+          <span>理解、练习与节奏回看</span>
         </div>
         <div class="practice-list">
           <button v-for="item in practiceItems" :key="item.title" type="button" @click="router.push(item.to)">
@@ -77,6 +97,8 @@
           </button>
         </div>
       </section>
+      <p v-if="loadError" class="refresh-warning">刷新失败，当前仍显示上一次的学习建议。</p>
+      </template>
     </PullToRefresh>
   </div>
 </template>
@@ -104,22 +126,40 @@ import { essayCenterLocation } from '@/features/practice/EssayNavigation';
 const router = useRouter();
 const studyDashboard = ref<StudyDashboard | null>(null);
 const digestCount = ref(0);
+const digestCompleted = ref(false);
 const isLoading = ref(false);
+const loadError = ref('');
 
-const weakPoints = computed(() => (studyDashboard.value?.weakPoints || []).slice(0, 4));
-const digestDone = computed(() => digestCount.value > 0);
+const pendingWeakPoints = computed(() => (studyDashboard.value?.weakPoints || [])
+  .filter((point) => point.learningStatus !== 'completed'));
+const weakPoints = computed(() => pendingWeakPoints.value.slice(0, 4));
+const learnedWeakPoint = computed(() => (studyDashboard.value?.weakPoints || [])
+  .find((point) => point.learningStatus === 'completed'));
+const digestDone = computed(() => digestCompleted.value);
 const learningDecision = computed(() => {
+  if (!studyDashboard.value?.hasLearningEvidence) {
+    return {
+      title: '先建立可信能力基线',
+      detail: '完成一组短诊断后，系统才能区分未接触和真实薄弱，再为你安排针对性讲解。'
+    };
+  }
   const first = weakPoints.value[0];
   if (first) {
     return {
       title: `今天先理解「${first.name}」`,
-      detail: `${first.module} 当前存在能力缺口。先看概念、边界和方法，再去刷题中心完成学后练习。`
+      detail: `${first.module} 当前存在能力缺口。先看概念、边界和方法，再去刷题中心完成学后练习${digestDone.value ? '。' : '；今日积累也尚未完成。'}`
     };
   }
   if (!digestDone.value) {
     return {
       title: '完成今日积累，保持持续输入',
       detail: '补充时政热点和知识点输入，积累会作为后续讲解与训练的内容背景。'
+    };
+  }
+  if (learnedWeakPoint.value) {
+    return {
+      title: `「${learnedWeakPoint.value.name}」已学，下一步用题目验证`,
+      detail: '讲义阅读已经记录，但不会直接提高掌握度。完成一组配套练习后，系统会根据真实作答继续调整。'
     };
   }
   return {
@@ -132,7 +172,7 @@ const learningItems = [
   { title: '考点精讲', description: '按知识点学习概念、边界和方法', icon: BookOpenIcon, tone: 'green', to: '/vue/study/lecture' },
   { title: '每日积累', description: '沉淀时政热点和公考知识', icon: LandmarkIcon, tone: 'blue', to: '/vue/digest' },
   { title: '知识地图', description: '按大纲查看知识结构和掌握情况', icon: MapIcon, tone: 'purple', to: '/vue/knowledge-graph' },
-  { title: '申论学习', description: '学习材料阅读、题型方法和表达结构', icon: FileTextIcon, tone: 'orange', to: essayCenterLocation('tutor') }
+  { title: '申论中心', description: '学习材料阅读、题型方法和表达结构', icon: FileTextIcon, tone: 'orange', to: essayCenterLocation('tutor') }
 ];
 
 const practiceItems = [
@@ -144,34 +184,47 @@ const practiceItems = [
 onMounted(loadDashboard);
 
 async function loadDashboard() {
-  isLoading.value = true;
+  if (!studyDashboard.value) isLoading.value = true;
+  loadError.value = '';
   try {
     const [study, digest] = await Promise.all([
       studyService.dashboard(),
-      digestService.dashboard('news')
+      digestService.learningSummary()
     ]);
     studyDashboard.value = study;
-    digestCount.value = digest.sections.length;
+    digestCount.value = digest.contentCount;
+    digestCompleted.value = digest.isCompleted;
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : '学习中心加载失败';
   } finally {
     isLoading.value = false;
   }
 }
 
 async function learn(point: StudyPoint) {
-  await studyService.startLearning(point);
-  await router.push('/vue/study/lecture');
+  const result = await studyService.startLearning(point);
+  await router.push({
+    path: '/vue/study/lecture',
+    query: {
+      taskId: result.task.id,
+      capabilityNodeId: point.capabilityNodeId,
+      source: 'learning-center'
+    }
+  });
 }
 </script>
 
 <style scoped>
 .learning-center { height:100%; min-height:0; overflow:hidden; }
 .learning-scroll { display:flex; flex-direction:column; gap:17px; padding-top:12px; }
+.retry-button { min-height:34px; border:0; border-radius:10px; padding:0 14px; color:#fff; background:var(--primary-color); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 .learning-hero { min-height:118px; border-radius:var(--radius-card); padding:17px; display:grid; grid-template-columns:minmax(0,1fr) 38px; gap:12px; align-items:center; background:var(--surface-feature-tutor); box-shadow:var(--shadow-card); }
 .learning-hero>div { min-width:0; }
 .learning-hero span { color:var(--primary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 .learning-hero strong { display:block; margin-top:5px; font-size:var(--type-size-section-title); line-height:1.35; }
 .learning-hero p { margin:7px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-secondary); line-height:1.5; }
 .learning-hero>svg { width:34px; height:34px; color:var(--primary-color); }
+.baseline-action { min-height:34px; margin-top:11px; border:0; border-radius:11px; padding:0 14px; color:#fff; background:var(--primary-color); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 .learning-overview { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
 .learning-overview article { min-width:0; border-radius:var(--radius-card); padding:10px 8px; background:rgba(var(--color-surface-rgb),.58); text-align:center; }
 .learning-overview span,.learning-overview em { display:block; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-micro); font-style:normal; text-overflow:ellipsis; white-space:nowrap; }
@@ -180,6 +233,8 @@ async function learn(point: StudyPoint) {
 .section-title { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .section-title strong { font-size:var(--type-size-body-large); }
 .section-title span,.section-title button { border:0; padding:3px; color:var(--text-secondary-color); background:transparent; font:inherit; font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); }
+.section-context { margin:-3px 0 1px; color:var(--text-secondary-color); font-size:var(--type-size-caption); line-height:1.45; }
+.refresh-warning { margin:0; text-align:center; color:var(--text-secondary-color); font-size:var(--type-size-micro); }
 .weak-list,.practice-list { overflow:hidden; border-radius:var(--radius-card); background:rgba(var(--color-surface-rgb),.56); box-shadow:var(--shadow-card); }
 .weak-list button,.practice-list button { width:100%; min-height:62px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.055); padding:10px 12px; display:flex; align-items:center; gap:10px; color:inherit; background:transparent; text-align:left; font:inherit; }
 .weak-list button:first-child,.practice-list button:first-child { border-top:0; }

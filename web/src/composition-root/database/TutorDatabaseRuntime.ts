@@ -92,6 +92,10 @@ import type {
   ProactiveSignalRepository
 } from '@/modules/proactive/public';
 import type {
+  LearningProgressRepository,
+  TrackLearningProgress
+} from '@/modules/learning-progress/public';
+import type {
   CreateLearningThread,
   LearningThreadRepository,
   RequestStructuredPractice,
@@ -144,6 +148,8 @@ export interface TutorDatabaseRuntime {
   readonly messageCenterRepository: MessageCenterRepository;
   readonly messageCenter: MessageCenter;
   readonly proactiveSignalRepository: ProactiveSignalRepository;
+  readonly learningProgressRepository: LearningProgressRepository;
+  readonly trackLearningProgress: TrackLearningProgress;
   readonly evaluateProactiveSignals: EvaluateProactiveSignals;
   readonly deliverProactiveSignals: DeliverProactiveSignals;
   readonly masteryRepository: MasteryRepository;

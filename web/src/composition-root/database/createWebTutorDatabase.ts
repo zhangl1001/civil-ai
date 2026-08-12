@@ -80,17 +80,14 @@ import { IndexedDbMessageCenterRepository } from '@/modules/message-center/adapt
 import { MessageCenter } from '@/modules/message-center/public';
 import { IndexedDbProactiveSignalRepository } from '@/modules/proactive/adapters/IndexedDbProactiveSignalRepository';
 import { DeliverProactiveSignals, EvaluateProactiveSignals } from '@/modules/proactive/public';
+import { IndexedDbLearningProgressRepository } from '@/modules/learning-progress/adapters/IndexedDbLearningProgressRepository';
+import { TrackLearningProgress } from '@/modules/learning-progress/public';
 import { IndexedDbMasteryRepository } from '@/modules/mastery/adapters/IndexedDbMasteryRepository';
 import { createGenerationLearningContextPort } from './createGenerationLearningContextPort';
 import { CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem } from '@/modules/mastery/public';
 import { IndexedDbDailyPlanRepository } from '@/modules/planning/adapters/IndexedDbDailyPlanRepository';
 import { BuildDailyPlanProposal, CompleteDailyPlanItem, DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus } from '@/modules/planning/public';
-import {
-  CreateLearningThread,
-  StartStructuredTeaching,
-  RequestStructuredPractice,
-  TransitionLearningThread
-} from '@/modules/teaching/public';
+import { CreateLearningThread, StartStructuredTeaching, RequestStructuredPractice, TransitionLearningThread } from '@/modules/teaching/public';
 import {
   IndexedDbErrorDiagnosisRepository,
   IndexedDbLearningEvidenceRepository,
@@ -199,6 +196,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const agentToolReceiptRepository = new IndexedDbAgentToolReceiptRepository(database);
   const messageCenterRepository = new IndexedDbMessageCenterRepository(database, transactionScope);
   const proactiveSignalRepository = new IndexedDbProactiveSignalRepository(database, transactionScope);
+  const learningProgressRepository = new IndexedDbLearningProgressRepository(database, transactionScope);
+  const trackLearningProgress = new TrackLearningProgress(unitOfWork, learningProgressRepository, clock, new UuidV7IdGenerator(clock));
   const messageCenter = new MessageCenter(
     unitOfWork,
     messageCenterRepository,
@@ -521,6 +520,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     messageCenterRepository,
     messageCenter,
     proactiveSignalRepository,
+    learningProgressRepository,
+    trackLearningProgress,
     evaluateProactiveSignals,
     deliverProactiveSignals,
     masteryRepository,

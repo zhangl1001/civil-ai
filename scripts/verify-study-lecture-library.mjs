@@ -16,12 +16,16 @@ assert.match(service, /status: LearningAssetStatus\.Ready/);
 assert.match(service, /seen\.has\(asset\.businessKey\)/);
 assert.match(view, />我的讲义</);
 assert.match(view, /studyService\.listLectures\(\)/);
-assert.match(view, /query: \{ assetId \}/);
-assert.match(view, /watch\(\(\) => \[route\.query\.assetId, route\.query\.dailyPlanItemId, route\.query\.start\], load, \{ immediate: true \}\)/);
+assert.match(view, /openLecture\(lecture\.id, lecture\.capabilityNodeId\)/);
+assert.match(view, /query: \{ assetId, \.\.\.\(capabilityNodeId/);
+assert.match(view, /route\.query\.taskId/);
 assert.match(view, /studyService\.startDailyPlanLecture/);
-assert.match(view, /studyService\.completeDailyPlanLecture/);
+assert.match(view, /studyService\.markLectureStarted/);
+assert.match(view, /studyService\.completeLecture/);
+assert.match(service, /learningProgressRepository\.listByCycle/);
+assert.match(service, /trackLearningProgress\.complete/);
 assert.match(executor, /kind: LearningAssetKind\.StudyLecture/);
-assert.match(executor, /payload: \{ module, topic, content:/);
+assert.match(executor, /capabilityNodeId/);
 
 console.log('Study lecture library verification passed.');
 

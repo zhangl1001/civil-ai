@@ -121,7 +121,7 @@ const routes: RouteRecordRaw[] = [
     path: '/vue/essay',
     name: 'VueEssay',
     component: () => import('../views/EssayView.vue'),
-    meta: { level: 2, title: '申论练习', fallbackPath: '/vue/practice', requiresCandidate: true }
+    meta: { level: 2, title: '申论中心', fallbackPath: '/vue/practice', requiresCandidate: true }
   },
   {
     path: '/vue/wrongbook',

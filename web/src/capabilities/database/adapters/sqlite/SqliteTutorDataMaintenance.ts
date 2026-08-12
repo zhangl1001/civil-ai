@@ -137,6 +137,7 @@ const maintenanceStatements: readonly MaintenanceStatement[] = [
   { sql: 'DELETE FROM mastery_tracks WHERE exam_cycle_id = ?', parameters: cycleParameter },
   { sql: 'DELETE FROM ability_calibration_snapshots WHERE exam_cycle_id = ?', parameters: cycleParameter },
   { sql: 'DELETE FROM proactive_signals WHERE exam_cycle_id = ?', parameters: cycleParameter },
+  { sql: 'DELETE FROM learning_progress WHERE exam_cycle_id = ?', parameters: cycleParameter },
   { sql: 'DELETE FROM learning_assets WHERE exam_cycle_id = ?', parameters: cycleParameter },
   { sql: 'DELETE FROM tutor_agent_runs WHERE exam_cycle_id = ?', parameters: cycleParameter },
   { sql: 'DELETE FROM lectures WHERE exam_cycle_id = ?', parameters: cycleParameter },

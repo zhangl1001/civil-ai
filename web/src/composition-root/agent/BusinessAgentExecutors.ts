@@ -771,6 +771,7 @@ async function collectDailyDigestResearch(
 export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
   const topic = asString(task.payload?.topic) || task.detail || '公考考点';
   const module = asString(task.payload?.module) || '公考';
+  const capabilityNodeId = asString(task.payload?.capabilityNodeId);
   const userRequest = asString(task.payload?.prompt) || `请系统讲解公考${module}考点「${topic}」。`;
   await context.update(18, '整理考点上下文');
   const recentAssets = await context.listLearningAssets({
@@ -791,8 +792,16 @@ export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
     kind: LearningAssetKind.StudyLecture,
     businessKey: `study:${module}:${topic}`,
     title: `${module} · ${topic}`,
-    payload: { module, topic, content: normalizeMarkdownSource(result) }
+    payload: {
+      module,
+      topic,
+      content: normalizeMarkdownSource(result),
+      ...(capabilityNodeId ? { capabilityNodeId } : {})
+    }
   });
-  await context.setResult({ resultRef: saved.id, payload: { assetId: saved.id, module, topic } });
+  await context.setResult({
+    resultRef: saved.id,
+    payload: { assetId: saved.id, module, topic, ...(capabilityNodeId ? { capabilityNodeId } : {}) }
+  });
   await context.update(94, '考点精讲已生成');
 };

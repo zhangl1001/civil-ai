@@ -377,7 +377,7 @@ const recommendedActions = computed(() => {
   }
   const essayGap = candidateHome.value?.scores.find((item) => item.subject === 'essay')?.gap;
   if (essayGap === undefined || essayGap > 0) {
-    actions.push({ name: '申论提升', sub: '材料阅读、作答与批改', icon: FileTextIcon, color: 'essay', to: essayCenterLocation('tutor') });
+    actions.push({ name: '申论中心', sub: '材料阅读、作答与批改', icon: FileTextIcon, color: 'essay', to: essayCenterLocation('tutor') });
   }
   if ((quality.value?.openWrongCount || 0) > 0 && !(quality.value?.reviewDueCount || 0)) {
     actions.push({ name: '错题复盘', sub: '关闭尚未解决的错误', icon: BookMarkedIcon, color: 'wrong', to: '/vue/wrongbook' });

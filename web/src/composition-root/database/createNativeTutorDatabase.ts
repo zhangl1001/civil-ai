@@ -83,17 +83,14 @@ import { SqliteMessageCenterRepository } from '@/modules/message-center/adapters
 import { MessageCenter } from '@/modules/message-center/public';
 import { SqliteProactiveSignalRepository } from '@/modules/proactive/adapters/SqliteProactiveSignalRepository';
 import { DeliverProactiveSignals, EvaluateProactiveSignals } from '@/modules/proactive/public';
+import { SqliteLearningProgressRepository } from '@/modules/learning-progress/adapters/SqliteLearningProgressRepository';
+import { TrackLearningProgress } from '@/modules/learning-progress/public';
 import { SqliteMasteryRepository } from '@/modules/mastery/adapters/SqliteMasteryRepository';
 import { createGenerationLearningContextPort } from './createGenerationLearningContextPort';
 import { CompleteReviewQueueItem, FailReviewQueueItem, RefreshMasteryTrack, RetryReviewQueueItem, StartReviewQueueItem } from '@/modules/mastery/public';
 import { SqliteDailyPlanRepository } from '@/modules/planning/adapters/SqliteDailyPlanRepository';
 import { BuildDailyPlanProposal, CompleteDailyPlanItem, DailyPlanRebalanceReason, PersistDailyPlanProposal, RebalanceDailyPlanAfterLearning, UpdateDailyPlanItemStatus } from '@/modules/planning/public';
-import {
-  CreateLearningThread,
-  StartStructuredTeaching,
-  RequestStructuredPractice,
-  TransitionLearningThread
-} from '@/modules/teaching/public';
+import { CreateLearningThread, StartStructuredTeaching, RequestStructuredPractice, TransitionLearningThread } from '@/modules/teaching/public';
 import {
   SqliteErrorDiagnosisRepository,
   SqliteLearningEvidenceRepository,
@@ -199,6 +196,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const agentToolReceiptRepository = new SqliteAgentToolReceiptRepository(database);
   const messageCenterRepository = new SqliteMessageCenterRepository(database, transactionScope);
   const proactiveSignalRepository = new SqliteProactiveSignalRepository(database, transactionScope);
+  const learningProgressRepository = new SqliteLearningProgressRepository(database, transactionScope);
+  const trackLearningProgress = new TrackLearningProgress(unitOfWork, learningProgressRepository, clock, new UuidV7IdGenerator(clock));
   const messageCenter = new MessageCenter(
     unitOfWork,
     messageCenterRepository,
@@ -519,6 +518,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     messageCenterRepository,
     messageCenter,
     proactiveSignalRepository,
+    learningProgressRepository,
+    trackLearningProgress,
     evaluateProactiveSignals,
     deliverProactiveSignals,
     masteryRepository,

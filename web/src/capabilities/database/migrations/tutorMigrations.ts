@@ -35,6 +35,7 @@ import generationSpecAgentRunSourceSql from './034_generation_spec_agent_run_sou
 import adaptiveDailyPlanningSql from './035_adaptive_daily_planning.sql?raw';
 import learningDataMaintenanceSql from './036_learning_data_maintenance.sql?raw';
 import learningAssetPurposeSql from './037_learning_asset_purpose.sql?raw';
+import learningProgressSql from './038_learning_progress.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -259,5 +260,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'learning_asset_purpose',
     checksum: 'sha256:f0f196b17c06cdcb54e998e015be5ba2f173700e00eb4a36996898a75318a319',
     sql: learningAssetPurposeSql
+  },
+  {
+    version: 38,
+    name: 'learning_progress',
+    checksum: 'sha256:3a90bf25e5fab7270e24fd50a802be8297ea8e35bd6d156991ee0afe4ca70000',
+    sql: learningProgressSql
   }
 ];
