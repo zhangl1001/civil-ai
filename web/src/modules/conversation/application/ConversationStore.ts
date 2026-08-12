@@ -82,6 +82,47 @@ export class ConversationStore {
     return sessions.length;
   }
 
+  async replaceProjectConversations(
+    projectId: string,
+    sessions: readonly ConversationSession[],
+    messages: readonly ConversationMessage[]
+  ): Promise<number> {
+    if (sessions.some((session) => session.projectId !== projectId)) {
+      throw new Error('Conversation session belongs to another project');
+    }
+    const incomingSessionIds = new Set(sessions.map((session) => session.id));
+    if (messages.some((message) => !incomingSessionIds.has(message.sessionId))) {
+      throw new Error('Conversation message references a missing session');
+    }
+
+    const previousSessions = await this.sessionLog.list(projectId);
+    const previousMessages = (await Promise.all(
+      previousSessions.map((session) => this.messageLog.list(session.id))
+    )).flat();
+    const touchedSessionIds = new Set([
+      ...previousSessions.map((session) => session.id),
+      ...sessions.map((session) => session.id)
+    ]);
+
+    try {
+      await this.replaceLogs(projectId, touchedSessionIds, sessions, messages);
+    } catch (error) {
+      await this.replaceLogs(projectId, touchedSessionIds, previousSessions, previousMessages)
+        .catch((rollbackError) => {
+          throw new AggregateError(
+            [error, rollbackError],
+            'Conversation import failed and rollback was incomplete'
+          );
+        });
+      throw error;
+    }
+
+    await Promise.allSettled(
+      previousSessions.map((session) => this.memories.forgetSession(session.id))
+    );
+    return sessions.length + messages.length;
+  }
+
   listMessages(sessionId: string): Promise<readonly ConversationMessage[]> {
     return this.messageLog.list(sessionId);
   }
@@ -136,5 +177,19 @@ export class ConversationStore {
 
   async restoreSession(session: ConversationSession): Promise<void> {
     await this.sessionLog.put(session);
+  }
+
+  private async replaceLogs(
+    projectId: string,
+    touchedSessionIds: ReadonlySet<string>,
+    sessions: readonly ConversationSession[],
+    messages: readonly ConversationMessage[]
+  ): Promise<void> {
+    for (const sessionId of touchedSessionIds) await this.messageLog.deleteSession(sessionId);
+    for (const session of await this.sessionLog.list(projectId)) {
+      await this.sessionLog.delete(session.id);
+    }
+    for (const session of sessions) await this.sessionLog.put(session);
+    for (const message of messages) await this.messageLog.replace(message);
   }
 }

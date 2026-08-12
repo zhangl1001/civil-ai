@@ -15,6 +15,7 @@
     "check:design": "node scripts/check-design-system.js",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:database-schema": "bash scripts/verify-tutor-database.sh",
+    "check:data-maintenance": "node scripts/verify-data-maintenance.mjs",
     "check:metadata": "node scripts/verify-curriculum-fixtures.mjs",
     "check:onboarding": "node scripts/verify-candidate-onboarding.mjs",
     "check:content-schema": "node scripts/verify-content-schema.mjs",

@@ -1,5 +1,5 @@
 import { initializeTutorRuntime, type TutorDatabaseRuntime } from '@/composition-root/public';
-import { TransactionWorkload } from '@/capabilities/database/public';
+import { TransactionWorkload, type TransactionContext } from '@/capabilities/database/public';
 import type { LearningThreadId } from '@/kernel/public';
 import type { CandidateCycleBundle } from '@/modules/candidate/public';
 import type { CommittedQuestionSetBundle, LearningAssetRecord } from '@/modules/content/public';
@@ -100,71 +100,36 @@ export class DataManagementService {
     if (current && current.examCycle.id !== backup.candidate.examCycle.id) {
       throw new Error('备份属于另一个备考周期；当前版本不合并不同考生或考试周期');
     }
+    const previous = current ? await this.exportActiveProject() : undefined;
     let count = 0;
-    if (current) count += await runtime.conversationStore.deleteProjectConversations(current.project.id);
-    await runtime.unitOfWork.run(async (context) => {
-      if (current) {
-        count += await runtime.dataMaintenance.clearLearningData(current.examCycle.id, context);
-      } else {
-        await runtime.candidateRepository.createCycleBundle(backup.candidate, context);
-        count += 1;
+    let learningCommitted = false;
+    try {
+      count += await restoreLearningSnapshot(runtime, backup, Boolean(current));
+      learningCommitted = true;
+      count += await runtime.conversationStore.replaceProjectConversations(
+        backup.project.id,
+        backup.conversations.sessions,
+        backup.conversations.messages
+      );
+      return count;
+    } catch (error) {
+      if (learningCommitted && current && previous) {
+        try {
+          await restoreLearningSnapshot(runtime, previous, true);
+          await runtime.conversationStore.replaceProjectConversations(
+            previous.project.id,
+            previous.conversations.sessions,
+            previous.conversations.messages
+          );
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            '数据导入失败，且自动恢复未能完整完成；请保留备份并重新启动应用'
+          );
+        }
       }
-      for (const aggregate of backup.learning.threads) {
-        if (!aggregate.events.length) continue;
-        await runtime.learningThreadRepository.restore(aggregate, context);
-        count += 1;
-      }
-      for (const bundle of backup.learning.questionSets) {
-        await runtime.contentRepository.commitQuestionSet(bundle, context);
-        count += bundle.questions.length + 1;
-      }
-      for (const facts of backup.learning.sessions) {
-        await runtime.learningSessionRepository.commitObjectiveSession(facts, context);
-        count += facts.attempts.length + 1;
-      }
-      if (backup.learning.diagnoses.length) {
-        await runtime.errorDiagnosisRepository.append(backup.learning.diagnoses, context);
-        count += backup.learning.diagnoses.length;
-      }
-      if (backup.learning.evidence.length) {
-        await runtime.learningEvidenceRepository.append(
-          backup.learning.evidence,
-          backup.learning.evidence.map((item) => ({
-            evidenceId: item.id,
-            validityStatus: 'valid',
-            updatedAt: item.occurredAt,
-            version: 1
-          })),
-          context
-        );
-        count += backup.learning.evidence.length;
-      }
-      for (const track of backup.learning.masteryTracks) {
-        await runtime.masteryRepository.upsertTrack(track, undefined, context);
-        count += 1;
-      }
-      for (const item of backup.learning.reviewQueue) {
-        await runtime.masteryRepository.scheduleReview(item, context);
-        count += 1;
-      }
-      for (const plan of backup.learning.dailyPlans) {
-        await runtime.dailyPlanRepository.replaceCurrent(plan, undefined, context);
-        count += plan.items.length + 1;
-      }
-      for (const asset of backup.learning.assets) {
-        await runtime.learningAssetRepository.save(asset, context);
-        count += 1;
-      }
-    }, { workload: TransactionWorkload.Maintenance });
-    for (const session of backup.conversations.sessions) {
-      await runtime.conversationStore.restoreSession(session);
-      count += 1;
+      throw error;
     }
-    for (const message of backup.conversations.messages) {
-      await runtime.conversationStore.restoreMessage(message);
-      count += 1;
-    }
-    return count;
   }
 
   async getSummary(): Promise<DataSummary> {
@@ -191,6 +156,79 @@ export class DataManagementService {
     if (!candidate) return 0;
     return runtime.dataMaintenance.clearLearningData(candidate.examCycle.id);
   }
+}
+
+async function restoreLearningSnapshot(
+  runtime: TutorDatabaseRuntime,
+  backup: DataBackup,
+  replaceExisting: boolean
+): Promise<number> {
+  return runtime.unitOfWork.run(async (context) => {
+    let count = 0;
+    if (replaceExisting) {
+      count += await runtime.dataMaintenance.clearLearningData(backup.candidate.examCycle.id, context);
+    } else {
+      await runtime.candidateRepository.createCycleBundle(backup.candidate, context);
+      count += 1;
+    }
+    count += await restoreLearningRecords(runtime, backup, context);
+    return count;
+  }, { workload: TransactionWorkload.Maintenance });
+}
+
+async function restoreLearningRecords(
+  runtime: TutorDatabaseRuntime,
+  backup: DataBackup,
+  context: TransactionContext
+): Promise<number> {
+  let count = 0;
+  for (const aggregate of backup.learning.threads) {
+    if (!aggregate.events.length) continue;
+    await runtime.learningThreadRepository.restore(aggregate, context);
+    count += 1;
+  }
+  for (const bundle of backup.learning.questionSets) {
+    await runtime.contentRepository.commitQuestionSet(bundle, context);
+    count += bundle.questions.length + 1;
+  }
+  for (const facts of backup.learning.sessions) {
+    await runtime.learningSessionRepository.commitObjectiveSession(facts, context);
+    count += facts.attempts.length + 1;
+  }
+  if (backup.learning.diagnoses.length) {
+    await runtime.errorDiagnosisRepository.append(backup.learning.diagnoses, context);
+    count += backup.learning.diagnoses.length;
+  }
+  if (backup.learning.evidence.length) {
+    await runtime.learningEvidenceRepository.append(
+      backup.learning.evidence,
+      backup.learning.evidence.map((item) => ({
+        evidenceId: item.id,
+        validityStatus: 'valid',
+        updatedAt: item.occurredAt,
+        version: 1
+      })),
+      context
+    );
+    count += backup.learning.evidence.length;
+  }
+  for (const track of backup.learning.masteryTracks) {
+    await runtime.masteryRepository.upsertTrack(track, undefined, context);
+    count += 1;
+  }
+  for (const item of backup.learning.reviewQueue) {
+    await runtime.masteryRepository.scheduleReview(item, context);
+    count += 1;
+  }
+  for (const plan of backup.learning.dailyPlans) {
+    await runtime.dailyPlanRepository.replaceCurrent(plan, undefined, context);
+    count += plan.items.length + 1;
+  }
+  for (const asset of backup.learning.assets) {
+    await runtime.learningAssetRepository.save(asset, context);
+    count += 1;
+  }
+  return count;
 }
 
 async function collectThreads(

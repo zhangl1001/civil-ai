@@ -508,6 +508,9 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
     const essayType = asString(task.payload?.essayType) === 'long' ? 'long' : 'short';
     const essayQuestionCount = Math.max(1, Math.min(3, Number(task.payload?.essayQuestionCount || 1)));
     const date = asString(task.payload?.date) || new Date().toISOString().slice(0, 10);
+    const entryMode = asString(task.payload?.entryMode) === 'tutor' || asString(task.payload?.entryMode) === 'true'
+      ? asString(task.payload?.entryMode)
+      : 'self';
     await context.update(20, '生成申论材料');
     const recentEssayAssets = await context.listLearningAssets({
       kinds: [LearningAssetKind.EssayQuestion],
@@ -535,14 +538,14 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
       title: question.title,
       payload: {
         question,
-        essayContext: { date, topic: essayTopic, type: essayType }
+        essayContext: { date, topic: essayTopic, type: essayType, entryMode }
       }
     });
     await context.setResult({
       resultRef: saved.id,
       payload: {
         assetId: saved.id,
-        essayContext: { date, topic: essayTopic, type: essayType }
+        essayContext: { date, topic: essayTopic, type: essayType, entryMode }
       }
     });
     await context.update(94, '申论模考题已写入');

@@ -9,6 +9,7 @@ export { getTutorRuntime, initializeTutorRuntime } from './TutorRuntimeProvider'
 export { createConfiguredProviderGateway } from './ai/createConfiguredProviderGateway';
 export { agentWorkerCoordinator } from './agent/AgentWorkerCoordinator';
 export { enqueueBusinessAgentTask } from './agent/enqueueBusinessAgentTask';
+export { EssayGenerationCoordinator, type EssayContext } from './essay/EssayGenerationCoordinator';
 export {
   importAgentAttachment,
   importAgentAttachments,

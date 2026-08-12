@@ -53,7 +53,18 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
     }
     const diagnosisIds = idsMatching(rowsByStore, TutorIndexedDbStore.ErrorDiagnoses, examCycleId, 'id');
     const workflowIds = idsMatching(rowsByStore, TutorIndexedDbStore.GenerationAggregates, examCycleId, 'workflowId');
+    const questionSetIds = idsMatching(
+      rowsByStore,
+      TutorIndexedDbStore.ContentQuestionSetBundles,
+      examCycleId,
+      'questionSetId'
+    );
     const agentRunIds = idsMatching(rowsByStore, TutorIndexedDbStore.AgentRunAggregates, examCycleId, 'runId');
+    const learningThreadIds = idsMatching(rowsByStore, TutorIndexedDbStore.LearningThreadAggregates, examCycleId, 'threadId');
+    const learningSessionIds = idsMatching(rowsByStore, TutorIndexedDbStore.LearningSessionFacts, examCycleId, 'sessionId');
+    const learningEvidenceIds = idsMatching(rowsByStore, TutorIndexedDbStore.LearningEvidenceAggregates, examCycleId, 'evidenceId');
+    const dailyPlanIds = ownedKeysMatching(rowsByStore, TutorIndexedDbStore.DailyPlanAggregates, examCycleId);
+    const reviewQueueIds = ownedKeysMatching(rowsByStore, TutorIndexedDbStore.ReviewQueue, examCycleId);
     const draftIds = idsMatching(rowsByStore, TutorIndexedDbStore.QuestionImportDrafts, examCycleId, 'id');
     const questionIds = questionIdsMatching(rowsByStore, examCycleId);
     const linkedRows = new Map<TutorIndexedDbStore, readonly Row[]>();
@@ -101,8 +112,28 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
     appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionLineages, (row) => (
       questionIds.has(text(row.questionId)) || questionIds.has(text(row.parentQuestionId))
     ));
-    await appendAllDeletes(this.database, operations, TutorIndexedDbStore.DomainOutbox);
-    await appendAllDeletes(this.database, operations, TutorIndexedDbStore.SystemMessages);
+    await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.DomainOutbox, (row) => {
+      const aggregateId = text(row.aggregateId);
+      const aggregateType = text(row.aggregateType);
+      if (aggregateType === 'learning_thread') return learningThreadIds.has(aggregateId);
+      if (aggregateType === 'tutor_agent_run') return agentRunIds.has(aggregateId);
+      if (aggregateType === 'error_diagnosis') return diagnosisIds.has(aggregateId);
+      if (aggregateType === 'learning_session') return learningSessionIds.has(aggregateId);
+      if (aggregateType === 'learning_evidence') return learningEvidenceIds.has(aggregateId);
+      if (aggregateType === 'generation_workflow') return workflowIds.has(aggregateId);
+      if (aggregateType === 'question_set') return questionSetIds.has(aggregateId);
+      return false;
+    });
+    await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.SystemMessages, (row) => {
+      const sourceId = text(row.sourceId);
+      const sourceType = text(row.sourceType);
+      if (sourceType === 'exam_cycle') return sourceId === examCycleId;
+      if (sourceType === 'agent_run') return agentRunIds.has(sourceId);
+      if (sourceType === 'daily_plan') return dailyPlanIds.has(sourceId);
+      if (sourceType === 'review_queue') return reviewQueueIds.has(sourceId);
+      if (sourceType === 'learning_session') return learningSessionIds.has(sourceId);
+      return false;
+    });
     if (context) {
       operations.forEach((operation) => this.scope.stage(context, operation));
     } else {
@@ -161,18 +192,6 @@ function appendMatchingDeletes(
   });
 }
 
-async function appendAllDeletes(
-  database: TutorIndexedDb,
-  operations: IndexedDbWriteOperation[],
-  store: TutorIndexedDbStore
-): Promise<void> {
-  const rows = await database.getAll<Row>(store);
-  rows.forEach((row) => {
-    const key = keyOf(store, row);
-    if (key) operations.push({ type: 'delete', store, key });
-  });
-}
-
 function idsMatching(
   rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
   store: TutorIndexedDbStore,
@@ -183,6 +202,17 @@ function idsMatching(
     .filter((row) => matchesCycle(row, examCycleId))
     .map((row) => text(row[key]))
     .filter(Boolean));
+}
+
+function ownedKeysMatching(
+  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
+  store: TutorIndexedDbStore,
+  examCycleId: string
+): ReadonlySet<string> {
+  return new Set((rowsByStore.get(store) || [])
+    .filter((row) => matchesCycle(row, examCycleId))
+    .map((row) => keyOf(store, row))
+    .filter((key): key is string => typeof key === 'string' && Boolean(key)));
 }
 
 async function appendLinkedDeletes(

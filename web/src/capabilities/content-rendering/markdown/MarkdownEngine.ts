@@ -1,7 +1,12 @@
 import { Marked, Renderer, type Tokens } from 'marked';
 import markedKatex from 'marked-katex-extension';
 import { HtmlPolicy } from '../security/HtmlPolicy';
-import { LinkKind, resolveLink } from '../security/UrlPolicy';
+import {
+  ImageSourceKind,
+  LinkKind,
+  resolveImageSource,
+  resolveLink
+} from '../security/UrlPolicy';
 
 export interface RenderedMarkdown {
   readonly html: string;
@@ -15,38 +20,16 @@ export interface MarkdownRenderWarning {
   readonly message: string;
 }
 
-export const MARKDOWN_RENDERER_VERSION = 'markdown-v3-katex';
+export const MARKDOWN_RENDERER_VERSION = 'markdown-v4-katex-safe-resources';
 
 export class MarkdownEngine {
   private readonly marked: Marked;
   private readonly fallbackMarked: Marked;
 
   constructor(private readonly htmlPolicy = new HtmlPolicy()) {
-    const renderer = new Renderer();
-    const renderTable = renderer.table.bind(renderer);
-    renderer.table = (token: Tokens.Table): string => (
-      `<div class="markdown-table-scroll">${renderTable(token)}</div>`
-    );
-    renderer.link = function link(token: Tokens.Link): string {
-      const label = this.parser.parseInline(token.tokens);
-      const resolved = resolveLink(token.href);
-      if (resolved.kind === LinkKind.Blocked) return label;
-      const title = token.title ? ` title="${escapeAttribute(token.title)}"` : '';
-      const external = resolved.kind === LinkKind.External
-        ? ' target="_blank" rel="noopener noreferrer"'
-        : '';
-      return `<a href="${escapeAttribute(resolved.href)}"${title}${external}>${label}</a>`;
-    };
-    renderer.html = (token: Tokens.HTML): string => escapeHtml(token.text);
-    this.marked = new Marked({
-      async: false,
-      breaks: true,
-      gfm: true,
-      renderer
-    });
+    this.marked = createMarkedRenderer();
     this.marked.use(mathExtension());
-    this.fallbackMarked = new Marked({ async: false, breaks: true, gfm: true });
-    this.fallbackMarked.use(mathExtension());
+    this.fallbackMarked = createMarkedRenderer();
   }
 
   render(source: string): RenderedMarkdown {
@@ -67,12 +50,54 @@ export class MarkdownEngine {
       }
     }
     return {
-      html: this.htmlPolicy.sanitize(rendered),
+      html: restoreSafeImageSources(this.htmlPolicy.sanitize(rendered)),
       warnings,
       contentHash: hashMarkdown(source),
       rendererVersion: MARKDOWN_RENDERER_VERSION
     };
   }
+}
+
+function createMarkedRenderer(): Marked {
+  const renderer = new Renderer();
+  const renderTable = renderer.table.bind(renderer);
+  renderer.table = (token: Tokens.Table): string => (
+    `<div class="markdown-table-scroll">${renderTable(token)}</div>`
+  );
+  renderer.link = function link(token: Tokens.Link): string {
+    const label = this.parser.parseInline(token.tokens);
+    const resolved = resolveLink(token.href);
+    if (resolved.kind === LinkKind.Blocked) return label;
+    const title = token.title ? ` title="${escapeAttribute(token.title)}"` : '';
+    const external = resolved.kind === LinkKind.External
+      ? ' target="_blank" rel="noopener noreferrer"'
+      : '';
+    return `<a href="${escapeAttribute(resolved.href)}"${title}${external}>${label}</a>`;
+  };
+  renderer.image = (token: Tokens.Image): string => {
+    const resolved = resolveImageSource(token.href);
+    const alt = escapeAttribute(token.text);
+    const title = token.title ? ` title="${escapeAttribute(token.title)}"` : '';
+    if (resolved.kind === ImageSourceKind.Local || resolved.kind === ImageSourceKind.Inline) {
+      return `<img data-app-image-src="${escapeAttribute(resolved.src)}" alt="${alt}" loading="lazy" decoding="async"${title}>`;
+    }
+    if (resolved.kind === ImageSourceKind.Remote) {
+      const label = escapeHtml(token.text || '查看外部图片');
+      return `<a href="${escapeAttribute(resolved.src)}" target="_blank" rel="noopener noreferrer"${title}>${label}</a>`;
+    }
+    return token.text ? `<span>${escapeHtml(token.text)}</span>` : '';
+  };
+  renderer.html = (token: Tokens.HTML): string => escapeHtml(token.text);
+  return new Marked({
+    async: false,
+    breaks: true,
+    gfm: true,
+    renderer
+  });
+}
+
+function restoreSafeImageSources(html: string): string {
+  return html.replace(/\sdata-app-image-src="([^"]+)"/g, ' src="$1"');
 }
 
 /**

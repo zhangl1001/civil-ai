@@ -168,6 +168,15 @@ function actionParamsForInput(input: GenerationTaskInput): JsonObject {
     ...(optionalText(input.payload?.reviewQueueItemId) ? { reviewQueueItemId: optionalText(input.payload?.reviewQueueItemId)! } : {})
   };
   if (input.intent === 'trueQuestionResearch') return { mode: 'true', ...linkage };
+  if (input.intent === 'mock' && input.payload?.subject === '申论') {
+    return {
+      ...linkage,
+      mode: optionalText(input.payload?.entryMode) || 'self',
+      topic: optionalText(input.payload?.essayTopic) || '申论',
+      date: optionalText(input.payload?.date) || '',
+      questionCount: Number(input.payload?.essayQuestionCount || 1)
+    };
+  }
   return linkage;
 }
 

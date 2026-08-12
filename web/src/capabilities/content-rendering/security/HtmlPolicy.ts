@@ -15,11 +15,11 @@ const ALLOWED_TAGS = [
 ] as const;
 
 const ALLOWED_ATTRIBUTES = [
-  'href', 'target', 'rel', 'class', 'src', 'alt', 'title', 'width', 'height',
+  'href', 'target', 'rel', 'class', 'alt', 'title', 'width', 'height',
   'loading', 'decoding', 'viewBox', 'preserveAspectRatio', 'xmlns', 'id', 'role',
   'aria-label', 'aria-hidden', 'style', 'type', 'checked', 'disabled', 'open', 'start', 'colspan',
   'rowspan', 'scope', 'align', 'fill', 'fill-opacity', 'stroke', 'stroke-opacity',
-  'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray',
+  'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'data-app-image-src',
   'stroke-dashoffset', 'opacity', 'vector-effect', 'cx', 'cy', 'r', 'rx', 'ry',
   'x', 'y', 'x1', 'y1', 'x2', 'y2', 'points', 'd', 'transform', 'font-size',
   'text-anchor', 'dominant-baseline', 'offset', 'stop-color', 'stop-opacity',
@@ -35,6 +35,17 @@ export class HtmlPolicy {
       USE_PROFILES: { html: true, svg: true, mathMl: true },
       ALLOWED_TAGS: [...ALLOWED_TAGS],
       ALLOWED_ATTR: [...ALLOWED_ATTRIBUTES],
+      ALLOW_UNKNOWN_PROTOCOLS: false
+    });
+  }
+
+  sanitizeSvg(svg: string): string {
+    return DOMPurify.sanitize(svg, {
+      USE_PROFILES: { svg: true },
+      ALLOWED_TAGS: [...ALLOWED_TAGS],
+      ALLOWED_ATTR: [...ALLOWED_ATTRIBUTES],
+      FORBID_TAGS: ['a', 'image', 'use'],
+      FORBID_ATTR: ['href', 'src', 'style'],
       ALLOW_UNKNOWN_PROTOCOLS: false
     });
   }

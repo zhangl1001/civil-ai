@@ -369,7 +369,7 @@ const sheetStyle = computed(() => {
   };
 });
 const fabStyle = computed(() => ({
-  right: '16px',
+  left: `${clampFabPosition(fabPosition.value).left}px`,
   top: `${clampFabPosition(fabPosition.value).top}px`
 }));
 
@@ -836,7 +836,7 @@ function dragFab(event: PointerEvent) {
   const dy = event.clientY - fabStart.value.y;
   if (Math.abs(dx) + Math.abs(dy) > 5) fabMoved.value = true;
   fabPosition.value = clampFabPosition({
-    left: fabStart.value.left,
+    left: fabStart.value.left + dx,
     top: fabStart.value.top + dy
   });
 }
@@ -855,9 +855,12 @@ function clampFabPosition(position: { left: number; top: number }) {
   const safeBottom = 12 + (Number.isFinite(routeBottomReserve) ? Math.max(0, routeBottomReserve) : 0);
   const width = 58;
   const height = 52;
+  const minLeft = 10;
+  const maxLeft = Math.max(minLeft, window.innerWidth - width - 16);
+  const maxTop = Math.max(safeTop, window.innerHeight - height - safeBottom);
   return {
-    left: Math.max(10, window.innerWidth - width - 16),
-    top: Math.max(safeTop, Math.min(window.innerHeight - height - safeBottom, position.top))
+    left: Math.min(maxLeft, Math.max(minLeft, position.left)),
+    top: Math.min(maxTop, Math.max(safeTop, position.top))
   };
 }
 </script>

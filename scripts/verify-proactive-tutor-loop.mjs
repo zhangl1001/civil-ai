@@ -21,7 +21,10 @@ try {
   assert(agent.tutorToolCatalog.some((tool) => tool.name === 'tutor.read_daily_context'));
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('lecture')).path, '/vue/study/lecture');
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('diagnosis')).path, '/vue/diagnosis');
-  assert.equal(planNavigation.dailyPlanItemLocation(planItem('essay')).path, '/vue/essay');
+  const essayLocation = planNavigation.dailyPlanItemLocation(planItem('essay'));
+  assert.equal(essayLocation.path, '/vue/practice');
+  assert.equal(essayLocation.query.subject, 'essay');
+  assert.equal(essayLocation.query.mode, 'tutor');
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('mock')).path, '/vue/exam');
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('digest')).path, '/vue/digest');
   const practiceLocation = planNavigation.dailyPlanItemLocation(planItem('review'));

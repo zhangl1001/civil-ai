@@ -1,4 +1,5 @@
 import type { AgentRunId, InstantMs } from '@/kernel/public';
+import type { AgentRunLeaseToken } from './AgentRunRepository';
 
 export const AgentToolReceiptStatus = {
   Prepared: 'prepared',
@@ -32,5 +33,14 @@ export interface AgentToolReceipt {
 
 export interface AgentToolReceiptRepository {
   claim(receipt: AgentToolReceipt): Promise<AgentToolReceipt>;
-  replace(receipt: AgentToolReceipt, expectedVersion: number): Promise<void>;
+  replace(
+    receipt: AgentToolReceipt,
+    expectedVersion: number,
+    guard?: AgentToolReceiptMutationGuard
+  ): Promise<void>;
+}
+
+export interface AgentToolReceiptMutationGuard {
+  readonly leaseToken: AgentRunLeaseToken;
+  readonly now: InstantMs;
 }

@@ -511,6 +511,49 @@ try {
     'a crash-left running receipt must enter unknown before idempotent recovery'
   );
 
+  let leaseChecks = 0;
+  const fencedReceiptValues = new Map();
+  const fencedExecutor = new agent.DurableAgentToolExecutor({
+    async execute() {
+      return { content: 'stale-result', resultRef: 'QuestionSetId:stale' };
+    }
+  }, {
+    async claim(receipt) {
+      fencedReceiptValues.set(`${receipt.agentRunId}:${receipt.toolCallId}`, receipt);
+      return receipt;
+    },
+    async replace(receipt, expectedVersion, guard) {
+      if (guard && leaseChecks >= 3) {
+        throw new Error('Agent tool receipt lease is no longer active');
+      }
+      const key = `${receipt.agentRunId}:${receipt.toolCallId}`;
+      assert.equal(fencedReceiptValues.get(key)?.version, expectedVersion);
+      fencedReceiptValues.set(key, receipt);
+    }
+  }, clock, undefined, {
+    async hasActiveLease() {
+      leaseChecks += 1;
+      return leaseChecks < 3;
+    }
+  });
+  await assert.rejects(
+    () => fencedExecutor.execute(
+      writeDefinition,
+      { id: 'tool-call:fenced', name: writeDefinition.name, arguments: { count: 5 } },
+      {
+        agentRunId: 'run:fenced',
+        leaseToken: { agentRunId: 'run:fenced', workerId: 'worker:old', leaseEpoch: 1 }
+      }
+    ),
+    /lease is no longer active/,
+    'a write Tool result must not commit after its Worker loses the lease'
+  );
+  assert.equal(
+    fencedReceiptValues.get('run:fenced:tool-call:fenced')?.status,
+    agent.AgentToolReceiptStatus.Running,
+    'a stale Worker must leave the receipt recoverable instead of claiming success'
+  );
+
   let agentTurn = 0;
   let activeReadTools = 0;
   let maxActiveReadTools = 0;
