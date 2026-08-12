@@ -117,6 +117,9 @@
       <EssayPracticeCenterPanel
         v-else
         v-model="activeMode"
+        :daily-plan-item-id="queryText(route.query.dailyPlanItemId)"
+        :capability-node-id="queryText(route.query.capabilityNodeId)"
+        :auto-start="route.query.mode === 'tutor' && Boolean(route.query.start)"
       />
     </PullToRefresh>
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
@@ -416,7 +419,11 @@ const trueQuestionFilterSummary = computed(() => {
 onMounted(async () => {
   await load();
   await loadResearchDraftFromRoute();
-  if (route.query.mode === 'tutor' && route.query.start) await startTutorPractice();
+  if (
+    activeSubject.value === PracticeSubject.Aptitude
+    && route.query.mode === 'tutor'
+    && route.query.start
+  ) await startTutorPractice();
   pollTimer = window.setInterval(() => void refreshTasks(), 1200);
 });
 
@@ -530,6 +537,10 @@ async function startTutorPractice() {
   } finally {
     launching.value = false;
   }
+}
+
+function queryText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 async function generateCustom() {

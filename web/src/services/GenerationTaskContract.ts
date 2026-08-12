@@ -31,9 +31,11 @@ export function generationTaskScope(projectId: string, input: GenerationTaskInpu
 
 export function generationTaskActionParams(input: GenerationTaskInput): JsonObject {
   const linkage = {
+    ...(text(input.payload?.dailyPlanId) ? { dailyPlanId: text(input.payload?.dailyPlanId)! } : {}),
     ...(text(input.payload?.dailyPlanItemId) ? { dailyPlanItemId: text(input.payload?.dailyPlanItemId)! } : {}),
     ...(text(input.payload?.capabilityNodeId) ? { capabilityNodeId: text(input.payload?.capabilityNodeId)! } : {}),
-    ...(text(input.payload?.reviewQueueItemId) ? { reviewQueueItemId: text(input.payload?.reviewQueueItemId)! } : {})
+    ...(text(input.payload?.reviewQueueItemId) ? { reviewQueueItemId: text(input.payload?.reviewQueueItemId)! } : {}),
+    ...(text(input.payload?.assessmentRole) ? { assessmentRole: text(input.payload?.assessmentRole)! } : {})
   };
   if (input.intent === 'trueQuestionResearch') return { mode: 'true', ...linkage };
   if (input.intent === 'essayGrade') {

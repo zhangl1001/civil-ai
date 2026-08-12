@@ -13,8 +13,12 @@ import {
 export class EssayGenerationCoordinator {
   constructor(private readonly runtime: TutorDatabaseRuntime) {}
 
-  async start(context: EssayGenerationContext, questionCount: number): Promise<AgentRunView> {
-    const result = await essayFlowService.enqueueQuestionGeneration(context, { questionCount });
+  async start(
+    context: EssayGenerationContext,
+    questionCount: number,
+    options: { readonly title?: string } = {}
+  ): Promise<AgentRunView> {
+    const result = await essayFlowService.enqueueQuestionGeneration(context, { questionCount, title: options.title });
     return result.task;
   }
 

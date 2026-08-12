@@ -15,6 +15,11 @@ export interface EssayGenerationContext {
   type: 'short' | 'long';
   entryMode?: EssayEntryMode;
   purpose?: EssayQuestionSetPurpose;
+  capabilityNodeId?: string;
+  dailyPlanId?: string;
+  dailyPlanItemId?: string;
+  reviewQueueItemId?: string;
+  assessmentRole?: string;
 }
 
 export interface EssayContext extends EssayGenerationContext {
@@ -106,7 +111,12 @@ export class EssayFlowService {
         essayType: context.type,
         entryMode,
         purpose,
-        essayQuestionCount: count
+        essayQuestionCount: count,
+        ...(context.capabilityNodeId ? { capabilityNodeId: context.capabilityNodeId } : {}),
+        ...(context.dailyPlanId ? { dailyPlanId: context.dailyPlanId } : {}),
+        ...(context.dailyPlanItemId ? { dailyPlanItemId: context.dailyPlanItemId } : {}),
+        ...(context.reviewQueueItemId ? { reviewQueueItemId: context.reviewQueueItemId } : {}),
+        ...(context.assessmentRole ? { assessmentRole: context.assessmentRole } : {})
       }
     });
   }

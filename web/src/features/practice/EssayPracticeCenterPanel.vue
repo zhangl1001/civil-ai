@@ -146,13 +146,19 @@ import {
   type EssayGenerationContext
 } from '@/composition-root/public';
 import { EssayPracticeCenterFeature, type EssayPracticeMode, type EssayPracticeSet } from './EssayPracticeCenterFeature';
+import { EssayTutorPlanFeature, type EssayTutorPlanPrescription } from './EssayTutorPlanFeature';
 import { essayQuestionSetLocation } from './EssayNavigation';
 import { useTrueQuestionImport } from './useTrueQuestionImport';
 import { useTrueQuestionCapture } from './useTrueQuestionCapture';
 import { DOCUMENT_FILE_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
 
 type Mode = EssayPracticeMode;
-const props = defineProps<{ modelValue: Mode }>();
+const props = defineProps<{
+  modelValue: Mode;
+  dailyPlanItemId?: string;
+  capabilityNodeId?: string;
+  autoStart?: boolean;
+}>();
 defineEmits<{ 'update:modelValue': [value: Mode] }>();
 const router = useRouter();
 const feature = ref<EssayPracticeCenterFeature>();
@@ -162,6 +168,7 @@ const opening = ref(false);
 const activeTask = ref<AgentRunView>();
 const pendingContext = ref<EssayGenerationContext>();
 const pendingQuestionCount = ref(1);
+const tutorPlan = ref<EssayTutorPlanPrescription>();
 const error = ref('');
 const trueQuestionFileInput = ref<HTMLInputElement | null>(null);
 const { importingTrueQuestion, importTrueQuestion } = useTrueQuestionImport(
@@ -218,7 +225,11 @@ let taskPollId: number | null = null;
 
 onMounted(async () => {
   await load();
+  if (props.modelValue === 'tutor') await loadTutorPlan();
   await restoreActiveTask();
+  if (props.modelValue === 'tutor' && props.autoStart && !activeTask.value) {
+    await startTutorGeneration();
+  }
   taskPollId = window.setInterval(() => void refreshTask(), 1000);
 });
 onBeforeUnmount(() => {
@@ -227,8 +238,13 @@ onBeforeUnmount(() => {
 watch(() => props.modelValue, async () => {
   activeTask.value = undefined;
   await load();
+  if (props.modelValue === 'tutor') await loadTutorPlan();
   await restoreActiveTask();
 });
+watch(
+  () => [props.dailyPlanItemId, props.capabilityNodeId] as const,
+  () => { if (props.modelValue === 'tutor') void loadTutorPlan(); }
+);
 
 async function load() {
   loading.value = true;
@@ -246,7 +262,7 @@ async function openPractice() {
     return;
   }
   if (props.modelValue === 'tutor') {
-    await startGeneration({ entryMode: 'tutor', topic: '归纳概括', count: 1 });
+    await startTutorGeneration();
     return;
   }
   // 真题只能来自导入，所以这个入口就是文件选择，已导入的题组从下方列表进入。
@@ -269,7 +285,14 @@ async function submitCustom() {
   });
 }
 
-async function startGeneration(input: { entryMode: Mode; topic: string; count: number }) {
+async function startGeneration(input: {
+  entryMode: Mode;
+  topic: string;
+  count: number;
+  type?: EssayGenerationContext['type'];
+  title?: string;
+  linkage?: Pick<EssayGenerationContext, 'capabilityNodeId' | 'dailyPlanId' | 'dailyPlanItemId' | 'reviewQueueItemId' | 'assessmentRole'>;
+}) {
   if (!coordinator.value || activeTask.value?.isActive) return;
   opening.value = true;
   error.value = '';
@@ -277,19 +300,53 @@ async function startGeneration(input: { entryMode: Mode; topic: string; count: n
     entryMode: input.entryMode,
     purpose: input.entryMode === 'true' ? 'true_question' : 'practice',
     topic: input.topic,
-    type: input.topic === '申发论述' ? 'long' : 'short',
-    date: new Date().toISOString().slice(0, 10)
+    type: input.type || (input.topic === '申发论述' ? 'long' : 'short'),
+    date: new Date().toLocaleDateString('en-CA'),
+    ...input.linkage
   };
   pendingContext.value = context;
   pendingQuestionCount.value = input.count;
   try {
-    activeTask.value = await coordinator.value.start(context, input.count);
+    activeTask.value = await coordinator.value.start(context, input.count, { title: input.title });
     pendingContext.value = contextFromTask(activeTask.value) || context;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申论生成失败';
   } finally {
     opening.value = false;
   }
+}
+
+async function loadTutorPlan() {
+  try {
+    const runtime = await initializeTutorRuntime();
+    tutorPlan.value = await new EssayTutorPlanFeature(runtime).prepare({
+      dailyPlanItemId: props.dailyPlanItemId,
+      capabilityNodeId: props.capabilityNodeId
+    });
+  } catch (cause) {
+    tutorPlan.value = undefined;
+    error.value = cause instanceof Error ? cause.message : '读取申论计划失败';
+  }
+}
+
+async function startTutorGeneration() {
+  if (!tutorPlan.value) await loadTutorPlan();
+  const prescription = tutorPlan.value;
+  if (!prescription) return;
+  await startGeneration({
+    entryMode: 'tutor',
+    topic: prescription.context.topic,
+    type: prescription.context.type,
+    count: prescription.questionCount,
+    title: prescription.title,
+    linkage: {
+      capabilityNodeId: prescription.context.capabilityNodeId,
+      dailyPlanId: prescription.context.dailyPlanId,
+      dailyPlanItemId: prescription.context.dailyPlanItemId,
+      reviewQueueItemId: prescription.context.reviewQueueItemId,
+      assessmentRole: prescription.context.assessmentRole
+    }
+  });
 }
 
 async function restoreActiveTask() {
@@ -381,8 +438,17 @@ function contextFromTask(task: AgentRunView): EssayContext | undefined {
     topic,
     date,
     type: type === 'long' ? 'long' : 'short',
-    purpose: purpose === 'mock' || purpose === 'true_question' ? purpose : 'practice'
+    purpose: purpose === 'mock' || purpose === 'true_question' ? purpose : 'practice',
+    capabilityNodeId: taskActionText(task, 'capabilityNodeId'),
+    dailyPlanId: taskActionText(task, 'dailyPlanId'),
+    dailyPlanItemId: taskActionText(task, 'dailyPlanItemId'),
+    reviewQueueItemId: taskActionText(task, 'reviewQueueItemId'),
+    assessmentRole: taskActionText(task, 'assessmentRole')
   };
+}
+function taskActionText(task: AgentRunView, key: string): string | undefined {
+  const value = task.actionParams[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 function normalizedMode(value?: EssayPracticeMode): Mode { return value === 'tutor' || value === 'true' ? value : 'self'; }
 function modeLabelFor(value?: EssayPracticeMode): string { return modes.find((item) => item.value === normalizedMode(value))?.label || '自主刷题'; }
