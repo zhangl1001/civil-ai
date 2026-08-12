@@ -114,14 +114,13 @@ import { IndexedDbTutorCycleRepository } from '@/modules/tutoring/adapters/Index
 import { IndexedDbAbilityCalibrationRepository } from '@/modules/calibration/adapters/IndexedDbAbilityCalibrationRepository';
 import { BuildAbilityCalibration } from '@/modules/calibration/public';
 import {
+  BuildLearnerPrioritySnapshot,
   BuildTutorDailyContext,
   FinalizeObjectiveTutorConclusion,
   RecordObjectiveTutorConclusion
 } from '@/modules/tutoring/public';
 import type { TutorDatabaseRuntime } from './TutorDatabaseRuntime';
-
 export type WebTutorDatabaseRuntime = TutorDatabaseRuntime;
-
 export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const database = new TutorIndexedDb();
   const databaseLifecycle: TutorDatabaseLifecycle = {
@@ -180,12 +179,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     clock,
     new UuidV7IdGenerator(clock)
   );
-  const learningAssetStore = new LearningAssetStore(
-    unitOfWork,
-    learningAssetRepository,
-    clock,
-    new UuidV7IdGenerator(clock)
-  );
+  const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new IndexedDbPromptRepository(database, transactionScope);
   const aiInvocationRepository = new IndexedDbAIInvocationRepository(database, transactionScope);
   const learningThreadRepository = new IndexedDbLearningThreadRepository(database, transactionScope);
@@ -198,13 +192,9 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const proactiveSignalRepository = new IndexedDbProactiveSignalRepository(database, transactionScope);
   const learningProgressRepository = new IndexedDbLearningProgressRepository(database, transactionScope);
   const trackLearningProgress = new TrackLearningProgress(unitOfWork, learningProgressRepository, clock, new UuidV7IdGenerator(clock));
-  const messageCenter = new MessageCenter(
-    unitOfWork,
-    messageCenterRepository,
-    clock,
-    new UuidV7IdGenerator(clock)
-  );
+  const messageCenter = new MessageCenter(unitOfWork, messageCenterRepository, clock, new UuidV7IdGenerator(clock));
   const masteryRepository = new IndexedDbMasteryRepository(database, transactionScope);
+  const buildLearnerPrioritySnapshot = new BuildLearnerPrioritySnapshot(candidateRepository, curriculumRepository, masteryRepository, learningProgressRepository, clock);
   const dailyPlanRepository = new IndexedDbDailyPlanRepository(database, transactionScope);
   const tutorCycleRepository = new IndexedDbTutorCycleRepository(database, transactionScope);
   const abilityCalibrationRepository = new IndexedDbAbilityCalibrationRepository(database, transactionScope);
@@ -299,13 +289,6 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     clock,
     new UuidV7IdGenerator(clock)
   );
-  const confirmErrorDiagnosis = new ConfirmErrorDiagnosis(
-    unitOfWork,
-    errorDiagnosisRepository,
-    outboxRepository,
-    clock,
-    new UuidV7IdGenerator(clock)
-  );
   const getObjectiveSessionReview = new GetObjectiveSessionReview(
     learningSessionRepository,
     errorDiagnosisRepository,
@@ -352,6 +335,15 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const refreshMasteryTrack = new RefreshMasteryTrack(
     unitOfWork, masteryRepository, learningEvidenceRepository, clock, new UuidV7IdGenerator(clock)
   );
+  const confirmErrorDiagnosis = new ConfirmErrorDiagnosis(
+    unitOfWork,
+    errorDiagnosisRepository,
+    learningEvidenceRepository,
+    refreshMasteryTrack,
+    outboxRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
   const recordSubjectiveAssessment = new RecordSubjectiveAssessment(
     unitOfWork,
     learningEvidenceRepository,
@@ -363,7 +355,13 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const completeReviewQueueItem = new CompleteReviewQueueItem(unitOfWork, masteryRepository, clock);
   const failReviewQueueItem = new FailReviewQueueItem(unitOfWork, masteryRepository, clock);
   const retryReviewQueueItem = new RetryReviewQueueItem(unitOfWork, masteryRepository, clock);
-  const buildDailyPlanProposal = new BuildDailyPlanProposal(candidateRepository, masteryRepository, curriculumRepository, clock);
+  const buildDailyPlanProposal = new BuildDailyPlanProposal(
+    candidateRepository,
+    masteryRepository,
+    curriculumRepository,
+    learningProgressRepository,
+    clock
+  );
   const persistDailyPlanProposal = new PersistDailyPlanProposal(unitOfWork, dailyPlanRepository, clock, new UuidV7IdGenerator(clock));
   const updateDailyPlanItemStatus = new UpdateDailyPlanItemStatus(unitOfWork, dailyPlanRepository, clock);
   const rebalanceDailyPlanAfterLearning = new RebalanceDailyPlanAfterLearning(candidateRepository,dailyPlanRepository,buildDailyPlanProposal,persistDailyPlanProposal,clock);
@@ -434,6 +432,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     candidateRepository,
     curriculumRepository,
     masteryRepository,
+    buildLearnerPrioritySnapshot,
     dailyPlanRepository,
     learningSessionRepository,
     contentRepository,
@@ -555,6 +554,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     completeObjectivePractice,
     processObjectiveSubmissionOutbox,
     recordSubjectiveAssessment,
+    buildLearnerPrioritySnapshot,
     buildTutorDailyContext,
     buildAbilityCalibration,
     createAgentRun,

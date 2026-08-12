@@ -1,6 +1,8 @@
 export { default as AppStateView } from './components/AppStateView.vue';
 export { default as FormField } from './components/FormField.vue';
 export { default as FloatingActionButton } from './components/FloatingActionButton.vue';
+export { default as FloatingBubbleSwitcher } from './components/FloatingBubbleSwitcher.vue';
+export type { FloatingBubbleSwitcherOption } from './components/FloatingBubbleSwitcher.types';
 export { default as InitialRefreshState } from './components/InitialRefreshState.vue';
 export { default as InfiniteScrollPagination } from './components/InfiniteScrollPagination.vue';
 export { default as PullToRefresh } from './components/PullToRefresh.vue';

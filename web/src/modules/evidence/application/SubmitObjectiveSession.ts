@@ -29,7 +29,7 @@ import {
 import type { DecisionObservationType } from '../domain/EvidenceCodes';
 import { AssessmentRole } from '../domain/AssessmentRole';
 import { EvidenceValidity } from '../domain/EvidenceValidity';
-import type { ObjectiveSubmissionBundle } from '../contracts/LearningFacts';
+import type { LearningEvidenceRecord, ObjectiveSubmissionBundle } from '../contracts/LearningFacts';
 import { objectiveEvidenceOriginFrom } from '../domain/ObjectiveEvidenceOrigin';
 import { objectiveEvidencePolicyV2 } from '../domain/ObjectiveEvidencePolicy';
 
@@ -45,6 +45,8 @@ export interface ObjectiveAnswerInput {
     readonly valueCode: string;
     readonly value: JsonObject;
     readonly confidence: number;
+    /** Explicitly scored decision evidence. Omit when the observation is descriptive only. */
+    readonly score?: number;
   }[];
 }
 
@@ -352,7 +354,63 @@ export class SubmitObjectiveSession {
         }
       )
     }]);
-    const evidence = [...correctnessEvidence, ...speedEvidence];
+    const comprehensionEvidence: LearningEvidenceRecord[] = (
+      assessmentRole === AssessmentRole.Teaching || assessmentRole === AssessmentRole.Guided
+    ) ? attempts.map((item) => ({
+      id: this.ids.next('EvidenceId'),
+      examCycleId: item.attempt.examCycleId,
+      capabilityNodeId: item.attempt.capabilityNodeId,
+      attemptId: item.attempt.id,
+      assessmentRole,
+      evidenceType: EvidenceType.TeachingComprehension,
+      value: item.attempt.score,
+      weight: assessmentRole === AssessmentRole.Teaching ? 0.75 : 0.6,
+      quality: objectiveEvidencePolicyV2.quality(item.attempt.hintLevel),
+      source: EvidenceSource.DeterministicGrader,
+      validationPolicyVersion: objectiveEvidencePolicyV2.version,
+      occurredAt: now,
+      idempotencyKey: `${command.idempotencyKey}:evidence:teaching-comprehension:${item.attempt.questionId}`,
+      metadata: questionEvidenceMetadata(item.question, {
+        hintLevel: item.attempt.hintLevel,
+        questionContentVersion: item.attempt.questionContentVersion,
+        masteryDimension: 'concept'
+      })
+    })) : [];
+    const decisionEvidence: LearningEvidenceRecord[] = attempts.flatMap((item) => (
+      item.answer.observations ?? []
+    ).flatMap((observation) => {
+      if (observation.score === undefined) return [];
+      const masteryDimension = observation.observationType === 'question_recognition'
+        ? 'recognition'
+        : observation.observationType === 'method_selection' ? 'method' : undefined;
+      if (!masteryDimension) return [];
+      return [{
+        id: this.ids.next('EvidenceId'),
+        examCycleId: item.attempt.examCycleId,
+        capabilityNodeId: item.attempt.capabilityNodeId,
+        attemptId: item.attempt.id,
+        assessmentRole,
+        evidenceType: EvidenceType.MethodRecognition,
+        value: observation.score,
+        weight: 0.7,
+        quality: observation.confidence,
+        source: EvidenceSource.UserConfirmation,
+        validationPolicyVersion: 'objective-decision-observation:v1',
+        occurredAt: now,
+        idempotencyKey: `${command.idempotencyKey}:evidence:${masteryDimension}:${item.attempt.questionId}`,
+        metadata: questionEvidenceMetadata(item.question, {
+          masteryDimension,
+          observationType: observation.observationType,
+          valueCode: observation.valueCode
+        })
+      }];
+    }));
+    const evidence: LearningEvidenceRecord[] = [
+      ...correctnessEvidence,
+      ...speedEvidence,
+      ...comprehensionEvidence,
+      ...decisionEvidence
+    ];
     const validity = evidence.map((item) => ({
       evidenceId: item.id,
       validityStatus: EvidenceValidity.Valid,
@@ -395,6 +453,9 @@ export class SubmitObjectiveSession {
         if (!observation.valueCode.trim()) throw new Error('Objective answer observation valueCode is required');
         if (!Number.isFinite(observation.confidence) || observation.confidence < 0 || observation.confidence > 1) {
           throw new Error('Objective answer observation confidence is invalid');
+        }
+        if (observation.score !== undefined && (!Number.isFinite(observation.score) || observation.score < 0 || observation.score > 1)) {
+          throw new Error('Objective answer observation score is invalid');
         }
       });
     });

@@ -123,7 +123,8 @@ try {
         observationType: 'method_selection',
         valueCode: 'alternative_cause_not_checked',
         value: { selectedMethod: 'correlation_only' },
-        confidence: 0.7
+        confidence: 0.7,
+        score: 0.35
       }]
     }]
   };
@@ -140,8 +141,15 @@ try {
   const diagnoses = await diagnosisRepository.listBySession(result.sessionId);
   assert.equal(diagnoses[0].causeCode, evidence.ErrorCauseCode.Unknown);
   assert.match(diagnoses[0].detail, /不能直接归因为/);
+  const confirmedDiagnosisRefreshes = [];
   const confirmDiagnosis = new evidence.ConfirmErrorDiagnosis(
-    unitOfWork, diagnosisRepository, outboxRepository, clock, ids
+    unitOfWork,
+    diagnosisRepository,
+    evidenceRepository,
+    { async execute(input) { confirmedDiagnosisRefreshes.push(input.capabilityNodeId); } },
+    outboxRepository,
+    clock,
+    ids
   );
   const confirmed = await confirmDiagnosis.execute({
     idempotencyKey: 'diagnosis:weakening:confirm:1',
@@ -153,6 +161,7 @@ try {
   });
   assert.equal(confirmed.confirmationStatus, 'corrected');
   assert.equal(confirmed.effectiveCauseCode, evidence.ErrorCauseCode.MethodSelectionError);
+  assert.deepEqual(confirmedDiagnosisRefreshes, ['capability:aptitude:judgment:weaken']);
   const repeatedConfirmation = await confirmDiagnosis.execute({
     idempotencyKey: 'diagnosis:weakening:confirm:1',
     diagnosisId: diagnoses[0].id,
@@ -163,15 +172,43 @@ try {
   });
   assert.equal(repeatedConfirmation.version, 1, 'diagnosis confirmation must be idempotent');
   const validEvidence = await evidenceRepository.listValid('cycle:test', 'capability:aptitude:judgment:weaken', 10);
-  assert.equal(validEvidence.length, 2);
+  assert.equal(validEvidence.length, 5);
   const correctnessEvidence = validEvidence.find((item) => item.evidenceType === evidence.EvidenceType.Correctness);
   assert.equal(correctnessEvidence?.weight, 0.42);
   assert.equal(validEvidence.some((item) => item.evidenceType === evidence.EvidenceType.Speed), true);
+  assert.equal(validEvidence.filter((item) => item.evidenceType === evidence.EvidenceType.MethodRecognition).length, 2);
+  assert.equal(validEvidence.some((item) => item.evidenceType === evidence.EvidenceType.UserConfirmation), true);
   assert.equal(evidence.objectiveEvidencePolicyV2.correctnessWeight(
     evidence.AssessmentRole.Practice,
     2,
     evidence.ObjectiveEvidenceOrigin.AiTraining
   ), 0.29);
+  const refreshedSubjectiveCapabilities = [];
+  const recordSubjective = new evidence.RecordSubjectiveAssessment(
+    unitOfWork,
+    evidenceRepository,
+    { async execute(input) { refreshedSubjectiveCapabilities.push(input.capabilityNodeId); } },
+    clock,
+    ids
+  );
+  const subjectiveCommand = {
+    examCycleId: 'cycle:test',
+    sourceAssetId: 'essay-attempt:1',
+    rubricVersion: 'essay_rubric@1.0.0',
+    dimensions: [
+      { capabilityNodeId: 'capability:essay:material', dimensionKey: 'relevance', score: 0.7, confidence: 0.8, metadata: {} },
+      { capabilityNodeId: 'capability:essay:material', dimensionKey: 'evidence_extraction', score: 0.5, confidence: 0.8, metadata: {} }
+    ]
+  };
+  const subjectiveEvidence = await recordSubjective.execute(subjectiveCommand);
+  assert.equal(subjectiveEvidence.length, 2, 'rubric dimensions sharing one capability must remain independent evidence');
+  assert.equal(new Set(subjectiveEvidence.map((item) => item.idempotencyKey)).size, 2);
+  assert.deepEqual(refreshedSubjectiveCapabilities, ['capability:essay:material']);
+  assert.deepEqual(
+    (await recordSubjective.execute(subjectiveCommand)).map((item) => item.id),
+    subjectiveEvidence.map((item) => item.id),
+    'subjective rubric evidence must remain idempotent per dimension'
+  );
   const repeatedSubmission = await submit.execute(command);
   assert.equal(repeatedSubmission.sessionId, result.sessionId, 'objective submission must be idempotent');
   assert.equal(repeatedSubmission.rootAgentRunId, result.rootAgentRunId);
@@ -337,7 +374,7 @@ try {
     reasonCode: 'question.quality_rejected',
     actorType: 'user'
   });
-  assert.equal((await evidenceRepository.listValid('cycle:test', 'capability:aptitude:judgment:weaken', 10)).length, 1);
+  assert.equal((await evidenceRepository.listValid('cycle:test', 'capability:aptitude:judgment:weaken', 10)).length, 4);
   await correctEvidence.execute({
     idempotencyKey: 'evidence:weakening:invalidate:1',
     evidenceId: correctnessEvidence.id,

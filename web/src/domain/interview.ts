@@ -16,7 +16,12 @@ export interface InterviewAnswer {
   skipped: boolean;
   elapsedSeconds: number;
   speechMetrics?: InterviewSpeechMetrics;
-  score?: InterviewScore;
+  completeness?: InterviewAnswerCompleteness;
+}
+
+export interface InterviewAnswerCompleteness {
+  status: 'empty' | 'brief' | 'substantive';
+  characterCount: number;
 }
 
 export interface InterviewSpeechMetrics {
@@ -27,12 +32,18 @@ export interface InterviewSpeechMetrics {
 }
 
 export interface InterviewScore {
-  content: number;
-  expression: number;
-  logic: number;
-  fluency?: number;
   total: number;
-  feedback: string;
+  confidence: number;
+  rubricVersion: string;
+  dimensions: InterviewScoreDimension[];
+}
+
+export interface InterviewScoreDimension {
+  code: 'content' | 'structure' | 'expression' | 'fluency';
+  name: string;
+  score: number;
+  comment: string;
+  evidence?: string;
 }
 
 export interface InterviewSession {
@@ -44,8 +55,11 @@ export interface InterviewSession {
   questionTypes: InterviewQuestionType[];
   questionCount: number;
   answers: InterviewAnswer[];
-  score: InterviewScore;
+  reviewStatus: 'pending' | 'completed' | 'failed';
+  score?: InterviewScore;
   aiFeedback?: string;
+  aiSuggestions?: string[];
+  reviewTaskId?: string;
   createdAt: number;
   updatedAt: number;
 }

@@ -71,7 +71,7 @@
           <article v-for="session in history" :key="session.id" class="history-row app-card">
             <MicIcon />
             <div><strong>{{ session.date }}</strong><span>{{ session.questionCount }} 题 · {{ typeText(session.interviewType) }}</span></div>
-            <em>{{ session.score.total }}/{{ maxScore(session) }}</em>
+            <em>{{ session.score ? `${session.score.total}/${maxScore(session)}` : '待复盘' }}</em>
           </article>
         </section>
       </template>
@@ -106,7 +106,7 @@
 
       <template v-else-if="stage === 'result' && resultSession">
         <section class="result-hero app-card">
-          <strong>{{ resultSession.score.total }}/{{ maxScore(resultSession) }}</strong>
+          <strong>{{ resultSession.score ? `${resultSession.score.total}/${maxScore(resultSession)}` : '--' }}</strong>
           <span>综合评分</span>
         </section>
 
@@ -116,7 +116,7 @@
             <div><i :style="{ width: `${item.value * 20}%` }"></i></div>
             <em>{{ item.value }}/5</em>
           </div>
-          <p>{{ resultSession.score.feedback }}</p>
+          <p v-if="resultSession.aiFeedback">{{ resultSession.aiFeedback }}</p>
         </section>
 
         <AiTaskPendingState
@@ -151,7 +151,7 @@
             <span v-if="item.speechMetrics" class="speech-metrics">
               {{ item.speechMetrics.durationSeconds }} 秒 · {{ item.speechMetrics.wordsPerMinute }} 字/分 · 口头语 {{ item.speechMetrics.fillerCount }}
             </span>
-            <em>{{ item.score?.total || 0 }}/{{ item.score?.fluency ? 20 : 15 }}</em>
+            <em>{{ item.completeness?.status === 'substantive' ? '已详答' : item.skipped ? '已跳过' : '简答' }}</em>
           </article>
         </section>
 
@@ -233,12 +233,7 @@ interface InterviewDraft {
 
 const currentQuestion = computed(() => questions.value[currentIndex.value] || null);
 const timerText = computed(() => `${String(Math.floor(timeLeft.value / 60)).padStart(2, '0')}:${String(timeLeft.value % 60).padStart(2, '0')}`);
-const scoreRows = computed(() => resultSession.value ? [
-  { label: '内容', value: resultSession.value.score.content },
-  { label: '表达', value: resultSession.value.score.expression },
-  { label: '逻辑', value: resultSession.value.score.logic },
-  ...(resultSession.value.score.fluency ? [{ label: '流畅', value: resultSession.value.score.fluency }] : [])
-] : []);
+const scoreRows = computed(() => resultSession.value?.score?.dimensions.map((dim) => ({ label: dim.name, value: dim.score })) || []);
 const speechButtonText = computed(() => {
   if (!speechAvailable.value) return '语音不可用';
   if (isSpeechBusy.value) return '处理中...';
@@ -460,7 +455,8 @@ function typeText(type: InterviewType): string {
 }
 
 function maxScore(session: InterviewSession): number {
-  return session.score.fluency ? 20 : 15;
+  const hasFluency = session.score?.dimensions.some((d) => d.code === 'fluency');
+  return hasFluency ? 20 : 15;
 }
 
 function draftSnapshot(): InterviewDraft | null {

@@ -77,6 +77,9 @@ try {
   assert(aptitude?.low !== undefined && aptitude.high !== undefined && aptitude.center !== undefined);
   assert.ok(aptitude.low <= aptitude.center && aptitude.center <= aptitude.high);
   assert.ok(aptitude.high - aptitude.low >= 8, 'Low-confidence forecast must remain an interval');
+  const essay = first.scoreForecasts.find((item) => item.subject === 'essay');
+  assert.equal(essay?.basis, 'blended');
+  assert.ok(essay?.center !== undefined && essay.center > 52, 'Essay rubric evidence must update the self-reported baseline');
 
   const repeated = await builder.execute();
   assert.equal(repeated?.id, first.id);
@@ -113,7 +116,8 @@ function candidateCycle() {
 function curriculumBundle() {
   return {
     curriculum: { id: 'CurriculumVersionId:1' },
-    capabilityNodes: modules.flatMap(([module, name, scoreWeight]) => [
+    capabilityNodes: [
+      ...modules.flatMap(([module, name, scoreWeight]) => [
       {
         id: `module:${module}`, code: `aptitude.${module}`, name, module, subject: 'aptitude',
         nodeType: 'module', status: 'active', scoreWeight
@@ -122,12 +126,18 @@ function curriculumBundle() {
         id: `cap:${module}`, code: `aptitude.${module}.core`, name: `${name}核心`, module,
         subject: 'aptitude', nodeType: 'knowledge_point', status: 'active', scoreWeight
       }
-    ])
+      ]),
+      {
+        id: 'cap:essay:material', code: 'essay.material_analysis', name: '材料分析', module: 'essay',
+        subject: 'essay', nodeType: 'knowledge_point', status: 'active', scoreWeight: 1
+      }
+    ]
   };
 }
 
 function baselineEvidence() {
-  return modules.flatMap(([module]) => {
+  return [
+    ...modules.flatMap(([module]) => {
     const values = [1, 1, 1].map((value, index) => makeEvidence(
       `${module}:training:${index}`,
       `cap:${module}`,
@@ -139,7 +149,27 @@ function baselineEvidence() {
       values.push(makeEvidence('judgment:true:2', 'cap:judgment', 0, 'official'));
     }
     return values;
-  });
+    }),
+    ...[.72, .76, .7, .74, .78].map((value, index) => makeSubjectiveEvidence(index, value))
+  ];
+}
+
+function makeSubjectiveEvidence(index, value) {
+  return {
+    id: `essay:${index}`,
+    examCycleId: 'ExamCycleId:1',
+    capabilityNodeId: 'cap:essay:material',
+    assessmentRole: 'practice',
+    evidenceType: 'correctness',
+    value,
+    weight: 1,
+    quality: .9,
+    source: 'ai_grader',
+    validationPolicyVersion: 'essay-rubric:v1',
+    occurredAt: now,
+    idempotencyKey: `essay:${index}`,
+    metadata: { evidenceKind: 'subjective_rubric', dimensionKey: `dimension-${index}` }
+  };
 }
 
 function makeEvidence(id, capabilityNodeId, value, origin) {

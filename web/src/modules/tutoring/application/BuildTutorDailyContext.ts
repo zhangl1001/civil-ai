@@ -9,6 +9,7 @@ import type { DailyPlanRepository } from '@/modules/planning/public';
 import type { LearningThreadRepository } from '@/modules/teaching/public';
 import type { TutorCycleRepository } from '../contracts/TutorCycleRepository';
 import { TUTOR_CONTEXT_POLICY_VERSION } from '../domain/TutorCycleCodes';
+import type { LearnerPrioritySnapshot } from './BuildLearnerPrioritySnapshot';
 
 const MAX_PRIORITY_TRACKS = 5;
 const MAX_DUE_REVIEWS = 5;
@@ -24,6 +25,10 @@ interface AbilityCalibrationPort {
     readonly scoreForecasts: unknown;
     readonly changes: unknown;
   } | undefined>;
+}
+
+interface LearnerPriorityPort {
+  execute(): Promise<LearnerPrioritySnapshot | undefined>;
 }
 
 export interface TutorDailyContext {
@@ -47,6 +52,7 @@ export class BuildTutorDailyContext {
     private readonly candidates: CandidateRepository,
     private readonly curriculums: CurriculumRepository,
     private readonly mastery: MasteryRepository,
+    private readonly learnerPriorities: LearnerPriorityPort,
     private readonly plans: DailyPlanRepository,
     private readonly sessions: LearningSessionRepository,
     private readonly content: ContentRepository,
@@ -62,15 +68,16 @@ export class BuildTutorDailyContext {
     const now = this.clock.now();
     const planDate = localDate(now, cycle.examCycle.timeZone) as LocalDate;
     const daysUntilExam = daysBetweenLocalDates(planDate, cycle.examCycle.examDate);
-    const [curriculum, tracks, reviews, plan, recentSessions, conclusionRows, calibration] = await Promise.all([
+    const [curriculum, prioritySnapshot, reviews, plan, recentSessions, conclusionRows, calibration] = await Promise.all([
       this.curriculums.findBundle(cycle.examCycle.curriculumVersionId),
-      this.mastery.listPriorityTracks(cycle.examCycle.id, MAX_PRIORITY_TRACKS),
+      this.learnerPriorities.execute(),
       this.mastery.listDueReviews(cycle.examCycle.id, now, MAX_DUE_REVIEWS),
       this.plans.findCurrent(cycle.examCycle.id, planDate),
       this.sessions.listRecent(cycle.examCycle.id, MAX_RECENT_SESSIONS),
       this.conclusions.listRecent(cycle.examCycle.id, MAX_RECENT_CONCLUSIONS),
       this.calibration.execute({ persist: false })
     ]);
+    const priorities = prioritySnapshot?.priorities.slice(0, MAX_PRIORITY_TRACKS) ?? [];
     const seenConclusionSessions = new Set<string>();
     const recentConclusions = conclusionRows.filter((item) => {
       if (seenConclusionSessions.has(item.learningSessionId)) return false;
@@ -79,7 +86,7 @@ export class BuildTutorDailyContext {
     });
     const nodeById = new Map(curriculum?.capabilityNodes.map((node) => [node.id, node]) ?? []);
     const capabilityIds = [...new Set([
-      ...tracks.map((track) => track.capabilityNodeId),
+      ...priorities.map((priority) => priority.capabilityNodeId),
       ...reviews.map((review) => review.capabilityNodeId),
       ...(plan?.items.map((item) => item.capabilityNodeId) ?? [])
     ])].slice(0, MAX_OPEN_THREADS);
@@ -161,16 +168,21 @@ export class BuildTutorDailyContext {
           status: item.status
         }))
       } : { status: 'missing', items: [] },
-      priorityCapabilities: tracks.map((track) => ({
-        ...capabilityView(track.capabilityNodeId, nodeById),
-        state: track.state,
-        accuracy: track.accuracy,
-        speed: track.speed,
-        retention: track.retention,
-        transfer: track.transfer,
-        stability: track.stability,
-        confidence: track.confidence,
-        effectiveSample: track.effectiveSample
+      priorityCapabilities: priorities.map((priority) => ({
+        ...capabilityView(priority.capabilityNodeId, nodeById),
+        priority: priority.priority,
+        recommendedAction: priority.action,
+        reasonCodes: [...priority.reasonCodes],
+        state: priority.state,
+        accuracy: priority.accuracy,
+        speed: priority.speed,
+        retention: priority.retention,
+        transfer: priority.transfer,
+        stability: priority.stability,
+        confidence: priority.confidence,
+        effectiveSample: priority.effectiveSample,
+        evidenceAgeDays: priority.evidenceAgeDays ?? null,
+        learningStatus: priority.learningStatus ?? null
       })),
       dueReviews: reviews.map((review) => ({
         reviewQueueItemId: review.id,

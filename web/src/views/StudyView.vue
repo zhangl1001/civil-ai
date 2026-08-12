@@ -85,7 +85,7 @@
           <button v-for="(point, index) in dashboard.weakPoints" :key="`${point.module}-${point.name}`" type="button" class="weak-card" @click="learn(point)">
             <i :class="index === 0 ? 'danger' : index < 3 ? 'warn' : 'info'">{{ index + 1 }}</i>
             <div><strong>{{ point.name }}</strong><span>{{ point.module }} · {{ point.reason }}</span></div>
-            <em>{{ point.proficiency }}%</em>
+            <em>{{ point.evidenceScore }}%</em>
           </button>
         </section>
 

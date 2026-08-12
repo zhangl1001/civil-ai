@@ -59,7 +59,7 @@ export interface QualityModule {
   total: number;
   correct: number;
   accuracy: number;
-  mastery: number;
+  stability: number;
   confidence: number;
   avgSeconds: number;
   openWrongCount: number;
@@ -272,7 +272,7 @@ function buildModules(
       total: values.total,
       correct: values.correct,
       accuracy: values.total ? Math.round(values.correct / values.total * 100) : 0,
-      mastery: Math.round(weightedAverage(moduleTracks, 'stability') * 100),
+      stability: Math.round(weightedAverage(moduleTracks, 'stability') * 100),
       confidence: weightedAverage(moduleTracks, 'confidence'),
       avgSeconds: values.total ? Math.round(values.elapsedMs / values.total / 1000) : 0,
       openWrongCount: [...values.latestResultByQuestion.values()].filter((result) => result === 'incorrect').length,
@@ -341,7 +341,7 @@ function adviceFor(input: {
 }): string[] {
   const result: string[] = [];
   if (input.totalQuestions < 30) result.push('真实作答样本不足，先完成几组针对性练习再判断长期能力。');
-  if (input.weakestModule) result.push(`优先补强${input.weakestModule.name}，当前证据掌握度 ${input.weakestModule.mastery}%。`);
+  if (input.weakestModule) result.push(`优先补强${input.weakestModule.name}，当前证据稳定度 ${input.weakestModule.stability}%。`);
   if (input.reviewDueCount) result.push(`${input.reviewDueCount} 个知识点已到复习窗口，建议先复习再做新题。`);
   if (input.avgSecondsPerQuestion > 90) result.push('平均作答速度偏慢，后续训练需要加入限时证据。');
   return result.length ? result : ['当前证据表现稳定，继续按计划巩固并补充迁移样本。'];

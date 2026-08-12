@@ -6,7 +6,6 @@ import type {
   InterviewDifficulty,
   InterviewQuestion,
   InterviewQuestionType,
-  InterviewScore,
   InterviewSession,
   InterviewStats,
   InterviewType
@@ -66,51 +65,17 @@ function shuffle<T>(items: T[]): T[] {
   return next;
 }
 
-function fluencyScore(answer: InterviewAnswer): number | undefined {
-  if (!answer.speechMetrics) return undefined;
-  const { wordsPerMinute, fillerCount, durationSeconds } = answer.speechMetrics;
-  let score = 3;
-  if (wordsPerMinute >= 120 && wordsPerMinute <= 220) score += 1;
-  if (durationSeconds >= 45) score += 1;
-  if (fillerCount >= 6) score -= 1;
-  return Math.max(1, Math.min(5, score));
-}
-
-function scoreAnswer(answer: InterviewAnswer): InterviewScore {
-  const fluency = fluencyScore(answer);
-  const maxTotal = fluency ? 20 : 15;
+function answerCompleteness(answer: InterviewAnswer): InterviewAnswer['completeness'] {
   const rawAnswer = answer.transcript || answer.answer;
   const text = rawAnswer.trim();
-  if (!text) return { content: 1, expression: 1, logic: 1, fluency, total: 3, feedback: '未作答，建议先按“观点-分析-对策-总结”补齐基本框架。' };
-  const hasStructure = /首先|其次|再次|最后|第一|第二|第三|一方面|另一方面/.test(text);
-  const hasExample = /比如|例如|举例|案例|经验|经历/.test(text);
-  const hasSummary = /总之|综上|因此|所以|总的来说/.test(text);
-  const content = Math.min(5, 2 + (text.length > 60 ? 1 : 0) + (text.length > 160 ? 1 : 0) + (hasExample ? 1 : 0));
-  const expression = Math.min(5, 2 + (text.length > 40 ? 1 : 0) + (hasStructure ? 1 : 0) + (text.length > 120 && hasStructure ? 1 : 0));
-  const logic = Math.min(5, 2 + (hasStructure ? 1 : 0) + (hasSummary ? 1 : 0) + (hasExample && hasStructure ? 1 : 0));
-  const total = content + expression + logic + (fluency || 0);
-  const feedback = total >= 12
-    ? `作答优秀，内容充实、条理清晰${fluency ? '，语音表达可继续控制口头语。' : '，后续可继续提升表达亮点。'}`
-    : total >= Math.round(maxTotal * 0.6)
-      ? '作答良好，建议增加具体案例和结尾升华。'
-      : '作答偏薄，建议加强结构化表达，并补充原因分析、对策和总结。';
-  return { content, expression, logic, fluency, total, feedback };
-}
-
-function averageScore(scores: InterviewScore[]): InterviewScore {
-  if (!scores.length) return { content: 1, expression: 1, logic: 1, total: 3, feedback: '暂无有效作答。' };
-  const content = Math.round(scores.reduce((sum, score) => sum + score.content, 0) / scores.length);
-  const expression = Math.round(scores.reduce((sum, score) => sum + score.expression, 0) / scores.length);
-  const logic = Math.round(scores.reduce((sum, score) => sum + score.logic, 0) / scores.length);
-  const fluencyScores = scores.map((score) => score.fluency).filter((score): score is number => typeof score === 'number');
-  const fluency = fluencyScores.length ? Math.round(fluencyScores.reduce((sum, score) => sum + score, 0) / fluencyScores.length) : undefined;
-  const total = content + expression + logic + (fluency || 0);
-  const feedback = scores[scores.length - 1]?.feedback || '已完成本次面试模拟。';
-  return { content, expression, logic, fluency, total, feedback };
+  return {
+    status: !text ? 'empty' : text.length < 40 ? 'brief' : 'substantive',
+    characterCount: text.length
+  };
 }
 
 export class InterviewRepository {
-  pickQuestions(types: InterviewQuestionType[], count = 3): InterviewQuestion[] {
+  pickQuestions(types: InterviewQuestionType[], count = 3, excludedIds: ReadonlySet<string> = new Set()): InterviewQuestion[] {
     const selected: InterviewQuestionType[] = types.length ? types : ['综合分析'];
     const pool = selected.flatMap((type) => BANK[type].map((item, index) => ({
       id: `${type}:${index}`,
@@ -118,13 +83,15 @@ export class InterviewRepository {
       text: item.text,
       hint: item.hint
     })));
-    return shuffle(pool).slice(0, count);
+    const unseen = pool.filter((question) => !excludedIds.has(question.id));
+    const candidates = unseen.length >= count ? unseen : [...unseen, ...pool.filter((question) => excludedIds.has(question.id))];
+    return shuffle(candidates).slice(0, count);
   }
 
-  scoreAnswers(answers: InterviewAnswer[]): InterviewAnswer[] {
+  prepareAnswers(answers: InterviewAnswer[]): InterviewAnswer[] {
     return answers.map((answer) => ({
       ...answer,
-      score: scoreAnswer(answer.skipped ? { ...answer, answer: '', transcript: '' } : answer)
+      completeness: answerCompleteness(answer.skipped ? { ...answer, answer: '', transcript: '' } : answer)
     }));
   }
 
@@ -138,8 +105,7 @@ export class InterviewRepository {
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
     const now = Date.now();
-    const scoredAnswers = this.scoreAnswers(input.answers);
-    const score = averageScore(scoredAnswers.map((answer) => answer.score).filter(Boolean) as InterviewScore[]);
+    const preparedAnswers = this.prepareAnswers(input.answers);
     const session: InterviewSession = {
       id: id('interview_session'),
       projectId: cycle.project.id,
@@ -148,8 +114,8 @@ export class InterviewRepository {
       difficulty: input.difficulty,
       questionTypes: input.questionTypes,
       questionCount: input.answers.length,
-      answers: scoredAnswers,
-      score,
+      answers: preparedAnswers,
+      reviewStatus: 'pending',
       createdAt: now,
       updatedAt: now
     };
@@ -196,16 +162,44 @@ export class InterviewRepository {
     return next;
   }
 
+  async updateReviewState(
+    sessionId: string,
+    reviewStatus: InterviewSession['reviewStatus'],
+    reviewTaskId?: string
+  ): Promise<InterviewSession | undefined> {
+    const current = await this.getSession(sessionId);
+    if (!current) return undefined;
+    const next: InterviewSession = {
+      ...current,
+      reviewStatus,
+      ...(reviewTaskId ? { reviewTaskId } : {}),
+      updatedAt: Date.now()
+    };
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    await runtime.learningAssetStore.save({
+      examCycleId: cycle.examCycle.id,
+      kind: LearningAssetKind.InterviewSession,
+      businessKey: businessKey(sessionId),
+      title: `面试训练 · ${next.date}`,
+      payload: next as unknown as JsonObject
+    });
+    return next;
+  }
+
   async enqueueAiReview(session: InterviewSession): Promise<AgentTaskEnqueueResult> {
-    return generationTaskService.enqueue({
+    const result = await generationTaskService.enqueue({
       intent: 'interviewReview',
       title: '面试深度点评',
-      detail: `${session.date} · ${session.questionCount} 题 · ${session.score.total}分`,
+      detail: `${session.date} · ${session.questionCount} 题`,
       sourceId: session.id,
       payload: {
         sessionId: session.id
       }
     });
+    await this.updateReviewState(session.id, 'pending', result.task.id);
+    return result;
   }
 
   async latest(limit = 5): Promise<InterviewSession[]> {
@@ -231,7 +225,10 @@ export class InterviewRepository {
 
   async stats(): Promise<InterviewStats> {
     const sessions = await this.latest(500);
-    const averageScore = sessions.length ? Math.round(sessions.reduce((sum, session) => sum + session.score.total, 0) / sessions.length) : 0;
+    const reviewed = sessions.filter((session) => session.reviewStatus === 'completed' && session.score);
+    const averageScore = reviewed.length
+      ? Math.round(reviewed.reduce((sum, session) => sum + (session.score?.total ?? 0), 0) / reviewed.length)
+      : 0;
     return {
       totalSessions: sessions.length,
       averageScore,

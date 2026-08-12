@@ -58,6 +58,23 @@ try {
     listReviews: async (_cycle, limit) => reviews.slice(0, limit),
     findTrack: async () => tracks[0]
   };
+  const learnerPriorities = {
+    execute: async () => ({
+      examCycleId: cycle.examCycle.id,
+      generatedAt: now,
+      priorities: [{
+        ...tracks[0],
+        subject: 'aptitude',
+        module: '判断推理',
+        name: '论证结构',
+        priority: 82,
+        action: 'practice',
+        reasonCodes: ['low_accuracy'],
+        scoreGapRatio: .3,
+        evidenceAgeDays: 2
+      }]
+    })
+  };
   const plans = { findCurrent: async () => plan };
   const sessions = { listRecent: async (_cycle, limit) => [facts].slice(0, limit) };
   const content = {
@@ -69,12 +86,13 @@ try {
   const threads = { findOpen: async () => ({ thread: learningThread(), events: [] }) };
 
   const contextBuilder = new tutoring.BuildTutorDailyContext(
-    candidates, curriculums, mastery, plans, sessions, content, threads, repository,
+    candidates, curriculums, mastery, learnerPriorities, plans, sessions, content, threads, repository,
     { async execute() { return undefined; } }, clock
   );
   const context = await contextBuilder.execute();
   assert(context);
   assert.equal(context.priorityCapabilities.length, 1);
+  assert.equal(context.priorityCapabilities[0].recommendedAction, 'practice');
   assert.equal(context.dueReviews.length, 1);
   assert.equal(context.trueQuestionEvidence.recentSessionCount, 1);
   assert.equal(context.trueQuestionEvidence.availableQuestionCount, 8);

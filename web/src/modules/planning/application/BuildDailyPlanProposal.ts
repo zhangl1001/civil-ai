@@ -1,5 +1,14 @@
-import type { Clock, CurriculumVersionId, ExamCycleId, InstantMs, SubjectCode } from '@/kernel/public';
-import type { MasteryTrack, ReviewQueueItem } from '@/modules/mastery/public';
+import type { Clock, CurriculumVersionId, ExamCycleId, InstantMs, JsonObject, SubjectCode } from '@/kernel/public';
+import {
+  latestLectureProgressByCapability,
+  type LearningProgressRecord
+} from '@/modules/learning-progress/public';
+import {
+  rankLearnerPriorities,
+  readCapabilityRecommendationPreferences,
+  type MasteryTrack,
+  type ReviewQueueItem
+} from '@/modules/mastery/public';
 import {
   proposeDailyPlan,
   type DailyPlanCapabilitySignal,
@@ -33,6 +42,7 @@ interface PlanningCandidateContext {
   readonly learningPreferences: {
     readonly teachingOrder: string;
     readonly explanationDepth: string;
+    readonly extension: JsonObject;
   };
 }
 
@@ -42,8 +52,11 @@ interface PlanningCandidatePort {
 
 interface PlanningMasteryPort {
   listDueReviews(examCycleId: ExamCycleId, now: InstantMs, limit: number): Promise<readonly ReviewQueueItem[]>;
-  listPriorityTracks(examCycleId: ExamCycleId, limit: number): Promise<readonly MasteryTrack[]>;
   listAllTracks(examCycleId: ExamCycleId): Promise<readonly MasteryTrack[]>;
+}
+
+interface PlanningProgressPort {
+  listByCycle(examCycleId: ExamCycleId): Promise<readonly LearningProgressRecord[]>;
 }
 
 interface PlanningCurriculumNode {
@@ -71,6 +84,7 @@ export class BuildDailyPlanProposal {
     private readonly candidates: PlanningCandidatePort,
     private readonly mastery: PlanningMasteryPort,
     private readonly curriculum: PlanningCurriculumPort,
+    private readonly progress: PlanningProgressPort,
     private readonly clock: Clock
   ) {}
 
@@ -81,22 +95,27 @@ export class BuildDailyPlanProposal {
     readonly phase?: string;
   }): Promise<DailyPlanProposal> {
     const now = this.clock.now();
-    const [candidate, dueReviews, priorityTracks, allTracks] = await Promise.all([
+    const [candidate, dueReviews, allTracks, progressRecords] = await Promise.all([
       this.candidates.findCycle(command.examCycleId),
       this.mastery.listDueReviews(command.examCycleId, now, 12),
-      this.mastery.listPriorityTracks(command.examCycleId, 16),
-      this.mastery.listAllTracks(command.examCycleId)
+      this.mastery.listAllTracks(command.examCycleId),
+      this.progress.listByCycle(command.examCycleId)
     ]);
     const curriculum = candidate
       ? await this.curriculum.findBundle(candidate.examCycle.curriculumVersionId)
       : undefined;
     const nodes = eligibleNodes(curriculum?.capabilityNodes ?? []);
     const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    const progressByNode = latestLectureProgressByCapability(progressRecords);
     const trackedIds = new Set(allTracks.map((track) => track.capabilityNodeId));
+    const learnedIds = new Set([...progressByNode.entries()]
+      .filter(([, progress]) => progress.status === 'completed')
+      .map(([capabilityNodeId]) => capabilityNodeId));
+    const observedIds = new Set([...trackedIds, ...learnedIds]);
     const scoreGaps = scoreGapRatios(candidate);
     const remainingDays = daysUntil(command.examDate ?? candidate?.examCycle.examDate, now);
     const curriculumCoverageRatio = nodes.length
-      ? nodes.filter((node) => trackedIds.has(node.id)).length / nodes.length
+      ? nodes.filter((node) => observedIds.has(node.id)).length / nodes.length
       : 0;
     const strategy = decidePreparationStrategy({
       remainingDays,
@@ -104,29 +123,57 @@ export class BuildDailyPlanProposal {
       curriculumCoverageRatio,
       dueReviewCount: dueReviews.length
     });
-    const prioritySignals = priorityTracks.flatMap((track): DailyPlanCapabilitySignal[] => {
-      const node = nodesById.get(track.capabilityNodeId);
-      if (!node) return [];
+    const preferences = readCapabilityRecommendationPreferences(candidate?.learningPreferences.extension ?? {});
+    const trackByNode = new Map(allTracks.map((track) => [track.capabilityNodeId, track]));
+    const ranked = rankLearnerPriorities(nodes.flatMap((node) => {
+      if (!observedIds.has(node.id)) return [];
+      const track = trackByNode.get(node.id);
+      const progress = progressByNode.get(node.id);
       return [{
-        capabilityNodeId: track.capabilityNodeId,
+        capabilityNodeId: node.id,
         subject: node.subject,
         module: node.module,
         name: node.name,
         scoreWeight: node.scoreWeight,
         scoreGapRatio: scoreGaps.get(node.subject) ?? 0,
-        state: track.state,
-        accuracy: track.accuracy,
-        speed: track.speed,
-        retention: track.retention,
-        transfer: track.transfer,
-        stability: track.stability,
-        confidence: track.confidence,
-        effectiveSample: track.effectiveSample,
-        ...(node.defaultTargetSeconds === undefined ? {} : { defaultTargetSeconds: node.defaultTargetSeconds })
+        state: track?.state ?? 'unassessed',
+        accuracy: track?.accuracy ?? 0,
+        speed: track?.speed ?? 0,
+        retention: track?.retention ?? 0,
+        transfer: track?.transfer ?? 0,
+        stability: track?.stability ?? 0,
+        confidence: track?.confidence ?? 0,
+        effectiveSample: track?.effectiveSample ?? 0,
+        lastEvidenceAt: track?.lastEvidenceAt,
+        learningStatus: progress?.status,
+        learningCompletedAt: progress?.completedAt,
+        preference: preferences.get(node.id)
       }];
+    }), now);
+    const prioritySignals = ranked.slice(0, 32).map((priority): DailyPlanCapabilitySignal => {
+      const node = nodesById.get(priority.capabilityNodeId)!;
+      return {
+        capabilityNodeId: priority.capabilityNodeId,
+        subject: priority.subject,
+        module: priority.module,
+        name: priority.name,
+        scoreWeight: priority.scoreWeight,
+        scoreGapRatio: priority.scoreGapRatio,
+        learnerPriority: priority.priority,
+        recommendedAction: priority.action,
+        state: priority.state,
+        accuracy: priority.accuracy,
+        speed: priority.speed,
+        retention: priority.retention,
+        transfer: priority.transfer,
+        stability: priority.stability,
+        confidence: priority.confidence,
+        effectiveSample: priority.effectiveSample,
+        ...(node.defaultTargetSeconds === undefined ? {} : { defaultTargetSeconds: node.defaultTargetSeconds })
+      };
     });
     const coverageCandidates: DailyPlanCoverageCandidate[] = nodes
-      .filter((node) => !trackedIds.has(node.id))
+      .filter((node) => !observedIds.has(node.id))
       .map((node) => toCoverageCandidate(node, scoreGaps))
       .sort((left, right) => (
         right.scoreWeight * (1 + right.scoreGapRatio) - left.scoreWeight * (1 + left.scoreGapRatio)

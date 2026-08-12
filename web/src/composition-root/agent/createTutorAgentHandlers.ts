@@ -414,6 +414,7 @@ async function executeBusinessOperation(
         if (!node) return [];
         return [{
           capabilityNodeId: node.id,
+          dimensionKey: dimension.dimensionKey,
           score: dimension.score,
           confidence: dimension.confidence,
           metadata: toJsonObject(dimension.metadata)

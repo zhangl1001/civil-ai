@@ -107,49 +107,44 @@ function parseEssayFeedback(text: string): {
   }
 }
 
-function parseInterviewReview(text: string, localScore: Record<string, unknown>): {
+function parseInterviewReview(text: string): {
   feedback: string;
   score: number;
   confidence: number;
   dimensions: Array<{ code: string; name: string; score: number; comment: string; evidence?: string }>;
   suggestions: string[];
 } {
-  try {
-    const parsed = parseStructuredJson<{
-      feedbackMarkdown?: string;
-      score?: number;
-      confidence?: number;
-      dimensions?: Array<{ code?: string; name?: string; score?: number; comment?: string; evidence?: string }>;
-      suggestions?: string[];
-    }>(text);
-    return {
-      feedback: parsed.feedbackMarkdown || text,
-      score: normalizePercent(Number(parsed.score ?? 0)),
-      confidence: clamp01(Number(parsed.confidence ?? 0.65)),
-      dimensions: (parsed.dimensions || []).flatMap((item) => (
-        item.code && item.name && typeof item.score === 'number' && item.comment
-          ? [{
-              code: item.code,
-              name: item.name,
-              score: normalizePercent(item.score),
-              comment: item.comment,
-              evidence: item.evidence
-            }]
-          : []
-      )),
-      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter(Boolean) : []
-    };
-  } catch {
-    const total = Number(localScore.total || 0);
-    const max = localScore.fluency === undefined ? 15 : 20;
-    return {
-      feedback: text,
-      score: max ? Math.round(total / max * 100) : 0,
-      confidence: 0.45,
-      dimensions: [],
-      suggestions: []
-    };
+  const parsed = parseStructuredJson<{
+    feedbackMarkdown?: string;
+    score?: number;
+    confidence?: number;
+    dimensions?: Array<{ code?: string; name?: string; score?: number; comment?: string; evidence?: string }>;
+    suggestions?: string[];
+  }>(text);
+  const feedback = asString(parsed.feedbackMarkdown);
+  const expectedCodes = ['content', 'structure', 'expression', 'fluency'];
+  const dimensions = (parsed.dimensions || []).flatMap((item) => (
+    item.code && expectedCodes.includes(item.code) && item.name && typeof item.score === 'number' && item.comment
+      ? [{
+          code: item.code,
+          name: item.name,
+          score: normalizePercent(item.score),
+          comment: item.comment,
+          evidence: item.evidence
+        }]
+      : []
+  ));
+  const dimensionCodes = new Set(dimensions.map((item) => item.code));
+  if (!feedback || expectedCodes.some((code) => !dimensionCodes.has(code)) || !Number.isFinite(parsed.score)) {
+    throw new Error('面试点评结果缺少完整评分维度');
   }
+  return {
+    feedback,
+    score: normalizePercent(Number(parsed.score)),
+    confidence: clamp01(Number(parsed.confidence ?? 0.65)),
+    dimensions,
+    suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter(Boolean) : []
+  };
 }
 
 function parseEssayQuestion(text: string): EssayQuestionRecord {
@@ -333,25 +328,23 @@ export const essayGradeExecutor: BusinessAgentExecutor = async (task, context) =
     }
   });
   const overallScore = normalizePercent(parsed.score ?? 0) / 100;
-  const materialScore = dimensionScore(parsed.dimensions, ['relevance', 'evidence_extraction'], overallScore);
-  const expressionScore = dimensionScore(parsed.dimensions, ['structure', 'reasoning', 'expression'], overallScore);
+  const essayRubricDimensions = [
+    { code: 'relevance', capabilityCode: 'essay.material_analysis' },
+    { code: 'evidence_extraction', capabilityCode: 'essay.material_analysis' },
+    { code: 'structure', capabilityCode: 'essay.structured_expression' },
+    { code: 'reasoning', capabilityCode: 'essay.structured_expression' },
+    { code: 'expression', capabilityCode: 'essay.structured_expression' }
+  ] as const;
   await context.recordSubjectiveAssessment({
     sourceAssetId: saved.id,
     rubricVersion: 'essay_rubric@1.0.0',
-    dimensions: [
-      {
-        capabilityCode: 'essay.material_analysis',
-        score: materialScore,
-        confidence: parsed.confidence,
-        metadata: { dimensionCodes: ['relevance', 'evidence_extraction'], questionAssetId: questionAsset.id }
-      },
-      {
-        capabilityCode: 'essay.structured_expression',
-        score: expressionScore,
-        confidence: parsed.confidence,
-        metadata: { dimensionCodes: ['structure', 'reasoning', 'expression'], questionAssetId: questionAsset.id }
-      }
-    ]
+    dimensions: essayRubricDimensions.map(({ code, capabilityCode }) => ({
+      capabilityCode,
+      dimensionKey: code,
+      score: dimensionScore(parsed.dimensions, [code], overallScore),
+      confidence: parsed.confidence,
+      metadata: { dimensionCode: code, questionAssetId: questionAsset.id }
+    }))
   });
   await context.setResult({
     resultRef: saved.id,
@@ -375,7 +368,6 @@ export const interviewReviewExecutor: BusinessAgentExecutor = async (task, conte
     const answer = asRecord(rawAnswer);
     const question = asRecord(answer.question);
     const speechMetrics = asRecord(answer.speechMetrics);
-    const score = asRecord(answer.score);
     return [
     `第 ${index + 1} 题（${asString(question.type)}）：${asString(question.text)}`,
     `提示：${asString(question.hint)}`,
@@ -383,27 +375,21 @@ export const interviewReviewExecutor: BusinessAgentExecutor = async (task, conte
     Object.keys(speechMetrics).length
       ? `语音指标：${Number(speechMetrics.durationSeconds || 0)} 秒，${Number(speechMetrics.wordsPerMinute || 0)} 字/分，口头语 ${Number(speechMetrics.fillerCount || 0)} 次`
       : '',
-    Object.keys(score).length ? `本地评分：${Number(score.total || 0)} 分，${asString(score.feedback)}` : ''
   ].filter(Boolean).join('\n');
   }).join('\n\n');
-  const sessionScore = asRecord(session.score);
 
   await context.update(38, '生成深度点评');
   const prompt = context.compilePrompt(BusinessTutorPromptCode.InterviewReview, {
     interviewType: asString(session.interviewType),
     difficulty: asString(session.difficulty),
     questionTypes: Array.isArray(session.questionTypes) ? session.questionTypes.map(String) : [],
-    localScore: {
-      total: Number(sessionScore.total || 0),
-      feedback: asString(sessionScore.feedback)
-    },
     answers
   });
   const rawFeedback = await context.complete([
     { role: 'system', content: prompt.system },
     { role: 'user', content: prompt.user }
   ], { temperature: 0.15, responseSchema: prompt.responseSchema });
-  const review = parseInterviewReview(rawFeedback, sessionScore);
+  const review = parseInterviewReview(rawFeedback);
 
   await context.update(86, '写入面试点评');
   const saved = await context.saveLearningAsset({
@@ -413,10 +399,14 @@ export const interviewReviewExecutor: BusinessAgentExecutor = async (task, conte
     payload: {
       ...session,
       aiFeedback: review.feedback,
-      aiScore: review.score,
-      aiConfidence: review.confidence,
-      aiDimensions: review.dimensions,
+      score: {
+        total: review.score,
+        confidence: review.confidence,
+        rubricVersion: 'interview_rubric@1.0.0',
+        dimensions: review.dimensions
+      },
       aiSuggestions: review.suggestions,
+      reviewStatus: 'completed',
       rubricVersion: 'interview_rubric@1.0.0',
       updatedAt: Date.now()
     }
@@ -425,6 +415,7 @@ export const interviewReviewExecutor: BusinessAgentExecutor = async (task, conte
     const dimension = review.dimensions.find((item) => item.code === code);
     return {
       capabilityCode: `interview.${code}`,
+      dimensionKey: code,
       score: normalizePercent(dimension?.score ?? review.score) / 100,
       confidence: dimension ? review.confidence : review.confidence * 0.7,
       metadata: {

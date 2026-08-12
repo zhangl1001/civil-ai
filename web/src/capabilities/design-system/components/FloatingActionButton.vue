@@ -8,7 +8,7 @@
       }
     ]"
     type="button"
-    :aria-label="label"
+    :aria-label="ariaLabel || label"
     :aria-busy="busy"
     :title="title || label"
     :disabled="disabled"
@@ -21,12 +21,14 @@
 <script setup lang="ts">
 withDefaults(defineProps<{
   label: string;
+  ariaLabel?: string;
   title?: string;
   avoidBottomNav?: boolean;
   busy?: boolean;
   disabled?: boolean;
 }>(), {
   title: '',
+  ariaLabel: '',
   avoidBottomNav: false,
   busy: false,
   disabled: false

@@ -39,103 +39,35 @@
         <template v-else>
           <section class="tutor-hero">
             <div class="hero-copy">
-              <span>今日私教判断</span>
+              <div class="hero-heading">
+                <span>今日私教判断</span>
+              </div>
               <strong>{{ tutorDecisionTitle }}</strong>
               <p>{{ tutorDecisionDetail }}</p>
             </div>
-            <div class="hero-meter">
+            <button
+              class="hero-meter"
+              type="button"
+              :aria-label="`查看${heroMetric.label}的判断依据`"
+              @click="router.push('/vue/quality-dashboard')"
+            >
               <strong>{{ heroMetric.value }}</strong>
               <span>{{ heroMetric.label }}</span>
-            </div>
+            </button>
             <small class="hero-evidence">{{ tutorDecisionEvidence }}</small>
             <div class="hero-actions">
               <button class="primary-action" type="button" @click="router.push(primaryTutorAction.to)">
                 <component :is="primaryTutorAction.icon" />
                 {{ primaryTutorAction.name }}
               </button>
-              <button type="button" @click="router.push('/vue/quality-dashboard')">
-                <TargetIcon />
-                查看判断依据
+              <button type="button" @click="router.push('/vue/plan')">
+                <SparklesIcon />
+                每日计划
               </button>
             </div>
           </section>
 
-          <section v-if="hasReliableAbilityProfile" class="portrait-section">
-            <div class="section-title">
-              <strong>个人能力画像</strong>
-              <button type="button" @click="router.push('/vue/quality-dashboard')">完整报告</button>
-            </div>
-            <div class="score-grid">
-              <article v-for="score in scoreRows" :key="score.subject" class="score-card">
-                <span>{{ score.label }}</span>
-                <strong>{{ score.current }}</strong>
-                <em>目标 {{ score.target }}</em>
-                <b :class="score.tone">{{ score.gapText }}</b>
-              </article>
-            </div>
-            <div class="ability-chart-card">
-              <div class="chart-head">
-                <strong>能力雷达</strong>
-                <span>{{ radarModules.length ? '模块正确率' : '等待练习样本' }}</span>
-              </div>
-              <div v-if="radarEvidenceCount >= 3" class="radar-panel">
-                <svg class="ability-radar" viewBox="0 0 200 200" role="img" aria-label="能力雷达图">
-                  <polygon v-for="ring in radarGridPolygons" :key="ring" class="radar-ring" :points="ring" />
-                  <line
-                    v-for="axis in radarAxis"
-                    :key="`axis-${axis.name}`"
-                    class="radar-axis"
-                    x1="100"
-                    y1="100"
-                    :x2="axis.x"
-                    :y2="axis.y"
-                  />
-                  <polygon class="radar-area" :points="radarPolygon" />
-                  <circle
-                    v-for="point in radarPoints"
-                    :key="`point-${point.name}`"
-                    class="radar-point"
-                    :cx="point.x"
-                    :cy="point.y"
-                    r="3.2"
-                  />
-                  <text
-                    v-for="axis in radarAxis"
-                    :key="`label-${axis.name}`"
-                    class="radar-label"
-                    :x="axis.labelX"
-                    :y="axis.labelY"
-                    :text-anchor="axis.anchor"
-                  >
-                    {{ axis.shortName }}
-                  </text>
-                </svg>
-                <div class="radar-legend">
-                  <span v-for="item in radarModules" :key="item.name">
-                    <i :style="{ opacity: `${Math.max(.45, item.accuracy / 100)}` }"></i>
-                    {{ item.name }} {{ item.accuracy }}%
-                  </span>
-                </div>
-              </div>
-              <AppStateView v-else compact title="雷达图待生成" description="完成至少 3 个模块的练习后，会形成更直观的能力画像。" />
-            </div>
-            <div class="portrait-metrics">
-              <article>
-                <span>累计题数</span>
-                <strong>{{ quality?.totalQuestions || 0 }}</strong>
-              </article>
-              <article>
-                <span>连续学习</span>
-                <strong>{{ quality?.streak || 0 }}天</strong>
-              </article>
-              <article>
-                <span>待复习错题</span>
-                <strong>{{ quality?.reviewDueCount || 0 }}</strong>
-              </article>
-            </div>
-          </section>
-
-          <section v-else class="baseline-card">
+          <section v-if="!hasReliableAbilityProfile" class="baseline-card">
             <div>
               <span>能力校准</span>
               <strong>先补齐可信样本，再判断薄弱点</strong>
@@ -144,13 +76,15 @@
             <button type="button" @click="router.push(primaryTutorAction.to)">开始校准</button>
           </section>
 
+          <HomeActionGrid />
+
           <section v-if="weakModules.length" class="section-group">
             <div class="section-title">
               <strong>薄弱点与训练优先级</strong>
               <button type="button" @click="router.push('/vue/knowledge-graph')">知识地图</button>
             </div>
             <div v-if="weakModules.length" class="weak-list">
-              <button v-for="(item, index) in weakModules" :key="item.name" type="button" class="weak-row" @click="startWeakPractice(item.name)">
+              <button v-for="(item, index) in weakModules" :key="item.code" type="button" class="weak-row" @click="startWeakPractice(item.code)">
                 <i>{{ index + 1 }}</i>
                 <span>
                   <strong>{{ item.name }}</strong>
@@ -161,19 +95,83 @@
             </div>
           </section>
 
-          <section v-if="recommendedActions.length" class="section-group">
+          <section v-if="hasReliableAbilityProfile" class="section-group">
             <div class="section-title">
-              <strong>接下来</strong>
-              <span>根据当前阶段动态排序</span>
+              <strong>个人能力画像</strong>
+              <button type="button" @click="router.push('/vue/quality-dashboard')">完整报告</button>
             </div>
-            <div class="action-grid">
-              <button v-for="action in recommendedActions" :key="action.name" type="button" class="action-card" @click="router.push(action.to)">
-                <i :class="action.color"><component :is="action.icon" /></i>
-                <strong>{{ action.name }}</strong>
-                <span>{{ action.sub }}</span>
-              </button>
+            <div class="portrait-section">
+              <div class="score-grid">
+                <article v-for="score in scoreRows" :key="score.subject" class="score-card">
+                  <span>{{ score.label }}</span>
+                  <strong>{{ score.current }}</strong>
+                  <em>{{ score.currentMeta }} · 目标 {{ score.target }}</em>
+                  <b :class="score.tone">{{ score.gapText }}</b>
+                </article>
+              </div>
+              <div class="ability-chart-card">
+                <div class="chart-head">
+                  <strong>能力雷达</strong>
+                  <span>{{ radarModules.length ? '模块正确率' : '等待练习样本' }}</span>
+                </div>
+                <div v-if="radarEvidenceCount >= 3" class="radar-panel">
+                  <svg class="ability-radar" viewBox="0 0 200 200" role="img" aria-label="能力雷达图">
+                    <polygon v-for="ring in radarGridPolygons" :key="ring" class="radar-ring" :points="ring" />
+                    <line
+                      v-for="axis in radarAxis"
+                      :key="`axis-${axis.name}`"
+                      class="radar-axis"
+                      x1="100"
+                      y1="100"
+                      :x2="axis.x"
+                      :y2="axis.y"
+                    />
+                    <polygon class="radar-area" :points="radarPolygon" />
+                    <circle
+                      v-for="point in radarPoints"
+                      :key="`point-${point.name}`"
+                      class="radar-point"
+                      :cx="point.x"
+                      :cy="point.y"
+                      r="3.2"
+                    />
+                    <text
+                      v-for="axis in radarAxis"
+                      :key="`label-${axis.name}`"
+                      class="radar-label"
+                      :x="axis.labelX"
+                      :y="axis.labelY"
+                      :text-anchor="axis.anchor"
+                    >
+                      {{ axis.shortName }}
+                    </text>
+                  </svg>
+                  <div class="radar-legend">
+                    <span v-for="item in radarModules" :key="item.name">
+                      <i :style="{ opacity: `${Math.max(.45, item.accuracy / 100)}` }"></i>
+                      {{ item.name }} {{ item.accuracy }}%
+                    </span>
+                  </div>
+                </div>
+                <AppStateView v-else compact title="雷达图待生成" description="完成至少 3 个模块的练习后，会形成更直观的能力画像。" />
+              </div>
+              <div class="portrait-metrics">
+                <article>
+                  <span>累计题数</span>
+                  <strong>{{ quality?.totalQuestions || 0 }}</strong>
+                </article>
+                <article>
+                  <span>连续学习</span>
+                  <strong>{{ quality?.streak || 0 }}天</strong>
+                </article>
+                <article>
+                  <span>待复习错题</span>
+                  <strong>{{ quality?.reviewDueCount || 0 }}</strong>
+                </article>
+              </div>
             </div>
           </section>
+
           <p v-if="tutorLoadError" class="refresh-note" role="status">{{ tutorLoadError }}</p>
         </template>
       </div>
@@ -186,30 +184,48 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   BookMarkedIcon,
-  BookOpenIcon,
   CalendarIcon,
   ChevronRightIcon,
   FileTextIcon,
-  MonitorIcon,
   SparklesIcon,
   TargetIcon
 } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import HomeActionGrid from '@/features/home/HomeActionGrid.vue';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
-import { essayCenterLocation } from '@/features/practice/EssayNavigation';
-import { APTITUDE_PRACTICE_MODULE_OPTIONS } from '@/domain/labels';
+import { useHomeAbilityRadar } from '@/features/home/useHomeAbilityRadar';
+import {
+  tutorPriorityActionLabel,
+  tutorPriorityDetail,
+  tutorPriorityLocation,
+  tutorPriorityTitle
+} from '@/features/home/HomeTutorPriority';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
   InitialDiagnosisStatus,
   type CandidateHomeScore,
   type CandidateHomeSnapshot
 } from '@/modules/candidate/public';
+import {
+  ScoreForecastBasis,
+  type ScoreForecastProjection
+} from '@/modules/calibration/public';
+import type { LearnerPriorityResult } from '@/modules/mastery/public';
 import { qualityDashboardService, type QualityDashboard } from '@/services/QualityDashboardService';
 
 const router = useRouter();
 const candidateHome = ref<CandidateHomeSnapshot | null>(null);
 const quality = ref<QualityDashboard | null>(null);
+const learnerPriorities = ref<readonly LearnerPriorityResult[]>([]);
+const {
+  modules: radarModules,
+  evidenceCount: radarEvidenceCount,
+  axis: radarAxis,
+  points: radarPoints,
+  polygon: radarPolygon,
+  gridPolygons: radarGridPolygons
+} = useHomeAbilityRadar(quality);
 const isTutorLoading = ref(true);
 const tutorLoadError = ref('');
 onMounted(loadTutorHome);
@@ -223,9 +239,15 @@ async function loadTutorHome() {
     candidateHome.value = nextCandidateHome;
     if (nextCandidateHome) {
       isTutorLoading.value = false;
-      quality.value = await qualityDashboardService.dashboard({ candidateHome: nextCandidateHome });
+      const [nextQuality, prioritySnapshot] = await Promise.all([
+        qualityDashboardService.dashboard({ candidateHome: nextCandidateHome }),
+        runtime.buildLearnerPrioritySnapshot.execute()
+      ]);
+      quality.value = nextQuality;
+      learnerPriorities.value = prioritySnapshot?.priorities ?? [];
     } else {
       quality.value = null;
+      learnerPriorities.value = [];
     }
   } catch (error) {
     if (showInitialLoading) candidateHome.value = null;
@@ -258,7 +280,13 @@ const cycleSubtitle = computed(() => {
   return `${phaseLabels[candidateHome.value.phase] || '备考中'} · ${dayText}`;
 });
 
-const scoreRows = computed(() => (candidateHome.value?.scores || []).map(formatScore));
+const scoreRows = computed(() => {
+  const forecasts = quality.value?.calibration?.scoreForecasts || [];
+  return (candidateHome.value?.scores || []).map((score) => formatScore(
+    score,
+    forecasts.find((forecast) => forecast.subject === score.subject)
+  ));
+});
 
 const aptitudeForecast = computed(() => quality.value?.calibration?.scoreForecasts.find(
   (item) => item.subject === 'aptitude' && item.center !== undefined
@@ -274,54 +302,28 @@ const hasReliableAbilityProfile = computed(() => (quality.value?.moduleDiagnoses
   (item) => item.diagnosisType !== 'insufficient_sample'
 ));
 
-const weakModules = computed(() => (quality.value?.priorityModules || []).slice(0, 3));
+const recommendedPriority = computed(() => (
+  learnerPriorities.value.find((item) => item.reliable)
+  ?? learnerPriorities.value[0]
+));
 
-const radarModules = computed(() => {
-  return APTITUDE_PRACTICE_MODULE_OPTIONS.map((option) => {
-    const module = quality.value?.modules.find((item) => item.code === option.code);
-    return { name: option.name, accuracy: module?.accuracy || 0, total: module?.total || 0 };
+const weakModules = computed(() => {
+  const seen = new Set<string>();
+  const ordered = learnerPriorities.value.flatMap((priority) => {
+    if (!priority.reliable || seen.has(priority.module)) return [];
+    const module = quality.value?.modules.find((item) => item.code === priority.module);
+    if (!module) return [];
+    seen.add(priority.module);
+    return [module];
   });
+  return (ordered.length ? ordered : quality.value?.priorityModules || []).slice(0, 3);
 });
-const radarEvidenceCount = computed(() => radarModules.value.filter((item) => item.total > 0).length);
-
-const radarAxis = computed(() => {
-  const total = radarModules.value.length;
-  return radarModules.value.map((module, index) => {
-    const point = radarPoint(index, total, 1);
-    const label = radarPoint(index, total, 1.18);
-    return {
-      name: module.name,
-      shortName: module.name.length > 4 ? `${module.name.slice(0, 4)}` : module.name,
-      x: point.x,
-      y: point.y,
-      labelX: label.x,
-      labelY: label.y,
-      anchor: label.x > 112 ? 'start' : label.x < 88 ? 'end' : 'middle'
-    };
-  });
-});
-
-const radarPoints = computed(() => {
-  const total = radarModules.value.length;
-  return radarModules.value.map((module, index) => ({
-    name: module.name,
-    ...radarPoint(index, total, module.accuracy / 100)
-  }));
-});
-
-const radarPolygon = computed(() => radarPoints.value.map((point) => `${point.x},${point.y}`).join(' '));
-const radarGridPolygons = computed(() => [0.25, 0.5, 0.75, 1].map((scale) => (
-  radarModules.value.map((_, index) => {
-    const point = radarPoint(index, radarModules.value.length, scale);
-    return `${point.x},${point.y}`;
-  }).join(' ')
-)));
 
 const tutorDecisionTitle = computed(() => {
   if (!quality.value?.totalQuestions) return '先建立可信能力基线';
   if ((quality.value.reviewDueCount || 0) > 0) return '先复盘到期错题，再做新题';
   if (!hasReliableAbilityProfile.value) return '继续补齐样本，暂不判断薄弱点';
-  if (quality.value.weakestModule) return `今天优先突破 ${quality.value.weakestModule.name}`;
+  if (recommendedPriority.value) return tutorPriorityTitle(recommendedPriority.value);
   return '保持当前节奏，做一次轻量巩固';
 });
 
@@ -329,7 +331,7 @@ const tutorDecisionDetail = computed(() => {
   if (!quality.value?.totalQuestions) return '当前样本还少，先完成一组针对性练习，让 AI 私教确认你的真实起点。';
   if ((quality.value.reviewDueCount || 0) > 0) return `${quality.value.reviewDueCount} 道错题已到复习窗口，先闭环旧问题，训练效率更高。`;
   if (!hasReliableAbilityProfile.value) return '已有作答还不足以形成可信模块结论，接下来优先补齐高信息量样本。';
-  if (quality.value.weakestModule) return `${quality.value.weakestModule.name} 当前正确率 ${quality.value.weakestModule.accuracy}%，适合先讲解再配一组专项训练。`;
+  if (recommendedPriority.value) return tutorPriorityDetail(recommendedPriority.value);
   return '近阶段训练状态稳定，继续用计划保持手感，并做少量迁移训练。';
 });
 
@@ -358,43 +360,49 @@ const primaryTutorAction = computed(() => {
   if (!hasReliableAbilityProfile.value) {
     return { name: '建立能力样本', icon: SparklesIcon, to: practiceDetailLocation({ mode: 'tutor' }) };
   }
-  if (quality.value?.weakestModule) {
+  if (recommendedPriority.value) {
+    const priority = recommendedPriority.value;
     return {
-      name: `突破${quality.value.weakestModule.name}`,
-      icon: TargetIcon,
-      to: practiceDetailLocation({ mode: 'tutor', module: quality.value.weakestModule.name })
+      name: tutorPriorityActionLabel(priority),
+      icon: priority.subject === 'essay' ? FileTextIcon : TargetIcon,
+      to: tutorPriorityLocation(priority)
     };
   }
-  return { name: '查看今日计划', icon: SparklesIcon, to: '/vue/plan' };
+  return { name: '开始轻量巩固', icon: SparklesIcon, to: practiceDetailLocation({ mode: 'tutor' }) };
 });
 
-const recommendedActions = computed(() => {
-  const actions = [];
-  if (candidateHome.value?.phase === 'sprint') {
-    actions.push({ name: '阶段模考', sub: '用整卷校准冲刺状态', icon: MonitorIcon, color: 'mock', to: '/vue/exam' });
-  } else {
-    actions.push({ name: '学习中心', sub: '先理解知识，再进入训练', icon: BookOpenIcon, color: 'study', to: '/vue/study' });
-  }
-  const essayGap = candidateHome.value?.scores.find((item) => item.subject === 'essay')?.gap;
-  if (essayGap === undefined || essayGap > 0) {
-    actions.push({ name: '申论中心', sub: '材料阅读、作答与批改', icon: FileTextIcon, color: 'essay', to: essayCenterLocation('tutor') });
-  }
-  if ((quality.value?.openWrongCount || 0) > 0 && !(quality.value?.reviewDueCount || 0)) {
-    actions.push({ name: '错题复盘', sub: '关闭尚未解决的错误', icon: BookMarkedIcon, color: 'wrong', to: '/vue/wrongbook' });
-  }
-  if (primaryTutorAction.value.name !== '查看今日计划') {
-    actions.push({ name: '今日计划', sub: '查看学习、练习与复习安排', icon: SparklesIcon, color: 'practice', to: '/vue/plan' });
-  }
-  return actions.slice(0, 3);
-});
-
-function formatScore(score: CandidateHomeScore) {
+function formatScore(score: CandidateHomeScore, forecast?: ScoreForecastProjection) {
   const label = subjectLabels[score.subject] || score.subject;
-  const current = score.currentScore === undefined ? '待诊断' : `${score.currentScore}`;
-  const gap = score.gap;
+  const currentScore = forecast?.center ?? score.currentScore;
+  const current = currentScore === undefined ? '待诊断' : `${currentScore}`;
+  const gap = currentScore === undefined ? undefined : roundScore(score.targetScore - currentScore);
   const gapText = gap === undefined ? '待确认差距' : gap <= 0 ? '已达目标' : `差 ${gap} 分`;
   const tone = gap === undefined ? 'unknown' : gap <= 0 ? 'good' : gap >= 15 ? 'danger' : 'warning';
-  return { subject: score.subject, label, current, target: score.targetScore, gapText, tone };
+  return {
+    subject: score.subject,
+    label,
+    current,
+    currentMeta: forecastBasisLabel(forecast?.basis, score.evidenceLabel),
+    target: score.targetScore,
+    gapText,
+    tone
+  };
+}
+
+function forecastBasisLabel(
+  basis: ScoreForecastProjection['basis'] | undefined,
+  evidenceLabel: CandidateHomeScore['evidenceLabel']
+): string {
+  if (basis === ScoreForecastBasis.TrueQuestionCalibrated) return '真题校准';
+  if (basis === ScoreForecastBasis.Blended) return '综合预测';
+  if (basis === ScoreForecastBasis.TrainingEvidence) return '训练预测';
+  if (basis === ScoreForecastBasis.Measured || evidenceLabel === 'measured') return '最近测评';
+  if (basis === ScoreForecastBasis.SelfReport || evidenceLabel === 'self_report') return '自报基线';
+  return '能力待诊断';
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 10) / 10;
 }
 
 function daysUntil(value: string): number | undefined {
@@ -404,22 +412,12 @@ function daysUntil(value: string): number | undefined {
 }
 
 function startWeakPractice(module: string) {
-  void router.push(practiceDetailLocation({ mode: 'tutor', module }));
+  const priority = learnerPriorities.value.find((item) => item.module === module);
+  void router.push(priority
+    ? tutorPriorityLocation(priority)
+    : practiceDetailLocation({ mode: 'tutor', module }));
 }
 
-function radarPoint(index: number, total: number, scale: number): { x: number; y: number } {
-  if (total <= 0) return { x: 100, y: 100 };
-  const angle = -Math.PI / 2 + (Math.PI * 2 * index) / total;
-  const radius = 66 * scale;
-  return {
-    x: roundChart(100 + Math.cos(angle) * radius),
-    y: roundChart(100 + Math.sin(angle) * radius)
-  };
-}
-
-function roundChart(value: number): number {
-  return Math.round(value * 10) / 10;
-}
 </script>
 
 <style scoped>
@@ -517,7 +515,15 @@ function roundChart(value: number): number {
   min-width: 0;
 }
 
-.hero-meter { min-width:0; min-height:78px; border-radius:16px; padding:9px 6px; display:grid; place-items:center; align-content:center; overflow:hidden; background:rgba(var(--color-brand-rgb),.045); }
+.hero-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hero-meter { min-width:0; min-height:78px; border:0; border-radius:16px; padding:9px 6px; display:grid; place-items:center; align-content:center; overflow:hidden; background:rgba(var(--color-brand-rgb),.045); font:inherit; transition:transform var(--motion-fast) ease, background var(--motion-fast) ease; }
+
+.hero-meter:active { transform:scale(.96); background:rgba(var(--color-brand-rgb),.09); }
 
 .hero-meter strong { max-width:100%; color:var(--primary-color); font-size:var(--type-size-metric); line-height:1; font-variant-numeric:tabular-nums; white-space:nowrap; }
 
@@ -814,56 +820,6 @@ function roundChart(value: number): number {
   height: 16px;
   color: var(--text-secondary-color);
 }
-
-.action-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.action-card {
-  min-height: 104px;
-  border: 0;
-  border-radius: var(--radius-card);
-  padding: 13px;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  color: inherit;
-  background: var(--surface-card);
-  box-shadow: var(--app-shadow-soft);
-  font: inherit;
-  text-align: left;
-}
-
-.action-card i {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-}
-
-.action-card svg {
-  width: 18px;
-  height: 18px;
-}
-
-.action-card strong {
-  font-size: var(--type-size-body);
-}
-
-.action-card span {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-caption);
-}
-
-.action-card .study { color: var(--green-color); background: rgba(52,199,89,.12); }
-.action-card .practice,
-.action-card .report { color: var(--primary-color); background: rgba(var(--color-brand-rgb), .12); }
-.action-card .wrong { color: var(--red-color); background: rgba(255,59,48,.11); }
-.action-card .essay { color: var(--orange-color); background: rgba(255,149,0,.12); }
-.action-card .mock { color: #1e8e3e; background: rgba(30,142,62,.12); }
 
 .refresh-note { margin: 0; color: var(--text-secondary-color); font-size: var(--type-size-micro); text-align: center; }
 

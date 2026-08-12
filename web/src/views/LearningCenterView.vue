@@ -56,13 +56,23 @@
         </div>
         <p class="section-context">首页按模块判断能力差距，这里下钻到细分考点安排讲解。</p>
         <div v-if="weakPoints.length" class="weak-list">
-          <button v-for="point in weakPoints" :key="`${point.module}-${point.name}`" type="button" @click="learn(point)">
-            <span>
-              <strong>{{ point.name }}</strong>
-              <em>{{ point.module }} · {{ point.reason }}</em>
-            </span>
-            <b>{{ point.proficiency }}%</b>
-          </button>
+          <article v-for="point in weakPoints" :key="`${point.module}-${point.name}`" class="weak-row">
+            <button class="weak-main" type="button" @click="learn(point)">
+              <span>
+                <strong>{{ point.name }}</strong>
+                <em>{{ point.module }} · {{ point.reason }}</em>
+              </span>
+              <b>{{ point.evidenceScore }}%</b>
+            </button>
+            <div class="weak-actions">
+              <button type="button" title="我已掌握，降低推荐优先级" @click="requestPreference(point, 'deprioritized')">
+                <CheckCircle2Icon /><span>已会</span>
+              </button>
+              <button type="button" title="七天内暂不推荐" @click="requestPreference(point, 'paused')">
+                <PauseCircleIcon /><span>暂缓</span>
+              </button>
+            </div>
+          </article>
         </div>
         <AppStateView v-else compact title="当前重点已学" description="阅读完成不等于掌握，请到刷题中心用真实作答验证；新的薄弱考点会继续补入。" />
       </section>
@@ -100,6 +110,14 @@
       <p v-if="loadError" class="refresh-warning">刷新失败，当前仍显示上一次的学习建议。</p>
       </template>
     </PullToRefresh>
+
+    <ConfirmDialog
+      v-model="preferenceDialogOpen"
+      :title="preferenceDialogTitle"
+      :description="preferenceDialogDescription"
+      :confirm-text="preferenceMode === 'paused' ? '暂缓 7 天' : '降低优先级'"
+      @confirm="applyPreference"
+    />
   </div>
 </template>
 
@@ -111,17 +129,21 @@ import {
   BookOpenCheckIcon,
   BookOpenIcon,
   CalendarDaysIcon,
+  CheckCircle2Icon,
   ChevronRightIcon,
   FileTextIcon,
   LandmarkIcon,
   MapIcon,
+  PauseCircleIcon,
   TargetIcon
 } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
 import { digestService } from '@/services/DigestService';
 import { studyService, type StudyDashboard, type StudyPoint } from '@/services/StudyService';
 import { essayCenterLocation } from '@/features/practice/EssayNavigation';
+import { CapabilityRecommendationMode } from '@/modules/mastery/public';
 
 const router = useRouter();
 const studyDashboard = ref<StudyDashboard | null>(null);
@@ -129,6 +151,9 @@ const digestCount = ref(0);
 const digestCompleted = ref(false);
 const isLoading = ref(false);
 const loadError = ref('');
+const preferenceDialogOpen = ref(false);
+const preferencePoint = ref<StudyPoint>();
+const preferenceMode = ref<'deprioritized' | 'paused'>('deprioritized');
 
 const pendingWeakPoints = computed(() => (studyDashboard.value?.weakPoints || [])
   .filter((point) => point.learningStatus !== 'completed'));
@@ -136,6 +161,12 @@ const weakPoints = computed(() => pendingWeakPoints.value.slice(0, 4));
 const learnedWeakPoint = computed(() => (studyDashboard.value?.weakPoints || [])
   .find((point) => point.learningStatus === 'completed'));
 const digestDone = computed(() => digestCompleted.value);
+const preferenceDialogTitle = computed(() => preferenceMode.value === 'paused'
+  ? `暂缓「${preferencePoint.value?.name || '该考点'}」`
+  : `降低「${preferencePoint.value?.name || '该考点'}」优先级`);
+const preferenceDialogDescription = computed(() => preferenceMode.value === 'paused'
+  ? '七天内不再主动推荐该考点，不会修改已有能力数据。'
+  : '系统会尊重你的判断并降低推荐优先级，但仍会根据后续真实作答重新校准。');
 const learningDecision = computed(() => {
   if (!studyDashboard.value?.hasLearningEvidence) {
     return {
@@ -212,6 +243,25 @@ async function learn(point: StudyPoint) {
     }
   });
 }
+
+function requestPreference(point: StudyPoint, mode: 'deprioritized' | 'paused') {
+  preferencePoint.value = point;
+  preferenceMode.value = mode;
+  preferenceDialogOpen.value = true;
+}
+
+async function applyPreference() {
+  const point = preferencePoint.value;
+  if (!point) return;
+  preferenceDialogOpen.value = false;
+  await studyService.setRecommendationPreference({
+    capabilityNodeId: point.capabilityNodeId,
+    mode: preferenceMode.value === 'paused'
+      ? CapabilityRecommendationMode.Paused
+      : CapabilityRecommendationMode.Deprioritized
+  });
+  await loadDashboard();
+}
 </script>
 
 <style scoped>
@@ -236,13 +286,19 @@ async function learn(point: StudyPoint) {
 .section-context { margin:-3px 0 1px; color:var(--text-secondary-color); font-size:var(--type-size-caption); line-height:1.45; }
 .refresh-warning { margin:0; text-align:center; color:var(--text-secondary-color); font-size:var(--type-size-micro); }
 .weak-list,.practice-list { overflow:hidden; border-radius:var(--radius-card); background:rgba(var(--color-surface-rgb),.56); box-shadow:var(--shadow-card); }
-.weak-list button,.practice-list button { width:100%; min-height:62px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.055); padding:10px 12px; display:flex; align-items:center; gap:10px; color:inherit; background:transparent; text-align:left; font:inherit; }
-.weak-list button:first-child,.practice-list button:first-child { border-top:0; }
-.weak-list button>span,.practice-list button>span { min-width:0; flex:1; }
+.weak-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; border-top:1px solid rgba(var(--color-ink-rgb),.055); }
+.weak-row:first-child { border-top:0; }
+.weak-main,.practice-list button { width:100%; min-height:62px; border:0; padding:10px 12px; display:flex; align-items:center; gap:10px; color:inherit; background:transparent; text-align:left; font:inherit; }
+.practice-list button { border-top:1px solid rgba(var(--color-ink-rgb),.055); }
+.practice-list button:first-child { border-top:0; }
+.weak-main>span,.practice-list button>span { min-width:0; flex:1; }
 .weak-list strong,.weak-list em,.practice-list strong,.practice-list em { display:block; overflow:hidden; text-overflow:ellipsis; }
 .weak-list strong,.practice-list strong { font-size:var(--type-size-secondary); white-space:nowrap; }
 .weak-list em,.practice-list em { margin-top:3px; color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; line-height:1.4; }
 .weak-list b { flex:0 0 auto; border-radius:999px; padding:4px 8px; color:var(--orange-color); background:rgba(255,149,0,.11); font-size:var(--type-size-micro); }
+.weak-actions { display:flex; align-items:center; gap:2px; padding-right:7px; }
+.weak-actions button { min-width:42px; min-height:42px; border:0; padding:4px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; color:var(--text-secondary-color); background:transparent; font:inherit; font-size:var(--type-size-micro); }
+.weak-actions svg { width:15px; height:15px; }
 .feature-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
 .feature-grid button { min-height:112px; border:0; border-radius:var(--radius-card); padding:12px; display:flex; flex-direction:column; align-items:flex-start; gap:7px; color:inherit; background:rgba(var(--color-surface-rgb),.6); box-shadow:var(--shadow-card); text-align:left; font:inherit; }
 .feature-grid i,.practice-list i { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; flex:0 0 auto; }

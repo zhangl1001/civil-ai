@@ -104,6 +104,7 @@ import type {
 } from '@/modules/teaching/public';
 import type { CommandReceiptRepository, OutboxRepository } from '@/modules/task/public';
 import type {
+  BuildLearnerPrioritySnapshot,
   BuildTutorDailyContext,
   TutorCycleRepository
 } from '@/modules/tutoring/public';
@@ -183,6 +184,7 @@ export interface TutorDatabaseRuntime {
   readonly completeObjectivePractice: CompleteObjectivePractice;
   readonly processObjectiveSubmissionOutbox: ProcessObjectiveSubmissionOutbox;
   readonly recordSubjectiveAssessment: RecordSubjectiveAssessment;
+  readonly buildLearnerPrioritySnapshot: BuildLearnerPrioritySnapshot;
   readonly buildTutorDailyContext: BuildTutorDailyContext;
   readonly buildAbilityCalibration: BuildAbilityCalibration;
   readonly createAgentRun: CreateAgentRun;

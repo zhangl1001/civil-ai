@@ -129,13 +129,11 @@
         />
       </section>
       </template>
-
       <EssayPracticeCenterPanel
         v-else
         v-model="activeMode"
       />
     </PullToRefresh>
-
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
       <div class="custom-sheet">
         <label>
@@ -459,9 +457,11 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const state = await (await practiceCenterFeature()).load(
-      String(route.query.dailyPlanItemId || '') || undefined
-    );
+    const state = await (await practiceCenterFeature()).load({
+      planItemId: String(route.query.dailyPlanItemId || '') || undefined,
+      capabilityNodeId: String(route.query.capabilityNodeId || '') || undefined,
+      module: normalizeModule(String(route.query.module || '')) || undefined
+    });
     cycleName.value = state.cycleName;
     examName.value = state.examName;
     candidateProvince.value = state.province;

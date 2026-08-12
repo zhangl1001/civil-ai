@@ -2,7 +2,8 @@ import type { ProviderGateway } from '@/capabilities/ai-runtime/public';
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import {
   AssessmentRole,
-  type LocalDate
+  type LocalDate,
+  type SubjectCode
 } from '@/kernel/public';
 import type { CapabilityNode } from '@/modules/curriculum/public';
 import {
@@ -15,7 +16,6 @@ import type { DailyPlanAggregate, DailyPlanItemRecord } from '@/modules/planning
 import { ReviewReasonCode } from '@/modules/mastery/public';
 import { ReviewPracticeFeature } from './ReviewPracticeFeature';
 import { StructuredPracticeFeature } from './StructuredPracticeFeature';
-import { selectPriorityOrCoverageCapability } from './CapabilitySelection';
 
 export interface TutorPracticePrescription {
   readonly plan?: DailyPlanAggregate;
@@ -38,7 +38,11 @@ export interface TutorPracticeStartResult {
 export class TutorDailyPracticeFeature {
   constructor(private readonly runtime: TutorDatabaseRuntime) {}
 
-  async prepare(preferredPlanItemId?: string): Promise<TutorPracticePrescription> {
+  async prepare(preference: {
+    readonly planItemId?: string;
+    readonly capabilityNodeId?: string;
+    readonly module?: string;
+  } = {}): Promise<TutorPracticePrescription> {
     const cycle = await this.runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
     const curriculum = await this.runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId);
@@ -65,14 +69,20 @@ export class TutorDailyPracticeFeature {
       item.status === 'pending' || item.status === 'in_progress'
     )) ?? [];
     const planItem = (
-      preferredPlanItemId
-        ? executableItems.find((item) => item.id === preferredPlanItemId)
+      preference.planItemId
+        ? executableItems.find((item) => item.id === preference.planItemId)
         : undefined
     ) ?? executableItems[0];
     const nodes = curriculum.capabilityNodes.filter((node) => node.status === 'active' && node.subject === 'aptitude');
+    const explicitlyRequested = nodes.find((node) => node.id === preference.capabilityNodeId)
+      ?? nodes.find((node) => preference.module && node.module === preference.module);
+    const effectivePlanItem = explicitlyRequested && planItem?.capabilityNodeId !== explicitlyRequested.id
+      ? undefined
+      : planItem;
     const capability = (
-      (planItem ? nodes.find((node) => node.id === planItem.capabilityNodeId) : undefined)
-      ?? await this.resolveFallbackCapability(cycle.examCycle.id, nodes)
+      explicitlyRequested
+      ?? (effectivePlanItem ? nodes.find((node) => node.id === effectivePlanItem.capabilityNodeId) : undefined)
+      ?? await this.resolveFallbackCapability(nodes)
     );
     if (!capability) throw new Error('当前大纲没有可训练的能力节点。');
 
@@ -80,18 +90,18 @@ export class TutorDailyPracticeFeature {
       availableMinutes: plan?.plan.availableMinutes ?? availableMinutesForToday(cycle.studyConstraints.weekdayMinutes, cycle.studyConstraints.weekendMinutes),
       strategy: decidePreparationStrategy({ remainingDays: daysUntil(cycle.examCycle.examDate) })
     });
-    const requestedCount = clampCount(planItem?.targetCount ?? defaultCountFor(planItem, load));
+    const requestedCount = clampCount(effectivePlanItem?.targetCount ?? defaultCountFor(effectivePlanItem, load));
     return {
       plan,
-      planItem,
+      planItem: effectivePlanItem,
       capability,
       requestedCount,
-      assessmentRole: roleFor(planItem),
-      title: planItem
-        ? `${actionLabel(planItem.itemType)} · ${capability.name}`
+      assessmentRole: roleFor(effectivePlanItem),
+      title: effectivePlanItem
+        ? `${actionLabel(effectivePlanItem.itemType)} · ${capability.name}`
         : `建立能力样本 · ${capability.name}`,
-      description: planItem
-        ? `${planReasonLabel(planItem.reason)}，计划 ${planItem.targetMinutes} 分钟${planItem.targetCount ? `、${requestedCount} 题` : ''}。`
+      description: effectivePlanItem
+        ? `${planReasonLabel(effectivePlanItem.reason)}，计划 ${effectivePlanItem.targetMinutes} 分钟${effectivePlanItem.targetCount ? `、${requestedCount} 题` : ''}。`
         : '当前还没有可执行的训练项，先从优先能力点建立真实作答证据。'
     };
   }
@@ -156,11 +166,11 @@ export class TutorDailyPracticeFeature {
   }
 
   private async resolveFallbackCapability(
-    examCycleId: Parameters<TutorDatabaseRuntime['masteryRepository']['listPriorityTracks']>[0],
     nodes: readonly CapabilityNode[]
   ): Promise<CapabilityNode | undefined> {
-    const tracks = await this.runtime.masteryRepository.listPriorityTracks(examCycleId, 100);
-    return selectPriorityOrCoverageCapability(nodes, tracks);
+    const snapshot = await this.runtime.buildLearnerPrioritySnapshot.execute({ subject: 'aptitude' as SubjectCode });
+    const selected = snapshot?.priorities.find((item) => nodes.some((node) => node.id === item.capabilityNodeId));
+    return selected ? nodes.find((node) => node.id === selected.capabilityNodeId) : nodes[0];
   }
 }
 

@@ -117,12 +117,12 @@ import { SqliteTutorCycleRepository } from '@/modules/tutoring/adapters/SqliteTu
 import { SqliteAbilityCalibrationRepository } from '@/modules/calibration/adapters/SqliteAbilityCalibrationRepository';
 import { BuildAbilityCalibration } from '@/modules/calibration/public';
 import {
+  BuildLearnerPrioritySnapshot,
   BuildTutorDailyContext,
   FinalizeObjectiveTutorConclusion,
   RecordObjectiveTutorConclusion
 } from '@/modules/tutoring/public';
 import type { TutorDatabaseRuntime } from './TutorDatabaseRuntime';
-
 export type NativeTutorDatabaseRuntime = TutorDatabaseRuntime;
 
 export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRuntime | undefined {
@@ -180,12 +180,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     clock,
     new UuidV7IdGenerator(clock)
   );
-  const learningAssetStore = new LearningAssetStore(
-    unitOfWork,
-    learningAssetRepository,
-    clock,
-    new UuidV7IdGenerator(clock)
-  );
+  const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new SqlitePromptRepository(database, transactionScope);
   const aiInvocationRepository = new SqliteAIInvocationRepository(database, transactionScope);
   const learningThreadRepository = new SqliteLearningThreadRepository(database, transactionScope);
@@ -198,13 +193,9 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const proactiveSignalRepository = new SqliteProactiveSignalRepository(database, transactionScope);
   const learningProgressRepository = new SqliteLearningProgressRepository(database, transactionScope);
   const trackLearningProgress = new TrackLearningProgress(unitOfWork, learningProgressRepository, clock, new UuidV7IdGenerator(clock));
-  const messageCenter = new MessageCenter(
-    unitOfWork,
-    messageCenterRepository,
-    clock,
-    new UuidV7IdGenerator(clock)
-  );
+  const messageCenter = new MessageCenter(unitOfWork, messageCenterRepository, clock, new UuidV7IdGenerator(clock));
   const masteryRepository = new SqliteMasteryRepository(database, transactionScope);
+  const buildLearnerPrioritySnapshot = new BuildLearnerPrioritySnapshot(candidateRepository, curriculumRepository, masteryRepository, learningProgressRepository, clock);
   const dailyPlanRepository = new SqliteDailyPlanRepository(database, transactionScope);
   const evaluateProactiveSignals = new EvaluateProactiveSignals(unitOfWork,candidateRepository,dailyPlanRepository,masteryRepository,proactiveSignalRepository,clock,new UuidV7IdGenerator(clock));
   const deliverProactiveSignals = new DeliverProactiveSignals(unitOfWork,proactiveSignalRepository,messageCenter,clock);
@@ -297,13 +288,6 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     clock,
     new UuidV7IdGenerator(clock)
   );
-  const confirmErrorDiagnosis = new ConfirmErrorDiagnosis(
-    unitOfWork,
-    errorDiagnosisRepository,
-    outboxRepository,
-    clock,
-    new UuidV7IdGenerator(clock)
-  );
   const getObjectiveSessionReview = new GetObjectiveSessionReview(
     learningSessionRepository,
     errorDiagnosisRepository,
@@ -350,6 +334,15 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const refreshMasteryTrack = new RefreshMasteryTrack(
     unitOfWork, masteryRepository, learningEvidenceRepository, clock, new UuidV7IdGenerator(clock)
   );
+  const confirmErrorDiagnosis = new ConfirmErrorDiagnosis(
+    unitOfWork,
+    errorDiagnosisRepository,
+    learningEvidenceRepository,
+    refreshMasteryTrack,
+    outboxRepository,
+    clock,
+    new UuidV7IdGenerator(clock)
+  );
   const recordSubjectiveAssessment = new RecordSubjectiveAssessment(
     unitOfWork,
     learningEvidenceRepository,
@@ -361,7 +354,13 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const completeReviewQueueItem = new CompleteReviewQueueItem(unitOfWork, masteryRepository, clock);
   const failReviewQueueItem = new FailReviewQueueItem(unitOfWork, masteryRepository, clock);
   const retryReviewQueueItem = new RetryReviewQueueItem(unitOfWork, masteryRepository, clock);
-  const buildDailyPlanProposal = new BuildDailyPlanProposal(candidateRepository, masteryRepository, curriculumRepository, clock);
+  const buildDailyPlanProposal = new BuildDailyPlanProposal(
+    candidateRepository,
+    masteryRepository,
+    curriculumRepository,
+    learningProgressRepository,
+    clock
+  );
   const persistDailyPlanProposal = new PersistDailyPlanProposal(unitOfWork, dailyPlanRepository, clock, new UuidV7IdGenerator(clock));
   const updateDailyPlanItemStatus = new UpdateDailyPlanItemStatus(unitOfWork, dailyPlanRepository, clock);
   const rebalanceDailyPlanAfterLearning = new RebalanceDailyPlanAfterLearning(candidateRepository,dailyPlanRepository,buildDailyPlanProposal,persistDailyPlanProposal,clock);
@@ -432,6 +431,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     candidateRepository,
     curriculumRepository,
     masteryRepository,
+    buildLearnerPrioritySnapshot,
     dailyPlanRepository,
     learningSessionRepository,
     contentRepository,
@@ -553,6 +553,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     completeObjectivePractice,
     processObjectiveSubmissionOutbox,
     recordSubjectiveAssessment,
+    buildLearnerPrioritySnapshot,
     buildTutorDailyContext,
     buildAbilityCalibration,
     createAgentRun,

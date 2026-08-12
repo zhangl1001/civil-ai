@@ -9,3 +9,4 @@ export {
   type LearningProgressStatus as LearningProgressStatusCode,
   type LearningResourceType as LearningResourceTypeCode
 } from './domain/LearningProgressCodes';
+export { latestLectureProgressByCapability } from './domain/LearningProgressProjection';

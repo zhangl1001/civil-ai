@@ -100,7 +100,9 @@
 
     <FloatingActionButton
       v-if="showReviewAction"
-      :label="startingReview ? '正在准备错题' : selectedReviewEntries.length ? `开始重做 ${selectedReviewEntries.length} 道` : '请选择要重做的错题'"
+      :label="startingReview ? '准备中' : selectedReviewEntries.length ? `重做 ${selectedReviewEntries.length} 题` : '先选题'"
+      :aria-label="startingReview ? '正在准备错题重做' : selectedReviewEntries.length ? `开始重做已选择的 ${selectedReviewEntries.length} 道错题` : '请先选择要重做的错题'"
+      :title="startingReview ? '正在准备错题重做' : selectedReviewEntries.length ? `开始重做已选择的 ${selectedReviewEntries.length} 道错题` : '请先选择要重做的错题'"
       :disabled="startingReview || !selectedReviewEntries.length"
       :busy="startingReview"
       avoid-bottom-nav
