@@ -42,6 +42,7 @@ const TITLE_BY_INTENT: Record<GenerationIntent, string> = {
   digest: '学习复盘',
   monthlyDigest: '时政月报',
   study: '考点精讲',
+  interviewQuestions: '补充面试题库',
   interviewReview: '面试深度点评',
   trueQuestionResearch: '联网真题研究'
 };
@@ -129,7 +130,7 @@ function businessLineForIntent(intent: GenerationIntent) {
   if (intent === 'practice') return MessageBusinessLine.Practice;
   if (intent === 'redo') return MessageBusinessLine.Review;
   if (intent === 'essayGrade') return MessageBusinessLine.Essay;
-  if (intent === 'interviewReview') return MessageBusinessLine.Interview;
+  if (intent === 'interviewReview' || intent === 'interviewQuestions') return MessageBusinessLine.Interview;
   if (intent === 'mock') return MessageBusinessLine.Exam;
   if (intent === 'trueQuestionResearch') return MessageBusinessLine.Practice;
   if (intent === 'daily' || intent === 'digest' || intent === 'monthlyDigest') return MessageBusinessLine.Digest;
@@ -140,7 +141,7 @@ function routeForInput(input: GenerationTaskInput): string {
   const intent = input.intent;
   if (intent === 'practice' || intent === 'redo') return '/vue/practice/session';
   if (intent === 'essayGrade') return '/vue/essay';
-  if (intent === 'interviewReview') return '/vue/interview';
+  if (intent === 'interviewReview' || intent === 'interviewQuestions') return '/vue/interview';
   if (intent === 'mock') return input.payload?.subject === '申论' ? '/vue/essay' : '/vue/exam';
   if (intent === 'monthlyDigest') return '/vue/monthly-digest';
   if (intent === 'trueQuestionResearch') return '/vue/practice';

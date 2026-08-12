@@ -48,7 +48,6 @@ import {
   digestExecutor,
   essayGradeExecutor,
   generatePracticeExecutor,
-  interviewReviewExecutor,
   mockExecutor,
   studyExecutor,
   type BusinessAgentExecutionContext,
@@ -56,6 +55,7 @@ import {
   type BusinessAgentTask,
   type BusinessAgentTaskType
 } from './BusinessAgentExecutors';
+import { interviewQuestionsExecutor, interviewReviewExecutor } from './BusinessAgentInterviewExecutors';
 import { invokeBusinessAgentModel } from './BusinessAgentModelBridge';
 import {
   runTrueQuestionResearchAgent,
@@ -568,6 +568,7 @@ function executorFor(intent: GenerationIntent): BusinessAgentExecutor {
   if (intent === 'mock') return mockExecutor;
   if (intent === 'daily' || intent === 'digest' || intent === 'monthlyDigest') return digestExecutor;
   if (intent === 'study') return studyExecutor;
+  if (intent === 'interviewQuestions') return interviewQuestionsExecutor;
   if (intent === 'interviewReview') return interviewReviewExecutor;
   throw new Error(`Unsupported business operation: ${intent}`);
 }

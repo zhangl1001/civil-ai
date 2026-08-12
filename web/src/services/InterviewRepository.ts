@@ -10,10 +10,15 @@ import type {
   InterviewStats,
   InterviewType
 } from '@/domain/interview';
+import {
+  INTERVIEW_QUESTION_TYPES,
+  pickInterviewQuestions,
+  prepareInterviewAnswers
+} from '@/domain/interview';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 
-export const INTERVIEW_QUESTION_TYPES: InterviewQuestionType[] = ['综合分析', '计划组织', '人际沟通', '应急应变', '岗位匹配'];
+export { INTERVIEW_QUESTION_TYPES } from '@/domain/interview';
 
 const BANK: Record<InterviewQuestionType, Array<{ text: string; hint: string }>> = {
   综合分析: [
@@ -56,43 +61,88 @@ function businessKey(sessionId: string): string {
   return `interview:${sessionId}`;
 }
 
-function shuffle<T>(items: T[]): T[] {
-  const next = [...items];
-  for (let i = next.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [next[i], next[j]] = [next[j], next[i]];
-  }
-  return next;
-}
-
-function answerCompleteness(answer: InterviewAnswer): InterviewAnswer['completeness'] {
-  const rawAnswer = answer.transcript || answer.answer;
-  const text = rawAnswer.trim();
-  return {
-    status: !text ? 'empty' : text.length < 40 ? 'brief' : 'substantive',
-    characterCount: text.length
-  };
-}
-
 export class InterviewRepository {
-  pickQuestions(types: InterviewQuestionType[], count = 3, excludedIds: ReadonlySet<string> = new Set()): InterviewQuestion[] {
+  pickQuestions(
+    types: InterviewQuestionType[],
+    count = 3,
+    excludedIds: ReadonlySet<string> = new Set(),
+    generatedQuestions: readonly InterviewQuestion[] = []
+  ): InterviewQuestion[] {
     const selected: InterviewQuestionType[] = types.length ? types : ['综合分析'];
-    const pool = selected.flatMap((type) => BANK[type].map((item, index) => ({
+    const builtInPool = selected.flatMap((type) => BANK[type].map((item, index) => ({
       id: `${type}:${index}`,
       type,
       text: item.text,
       hint: item.hint
     })));
-    const unseen = pool.filter((question) => !excludedIds.has(question.id));
-    const candidates = unseen.length >= count ? unseen : [...unseen, ...pool.filter((question) => excludedIds.has(question.id))];
-    return shuffle(candidates).slice(0, count);
+    return pickInterviewQuestions({
+      selectedTypes: selected,
+      count,
+      excludedIds,
+      generatedQuestions,
+      fallbackQuestions: builtInPool
+    });
+  }
+
+  async questionPool(limit = 160): Promise<InterviewQuestion[]> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return [];
+    const assets = await runtime.learningAssetStore.list({
+      examCycleId: cycle.examCycle.id,
+      kinds: [LearningAssetKind.InterviewQuestionPool],
+      status: LearningAssetStatus.Ready,
+      limit: 20
+    });
+    const seen = new Set<string>();
+    return assets.flatMap((asset) => {
+      const payload = asset.payload as { questions?: unknown };
+      if (!Array.isArray(payload.questions)) return [];
+      return payload.questions.flatMap((value) => {
+        const question = value as Partial<InterviewQuestion>;
+        const fingerprint = typeof question.text === 'string' ? question.text.replace(/\s+/g, '') : '';
+        if (
+          !question.id
+          || !question.type
+          || !INTERVIEW_QUESTION_TYPES.includes(question.type)
+          || !question.text
+          || !question.hint
+          || !fingerprint
+          || seen.has(fingerprint)
+        ) return [];
+        seen.add(fingerprint);
+        return [question as InterviewQuestion];
+      });
+    }).slice(0, limit);
+  }
+
+  async ensureQuestionPool(
+    types: InterviewQuestionType[],
+    difficulty: InterviewDifficulty,
+    excludedIds: ReadonlySet<string>
+  ): Promise<AgentTaskEnqueueResult | undefined> {
+    const generatedQuestions = await this.questionPool();
+    const selectedTypes = types.length ? types : INTERVIEW_QUESTION_TYPES;
+    const reusableCount = generatedQuestions.filter((question) => (
+      selectedTypes.includes(question.type) && !excludedIds.has(question.id)
+    )).length;
+    if (reusableCount >= 12) return undefined;
+    return generationTaskService.enqueue({
+      intent: 'interviewQuestions',
+      title: '补充面试题库',
+      detail: '后台准备新的结构化面试训练题',
+      sourceId: 'interview-question-pool',
+      payload: {
+        questionTypes: selectedTypes,
+        difficulty,
+        questionCount: 15,
+        recentQuestions: generatedQuestions.slice(0, 40).map((question) => question.text)
+      }
+    });
   }
 
   prepareAnswers(answers: InterviewAnswer[]): InterviewAnswer[] {
-    return answers.map((answer) => ({
-      ...answer,
-      completeness: answerCompleteness(answer.skipped ? { ...answer, answer: '', transcript: '' } : answer)
-    }));
+    return prepareInterviewAnswers(answers);
   }
 
   async saveSession(input: {
@@ -141,27 +191,6 @@ export class InterviewRepository {
     return asset?.payload as unknown as InterviewSession | undefined;
   }
 
-  async saveAiFeedback(sessionId: string, aiFeedback: string): Promise<InterviewSession | undefined> {
-    const current = await this.getSession(sessionId);
-    if (!current) return undefined;
-    const next: InterviewSession = {
-      ...current,
-      aiFeedback,
-      updatedAt: Date.now()
-    };
-    const runtime = await initializeTutorRuntime();
-    const cycle = await runtime.candidateRepository.findCurrentCycle();
-    if (!cycle) throw new Error('请先完成备考档案。');
-    await runtime.learningAssetStore.save({
-      examCycleId: cycle.examCycle.id,
-      kind: LearningAssetKind.InterviewSession,
-      businessKey: businessKey(sessionId),
-      title: `面试训练 · ${next.date}`,
-      payload: next as unknown as JsonObject
-    });
-    return next;
-  }
-
   async updateReviewState(
     sessionId: string,
     reviewStatus: InterviewSession['reviewStatus'],
@@ -198,8 +227,28 @@ export class InterviewRepository {
         sessionId: session.id
       }
     });
-    await this.updateReviewState(session.id, 'pending', result.task.id);
+    await this.attachReviewTask(session.id, result.task.id);
     return result;
+  }
+
+  private async attachReviewTask(sessionId: string, reviewTaskId: string): Promise<void> {
+    const current = await this.getSession(sessionId);
+    if (!current || current.reviewTaskId === reviewTaskId) return;
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const next: InterviewSession = {
+      ...current,
+      reviewTaskId,
+      updatedAt: Date.now()
+    };
+    await runtime.learningAssetStore.save({
+      examCycleId: cycle.examCycle.id,
+      kind: LearningAssetKind.InterviewSession,
+      businessKey: businessKey(sessionId),
+      title: `面试训练 · ${next.date}`,
+      payload: next as unknown as JsonObject
+    });
   }
 
   async latest(limit = 5): Promise<InterviewSession[]> {

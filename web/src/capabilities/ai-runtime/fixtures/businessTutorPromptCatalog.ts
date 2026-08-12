@@ -6,6 +6,7 @@ import { GENERATION_AUTONOMY_LIMITS } from '../prompt/GenerationBoundaryPolicy';
 export const BusinessTutorPromptCode = {
   EssayGeneration: 'content.generate.essay.question',
   EssayGrade: 'teaching.grade.essay',
+  InterviewQuestions: 'content.generate.interview.questions',
   InterviewReview: 'teaching.review.interview',
   DailyDigest: 'content.generate.digest.daily',
   MonthlyDigest: 'content.generate.digest.monthly',
@@ -98,6 +99,29 @@ const interviewReviewSchema: JsonObject = {
   }
 };
 
+const interviewQuestionsSchema: JsonObject = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['questions'],
+  properties: {
+    questions: {
+      type: 'array',
+      minItems: 6,
+      maxItems: 20,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['type', 'text', 'hint'],
+        properties: {
+          type: { type: 'string', enum: ['综合分析', '计划组织', '人际沟通', '应急应变', '岗位匹配'] },
+          text: { type: 'string', minLength: 1 },
+          hint: { type: 'string', minLength: 1 }
+        }
+      }
+    }
+  }
+};
+
 function section(
   code: typeof PromptSectionCode[keyof typeof PromptSectionCode],
   title: string,
@@ -168,18 +192,34 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
     ]
   }),
   bundle({
+    code: BusinessTutorPromptCode.InterviewQuestions,
+    taskType: 'interview_question_generation',
+    description: '按结构化面试题型补充可复用的训练题池',
+    version: '1.0.0',
+    hash: 'sha256:ce15960eafdbd286516fc1ee87fa7b59c8bc6a340c5e5be335b3e9fba5c4201c',
+    schema: interviewQuestionsSchema,
+    sections: [
+      section(PromptSectionCode.Role, '命题身份与边界', 10, '你是公务员结构化面试教研员。生成原创模拟题，不冒充官方真题，不输出思考过程。'),
+      section(PromptSectionCode.TeachingObjective, '命题目标', 20, '补充能检验观点质量、组织能力、沟通判断、应急处置和岗位匹配的训练题，避免靠背诵模板作答。'),
+      section(PromptSectionCode.InputContract, '输入规格', 30, '输入包含目标题型、难度、数量和近期题目。不得改写或近似重复近期题目；题型分布由输入范围和数量决定。'),
+      section(PromptSectionCode.OutputContract, '输出合同', 40, '只输出 JSON：questions 数组。每题包含 type、text、hint；type 只能是综合分析、计划组织、人际沟通、应急应变、岗位匹配。hint 只提示分析方向，不提供完整答案。'),
+      section(PromptSectionCode.QualityRules, '命题质量', 50, '题目必须有清晰任务和可评价的能力目标；情境题交代角色、约束与冲突；综合分析题避免空泛口号。禁止只替换地名、人名或数字形成伪变式。'),
+      section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查 JSON 可解析、字段完整、题型合法、题目互不重复且与近期题目有实质差异，然后只输出最终 JSON。')
+    ]
+  }),
+  bundle({
     code: BusinessTutorPromptCode.InterviewReview,
     taskType: 'interview_review',
-    description: '结合文本、语音指标和本地评分生成面试复盘',
-    version: '1.1.0',
-    hash: 'sha256:cef73d99843d07f59230a32a34e3ed67160a6006af7d18872e97c1c56e720189',
+    description: '依据真实作答与可用语音指标生成结构化面试复盘',
+    version: '1.2.0',
+    hash: 'sha256:0ecc9fd7f643086f6c44029a91d22f8f08cf6b6e0bdc07e72c0d03313c5cc42a',
     schema: interviewReviewSchema,
     sections: [
       section(PromptSectionCode.Role, '教练身份与边界', 10, '你是公务员面试教练。依据输入记录复盘，严格但鼓励，不虚构现场表现，不输出思考过程。'),
       section(PromptSectionCode.TeachingObjective, '复盘目标', 20, '使用 interview_rubric@1.0.0 找出最影响得分的内容、结构、表达和流畅度问题，并安排下一次训练重点。'),
-      section(PromptSectionCode.InputContract, '输入规格', 30, '输入包含面试类型、难度、题目、作答文本、语音指标和本地评分。语音指标缺失时不得猜测。'),
+      section(PromptSectionCode.InputContract, '输入规格', 30, '输入包含面试类型、难度、题目、作答文本和可选语音指标。语音指标缺失时不得猜测；不得使用字数、连接词或模板短语直接推断高分。'),
       section(PromptSectionCode.OutputContract, '输出合同', 40, '只输出 JSON：score、confidence、feedbackMarkdown、suggestions、dimensions。dimensions 的 code 固定为 content、structure、expression、fluency，每项包含 name、score、comment、evidence。'),
-      section(PromptSectionCode.QualityRules, '点评规则', 50, 'feedbackMarkdown 适合手机阅读，包含总体评价、逐题问题、优化示范和下一次训练重点。建议必须具体、可练习、可复测。'),
+      section(PromptSectionCode.QualityRules, '点评规则', 50, 'content 重点判断是否切题、观点质量、分析深度、事实或场景支撑；structure 判断论证层次和组织关系，不因机械使用“首先、其次、最后”加分；expression 判断准确、自然和岗位语境，fluency 仅在有语音证据时评价节奏与口头表达。feedbackMarkdown 适合手机阅读，包含总体评价、逐题问题、优化示范和下一次训练重点。建议必须具体、可练习、可复测。'),
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查四维评分齐全、有输入证据、没有臆测，并只输出最终 JSON。')
     ]
   }),

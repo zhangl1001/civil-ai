@@ -50,10 +50,11 @@
       </section>
 
       <section v-if="studyDashboard.hasLearningEvidence" class="section-group">
-        <div class="section-title">
-          <strong>需要先学透</strong>
-          <button type="button" @click="router.push('/vue/study/lecture')">知识体系</button>
-        </div>
+        <SectionHeading title="需要先学透">
+          <template #action>
+            <button type="button" @click="router.push('/vue/study/lecture')">知识体系</button>
+          </template>
+        </SectionHeading>
         <p class="section-context">首页按模块判断能力差距，这里下钻到细分考点安排讲解。</p>
         <div v-if="weakPoints.length" class="weak-list">
           <article v-for="point in weakPoints" :key="`${point.module}-${point.name}`" class="weak-row">
@@ -78,10 +79,7 @@
       </section>
 
       <section class="section-group">
-        <div class="section-title">
-          <strong>知识学习</strong>
-          <span>输入与理解</span>
-        </div>
+        <SectionHeading title="知识学习" meta="输入与理解" />
         <div class="feature-grid">
           <button v-for="item in learningItems" :key="item.title" type="button" @click="router.push(item.to)">
             <i :class="item.tone"><component :is="item.icon" /></i>
@@ -92,10 +90,7 @@
       </section>
 
       <section class="section-group">
-        <div class="section-title">
-          <strong>回顾与巩固</strong>
-          <span>理解、练习与节奏回看</span>
-        </div>
+        <SectionHeading title="回顾与巩固" meta="理解、练习与节奏回看" />
         <div class="practice-list">
           <button v-for="item in practiceItems" :key="item.title" type="button" @click="router.push(item.to)">
             <i :class="item.tone"><component :is="item.icon" /></i>
@@ -139,7 +134,7 @@ import {
 } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import { digestService } from '@/services/DigestService';
 import { studyService, type StudyDashboard, type StudyPoint } from '@/services/StudyService';
 import { essayCenterLocation } from '@/features/practice/EssayNavigation';
@@ -280,9 +275,7 @@ async function applyPreference() {
 .learning-overview span,.learning-overview em { display:block; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-micro); font-style:normal; text-overflow:ellipsis; white-space:nowrap; }
 .learning-overview strong { display:block; margin:5px 0 3px; font-size:var(--type-size-body-large); }
 .section-group { display:flex; flex-direction:column; gap:9px; }
-.section-title { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.section-title strong { font-size:var(--type-size-body-large); }
-.section-title span,.section-title button { border:0; padding:3px; color:var(--text-secondary-color); background:transparent; font:inherit; font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); }
+.section-heading button { border:0; padding:3px; color:var(--text-secondary-color); background:transparent; font:inherit; font-size:var(--type-size-micro); font-weight:var(--type-weight-semibold); }
 .section-context { margin:-3px 0 1px; color:var(--text-secondary-color); font-size:var(--type-size-caption); line-height:1.45; }
 .refresh-warning { margin:0; text-align:center; color:var(--text-secondary-color); font-size:var(--type-size-micro); }
 .weak-list,.practice-list { overflow:hidden; border-radius:var(--radius-card); background:rgba(var(--color-surface-rgb),.56); box-shadow:var(--shadow-card); }

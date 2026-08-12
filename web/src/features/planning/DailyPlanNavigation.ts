@@ -1,4 +1,5 @@
 import type { RouteLocationRaw } from 'vue-router';
+import type { SubjectCode } from '@/kernel/public';
 import { DailyPlanDigestType, DailyPlanItemType, type DailyPlanItemRecord } from '@/modules/planning/public';
 
 const PRACTICE_ITEM_TYPES = new Set<DailyPlanItemRecord['itemType']>([
@@ -10,7 +11,7 @@ const PRACTICE_ITEM_TYPES = new Set<DailyPlanItemRecord['itemType']>([
   DailyPlanItemType.Transfer
 ]);
 
-export function dailyPlanItemLocation(item: DailyPlanItemRecord): RouteLocationRaw {
+export function dailyPlanItemLocation(item: DailyPlanItemRecord, subject?: SubjectCode): RouteLocationRaw {
   const context = {
     source: 'daily-plan',
     dailyPlanItemId: item.id,
@@ -18,9 +19,15 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord): RouteLocationR
   };
 
   if (PRACTICE_ITEM_TYPES.has(item.itemType)) {
+    if (subject === 'interview') {
+      return {
+        path: '/vue/interview',
+        query: context
+      };
+    }
     return {
       path: '/vue/practice',
-      query: { ...context, mode: 'tutor', start: '1' }
+      query: { ...context, ...(subject === 'essay' ? { subject: 'essay' } : {}), mode: 'tutor', start: '1' }
     };
   }
   if (item.itemType === DailyPlanItemType.Lecture) {

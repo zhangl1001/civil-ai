@@ -4,6 +4,8 @@ export { default as FloatingActionButton } from './components/FloatingActionButt
 export { default as FloatingBubbleSwitcher } from './components/FloatingBubbleSwitcher.vue';
 export type { FloatingBubbleSwitcherOption } from './components/FloatingBubbleSwitcher.types';
 export { default as InitialRefreshState } from './components/InitialRefreshState.vue';
+export { default as MetricTile } from './components/MetricTile.vue';
+export { default as SectionHeading } from './components/SectionHeading.vue';
 export { default as InfiniteScrollPagination } from './components/InfiniteScrollPagination.vue';
 export { default as PullToRefresh } from './components/PullToRefresh.vue';
 export { default as SurfaceCard } from './components/SurfaceCard.vue';

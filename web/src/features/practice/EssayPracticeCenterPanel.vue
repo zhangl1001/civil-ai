@@ -31,7 +31,7 @@
         @retry="retryGeneration"
         @cancel="cancelGeneration"
       />
-      <button v-else class="essay-action-card" type="button" :disabled="loading || opening" @click="openPractice">
+      <button v-else class="essay-action-card" type="button" :disabled="loading || opening || importingTrueQuestion" @click="openPractice">
         <i><component :is="activeModeIcon" /></i>
         <span>
           <small>{{ actionEyebrow }}</small>
@@ -40,6 +40,25 @@
         </span>
         <ChevronRightIcon />
       </button>
+      <button
+        v-if="!activeTask && modelValue === 'true' && nativeCameraAvailable"
+        class="essay-capture-action"
+        type="button"
+        :disabled="takingPhoto || importingTrueQuestion"
+        @click="capturePhoto"
+      >
+        <LoaderCircleIcon v-if="takingPhoto" class="spinning" />
+        <CameraIcon v-else />
+        {{ takingPhoto ? '正在打开相机…' : '拍摄纸质试卷' }}
+      </button>
+      <input
+        ref="trueQuestionFileInput"
+        hidden
+        type="file"
+        multiple
+        :accept="DOCUMENT_FILE_IMPORT_ACCEPT"
+        @change="selectTrueQuestionFiles"
+      />
       <p v-if="error" class="essay-error" role="alert">{{ error }}</p>
     </section>
 
@@ -98,14 +117,23 @@
         </button>
       </div>
     </BottomSheet>
+
+    <ConfirmDialog
+      v-model="showCameraPermissionDialog"
+      title="需要相机权限"
+      :description="cameraPermissionDescription"
+      confirm-text="去设置"
+      @confirm="openCameraSettings"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { BookOpenCheckIcon, ChevronRightIcon, FileTextIcon, LandmarkIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
+import { BookOpenCheckIcon, CameraIcon, ChevronRightIcon, FileTextIcon, LandmarkIcon, LoaderCircleIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
+import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import PracticeSubjectMark from './PracticeSubjectMark.vue';
@@ -119,6 +147,9 @@ import {
 } from '@/composition-root/public';
 import { EssayPracticeCenterFeature, type EssayPracticeMode, type EssayPracticeSet } from './EssayPracticeCenterFeature';
 import { essayQuestionSetLocation } from './EssayNavigation';
+import { useTrueQuestionImport } from './useTrueQuestionImport';
+import { useTrueQuestionCapture } from './useTrueQuestionCapture';
+import { DOCUMENT_FILE_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
 
 type Mode = EssayPracticeMode;
 const props = defineProps<{ modelValue: Mode }>();
@@ -132,6 +163,23 @@ const activeTask = ref<AgentRunView>();
 const pendingContext = ref<EssayGenerationContext>();
 const pendingQuestionCount = ref(1);
 const error = ref('');
+const trueQuestionFileInput = ref<HTMLInputElement | null>(null);
+const { importingTrueQuestion, importTrueQuestion } = useTrueQuestionImport(
+  (message) => { error.value = message; },
+  'essay'
+);
+const {
+  nativeCameraAvailable,
+  takingPhoto,
+  permissionDescription: cameraPermissionDescription,
+  showPermissionDialog: showCameraPermissionDialog,
+  capturePhoto,
+  openCameraSettings
+} = useTrueQuestionCapture({
+  onCaptured: (files) => { void importTrueQuestion(files); },
+  onError: (message) => { error.value = message; },
+  isBusy: () => importingTrueQuestion.value
+});
 const showHistory = ref(false);
 const showCustomSheet = ref(false);
 const customTopic = ref('归纳概括');
@@ -155,11 +203,15 @@ const modeStates = computed(() => allStates.value.filter((item) => (
   && normalizedMode(item.context.entryMode) === props.modelValue
 )));
 const sets = computed(() => modeStates.value);
-const mainlineDescription = computed(() => props.modelValue === 'tutor' ? '根据今日计划和能力证据安排' : props.modelValue === 'self' ? '选择题型后生成独立题组' : '导入或整理真实申论材料后练习');
-const actionEyebrow = computed(() => props.modelValue === 'tutor' ? '今日教学动作' : props.modelValue === 'self' ? '自主出题' : '真题入口');
-const actionTitle = computed(() => props.modelValue === 'tutor' ? '开始今天的申论私教学习' : props.modelValue === 'self' ? '选择申论题型和训练数量' : '导入或选择申论真题');
-const actionDescription = computed(() => props.modelValue === 'tutor' ? '讲义、材料、小题和批改围绕同一知识目标组织' : props.modelValue === 'self' ? '生成后题组会留在当前分类，不与私教题组混合' : '真题资产单独归档，作答记录可进入能力分析');
-const emptyDescription = computed(() => props.modelValue === 'true' ? '当前还没有申论真题，可从文件导入入口开始建立真题库。' : '点击上方入口创建申论题组，完成后会自动出现在当前分类。');
+const mainlineDescription = computed(() => props.modelValue === 'tutor' ? '根据今日计划和能力证据安排' : props.modelValue === 'self' ? '选择题型后生成独立题组' : '导入真实申论试卷后练习');
+const actionEyebrow = computed(() => props.modelValue === 'tutor' ? '今日教学动作' : props.modelValue === 'self' ? '自主出题' : '真题导入');
+const actionTitle = computed(() => {
+  if (props.modelValue === 'tutor') return '开始今天的申论私教学习';
+  if (props.modelValue === 'self') return '选择申论题型和训练数量';
+  return importingTrueQuestion.value ? '正在读取试卷…' : '导入申论真题';
+});
+const actionDescription = computed(() => props.modelValue === 'tutor' ? '讲义、材料、小题和批改围绕同一知识目标组织' : props.modelValue === 'self' ? '生成后题组会留在当前分类，不与私教题组混合' : 'PDF、图片或文本，AI 整理成草稿后由你确认');
+const emptyDescription = computed(() => props.modelValue === 'true' ? '点击上方导入申论真题，确认入库后会出现在这里。' : '点击上方入口创建申论题组，完成后会自动出现在当前分类。');
 const activeModeIcon = computed(() => modes.find((item) => item.value === props.modelValue)?.icon || BookOpenCheckIcon);
 
 let taskPollId: number | null = null;
@@ -197,9 +249,15 @@ async function openPractice() {
     await startGeneration({ entryMode: 'tutor', topic: '归纳概括', count: 1 });
     return;
   }
-  const latestTrueSet = sets.value[0];
-  if (latestTrueSet) await openSet(latestTrueSet);
-  else error.value = '当前还没有可练习的申论真题。请先完成申论真题导入。';
+  // 真题只能来自导入，所以这个入口就是文件选择，已导入的题组从下方列表进入。
+  trueQuestionFileInput.value?.click();
+}
+
+function selectTrueQuestionFiles(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = input.files ? [...input.files] : [];
+  input.value = '';
+  if (files.length) void importTrueQuestion(files);
 }
 
 async function submitCustom() {
@@ -357,6 +415,11 @@ function modeLabelFor(value?: EssayPracticeMode): string { return modes.find((it
 .essay-action-card strong,.essay-set-list strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--type-size-body); }
 .essay-action-card em,.essay-set-list em,.essay-history em { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; line-height:1.45; }
 .essay-action-card>svg,.essay-set-list button>svg { color:var(--text-secondary-color); flex:0 0 auto; }
+.essay-capture-action { min-height:40px; display:inline-flex; align-items:center; justify-content:center; gap:7px; border:0; border-radius:var(--radius-control); color:var(--primary-color); background:var(--color-brand-soft); font:inherit; font-size:var(--type-size-secondary); font-weight:var(--type-weight-semibold); }
+.essay-capture-action svg { width:16px; height:16px; }
+.essay-capture-action:disabled { opacity:.5; }
+.essay-capture-action .spinning { animation:essay-capture-spin .85s linear infinite; }
+@keyframes essay-capture-spin { to { transform:rotate(360deg); } }
 .essay-error { margin:0; color:var(--danger-color, #c63737); font-size:var(--type-size-caption); line-height:1.5; }
 .essay-set-list { display:flex; flex-direction:column; overflow:hidden; border-radius:var(--radius-card); background:rgba(var(--color-surface-rgb),.62); }
 .essay-set-list button { padding:13px 14px; border-radius:0; border-bottom:1px solid rgba(var(--color-ink-rgb),.06); }

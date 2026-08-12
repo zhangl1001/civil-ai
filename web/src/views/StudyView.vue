@@ -60,7 +60,7 @@
         </section>
 
         <section class="panel app-card lecture-library">
-          <div class="section-title"><strong>我的讲义</strong><span>{{ lectures.length }} 份</span></div>
+          <SectionHeading title="我的讲义" :meta="`${lectures.length} 份`" />
           <AppStateView
             v-if="!lectures.length"
             compact
@@ -80,7 +80,7 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>薄弱考点</strong><span>{{ dashboard.weakPoints.length }} 个需加强</span></div>
+          <SectionHeading title="薄弱考点" :meta="`${dashboard.weakPoints.length} 个需加强`" />
           <div v-if="!dashboard.weakPoints.length" class="inline-empty">完成练习后自动显示薄弱考点</div>
           <button v-for="(point, index) in dashboard.weakPoints" :key="`${point.module}-${point.name}`" type="button" class="weak-card" @click="learn(point)">
             <i :class="index === 0 ? 'danger' : index < 3 ? 'warn' : 'info'">{{ index + 1 }}</i>
@@ -90,7 +90,7 @@
         </section>
 
         <section class="panel app-card">
-          <div class="section-title"><strong>知识体系</strong><span>{{ visibleModules.length }} 个模块</span></div>
+          <SectionHeading title="知识体系" :meta="`${visibleModules.length} 个模块`" />
           <article v-for="module in visibleModules" :key="module.name" class="tree-module">
             <button type="button" class="tree-head" @click="toggle(module.name)">
               <BookOpenIcon /><strong>{{ module.name }}</strong><span>{{ module.total }} 个考点</span>
@@ -120,7 +120,7 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { studyService, type StudyDashboard, type StudyLectureSummary, type StudyPoint } from '@/services/StudyService';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import LectureContent from '@/components/content/LectureContent.vue';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import type { AgentRunView } from '@/modules/agent/public';
@@ -333,10 +333,8 @@ async function learnQuery() {
 .module-filter-options button.active { background:rgba(var(--color-brand-rgb), .12); color:var(--primary-color); }
 .empty-state { min-height: 180px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.72); color: var(--text-secondary-color); font-size: var(--type-size-secondary); }
 .panel { padding: 14px; }
-.section-title,.weak-card,.tree-head { display:flex; align-items:center; }
-.section-title { justify-content:space-between; margin-bottom:10px; }
-.section-title strong { font-size: var(--type-size-body-large); }
-.section-title span { color:var(--text-secondary-color); font-size: var(--type-size-micro); font-weight: var(--type-weight-semibold); }
+.weak-card,.tree-head { display:flex; align-items:center; }
+.section-heading { margin-bottom:10px; }
 .inline-empty { padding:14px; text-align:center; color:var(--text-secondary-color); font-size: var(--type-size-secondary); }
 .lecture-library { overflow:hidden; }
 .lecture-row { width:100%; min-height:62px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.06); padding:10px 0; display:flex; align-items:center; gap:10px; color:inherit; background:transparent; text-align:left; font:inherit; }

@@ -79,10 +79,11 @@
           <HomeActionGrid />
 
           <section v-if="weakModules.length" class="section-group">
-            <div class="section-title">
-              <strong>薄弱点与训练优先级</strong>
-              <button type="button" @click="router.push('/vue/knowledge-graph')">知识地图</button>
-            </div>
+            <SectionHeading title="薄弱点与训练优先级">
+              <template #action>
+                <button type="button" @click="router.push('/vue/knowledge-graph')">知识地图</button>
+              </template>
+            </SectionHeading>
             <div v-if="weakModules.length" class="weak-list">
               <button v-for="(item, index) in weakModules" :key="item.code" type="button" class="weak-row" @click="startWeakPractice(item.code)">
                 <i>{{ index + 1 }}</i>
@@ -96,10 +97,11 @@
           </section>
 
           <section v-if="hasReliableAbilityProfile" class="section-group">
-            <div class="section-title">
-              <strong>个人能力画像</strong>
-              <button type="button" @click="router.push('/vue/quality-dashboard')">完整报告</button>
-            </div>
+            <SectionHeading title="个人能力画像">
+              <template #action>
+                <button type="button" @click="router.push('/vue/quality-dashboard')">完整报告</button>
+              </template>
+            </SectionHeading>
             <div class="portrait-section">
               <div class="score-grid">
                 <article v-for="score in scoreRows" :key="score.subject" class="score-card">
@@ -191,7 +193,7 @@ import {
   TargetIcon
 } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import HomeActionGrid from '@/features/home/HomeActionGrid.vue';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { useHomeAbilityRadar } from '@/features/home/useHomeAbilityRadar';
@@ -486,7 +488,7 @@ function startWeakPractice(module: string) {
 
 .onboarding-card button,
 .hero-actions button,
-.section-title button {
+.section-heading button {
   border: 0;
   font: inherit;
 }
@@ -566,19 +568,7 @@ function startWeakPractice(module: string) {
 .baseline-card strong { display: block; margin-top: 4px; font-size: var(--type-size-body-large); }
 .baseline-card button { min-height: 38px; flex: 0 0 auto; border: 0; border-radius: var(--radius-pill); padding: 0 13px; color: var(--primary-color); background: rgba(var(--color-brand-rgb), .1); font: inherit; font-size: var(--type-size-caption); font-weight: var(--type-weight-semibold); }
 
-.section-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.section-title strong {
-  font-size: var(--type-size-body-large);
-}
-
-.section-title span,
-.section-title button {
+.section-heading button {
   color: var(--text-secondary-color);
   background: transparent;
   font-size: var(--type-size-micro);

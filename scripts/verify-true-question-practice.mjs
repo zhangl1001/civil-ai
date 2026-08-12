@@ -228,6 +228,7 @@ async function verifyRepositoryAndViewContracts() {
     indexedDb,
     centerView,
     libraryActions,
+    captureComposable,
     importFeature,
     importComposable,
     researchAgent,
@@ -244,6 +245,7 @@ async function verifyRepositoryAndViewContracts() {
     readFile(path.join(webRoot, 'src/modules/content/adapters/IndexedDbContentRepository.ts'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/TutorPracticeCenterView.vue'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/TrueQuestionLibraryActions.vue'), 'utf8'),
+    readFile(path.join(webRoot, 'src/features/practice/useTrueQuestionCapture.ts'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/TrueQuestionImportFeature.ts'), 'utf8'),
     readFile(path.join(webRoot, 'src/features/practice/useTrueQuestionImport.ts'), 'utf8'),
     readFile(path.join(webRoot, 'src/composition-root/agent/TrueQuestionResearchAgent.ts'), 'utf8'),
@@ -275,8 +277,11 @@ async function verifyRepositoryAndViewContracts() {
   assert.match(libraryActions, /AI 联网找题/);
   assert.match(libraryActions, /DOCUMENT_FILE_IMPORT_ACCEPT/);
   assert.doesNotMatch(libraryActions, /image\/\*/);
-  assert.match(libraryActions, /CameraPermissionError/);
   assert.match(libraryActions, /confirm-text="去设置"/);
+  assert.match(libraryActions, /useTrueQuestionCapture/);
+  assert.match(captureComposable, /CameraPermissionError/);
+  assert.match(captureComposable, /cameraCaptureService\.openAppSettings/);
+  assert.match(captureComposable, /permissionStatus === 'restricted'/);
   assert.match(importFeature, /skillNames: \['tutor\.question_bank_ingestion'\]/);
   assert.match(importFeature, /待确认草稿/);
   assert.match(importComposable, /enqueueBusinessAgentTask\(\{/);

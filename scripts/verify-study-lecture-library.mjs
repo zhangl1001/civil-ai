@@ -15,7 +15,7 @@ assert.match(service, /async listLectures\(limit = 20\)/);
 assert.match(service, /kinds: \[LearningAssetKind\.StudyLecture\]/);
 assert.match(service, /status: LearningAssetStatus\.Ready/);
 assert.match(service, /seen\.has\(asset\.businessKey\)/);
-assert.match(view, />我的讲义</);
+assert.match(view, /title="我的讲义"/);
 assert.match(view, /studyService\.listLectures\(\)/);
 assert.match(view, /openLecture\(lecture\.id, lecture\.capabilityNodeId\)/);
 assert.match(view, /query: \{ assetId, \.\.\.\(capabilityNodeId/);

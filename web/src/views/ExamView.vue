@@ -51,10 +51,7 @@
       </section>
 
       <section class="history-section">
-        <div class="section-title">
-          <strong>我的模考记录</strong>
-          <span>{{ stats.total ? `共 ${stats.total} 条` : '暂无记录' }}</span>
-        </div>
+        <SectionHeading title="我的模考记录" :meta="stats.total ? `共 ${stats.total} 条` : '暂无记录'" />
 
         <AppStateView v-if="isLoading" compact state="loading" title="加载模考记录" />
         <AppStateView v-else-if="!history.length" compact :title="`还没有${subject}模考记录`" description="完成一次模考后，成绩会自动回流到这里。">
@@ -173,7 +170,7 @@ import {
 } from '@/services/ExamFlowService';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
-import { AppStateView, InfiniteScrollPagination, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, InfiniteScrollPagination, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { essayHistoryLocation } from '@/features/practice/EssayNavigation';
 import { durationText, groupHistoryByMonth } from '@/features/exam/ExamHistoryPresentation';
@@ -352,8 +349,6 @@ function openHistory(item: ExamHistoryItem) {
 }
 
 .title-row,
-.section-heading,
-.section-title,
 .history-row {
   display: flex;
   align-items: center;
@@ -690,19 +685,8 @@ h3 {
   font-weight: var(--type-weight-semibold);
 }
 
-.section-title {
-  justify-content: space-between;
+.section-heading {
   margin: 0 0 8px;
-}
-
-.section-title strong {
-  font-size: var(--type-size-body-large);
-}
-
-.section-title span {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-micro);
-  font-weight: var(--type-weight-semibold);
 }
 
 .empty-state {

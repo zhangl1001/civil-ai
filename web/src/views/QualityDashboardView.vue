@@ -7,28 +7,27 @@
       <AppStateView v-if="isLoading" state="loading" title="加载质量追踪" />
       <template v-else-if="dashboard">
         <SurfaceCard as="section" class="quality-hero" variant="strong">
-          <div class="hero-score">
-            <strong>{{ dashboard.score }}</strong>
-            <span>{{ dashboard.grade }}</span>
-          </div>
-          <div class="hero-copy">
-            <b>训练质量指数</b>
-            <p>综合题量、正确率、错题复习和连续学习情况，用来判断当前训练是否有效。</p>
+          <div class="hero-layout">
+            <div class="hero-score">
+              <strong>{{ dashboard.score }}</strong>
+              <span>{{ dashboard.grade }}</span>
+            </div>
+            <div class="hero-copy">
+              <b>训练质量指数</b>
+              <p>综合题量、正确率、错题复习和连续学习情况，用来判断当前训练是否有效。</p>
+            </div>
           </div>
         </SurfaceCard>
 
         <section class="metric-grid">
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.totalQuestions }}</strong><span>累计题数</span></SurfaceCard>
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.practiceDays }}</strong><span>练习天数</span></SurfaceCard>
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.streak }}</strong><span>连续打卡</span></SurfaceCard>
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.weakestModule?.name || '--' }}</strong><span>薄弱模块</span></SurfaceCard>
+          <MetricTile :value="dashboard.totalQuestions" label="累计题数" />
+          <MetricTile :value="dashboard.practiceDays" label="练习天数" />
+          <MetricTile :value="dashboard.streak" label="连续打卡" />
+          <MetricTile :value="dashboard.weakestModule?.name || '--'" label="薄弱模块" variant="text" />
         </section>
 
         <section class="section-group">
-          <div class="section-title">
-            <strong>能力诊断</strong>
-            <span>代码规则计算</span>
-          </div>
+          <SectionHeading title="能力诊断" meta="代码规则计算" />
           <SurfaceCard class="diagnosis-card" compact>
             <p>{{ dashboard.diagnosisSummary }}</p>
             <div class="diagnosis-meta">
@@ -40,10 +39,10 @@
         </section>
 
         <section v-if="dashboard.calibration" class="section-group">
-          <div class="section-title">
-            <strong>基线与分数区间</strong>
-            <span>{{ dashboard.calibration.baseline.coveredModuleCount }}/{{ dashboard.calibration.baseline.requiredModuleCount }} 模块</span>
-          </div>
+          <SectionHeading
+            title="基线与分数区间"
+            :meta="`${dashboard.calibration.baseline.coveredModuleCount}/${dashboard.calibration.baseline.requiredModuleCount} 模块`"
+          />
           <SurfaceCard class="panel calibration-panel" compact>
             <article v-for="forecast in dashboard.calibration.scoreForecasts" :key="forecast.subject" class="forecast-row">
               <div>
@@ -64,10 +63,7 @@
         </section>
 
         <section class="section-group">
-          <div class="section-title">
-            <strong>能力结构</strong>
-            <span>模块正确率</span>
-          </div>
+          <SectionHeading title="能力结构" meta="模块正确率" />
           <SurfaceCard class="panel" compact>
             <div v-if="!dashboard.modules.length" class="inline-empty">完成练习后生成模块能力</div>
             <div v-for="module in dashboard.modules" :key="module.name" class="module-row">
@@ -79,7 +75,7 @@
         </section>
 
         <section v-if="dashboard.moduleDiagnoses.length" class="section-group">
-          <div class="section-title"><strong>模块诊断</strong><span>优先级排序</span></div>
+          <SectionHeading title="模块诊断" meta="优先级排序" />
           <SurfaceCard class="panel" compact>
             <article v-for="item in dashboard.moduleDiagnoses" :key="item.module" class="diagnosis-row">
               <div class="diagnosis-row-main">
@@ -95,7 +91,7 @@
         </section>
 
         <section class="section-group">
-          <div class="section-title"><strong>正确率趋势</strong><span>最近 7 天</span></div>
+          <SectionHeading title="正确率趋势" meta="最近 7 天" />
           <SurfaceCard class="panel" compact>
             <div class="trend">
               <div v-for="point in dashboard.trend" :key="point.date">
@@ -107,14 +103,14 @@
         </section>
 
         <section class="metric-grid">
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.weekQuestions }}</strong><span>本周题数</span></SurfaceCard>
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.weekMinutes }}m</strong><span>本周用时</span></SurfaceCard>
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.avgSecondsPerQuestion || '--' }}</strong><span>平均秒/题</span></SurfaceCard>
-          <SurfaceCard as="article" class="metric-card" compact><strong>{{ dashboard.eventsCount }}</strong><span>学习事件</span></SurfaceCard>
+          <MetricTile :value="dashboard.weekQuestions" label="本周题数" />
+          <MetricTile :value="`${dashboard.weekMinutes}m`" label="本周用时" />
+          <MetricTile :value="dashboard.avgSecondsPerQuestion || '--'" label="平均秒/题" />
+          <MetricTile :value="dashboard.eventsCount" label="学习事件" />
         </section>
 
         <section class="section-group">
-          <div class="section-title"><strong>题目与复习质量</strong></div>
+          <SectionHeading title="题目与复习质量" />
           <SurfaceCard class="panel" compact>
             <div class="quality-row"><ShieldAlertIcon /><div><strong>{{ dashboard.openWrongCount }}</strong><span>待处理错题，越多说明复盘压力越大</span></div></div>
             <div class="quality-row"><RouteIcon /><div><strong>{{ dashboard.reviewDueCount }}</strong><span>已经到复习窗口的错题</span></div></div>
@@ -123,19 +119,20 @@
         </section>
 
         <section class="section-group">
-          <div class="section-title"><strong>学习建议</strong></div>
+          <SectionHeading title="学习建议" />
           <SurfaceCard class="panel" compact>
             <p v-for="item in dashboard.advice" :key="item" class="advice">{{ item }}</p>
           </SurfaceCard>
         </section>
 
         <section class="section-group">
-          <div class="section-title">
-            <strong>AI 教练洞察</strong>
-            <button class="section-action" type="button" :disabled="isGeneratingInsight" @click="generateInsight">
-              {{ isGeneratingInsight ? '生成中...' : '生成' }}
-            </button>
-          </div>
+          <SectionHeading title="AI 教练洞察">
+            <template #action>
+              <button class="section-action" type="button" :disabled="isGeneratingInsight" @click="generateInsight">
+                {{ isGeneratingInsight ? '生成中...' : '生成' }}
+              </button>
+            </template>
+          </SectionHeading>
           <SurfaceCard class="panel" compact>
             <MarkdownContent v-if="insight" class="insight-content" :content="insight.content" />
             <div v-else class="inline-empty">基于当前诊断生成一段个性化备考建议</div>
@@ -156,7 +153,7 @@ import { useRouter } from 'vue-router';
 import { ActivityIcon, RouteIcon, ShieldAlertIcon, TargetIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
-import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
+import { AppStateView, MetricTile, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import type { ProfileInsight } from '@/domain/profileAnalysis';
 import { profileInsightService } from '@/services/ProfileInsightService';
@@ -240,10 +237,11 @@ function reasonText(code: string): string {
   gap: 16px;
   padding-top: 12px;
 }
-.section-title,.module-row,.quality-row,.footer-actions{display:flex;align-items:center}
-.quality-hero {
-  min-height: 112px;
-  padding: 16px;
+.module-row,.footer-actions{display:flex;align-items:center}
+.quality-hero { padding: 16px; }
+/* SurfaceCard wraps slot content, so the two-column layout belongs inside the card. */
+.hero-layout {
+  min-height: 82px;
   display: grid;
   grid-template-columns: 82px minmax(0, 1fr);
   gap: 14px;
@@ -251,7 +249,7 @@ function reasonText(code: string): string {
 }
 .hero-score {
   height: 82px;
-  border-radius: 18px;
+  border-radius: var(--radius-sheet);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -265,43 +263,40 @@ function reasonText(code: string): string {
 .hero-copy p{margin:6px 0 0;color:var(--text-secondary-color);font-size: var(--type-size-caption);line-height:1.55;font-weight: var(--type-weight-semibold)}
 .diagnosis-card p{margin:0;color:var(--text-color);font-size: var(--type-size-body);font-weight: var(--type-weight-semibold);line-height:1.55}
 .diagnosis-meta{margin-top:10px;display:flex;flex-wrap:wrap;gap:7px}
-.diagnosis-meta span{padding:4px 8px;border-radius:999px;background:rgba(var(--color-brand-rgb), .1);color:var(--primary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
+.diagnosis-meta span{padding:4px 8px;border-radius:var(--radius-pill);background:rgba(var(--color-brand-rgb), .1);color:var(--primary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
 .panel{padding:13px}
 .section-group{display:flex;flex-direction:column;gap:9px}
-.section-title{justify-content:space-between;margin:0}
-.section-title strong{font-size: var(--type-size-body-large)}.section-title span{color:var(--text-secondary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
-.section-action{height:28px;border:none;border-radius:999px;padding:0 10px;color:var(--primary-color);background:rgba(var(--color-brand-rgb), .1);font:inherit;font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
+.section-action{height:28px;border:none;border-radius:var(--radius-pill);padding:0 10px;color:var(--primary-color);background:rgba(var(--color-brand-rgb), .1);font:inherit;font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
 .section-action:disabled{opacity:.58}
 .inline-empty{padding:14px;color:var(--text-secondary-color);font-size: var(--type-size-secondary);text-align:center}
-.module-row{gap:10px;padding:9px 0;border-top:1px solid rgba(var(--color-ink-rgb), .06)}
-.module-row span{width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size: var(--type-size-secondary);font-weight: var(--type-weight-semibold)}
-.module-row div{flex:1;height:8px;border-radius:4px;overflow:hidden;background:rgba(var(--color-ink-rgb), .08)}
-.module-row i{display:block;height:100%;border-radius:4px;background:var(--primary-color)}
+.module-row{gap:10px;padding:9px 0;border-top:1px solid var(--border-subtle)}
+.module-row:first-child{border-top:none}
+.module-row span{flex:0 0 auto;min-width:56px;max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size: var(--type-size-secondary);font-weight: var(--type-weight-semibold)}
+.module-row div{flex:1;min-width:0;height:8px;border-radius:var(--radius-pill);overflow:hidden;background:rgba(var(--color-ink-rgb), .08)}
+.module-row i{display:block;height:100%;border-radius:var(--radius-pill);background:var(--primary-color)}
 .module-row em{width:42px;text-align:right;color:var(--primary-color);font-style:normal;font-weight: var(--type-weight-semibold);font-size: var(--type-size-caption)}
-.diagnosis-row{padding:10px 0;border-top:1px solid rgba(var(--color-ink-rgb), .06)}
+.diagnosis-row{padding:10px 0;border-top:1px solid var(--border-subtle)}
 .diagnosis-row:first-child{border-top:none}
 .diagnosis-row-main{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .diagnosis-row-main strong{font-size: var(--type-size-secondary)}
 .diagnosis-row-main span{color:var(--text-secondary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold);text-align:right}
 .diagnosis-tags{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
-.diagnosis-tags em{padding:3px 7px;border-radius:999px;background:rgba(var(--color-ink-rgb), .06);color:var(--text-secondary-color);font-style:normal;font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
-.trend{display:flex;align-items:flex-end;gap:7px;height:96px}
-.trend div{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px}
-.trend i{width:100%;border-radius:5px 5px 0 0;background:var(--primary-color)}
+.diagnosis-tags em{padding:3px 7px;border-radius:var(--radius-pill);background:rgba(var(--color-ink-rgb), .06);color:var(--text-secondary-color);font-style:normal;font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
+.trend{display:flex;align-items:stretch;gap:7px;height:112px}
+.trend div{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px}
+.trend i{width:100%;border-radius:var(--radius-inset) var(--radius-inset) 0 0;background:var(--primary-color)}
 .trend span{color:var(--text-secondary-color);font-size: var(--type-size-micro)}
 .metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.metric-card{min-height:76px;display:flex;flex-direction:column;justify-content:center}
-.metric-card strong,.metric-card span{display:block}
-.metric-card strong{font-size: var(--type-size-page-title);line-height:1.15}.metric-card span{margin-top:5px;color:var(--text-secondary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
-.quality-row{gap:10px;padding:10px 0;border-top:1px solid rgba(var(--color-ink-rgb), .06)}
-.quality-row svg{width:19px;height:19px;color:var(--primary-color)}
+.quality-row{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-top:1px solid var(--border-subtle)}
+.quality-row:first-child{border-top:none}
+.quality-row svg{flex:0 0 auto;width:19px;height:19px;margin-top:2px;color:var(--primary-color)}
 .quality-row strong{display:block;font-size: var(--type-size-section-title)}.quality-row span{color:var(--text-secondary-color);font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold);line-height:1.35}
 .forecast-row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:10px 0}
-.forecast-row+.forecast-row{border-top:1px solid rgba(var(--color-ink-rgb),.06)}
+.forecast-row+.forecast-row{border-top:1px solid var(--border-subtle)}
 .forecast-row div{min-width:0}.forecast-row strong,.forecast-row span{display:block}.forecast-row span,.baseline-note{color:var(--text-secondary-color);font-size:var(--type-size-micro);line-height:1.5}
 .forecast-row em{flex:none;color:var(--primary-color);font-style:normal;font-weight:var(--type-weight-bold)}
 .baseline-note{margin:8px 0 0}
-.calibration-gaps{margin-top:8px;padding-top:6px;border-top:1px solid rgba(var(--color-ink-rgb),.06)}
+.calibration-gaps{margin-top:8px;padding-top:6px;border-top:1px solid var(--border-subtle)}
 .calibration-gaps article{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;padding:5px 0;font-size:var(--type-size-micro)}
 .calibration-gaps span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:var(--type-weight-semibold)}
 .calibration-gaps em{color:var(--text-secondary-color);font-style:normal}

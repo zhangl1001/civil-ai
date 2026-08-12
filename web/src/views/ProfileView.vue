@@ -959,20 +959,6 @@ async function confirmClearLearningData() {
 .spin {
   animation: spin .8s linear infinite;
 }
-.section-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-.section-title strong {
-  font-size: var(--type-size-body-large);
-}
-.section-title span {
-  color: var(--text-secondary-color);
-  font-size: var(--type-size-micro);
-  font-weight: var(--type-weight-semibold);
-}
 .data-summary {
   padding: 14px;
   border: 0;
