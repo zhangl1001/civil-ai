@@ -199,6 +199,7 @@ import {
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
+import { essayCenterLocation } from '@/features/practice/EssayNavigation';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import {
   InitialDiagnosisStatus,
@@ -350,7 +351,7 @@ const actionCards = [
   { name: '学习中心', sub: '讲义、积累和路径', icon: BookOpenIcon, color: 'study', to: '/vue/study' },
   { name: '针对性练习', sub: '围绕薄弱点刷题', icon: Edit3Icon, color: 'practice', to: { path: '/vue/practice/session', query: { mode: 'tutor' } } },
   { name: '错题复盘', sub: '错因、闪卡、重做', icon: BookMarkedIcon, color: 'wrong', to: '/vue/wrongbook' },
-  { name: '申论练习', sub: '材料题和批改', icon: FileTextIcon, color: 'essay', to: '/vue/essay' },
+  { name: '申论练习', sub: '材料题和批改', icon: FileTextIcon, color: 'essay', to: essayCenterLocation('tutor') },
   { name: '阶段模考', sub: '校准真实水平', icon: MonitorIcon, color: 'mock', to: '/vue/exam' },
   { name: '完整画像', sub: '质量追踪报告', icon: TargetIcon, color: 'report', to: '/vue/quality-dashboard' }
 ];

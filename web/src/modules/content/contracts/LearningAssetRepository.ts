@@ -21,6 +21,7 @@ export interface LearningAssetQuery {
   readonly kinds?: readonly LearningAssetKind[];
   readonly businessKey?: string;
   readonly status?: LearningAssetStatus;
+  readonly offset?: number;
   readonly limit: number;
 }
 

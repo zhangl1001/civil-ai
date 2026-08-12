@@ -175,10 +175,9 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import { AppStateView, InfiniteScrollPagination, PullToRefresh } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
-
+import { essayHistoryLocation } from '@/features/practice/EssayNavigation';
 const router = useRouter();
 const subjects: ExamSubject[] = ['行测', '申论'];
-
 const initial = examFlowService.readContext();
 const subject = ref<ExamSubject>(initial.subject);
 const date = ref(initial.date);
@@ -207,7 +206,6 @@ onMounted(async () => {
   await loadDashboard();
   applyDefaultScheme();
 });
-
 async function loadDashboard() {
   isLoading.value = true;
   notice.value = '';
@@ -227,7 +225,6 @@ async function switchSubject(next: ExamSubject) {
   await loadDashboard();
   applyDefaultScheme();
 }
-
 function applyDefaultScheme() {
   if (subject.value !== '行测') return;
   const defaultCount = dashboard.value?.defaultQuestionCount || 120;
@@ -238,7 +235,6 @@ function applyDefaultScheme() {
   questionCount.value = scheme.count;
   durationMinutes.value = scheme.durationMinutes;
 }
-
 function selectScheme(count: number, minutes: number) {
   questionCount.value = count;
   durationMinutes.value = minutes;
@@ -268,7 +264,7 @@ async function startExam() {
       tags: selectedTags.value,
       essayType: essayType.value
     });
-    notice.value = result.reused ? '已有相同模考任务在执行，已为你打开对应页面。' : '模考任务已加入执行队列。';
+    notice.value = result.reused ? '已有相同模考任务在执行，可在任务栏查看进度。' : '模考任务已加入执行队列。';
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '模考任务派发失败';
   } finally {
@@ -277,11 +273,15 @@ async function startExam() {
 }
 
 function openHistory(item: ExamHistoryItem) {
+  if (subject.value === '申论') {
+    router.push(essayHistoryLocation(item));
+    return;
+  }
   if (item.manifestId) {
     router.push({ path: '/vue/practice/objective-session', query: { manifestId: item.manifestId } });
     return;
   }
-  router.push(subject.value === '申论' ? '/vue/essay' : practiceDetailLocation({ mode: 'self' }));
+  router.push(practiceDetailLocation({ mode: 'self' }));
 }
 
 function durationText(durationMs?: number): string {

@@ -55,13 +55,15 @@ export class IndexedDbLearningAssetRepository implements LearningAssetRepository
     if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 500) {
       throw new RangeError('Learning asset query limit must be between 1 and 500');
     }
+    const offset = query.offset ?? 0;
+    if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Learning asset query offset must be a non-negative integer');
     return (await this.database.getAll<LearningAssetRecord>(TutorIndexedDbStore.LearningAssets))
       .filter((item) => item.examCycleId === query.examCycleId)
       .filter((item) => !query.kinds?.length || query.kinds.includes(item.kind))
       .filter((item) => !query.businessKey || item.businessKey === query.businessKey)
       .filter((item) => !query.status || item.status === query.status)
       .sort(compareLatest)
-      .slice(0, query.limit);
+      .slice(offset, offset + query.limit);
   }
 
   async listAll(examCycleId: ExamCycleId): Promise<readonly LearningAssetRecord[]> {

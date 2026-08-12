@@ -1,5 +1,5 @@
 import { digestService } from '@/services/DigestService';
-import { essayFlowService } from '@/services/EssayFlowService';
+import { essayFlowService, type EssayGenerationContext } from '@/services/EssayFlowService';
 import { examFlowService } from '@/services/ExamFlowService';
 import { monthlyDigestService } from '@/services/MonthlyDigestService';
 import { initializeTutorRuntime } from '@/composition-root/public';
@@ -113,11 +113,13 @@ export class AIBusinessTools {
     if (call.name === 'generate_essay') {
       const essayTopic = asString(args.essayTopic) || '申论小题';
       const essayType = args.essayType === 'long' || essayTopic === '申发论述' ? 'long' : 'short';
-      const context = essayFlowService.writeContext({
+      const context: EssayGenerationContext = {
         date: today(),
         topic: essayTopic,
-        type: essayType
-      });
+        type: essayType,
+        entryMode: 'self' as const,
+        purpose: 'practice' as const
+      };
       const result = await essayFlowService.enqueueQuestionGeneration(context, {
         questionCount: asNumber(args.questionCount, 1),
         idempotencyKey: meta.idempotencyKey

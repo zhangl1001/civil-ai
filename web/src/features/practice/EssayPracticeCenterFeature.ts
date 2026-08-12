@@ -4,18 +4,26 @@ import {
   LearningAssetStatus,
   type LearningAssetRecord
 } from '@/modules/content/public';
+import {
+  normalizeEssayQuestionSetMode,
+  normalizeEssayQuestionSetPurpose,
+  type EssayQuestionSetPurpose
+} from '@/domain/essayQuestionSet';
 
 export type EssayPracticeMode = 'tutor' | 'self' | 'true';
 
 export interface EssayPracticeContext {
+  readonly questionSetId?: string;
   readonly date: string;
   readonly topic: string;
   readonly type: 'short' | 'long';
   readonly entryMode?: EssayPracticeMode;
+  readonly purpose?: EssayQuestionSetPurpose;
 }
 
 export interface EssayPracticeSet {
   readonly key: string;
+  readonly updatedAt: number;
   readonly context: EssayPracticeContext;
   readonly question?: { readonly id: string; readonly title: string };
 }
@@ -30,10 +38,12 @@ function contextFromAsset(asset: LearningAssetRecord): EssayPracticeContext {
     ? raw as Record<string, unknown>
     : {};
   return {
+    questionSetId: asset.businessKey,
     date: typeof record.date === 'string' ? record.date : today(),
     topic: typeof record.topic === 'string' ? record.topic : '申论',
     type: record.type === 'long' ? 'long' : 'short',
-    entryMode: record.entryMode === 'tutor' || record.entryMode === 'true' ? record.entryMode : 'self'
+    entryMode: normalizeEssayQuestionSetMode(record.entryMode),
+    purpose: normalizeEssayQuestionSetPurpose(record.purpose, record.entryMode)
   };
 }
 
@@ -62,7 +72,13 @@ export class EssayPracticeCenterFeature {
     const latest = new Map<string, LearningAssetRecord>();
     for (const asset of assets) if (!latest.has(asset.businessKey)) latest.set(asset.businessKey, asset);
     return [...latest.values()]
-      .map((asset) => ({ key: asset.businessKey, context: contextFromAsset(asset), question: questionFromAsset(asset) }))
-      .sort((left, right) => right.context.date.localeCompare(left.context.date) || right.key.localeCompare(left.key));
+      .filter((asset) => contextFromAsset(asset).purpose !== 'mock')
+      .map((asset) => ({
+        key: asset.businessKey,
+        updatedAt: asset.updatedAt,
+        context: contextFromAsset(asset),
+        question: questionFromAsset(asset)
+      }))
+      .sort((left, right) => right.updatedAt - left.updatedAt || right.key.localeCompare(left.key));
   }
 }

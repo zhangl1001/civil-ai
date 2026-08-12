@@ -1,8 +1,17 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
+import {
+  LearningAssetKind,
+  LearningAssetStatus,
+  type LearningAssetRecord
+} from '@/modules/content/public';
 import { generationTaskService } from './GenerationTaskService';
 import { essayFlowService } from './EssayFlowService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
+import {
+  normalizeEssayQuestionSetMode,
+  isEssayMockContext,
+  type EssayQuestionSetMode
+} from '@/domain/essayQuestionSet';
 
 export type ExamSubject = '行测' | '申论';
 export type EssayMockType = 'short' | 'long';
@@ -33,6 +42,11 @@ export interface ExamHistoryItem {
   durationMs?: number;
   createdAt: number;
   manifestId?: string;
+  questionSetId?: string;
+  essayEntryMode?: EssayQuestionSetMode;
+  essayTopic?: string;
+  essayType?: EssayMockType;
+  essayPurpose?: 'mock';
 }
 
 export interface ExamStats {
@@ -132,12 +146,14 @@ export class ExamFlowService {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
-    const assets = await runtime.learningAssetStore.list({
-      examCycleId: cycle.examCycle.id,
-      kinds: subject === '行测' ? [LearningAssetKind.MockManifest] : [LearningAssetKind.EssayQuestion],
-      status: LearningAssetStatus.Ready,
-      limit: 100
-    });
+    const assets = subject === '行测'
+      ? await runtime.learningAssetStore.list({
+        examCycleId: cycle.examCycle.id,
+        kinds: [LearningAssetKind.MockManifest],
+        status: LearningAssetStatus.Ready,
+        limit: 100
+      })
+      : await listEssayMockAssets(runtime, cycle.examCycle.id, 30);
     const recentSessions = subject === '行测'
       ? await runtime.learningSessionRepository.listRecent(cycle.examCycle.id, 500)
       : [];
@@ -153,6 +169,11 @@ export class ExamFlowService {
             subject,
             date,
             title: asset.title,
+            questionSetId: asset.businessKey,
+            essayEntryMode: normalizeEssayQuestionSetMode(essayContext.entryMode),
+            essayTopic: typeof essayContext.topic === 'string' ? essayContext.topic : asset.title,
+            essayType: essayContext.type === 'long' ? 'long' : 'short',
+            essayPurpose: 'mock',
             questionCount: 1,
             correctCount: 0,
             accuracy: 0,
@@ -217,27 +238,46 @@ export class ExamFlowService {
     }
 
     const topic = normalized.essayType === 'long' ? '申发论述' : '申论小题';
-    essayFlowService.writeContext({
+    return essayFlowService.enqueueQuestionGeneration({
       date: normalized.date,
       topic,
-      type: normalized.essayType
-    });
-    return generationTaskService.enqueue({
-      idempotencyKey,
-      intent: 'mock',
-      title: '申论模考',
-      detail: `${topic} · ${normalized.date}`,
-      module: '申论',
-      sourceId: `mock:申论:${normalized.date}:${normalized.essayType}`,
-      payload: {
-        subject: '申论',
-        date: normalized.date,
-        essayTopic: topic,
-        essayType: normalized.essayType
-      }
-    });
+      type: normalized.essayType,
+      entryMode: 'self',
+      purpose: 'mock'
+    }, { questionCount: 1, title: '申论模考', idempotencyKey });
   }
 
 }
 
 export const examFlowService = new ExamFlowService();
+
+async function listEssayMockAssets(
+  runtime: Awaited<ReturnType<typeof initializeTutorRuntime>>,
+  examCycleId: Parameters<typeof runtime.learningAssetStore.list>[0]['examCycleId'],
+  targetCount: number
+) {
+  const pageSize = 100;
+  const matches: LearningAssetRecord[] = [];
+  const seenBusinessKeys = new Set<string>();
+  for (let offset = 0; matches.length < targetCount; offset += pageSize) {
+    const page = await runtime.learningAssetStore.list({
+      examCycleId,
+      kinds: [LearningAssetKind.EssayQuestion],
+      status: LearningAssetStatus.Ready,
+      offset,
+      limit: pageSize
+    });
+    for (const asset of page) {
+      if (!isEssayMockAsset(asset) || seenBusinessKeys.has(asset.businessKey)) continue;
+      seenBusinessKeys.add(asset.businessKey);
+      matches.push(asset);
+      if (matches.length >= targetCount) break;
+    }
+    if (page.length < pageSize) break;
+  }
+  return matches.slice(0, targetCount);
+}
+
+export function isEssayMockAsset(asset: LearningAssetRecord): boolean {
+  return isEssayMockContext(asset.payload.essayContext);
+}

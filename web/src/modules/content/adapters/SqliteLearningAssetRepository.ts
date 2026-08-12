@@ -100,6 +100,8 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
     if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 500) {
       throw new RangeError('Learning asset query limit must be between 1 and 500');
     }
+    const offset = query.offset ?? 0;
+    if (!Number.isInteger(offset) || offset < 0) throw new RangeError('Learning asset query offset must be a non-negative integer');
     const conditions = ['exam_cycle_id=?'];
     const parameters: Array<string | number> = [query.examCycleId];
     if (query.kinds?.length) {
@@ -114,10 +116,10 @@ export class SqliteLearningAssetRepository implements LearningAssetRepository {
       conditions.push('status=?');
       parameters.push(query.status);
     }
-    parameters.push(query.limit);
+    parameters.push(query.limit, offset);
     const rows = await this.database.query<LearningAssetRow>(
       `SELECT * FROM learning_assets WHERE ${conditions.join(' AND ')}
-       ORDER BY updated_at DESC,version DESC,id DESC LIMIT ?`,
+       ORDER BY updated_at DESC,version DESC,id DESC LIMIT ? OFFSET ?`,
       parameters
     );
     return rows.map(mapRow);

@@ -1,11 +1,24 @@
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
+import {
+  createEssayQuestionSetId,
+  essayQuestionSetGenerationScope,
+  normalizeEssayQuestionSetMode,
+  normalizeEssayQuestionSetPurpose,
+  type EssayQuestionSetPurpose
+} from '@/domain/essayQuestionSet';
 
-export interface EssayContext {
+export interface EssayGenerationContext {
+  questionSetId?: string;
   date: string;
   topic: string;
   type: 'short' | 'long';
   entryMode?: EssayEntryMode;
+  purpose?: EssayQuestionSetPurpose;
+}
+
+export interface EssayContext extends EssayGenerationContext {
+  questionSetId: string;
 }
 
 export type EssayEntryMode = 'tutor' | 'self' | 'true';
@@ -21,7 +34,7 @@ function typeFromTopic(topic: string): EssayContext['type'] {
 }
 
 export class EssayFlowService {
-  readContext(): EssayContext {
+  readGenerationDefaults(): EssayGenerationContext {
     const date = localStorage.getItem('es-date') || today();
     const topic = localStorage.getItem('essay-topic') || '申论';
     return {
@@ -31,17 +44,24 @@ export class EssayFlowService {
     };
   }
 
-  writeContext(patch: Partial<EssayContext>): EssayContext {
-    const next = { ...this.readContext(), ...patch };
-    localStorage.setItem('es-date', next.date);
-    if (next.topic && next.topic !== '申论') localStorage.setItem('essay-topic', next.topic);
+  writeContext(context: EssayContext): EssayContext {
+    const questionSetId = context.questionSetId.trim();
+    if (!questionSetId) throw new TypeError('Essay context requires questionSetId');
+    const next: EssayContext = {
+      ...context,
+      questionSetId,
+      entryMode: normalizeEssayQuestionSetMode(context.entryMode),
+      purpose: normalizeEssayQuestionSetPurpose(context.purpose, context.entryMode)
+    };
+    localStorage.setItem('es-date', context.date);
+    if (context.topic && context.topic !== '申论') localStorage.setItem('essay-topic', context.topic);
     else localStorage.removeItem('essay-topic');
     return next;
   }
 
   async enqueueGrading(
     content: string,
-    context = this.readContext(),
+    context: EssayContext,
     idempotencyKey?: string
   ): Promise<AgentTaskEnqueueResult> {
     return generationTaskService.enqueue({
@@ -49,34 +69,43 @@ export class EssayFlowService {
       intent: 'essayGrade',
       title: '申论批改',
       detail: `${context.topic} · ${context.date}`,
-      sourceId: `${context.topic}:${context.date}`,
+      sourceId: context.questionSetId || `${context.topic}:${context.date}`,
       payload: {
         content,
+        questionSetId: context.questionSetId,
         essayDate: context.date,
         essayTopic: context.topic,
-        essayType: context.type
+        essayType: context.type,
+        entryMode: normalizeEssayQuestionSetMode(context.entryMode),
+        purpose: normalizeEssayQuestionSetPurpose(context.purpose, context.entryMode)
       }
     });
   }
 
   async enqueueQuestionGeneration(
-    context = this.readContext(),
+    context: EssayGenerationContext,
     options: { questionCount?: number; title?: string; idempotencyKey?: string } = {}
   ): Promise<AgentTaskEnqueueResult> {
     const count = Math.max(1, Math.min(3, Number(options.questionCount || 1)));
+    const questionSetId = context.questionSetId?.trim() || createEssayQuestionSetId();
+    const entryMode = normalizeEssayQuestionSetMode(context.entryMode);
+    const purpose = normalizeEssayQuestionSetPurpose(context.purpose, entryMode);
     return generationTaskService.enqueue({
       idempotencyKey: options.idempotencyKey,
       intent: 'mock',
       title: options.title || '生成申论题目',
       detail: `${context.topic} · ${count} 题 · ${context.date}`,
       module: '申论',
-      sourceId: `essay:${context.entryMode || 'self'}:${context.topic}:${context.date}:${context.type}:${count}`,
+      sourceId: questionSetId,
+      scopeId: essayQuestionSetGenerationScope({ ...context, questionSetId, entryMode, purpose }),
       payload: {
         subject: '申论',
+        questionSetId,
         date: context.date,
         essayTopic: context.topic,
         essayType: context.type,
-        entryMode: context.entryMode || 'self',
+        entryMode,
+        purpose,
         essayQuestionCount: count
       }
     });

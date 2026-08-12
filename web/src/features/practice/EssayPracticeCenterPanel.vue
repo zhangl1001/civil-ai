@@ -108,8 +108,14 @@ import BottomSheet from '@/components/layout/BottomSheet.vue';
 import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import type { AgentRunView } from '@/modules/agent/public';
-import { EssayGenerationCoordinator, initializeTutorRuntime, type EssayContext } from '@/composition-root/public';
+import {
+  EssayGenerationCoordinator,
+  initializeTutorRuntime,
+  type EssayContext,
+  type EssayGenerationContext
+} from '@/composition-root/public';
 import { EssayPracticeCenterFeature, type EssayPracticeMode, type EssayPracticeSet } from './EssayPracticeCenterFeature';
+import { essayQuestionSetLocation } from './EssayNavigation';
 
 type Mode = EssayPracticeMode;
 const props = defineProps<{ modelValue: Mode }>();
@@ -120,7 +126,7 @@ const coordinator = ref<EssayGenerationCoordinator>();
 const loading = ref(true);
 const opening = ref(false);
 const activeTask = ref<AgentRunView>();
-const pendingContext = ref<EssayContext>();
+const pendingContext = ref<EssayGenerationContext>();
 const pendingQuestionCount = ref(1);
 const error = ref('');
 const showHistory = ref(false);
@@ -185,14 +191,9 @@ async function openPractice() {
     await startGeneration({ entryMode: 'tutor', topic: '归纳概括', count: 1 });
     return;
   }
-  opening.value = true;
-  try {
-    const query = {
-      source: 'practice-center',
-      entryMode: props.modelValue,
-    };
-    await router.push({ path: '/vue/essay', query });
-  } finally { opening.value = false; }
+  const latestTrueSet = sets.value[0];
+  if (latestTrueSet) await openSet(latestTrueSet);
+  else error.value = '当前还没有可练习的申论真题。请先完成申论真题导入。';
 }
 
 async function submitCustom() {
@@ -208,8 +209,9 @@ async function startGeneration(input: { entryMode: Mode; topic: string; count: n
   if (!coordinator.value || activeTask.value?.isActive) return;
   opening.value = true;
   error.value = '';
-  const context: EssayContext = {
+  const context: EssayGenerationContext = {
     entryMode: input.entryMode,
+    purpose: input.entryMode === 'true' ? 'true_question' : 'practice',
     topic: input.topic,
     type: input.topic === '申发论述' ? 'long' : 'short',
     date: new Date().toISOString().slice(0, 10)
@@ -218,6 +220,7 @@ async function startGeneration(input: { entryMode: Mode; topic: string; count: n
   pendingQuestionCount.value = input.count;
   try {
     activeTask.value = await coordinator.value.start(context, input.count);
+    pendingContext.value = contextFromTask(activeTask.value) || context;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申论生成失败';
   } finally {
@@ -273,10 +276,21 @@ async function retryGeneration() {
 function openHistory() { showHistory.value = true; }
 async function openSet(item: EssayPracticeSet) {
   showHistory.value = false;
-  await router.push({ path: '/vue/essay', query: { source: 'practice-center', entryMode: normalizedMode(item.context.entryMode), date: item.context.date, topic: item.context.topic } });
+  await router.push(essayQuestionSetLocation({
+    questionSetId: item.context.questionSetId || item.key,
+    entryMode: normalizedMode(item.context.entryMode),
+    date: item.context.date,
+    topic: item.context.topic,
+    type: item.context.type,
+    purpose: item.context.purpose
+  }));
 }
-async function openLatestSet(context: EssayContext) {
-  const item = allStates.value.find((candidate) => candidate.context.date === context.date && candidate.context.topic === context.topic && normalizedMode(candidate.context.entryMode) === context.entryMode);
+async function openLatestSet(context: EssayGenerationContext) {
+  const item = allStates.value.find((candidate) => (
+    context.questionSetId
+      ? candidate.context.questionSetId === context.questionSetId
+      : candidate.context.date === context.date && candidate.context.topic === context.topic && normalizedMode(candidate.context.entryMode) === context.entryMode
+  ));
   if (item) {
     await openSet(item);
   } else {
@@ -284,11 +298,27 @@ async function openLatestSet(context: EssayContext) {
   }
 }
 function contextFromTask(task: AgentRunView): EssayContext | undefined {
-  const mode = task.actionParams.mode;
+  const mode = task.actionParams.entryMode || task.actionParams.mode;
   const topic = task.actionParams.topic;
   const date = task.actionParams.date;
-  if ((mode !== 'tutor' && mode !== 'self' && mode !== 'true') || typeof topic !== 'string' || typeof date !== 'string') return undefined;
-  return { entryMode: mode, topic, date, type: topic === '申发论述' ? 'long' : 'short' };
+  const questionSetId = task.actionParams.questionSetId;
+  const type = task.actionParams.type;
+  const purpose = task.actionParams.purpose;
+  if (
+    (mode !== 'tutor' && mode !== 'self' && mode !== 'true')
+    || typeof topic !== 'string'
+    || typeof date !== 'string'
+    || typeof questionSetId !== 'string'
+    || !questionSetId
+  ) return undefined;
+  return {
+    questionSetId,
+    entryMode: mode,
+    topic,
+    date,
+    type: type === 'long' ? 'long' : 'short',
+    purpose: purpose === 'mock' || purpose === 'true_question' ? purpose : 'practice'
+  };
 }
 function normalizedMode(value?: EssayPracticeMode): Mode { return value === 'tutor' || value === 'true' ? value : 'self'; }
 function modeLabelFor(value?: EssayPracticeMode): string { return modes.find((item) => item.value === normalizedMode(value))?.label || '自主刷题'; }
