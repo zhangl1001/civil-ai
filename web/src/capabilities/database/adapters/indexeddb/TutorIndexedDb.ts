@@ -170,6 +170,72 @@ export class TutorIndexedDb {
     });
   }
 
+  async mutateStores<Result>(
+    requestedStores: readonly TutorIndexedDbStore[],
+    mutation: (
+      values: ReadonlyMap<TutorIndexedDbStore, readonly unknown[]>
+    ) => { readonly operations: readonly IndexedDbWriteOperation[]; readonly result: Result }
+  ): Promise<Result> {
+    const storeNames = [...new Set(requestedStores)];
+    if (storeNames.length === 0) throw new Error('IndexedDB mutation requires at least one store');
+    await this.open();
+    return new Promise<Result>((resolve, reject) => {
+      const transaction = this.requireDatabase().transaction(storeNames, 'readwrite');
+      const values = new Map<TutorIndexedDbStore, readonly unknown[]>();
+      let pending = storeNames.length;
+      let mutationResult: Result | undefined;
+      let hasResult = false;
+      let rejected = false;
+
+      const rejectOnce = (error: unknown) => {
+        if (rejected) return;
+        rejected = true;
+        reject(error);
+      };
+      const applyMutation = () => {
+        try {
+          const outcome = mutation(values);
+          for (const operation of outcome.operations) {
+            if (!storeNames.includes(operation.store)) {
+              throw new Error('IndexedDB mutation cannot write an unopened store');
+            }
+            const store = transaction.objectStore(operation.store);
+            if (operation.type === 'add') store.add(operation.value);
+            if (operation.type === 'put') store.put(operation.value);
+            if (operation.type === 'delete' && operation.key !== undefined) store.delete(operation.key);
+          }
+          mutationResult = outcome.result;
+          hasResult = true;
+        } catch (error) {
+          transaction.abort();
+          rejectOnce(error);
+        }
+      };
+
+      for (const storeName of storeNames) {
+        const request = transaction.objectStore(storeName).getAll();
+        request.onsuccess = () => {
+          values.set(storeName, request.result);
+          pending -= 1;
+          if (pending === 0) applyMutation();
+        };
+        request.onerror = () => {
+          transaction.abort();
+          rejectOnce(request.error ?? new Error('IndexedDB multi-store mutation read failed'));
+        };
+      }
+      transaction.oncomplete = () => {
+        if (hasResult) resolve(mutationResult as Result);
+      };
+      transaction.onerror = () => rejectOnce(
+        transaction.error ?? new Error('IndexedDB multi-store mutation failed')
+      );
+      transaction.onabort = () => rejectOnce(
+        transaction.error ?? new Error('IndexedDB multi-store mutation aborted')
+      );
+    });
+  }
+
   private openDatabase(): Promise<void> {
     if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB is not available in this environment'));
     return new Promise((resolve, reject) => {

@@ -11,7 +11,7 @@
 
       <figure v-else-if="block.type === 'svg_diagram'" class="content-diagram"><div class="content-svg" role="img" :aria-label="block.alt" v-html="sanitizeSvg(block.markup)"></div><figcaption>{{ block.alt }}</figcaption></figure>
 
-      <figure v-else-if="block.type === 'image'" class="content-image"><img v-if="safeImage(block.assetRef)" :src="safeImage(block.assetRef)" :alt="block.alt" loading="lazy" /><figcaption v-if="block.caption">{{ block.caption }}</figcaption><span v-else-if="!safeImage(block.assetRef)" class="content-image-unavailable">图片资源不可用：{{ block.alt }}</span></figure>
+      <figure v-else-if="block.type === 'image'" class="content-image"><img v-if="renderableImage(block.assetRef)" :src="renderableImage(block.assetRef)" :alt="block.alt" loading="lazy" decoding="async" /><a v-else-if="remoteImage(block.assetRef)" :href="remoteImage(block.assetRef)" target="_blank" rel="noopener noreferrer">查看外部图片：{{ block.alt }}</a><figcaption v-if="block.caption">{{ block.caption }}</figcaption><span v-else-if="!renderableImage(block.assetRef) && !remoteImage(block.assetRef)" class="content-image-unavailable">图片资源不可用：{{ block.alt }}</span></figure>
 
       <MathFormula
         v-else-if="block.type === 'formula'"
@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { HtmlPolicy } from '@/capabilities/content-rendering/public';
+import { HtmlPolicy, ImageSourceKind, resolveImageSource } from '@/capabilities/content-rendering/public';
 import type { ContentDocument } from '@/modules/content/public';
 import TextContent from '@/components/content/TextContent.vue';
 import MathFormula from '@/components/content/MathFormula.vue';
@@ -47,8 +47,17 @@ withDefaults(defineProps<{
   presentation: 'default'
 });
 const htmlPolicy = new HtmlPolicy();
-function sanitizeSvg(value: string): string { return htmlPolicy.sanitize(value); }
-function safeImage(value: string): string | undefined { return /^(https?:\/\/|\/|data:image\/)/i.test(value) ? value : undefined; }
+function sanitizeSvg(value: string): string { return htmlPolicy.sanitizeSvg(value); }
+function renderableImage(value: string): string | undefined {
+  const resolved = resolveImageSource(value);
+  return resolved.kind === ImageSourceKind.Local || resolved.kind === ImageSourceKind.Inline
+    ? resolved.src
+    : undefined;
+}
+function remoteImage(value: string): string | undefined {
+  const resolved = resolveImageSource(value);
+  return resolved.kind === ImageSourceKind.Remote ? resolved.src : undefined;
+}
 </script>
 
 <style scoped>

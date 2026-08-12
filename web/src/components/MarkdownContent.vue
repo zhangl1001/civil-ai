@@ -35,14 +35,13 @@ const html = computed(() => {
     .trim();
   if (!clean) {
     return stopped
-      ? htmlPolicy.sanitize(`<p class="markdown-stopped-empty">${escapeHtml(props.stoppedLabel)}</p>`)
+      ? `<p class="markdown-stopped-empty">${escapeHtml(props.stoppedLabel)}</p>`
       : '';
   }
   const rendered = markdownEngine.render(clean).html;
-  const withStatus = stopped && clean
-    ? `${rendered}<p class="markdown-stopped-note">（${props.stoppedLabel}）</p>`
+  return stopped && clean
+    ? `${rendered}<p class="markdown-stopped-note">（${escapeHtml(props.stoppedLabel)}）</p>`
     : rendered;
-  return htmlPolicy.sanitize(withStatus);
 });
 
 </script>

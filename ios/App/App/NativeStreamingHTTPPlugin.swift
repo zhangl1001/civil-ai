@@ -1,6 +1,7 @@
 import Capacitor
 import Darwin
 import Foundation
+import Security
 import UIKit
 
 @objc(NativeStreamingHTTPPlugin)
@@ -150,6 +151,11 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         let headers: [String: String]
         do {
             headers = try validateHeaders(rawHeaders, purpose: purpose)
+            try validateCredentialTarget(
+                host: validatedHost,
+                headers: headers,
+                purpose: purpose
+            )
         } catch {
             call.reject(error.localizedDescription)
             return
@@ -423,6 +429,65 @@ public final class NativeStreamingHTTPPlugin: CAPPlugin, CAPBridgedPlugin, URLSe
         return result
     }
 
+    private func validateCredentialTarget(
+        host: String,
+        headers: [String: String],
+        purpose: RequestPurpose
+    ) throws {
+        let names = Set(headers.keys.map { $0.lowercased() })
+        let carriesCredential = !names.isDisjoint(with: Self.sensitiveHeaders)
+        guard carriesCredential else { return }
+
+        if purpose == .model {
+            guard configuredHost(account: "zhangl-ai-config", field: "baseUrl") == host else {
+                throw NativeNetworkTargetPolicy.ValidationError.credentialHostMismatch
+            }
+            return
+        }
+
+        if names.contains("x-subscription-token") {
+            guard host == "api.search.brave.com" else {
+                throw NativeNetworkTargetPolicy.ValidationError.credentialHostMismatch
+            }
+            return
+        }
+
+        var approvedHosts: Set<String> = ["s.jina.ai", "r.jina.ai", "api.firecrawl.dev"]
+        if let configuredFirecrawl = configuredHost(
+            account: "zhangl-web-research-config",
+            field: "firecrawlBaseUrl"
+        ) {
+            approvedHosts.insert(configuredFirecrawl)
+        }
+        guard approvedHosts.contains(host) else {
+            throw NativeNetworkTargetPolicy.ValidationError.credentialHostMismatch
+        }
+    }
+
+    private func configuredHost(account: String, field: String) -> String? {
+        let service = Bundle.main.bundleIdentifier ?? "com.zhangl.examtutor"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard
+            SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+            let data = result as? Data,
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let rawURL = json[field] as? String,
+            let url = URL(string: rawURL),
+            let host = url.host?.lowercased(),
+            url.scheme?.lowercased() == "https"
+        else {
+            return nil
+        }
+        return host.hasSuffix(".") ? String(host.dropLast()) : host
+    }
+
     private func emit(_ data: JSObject, completion: (() -> Void)? = nil) {
         DispatchQueue.main.async { [weak self] in
             self?.notifyListeners("nativeHttpStream", data: data)
@@ -466,6 +531,7 @@ private enum NativeNetworkTargetPolicy {
         case tooManyHeaders
         case disallowedHeader(String)
         case invalidHeader(String)
+        case credentialHostMismatch
 
         var errorDescription: String? {
             switch self {
@@ -493,6 +559,8 @@ private enum NativeNetworkTargetPolicy {
                 return "native HTTP request header is not allowed: \(name)"
             case let .invalidHeader(name):
                 return "native HTTP request header is invalid: \(name)"
+            case .credentialHostMismatch:
+                return "credentials may only be sent to the configured provider endpoint"
             }
         }
     }

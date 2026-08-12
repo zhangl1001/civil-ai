@@ -1,8 +1,34 @@
-# ADR-001：供应商无关的本地 Tutor Agent Runtime
+# ADR-001: Provider-Neutral Local Tutor Agent Runtime / 供应商无关的本地 Tutor Agent Runtime
 
-> 状态：accepted，分阶段实施  
-> 日期：2026-07-25  
-> 适用范围：AI 对话、主动私教、工具调用、上下文、记忆、子 Agent、模型供应商适配
+> **Status / 状态:** Accepted, implemented incrementally / 已接受，分阶段实施
+> **Decision date / 决策日期:** 2026-07-25
+> **Last reviewed / 最近复核:** 2026-08-11
+> **Scope / 适用范围:** AI chat, proactive tutoring, tools, context, memory, sub-agents, and model-provider adapters / AI 对话、主动私教、工具调用、上下文、记忆、子 Agent、模型供应商适配
+
+## English executive summary
+
+### Summary
+
+Civil AI uses a local, headless, provider-neutral Tutor Agent runtime. The runtime coordinates model turns, skills, tools, context, memory, checkpoints, and recovery while deterministic application use cases remain responsible for business validation and persistence.
+
+### Context
+
+Provider protocols, conversational state, learning evidence, and recoverable workflows previously risked being coupled inside application services. That coupling would make provider changes expensive, allow context to grow without bounds, and blur the distinction between an Agent decision and a committed learning result.
+
+### Decision
+
+Keep the Agent kernel behind stable application ports. Load only relevant Skill and Tool metadata, route model calls through a provider gateway, execute tools through registered application use cases, and keep durable business state in SQLite/IndexedDB. Pi Agent Core is the default loop engine under this contract; it does not own domain repositories or the safety control plane.
+
+### Consequences
+
+- Provider adapters can evolve without changing tutoring workflows.
+- Agent autonomy is bounded by schemas, policy, leases, receipts, budgets, cancellation, and completion verification.
+- Conversation and working memory remain separate from authoritative learning facts.
+- The application must maintain explicit recovery, ownership, and security tests around every write-capable integration.
+
+---
+
+## 中文决策记录 / Chinese decision record
 
 ## 1. 背景
 
@@ -189,19 +215,29 @@ Agent Workspace 文件日志：
 | 供应商耦合 | ProviderGateway 统一合同和合约测试 |
 | 切后台丢状态 | SQLite checkpoint、lease 恢复、幂等工具 |
 
+### 6.1 安全边界补充（2026-08-11）
+
+- AgentRun、checkpoint 和 durable tool receipt 使用 worker ownership 与 lease epoch 防止旧 Worker 提交；写工具执行前后重新验证有效租约。所有下游业务写入与 fencing token 在同一事务内强制校验仍是后续强化项。
+- 考试周期数据清理按所属 aggregate 派生 Outbox 与消息范围，禁止周期级命令清空全局表。
+- Markdown、HTML、SVG 和图片资源采用统一资源策略：远程图片不静默加载，内联图片受类型和体积限制，SVG 禁止外部引用。
+- iOS 原生 HTTP 对携带模型或检索凭证的请求执行目标主机约束；无凭证公开网页读取仍受 HTTPS、私网地址、重定向、容量和并发限制。
+- 备份导入在结构化数据库与会话日志之间采用校验、逻辑替换和失败补偿，避免常规导入失败留下半恢复状态。
+
 ## 7. 实施状态
 
-截至 2026-07-25：
+截至 2026-08-11：
 
-- done：OpenAI/Anthropic 双协议 Gateway，供应商无关工具调用响应。
-- done：受限 `RunAgentLoop`、重复调用防线、确认停点、检查点 Port、类型化事件。
-- done：Context Budgeter、五层 Memory Port、Skill/Tool Registry、Sub-agent Registry。
-- done：会话、摘要和 Agent memory 已切到统一 `AgentWorkspaceStorage` 文件日志；SQLite/IndexedDB 会话表与 Repository 已删除。
-- done：工具调用展示采用当前 run 的有界内存快照，下一次 run 整体覆盖，不持久化。
-- pending：将 AIChatStore/AICommandRouter 切到统一 Tutor Agent loop。
-- pending：Application Tool Executor、Policy Guard 和现有业务 Use Case 的正式装配。
-- pending：Context Source/Compiler 读取真实学习主线、证据、计划和会话摘要。
-- pending：专业 Sub-agent 的首个端到端委派和固定评测。
+- done：OpenAI/Anthropic 双协议 Gateway 与供应商无关工具调用响应。
+- done：`LazyPiAgentLoopRuntime` 已成为 Web/iOS composition root 的默认循环；旧 `RunAgentLoop` 只允许在没有输出文本或启动工具前安全回退。
+- done：AI 对话通过统一 Tutor Agent loop 执行，绑定 session、AgentRun、考试周期和目标资源。
+- done：Application Tool Executor、Tool/Skill Registry、Schema 校验、资源授权、Policy Guard、动态预算和完成状态核验已正式装配。
+- done：Context Compiler 已接入学生档案、会话摘要、近期消息和按需工具；隐藏思考与低可信数据不提升为系统指令。
+- done：Context Budgeter、五层 Memory Port、Sub-agent Registry 和版本化 Skill Manifest 已实现。
+- done：会话、摘要和 Agent memory 使用统一 `AgentWorkspaceStorage` 文件日志；业务 SQLite/IndexedDB 不保存非结构化聊天正文。
+- done：工具调用展示采用当前 run 的有界内存快照，下一次 run 整体覆盖，不持久化为无限历史。
+- done：lease、checkpoint、durable receipt、统一取消、任务恢复和类型化运行事件已接入并有自动验证。
+- in progress：专业 Sub-agent 已有隔离的 Registry/Catalog，但首个端到端委派、真实业务入口和固定评测尚未完成。
+- in progress：将 fencing token 强制传递到每个写 Use Case，并与业务变更在同一事务验证。
 
 “done”只表示有运行实现和自动验证；只有接入 composition root 并通过真机链路后才算对应产品功能完成。
 
@@ -214,6 +250,6 @@ Agent Workspace 文件日志：
 - Sub-agent：上下文过滤、工具限制、父预算和结果 Validator。
 - 恢复：切后台、杀进程、429、工具超时和重复点击。
 
-## 9. 退出条件
+## 9. 引擎替换条件
 
-如果未来引入成熟的供应商无关 Agent SDK，只有在它能满足本地 SQLite 检查点、双供应商、自定义 Context/Memory、领域工具 Policy、离线可用和隐私要求时，才可替换 Runtime Kernel。Provider、业务 Use Case、数据表和 View DTO 边界保持不变。
+Pi Agent Core 已作为默认 loop engine 接入，但只能位于 `AgentLoopRuntime` 协议之后。未来升级或替换引擎时，仍必须满足本地 SQLite 检查点、双供应商、自定义 Context/Memory、领域工具 Policy、离线恢复和隐私要求。Provider、业务 Use Case、数据表和 View DTO 边界不得随第三方引擎迁移。

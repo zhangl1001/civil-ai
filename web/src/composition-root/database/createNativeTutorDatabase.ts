@@ -328,7 +328,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const invokeAgentModel = new InvokeAgentModel(unitOfWork, agentRunRepository, clock, new UuidV7IdGenerator(clock));
   const saveAgentLoopCheckpoint = new SaveAgentLoopCheckpoint(unitOfWork, agentRunRepository, clock, new UuidV7IdGenerator(clock));
   const defaultAgentToolPolicy = new DefaultAgentToolPolicy();
-  const createAgentLoop = createDurableAgentLoopFactory({ invoker: invokeAgentModel, policy: defaultAgentToolPolicy, receipts: agentToolReceiptRepository, checkpoints: saveAgentLoopCheckpoint, clock });
+  const createAgentLoop = createDurableAgentLoopFactory({ invoker: invokeAgentModel, policy: defaultAgentToolPolicy, receipts: agentToolReceiptRepository, runs: agentRunRepository, checkpoints: saveAgentLoopCheckpoint, clock });
   const finalizeObjectiveTutorConclusion = new FinalizeObjectiveTutorConclusion(
     unitOfWork,
     tutorCycleRepository,

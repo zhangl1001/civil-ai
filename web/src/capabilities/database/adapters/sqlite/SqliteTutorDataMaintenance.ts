@@ -14,6 +14,9 @@ interface MaintenanceStatement {
 const noParameters = (): readonly string[] => [];
 const cycleParameter = (examCycleId: ExamCycleId): readonly string[] => [examCycleId];
 const cycleParameterTwice = (examCycleId: ExamCycleId): readonly string[] => [examCycleId, examCycleId];
+const repeatedCycleParameter = (count: number) => (examCycleId: ExamCycleId): readonly string[] => (
+  Array.from({ length: count }, () => examCycleId)
+);
 
 // Keep this child-to-parent order aligned with the SQLite foreign-key graph.
 const maintenanceStatements: readonly MaintenanceStatement[] = [
@@ -27,8 +30,48 @@ const maintenanceStatements: readonly MaintenanceStatement[] = [
     parameters: noParameters,
     countChanges: false
   },
-  { sql: 'DELETE FROM domain_outbox', parameters: noParameters },
-  { sql: 'DELETE FROM system_messages', parameters: noParameters },
+  {
+    sql: `DELETE FROM domain_outbox WHERE
+      (aggregate_type = 'learning_thread' AND aggregate_id IN (
+        SELECT id FROM learning_threads WHERE exam_cycle_id = ?
+      )) OR
+      (aggregate_type = 'tutor_agent_run' AND aggregate_id IN (
+        SELECT id FROM tutor_agent_runs WHERE exam_cycle_id = ?
+      )) OR
+      (aggregate_type = 'error_diagnosis' AND aggregate_id IN (
+        SELECT id FROM error_diagnoses WHERE exam_cycle_id = ?
+      )) OR
+      (aggregate_type = 'learning_session' AND aggregate_id IN (
+        SELECT id FROM learning_sessions WHERE exam_cycle_id = ?
+      )) OR
+      (aggregate_type = 'learning_evidence' AND aggregate_id IN (
+        SELECT id FROM learning_evidence WHERE exam_cycle_id = ?
+      )) OR
+      (aggregate_type = 'generation_workflow' AND aggregate_id IN (
+        SELECT id FROM generation_workflows WHERE exam_cycle_id = ?
+      )) OR
+      (aggregate_type = 'question_set' AND aggregate_id IN (
+        SELECT id FROM question_sets WHERE exam_cycle_id = ?
+      ))`,
+    parameters: repeatedCycleParameter(7)
+  },
+  {
+    sql: `DELETE FROM system_messages WHERE
+      (source_type = 'exam_cycle' AND source_id = ?) OR
+      (source_type = 'agent_run' AND source_id IN (
+        SELECT id FROM tutor_agent_runs WHERE exam_cycle_id = ?
+      )) OR
+      (source_type = 'daily_plan' AND source_id IN (
+        SELECT id FROM daily_plans WHERE exam_cycle_id = ?
+      )) OR
+      (source_type = 'review_queue' AND source_id IN (
+        SELECT id FROM review_queue WHERE exam_cycle_id = ?
+      )) OR
+      (source_type = 'learning_session' AND source_id IN (
+        SELECT id FROM learning_sessions WHERE exam_cycle_id = ?
+      ))`,
+    parameters: repeatedCycleParameter(5)
+  },
   {
     sql: `DELETE FROM question_source_import_receipts
       WHERE source_id IN (

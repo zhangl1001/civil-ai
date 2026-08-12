@@ -7,4 +7,13 @@ export {
   type RenderedMarkdown
 } from './markdown/MarkdownEngine';
 export { HtmlPolicy } from './security/HtmlPolicy';
-export { LinkKind, resolveLink, type LinkKind as LinkKindCode, type ResolvedLink } from './security/UrlPolicy';
+export {
+  ImageSourceKind,
+  LinkKind,
+  resolveImageSource,
+  resolveLink,
+  type ImageSourceKind as ImageSourceKindCode,
+  type LinkKind as LinkKindCode,
+  type ResolvedImageSource,
+  type ResolvedLink
+} from './security/UrlPolicy';
