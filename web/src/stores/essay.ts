@@ -33,7 +33,6 @@ export interface EssayState {
   history: EssayHistoryRecord[];
   preview: EssayAttemptPreview | null;
   context: EssayContext | null;
-  submitMessage: string;
   isLoading: boolean;
   error: string | null;
 }
@@ -43,6 +42,7 @@ const draftAutosave = new EssayDraftAutosave(
   180,
   (cause) => console.warn('[Essay] draft autosave failed', cause)
 );
+let stateLoadRevision = 0;
 
 export const useEssayStore = defineStore('essay', {
   state: (): EssayState => ({
@@ -55,25 +55,32 @@ export const useEssayStore = defineStore('essay', {
     history: [],
     preview: null,
     context: null,
-    submitMessage: '',
     isLoading: true,
     error: null,
   }),
 
   actions: {
     async fetchQuestion(context: EssayContext) {
+      const revision = ++stateLoadRevision;
       this.isLoading = true;
       this.error = null;
       // The pending draft belongs to the set being left, so it must land before switching.
       await draftAutosave.flush();
+      if (revision !== stateLoadRevision) return;
       try {
         this.context = context;
+        this.question = null;
         this.preview = null;
-        this.applyState(await essayRepository.getState(context));
+        this.submission = { content: '', feedback: null, isSubmitting: false };
+        this.history = [];
+        const state = await essayRepository.getState(context);
+        if (revision !== stateLoadRevision || this.context?.questionSetId !== context.questionSetId) return;
+        this.applyState(state);
       } catch (error) {
+        if (revision !== stateLoadRevision) return;
         this.error = error instanceof Error ? error.message : String(error);
       } finally {
-        this.isLoading = false;
+        if (revision === stateLoadRevision) this.isLoading = false;
       }
     },
 
@@ -87,6 +94,7 @@ export const useEssayStore = defineStore('essay', {
       try {
         await draftAutosave.flush();
         const state = await essayRepository.getState(context);
+        if (this.context?.questionSetId !== context.questionSetId) return;
         this.question = state.question;
         this.submission.feedback = state.feedback;
         this.history = state.history;
@@ -103,22 +111,17 @@ export const useEssayStore = defineStore('essay', {
     updateContent(content: string) {
       this.submission.content = content;
       this.submission.feedback = null;
-      this.submitMessage = '';
       draftAutosave.schedule(content, requireEssayContext(this.context));
     },
 
     async submitForGrading(): Promise<AgentRunView | undefined> {
       this.submission.isSubmitting = true;
       this.submission.feedback = null;
-      this.submitMessage = '';
       this.error = null;
       try {
         const context = requireEssayContext(this.context);
         await draftAutosave.flush();
         const result = await essayFlowService.enqueueGrading(this.submission.content, context);
-        this.submitMessage = result.reused
-          ? '本题组已有批改任务在执行，正在等待结果。'
-          : '批改任务已提交，完成后会自动显示。';
         return result.task;
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
@@ -134,7 +137,6 @@ export const useEssayStore = defineStore('essay', {
       try {
         this.preview = null;
         this.applyState(await essayRepository.resetDraft(requireEssayContext(this.context)));
-        this.submitMessage = '';
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
       }
@@ -163,13 +165,13 @@ export const useEssayStore = defineStore('essay', {
     },
 
     reset(options: { loading?: boolean } = {}) {
+      stateLoadRevision += 1;
       void draftAutosave.flush();
       this.question = null;
       this.submission = { content: '', feedback: null, isSubmitting: false };
       this.history = [];
       this.preview = null;
       this.context = null;
-      this.submitMessage = '';
       this.isLoading = options.loading ?? false;
       this.error = null;
     }

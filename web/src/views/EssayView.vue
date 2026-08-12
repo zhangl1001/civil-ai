@@ -106,7 +106,6 @@
         </section>
 
         <template v-else>
-          <div v-if="store.submitMessage" class="submit-message">{{ store.submitMessage }}</div>
           <div v-if="store.submission.feedback" class="feedback-section">
             <h4>AI 批改反馈</h4>
             <MarkdownContent :content="store.submission.feedback" />
@@ -378,9 +377,10 @@ const historyCountLabel = computed(() => (
 ));
 
 async function submitForGrading() {
+  const submittedQuestionSetId = store.context?.questionSetId;
   const run = await store.submitForGrading();
   // A failed enqueue leaves the candidate still answering, so the clock keeps running.
-  if (!run) return;
+  if (!run || !submittedQuestionSetId || store.context?.questionSetId !== submittedQuestionSetId) return;
   pauseTimer();
   isAnswerSheetOpen.value = false;
   trackGrading(run);
@@ -804,7 +804,6 @@ function formatTime(time: number): string {
   line-height: 1.72;
   white-space: pre-wrap;
 }
-.submit-message { padding: 12px 14px; border-radius: var(--radius-card); background: var(--color-brand-soft); color: var(--primary-color); font-size: var(--type-size-secondary); font-weight: var(--type-weight-semibold); }
 .feedback-section { padding: 16px; background: var(--soft-blue); border-radius: var(--radius-card); line-height: 1.7; }
 .feedback-section h4 { margin: 0 0 8px; }
 .feedback-section :deep(p) { margin: 0; }

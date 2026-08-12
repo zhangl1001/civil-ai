@@ -31,13 +31,16 @@ export function useEssayGradingWatcher(options: EssayGradingWatcherOptions): Ess
   let timerId: number | null = null;
   let trackedRunId = '';
   let disposed = false;
+  let watchRevision = 0;
 
   function stop() {
+    watchRevision += 1;
     if (timerId !== null) window.clearInterval(timerId);
     timerId = null;
     trackedRunId = '';
     isGrading.value = false;
     progressText.value = '';
+    failure.value = '';
   }
 
   function adopt(run: AgentRunView) {
@@ -93,10 +96,11 @@ export function useEssayGradingWatcher(options: EssayGradingWatcherOptions): Ess
     failure: readonly(failure),
     track: adopt,
     async resume(questionSetId: string) {
+      const revision = watchRevision;
       try {
         const runtime = await initializeTutorRuntime();
         const run = await new EssayGradingCoordinator(runtime).findActive(questionSetId);
-        if (run) adopt(run);
+        if (run && revision === watchRevision && !disposed) adopt(run);
       } catch (cause) {
         // Failing to re-attach only costs the live progress banner, not the page.
         console.warn('[Essay] grading resume failed', cause);
