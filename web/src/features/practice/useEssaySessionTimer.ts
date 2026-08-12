@@ -5,8 +5,6 @@ const PERSIST_EVERY_TICKS = 10;
 
 interface StoredTimer {
   readonly elapsedMs?: number;
-  readonly running?: boolean;
-  readonly savedAt?: number;
 }
 
 export interface EssaySessionTimer {
@@ -34,14 +32,13 @@ export function useEssaySessionTimer(): EssaySessionTimer {
   let timerId: number | null = null;
   let ticksSincePersist = 0;
   let disposed = false;
+  let resumeAfterVisibility = false;
 
   function persist() {
     if (!storageKey) return;
     try {
       localStorage.setItem(storageKey, JSON.stringify({
-        elapsedMs: elapsedMs.value,
-        running: isRunning.value,
-        savedAt: Date.now()
+        elapsedMs: elapsedMs.value
       }));
     } catch {
       // A full or blocked storage must never interrupt answering.
@@ -77,26 +74,22 @@ export function useEssaySessionTimer(): EssaySessionTimer {
       if (!raw) return;
       const saved = JSON.parse(raw) as StoredTimer;
       elapsedMs.value = saved.elapsedMs || 0;
-      if (saved.running && saved.savedAt) {
-        elapsedMs.value += Date.now() - saved.savedAt;
-        start();
-      }
     } catch {
       elapsedMs.value = 0;
     }
   }
 
-  /**
-   * Backgrounding must record the clock as still running so it resumes on return, which is
-   * why the stored `running` flag is written before the interval is torn down.
-   */
   function handleVisibilityChange() {
     if (document.hidden) {
-      persist();
-      stop();
+      resumeAfterVisibility = isRunning.value;
+      pause();
       return;
     }
     restore();
+    if (resumeAfterVisibility) {
+      resumeAfterVisibility = false;
+      start();
+    }
   }
 
   function pause() {
@@ -107,8 +100,8 @@ export function useEssaySessionTimer(): EssaySessionTimer {
   onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange));
   onBeforeUnmount(() => {
     document.removeEventListener('visibilitychange', handleVisibilityChange);
-    persist();
-    stop();
+    resumeAfterVisibility = false;
+    pause();
     disposed = true;
   });
 
@@ -116,8 +109,7 @@ export function useEssaySessionTimer(): EssaySessionTimer {
     elapsedText: computed(() => formatDuration(elapsedMs.value)),
     isRunning: readonly(isRunning),
     activate(questionSetId: string) {
-      persist();
-      stop();
+      pause();
       elapsedMs.value = 0;
       storageKey = `essay-timer:${questionSetId}`;
     },
