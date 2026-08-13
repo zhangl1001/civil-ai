@@ -30,6 +30,7 @@ export { createBundledCurriculumPacks, type BundledCurriculumPack } from './fixt
 export { EnsureCurriculumBundle } from './application/EnsureCurriculumBundle';
 export { GetExamSubjects, projectExamSubjects } from './application/GetExamSubjects';
 export type {
+  ExamChoiceGradingRule,
   ExamMockPaperSpec,
   ExamMockScheme,
   ExamSubjectModule,

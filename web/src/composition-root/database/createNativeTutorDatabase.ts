@@ -20,6 +20,7 @@ import {
 import { SqliteCurriculumRepository } from '@/modules/curriculum/adapters/SqliteCurriculumRepository';
 import { createBundledCurriculumPacks, EnsureCurriculumBundle } from '@/modules/curriculum/public';
 import { InstallExamPacks } from '../curriculum/InstallExamPacks';
+import { choiceGradingRule } from '@/domain/choiceGradingRules';
 import { SqliteOutboxRepository } from '@/modules/task/adapters/SqliteOutboxRepository';
 import { SqliteCommandReceiptRepository } from '@/modules/task/adapters/SqliteCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -277,7 +278,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     learningEvidenceRepository,
     outboxRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    choiceGradingRule
   );
   const correctLearningEvidence = new CorrectLearningEvidence(
     unitOfWork,

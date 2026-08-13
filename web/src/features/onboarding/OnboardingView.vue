@@ -159,19 +159,19 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import { FormField, SegmentedControl, StickyActionBar } from '@/capabilities/design-system/public';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { PROVINCE_OPTIONS } from '@/domain/labels';
-import {
-  CompanionTone,
-  ExamPhase,
-  ExplanationDepth,
-  ProactiveLevel,
-  StudyMode,
-  TeachingOrder
-} from '@/modules/candidate/public';
+import { ExamPhase, ProactiveLevel, StudyMode, TeachingOrder } from '@/modules/candidate/public';
 import type { JsonObject, LocalDate, TimeZoneId } from '@/kernel/public';
 import { OnboardingMessage, resolveOnboardingError } from './onboardingMessages';
 import { OnboardingDraftFeature } from './OnboardingDraftFeature';
 import { ExamPackSelectionFeature, type ExamPackOption } from './ExamPackSelectionFeature';
-import { applyScoreDefaults, examNameFor, scoreValidationError, subjectScoreInputs } from './ExamProfileScores';
+import {
+  applyScoreDefaults,
+  examNameFor,
+  restoreScoreEntries,
+  scoreValidationError,
+  studyRhythmInput,
+  subjectScoreInputs
+} from './ExamProfileScores';
 
 const OnboardingStep = {
   Goal: 1,
@@ -297,10 +297,20 @@ async function restoreDraft() {
     const data = saved.data;
     for (const key of Object.keys(form) as Array<keyof typeof form>) {
       const value = data[key];
+      // Score maps are restored separately: a draft may name subjects the
+      // installed package no longer has.
+      if (key === 'currentScores' || key === 'targetScores') continue;
       if (typeof value === typeof form[key]) {
         (form[key] as string | number) = value as string | number;
       }
     }
+    // A draft can outlive the package it was written against, so the track and
+    // every restored score is re-checked instead of trusted.
+    if (!examPacks.value.some((pack) => pack.examType === form.examType)) {
+      form.examType = examPacks.value[0]?.examType ?? '';
+    }
+    restoreScoreEntries(scoredSubjects.value, data, form.currentScores, form.targetScores);
+    applyScoreDefaults(scoredSubjects.value, form.currentScores, form.targetScores);
   } catch {
     submitMessage.value = OnboardingMessage.SaveFailed;
   }
@@ -367,8 +377,13 @@ function validateStep(target: number): boolean {
 }
 
 async function submit() {
+  if (submitting.value) return;
   const pack = activePack.value;
-  if (submitting.value || !pack || !validateStep(OnboardingStep.Rhythm)) return;
+  if (!pack) {
+    submitMessage.value = OnboardingMessage.ExamPackUnavailable;
+    return;
+  }
+  if (!validateStep(OnboardingStep.Rhythm)) return;
   submitting.value = true;
   submitMessage.value = '';
   try {
@@ -389,23 +404,7 @@ async function submit() {
       phase: ExamPhase.Foundation,
       curriculumVersionId: pack.curriculumVersionId,
       subjectScores: subjectScoreInputs(scoredSubjects.value, form.currentScores, form.targetScores),
-      study: {
-        mode: form.studyMode as typeof StudyMode[keyof typeof StudyMode],
-        weeklyStudyDays: form.weeklyStudyDays,
-        weekdayMinutes: form.weekdayMinutes,
-        weekendMinutes: form.weekendMinutes,
-        maxFocusMinutes: form.maxFocusMinutes,
-        availableWindows: [],
-        interruptionRisks: []
-      },
-      preferences: {
-        teachingOrder: form.teachingOrder as typeof TeachingOrder[keyof typeof TeachingOrder],
-        explanationDepth: ExplanationDepth.Balanced,
-        proactiveLevel: form.proactiveLevel as typeof ProactiveLevel[keyof typeof ProactiveLevel],
-        companionTone: CompanionTone.Gentle,
-        quietHours: [],
-        accessibility: {}
-      }
+      ...studyRhythmInput(form)
     });
     localStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
     await router.replace('/vue/diagnosis');

@@ -4,12 +4,12 @@
     "packageType": "curriculum",
     "examType": "civil_service",
     "regionScope": "national",
-    "version": "2.6.0",
+    "version": "2.7.0",
     "status": "published",
     "source": "bundled",
-    "contentHash": "sha256:487060e3b12d7785594c6fc6caca0812c11cea7a9ca3fb4ba228c886aea4f6fe",
+    "contentHash": "sha256:16f476384e42978be99c7960dbb12cfb09c8b993e3c8500de0b2e7e2af50acdd",
     "schemaVersion": "1",
-    "releaseNotes": "申论声明可选题型与长文形态，应用不再按题名字符串判断",
+    "releaseNotes": "客观题少选计分规则进入考试包策略，不再写死在判分代码里",
     "publishedAt": 1784016000000,
     "installedAt": 1784016000000
   },
@@ -19,7 +19,7 @@
       "metadataPackageId": "metadata:curriculum:civil-service-national:v2",
       "examType": "civil_service",
       "regionScope": "national",
-      "version": "2.6.0",
+      "version": "2.7.0",
       "status": "published",
       "createdAt": 1784016000000
     },
@@ -838,6 +838,7 @@
         "config": {
           "deliveryKind": "objective",
           "score": { "maxScore": 100, "defaultCurrent": 50, "defaultTarget": 80 },
+          "choiceGrading": { "underSelectionCreditWeight": 0.5 },
           "mockExam": {
             "defaultQuestionCount": 120,
             "defaultDurationMinutes": 120,

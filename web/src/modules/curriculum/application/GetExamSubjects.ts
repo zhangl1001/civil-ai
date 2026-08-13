@@ -40,6 +40,15 @@ export interface ExamWrittenFormat {
   readonly longForm: boolean;
 }
 
+/**
+ * How an objective subject scores an incomplete but correct selection. Exams
+ * differ on 少选: some award a fraction, some award nothing.
+ */
+export interface ExamChoiceGradingRule {
+  /** Fraction of the proportional score kept for an under-selected answer. */
+  readonly underSelectionCreditWeight: number;
+}
+
 /** Mock paper defaults for one subject. Absent when the subject has no mock exam. */
 export interface ExamMockPaperSpec {
   readonly defaultQuestionCount: number;
@@ -64,6 +73,7 @@ export interface ExamSubjectView {
   readonly deliveryKind: ExamDeliveryKind;
   readonly modules: readonly ExamSubjectModule[];
   readonly score?: ExamSubjectScore;
+  readonly choiceGrading?: ExamChoiceGradingRule;
   /** Answer formats offered for a subjective subject, in package order. */
   readonly writtenFormats: readonly ExamWrittenFormat[];
   readonly mockExam?: ExamMockPaperSpec;
@@ -106,6 +116,7 @@ export function projectExamSubjects(bundle: CurriculumBundle): readonly ExamSubj
       if (!deliveryKind) return [];
       const mockExam = readMockPaperSpec(readValue(policy.config, 'mockExam'));
       const score = readSubjectScore(readValue(policy.config, 'score'));
+      const choiceGrading = readChoiceGradingRule(readValue(policy.config, 'choiceGrading'));
       return [{
         code: node.subject,
         name: node.name,
@@ -114,6 +125,7 @@ export function projectExamSubjects(bundle: CurriculumBundle): readonly ExamSubj
         deliveryKind,
         modules: modulesOf(activeNodes, node.subject),
         ...(score ? { score } : {}),
+        ...(choiceGrading ? { choiceGrading } : {}),
         writtenFormats: readWrittenFormats(readValue(policy.config, 'writtenFormats')),
         ...(mockExam ? { mockExam } : {})
       }];
@@ -160,6 +172,15 @@ function readWrittenFormats(value: unknown): readonly ExamWrittenFormat[] {
     if (!name) return [];
     return [{ name, longForm: record?.longForm === true }];
   });
+}
+
+function readChoiceGradingRule(value: unknown): ExamChoiceGradingRule | undefined {
+  const record = asRecord(value);
+  const weight = record?.underSelectionCreditWeight;
+  // A weight outside 0..1 would push an attempt score past the stored range,
+  // so an unusable rule is rejected rather than clamped.
+  if (typeof weight !== 'number' || !Number.isFinite(weight) || weight < 0 || weight > 1) return undefined;
+  return { underSelectionCreditWeight: weight };
 }
 
 function readSubjectScore(value: unknown): ExamSubjectScore | undefined {

@@ -10,11 +10,16 @@ export interface ChoiceAnswerGrade {
 export const CHOICE_GRADER_VERSION = 'objective-choice:v1';
 
 /**
- * Fraction of the proportional score kept when a candidate selects only correct
- * options but not all of them. Under-selection shows partial knowledge, so it
- * scores, but never as much as a complete answer.
+ * How an incomplete but correct selection scores. Exams differ on 少选, so the
+ * exam package declares this rather than the grader hard-coding it; the default
+ * applies only when no package rule reached the caller.
  */
-const UNDER_SELECTION_CREDIT_WEIGHT = 0.5;
+export interface ChoiceGradingRule {
+  /** Fraction of the proportional score kept for an under-selected answer. */
+  readonly underSelectionCreditWeight: number;
+}
+
+export const DEFAULT_CHOICE_GRADING_RULE: ChoiceGradingRule = { underSelectionCreditWeight: 0.5 };
 
 const SCORE_DECIMALS = 4;
 
@@ -34,7 +39,8 @@ const PARTIAL_CREDIT_TEMPLATES: readonly QuestionTemplateCode[] = [
 export function gradeChoiceAnswer(
   templateCode: QuestionTemplateCode,
   correctOptionIds: readonly string[],
-  selectedOptionIds: readonly string[]
+  selectedOptionIds: readonly string[],
+  rule: ChoiceGradingRule = DEFAULT_CHOICE_GRADING_RULE
 ): ChoiceAnswerGrade {
   const selected = new Set(selectedOptionIds);
   if (selected.size === 0) return { result: AttemptResult.Unanswered, score: 0 };
@@ -47,6 +53,6 @@ export function gradeChoiceAnswer(
   if (!PARTIAL_CREDIT_TEMPLATES.includes(templateCode)) {
     return { result: AttemptResult.Incorrect, score: 0 };
   }
-  const ratio = selected.size / correct.size * UNDER_SELECTION_CREDIT_WEIGHT;
+  const ratio = selected.size / correct.size * rule.underSelectionCreditWeight;
   return { result: AttemptResult.Partial, score: Number(ratio.toFixed(SCORE_DECIMALS)) };
 }

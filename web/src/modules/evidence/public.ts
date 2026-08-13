@@ -30,8 +30,10 @@ export {
 } from './domain/ChoiceAttemptAnswer';
 export {
   CHOICE_GRADER_VERSION,
+  DEFAULT_CHOICE_GRADING_RULE,
   gradeChoiceAnswer,
-  type ChoiceAnswerGrade
+  type ChoiceAnswerGrade,
+  type ChoiceGradingRule
 } from './domain/ChoiceGradingPolicy';
 export type {
   AttemptRecord,

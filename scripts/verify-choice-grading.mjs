@@ -66,6 +66,36 @@ try {
   const underSelected = gradeChoiceAnswer(multiple, ['A', 'C'], ['A']);
   assert.equal(evidence.isMistakenAttempt(underSelected.result), true);
 
+  // --- the 少选 rule belongs to the exam package -------------------------------
+  const curriculum = await server.ssrLoadModule('/src/modules/curriculum/public.ts');
+  const rules = await server.ssrLoadModule('/src/domain/choiceGradingRules.ts');
+  const bundled = curriculum.projectExamSubjects(curriculum.createBundledNationalCurriculum());
+  rules.installChoiceGradingRule(bundled);
+  assert.deepEqual(rules.choiceGradingRule(), { underSelectionCreditWeight: 0.5 });
+
+  // A package declaring a different rule changes the score without code changes.
+  const strictPack = bundled.map((subject) => (subject.deliveryKind === 'objective'
+    ? { ...subject, choiceGrading: { underSelectionCreditWeight: 0.2 } }
+    : subject));
+  rules.installChoiceGradingRule(strictPack);
+  assert.deepEqual(
+    gradeChoiceAnswer(multiple, ['A', 'C'], ['A'], rules.choiceGradingRule()),
+    { result: AttemptResult.Partial, score: 0.1 }
+  );
+
+  // A package awarding nothing for 少选 still records the attempt as partial,
+  // so it stays in the review loop even at zero score.
+  rules.installChoiceGradingRule(bundled.map((subject) => (subject.deliveryKind === 'objective'
+    ? { ...subject, choiceGrading: { underSelectionCreditWeight: 0 } }
+    : subject)));
+  const noCredit = gradeChoiceAnswer(multiple, ['A', 'C'], ['A'], rules.choiceGradingRule());
+  assert.deepEqual(noCredit, { result: AttemptResult.Partial, score: 0 });
+  assert.equal(evidence.isMistakenAttempt(noCredit.result), true);
+
+  // A package with no rule falls back to the shipped default.
+  rules.installChoiceGradingRule([]);
+  assert.deepEqual(rules.choiceGradingRule(), evidence.DEFAULT_CHOICE_GRADING_RULE);
+
   // --- persisted answer round trip -------------------------------------------
   const stored = evidence.choiceAttemptAnswer(['A', 'C']);
   assert.deepEqual(stored, { optionIds: ['A', 'C'] });

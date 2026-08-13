@@ -16,6 +16,7 @@ import {
 import { IndexedDbCurriculumRepository } from '@/modules/curriculum/adapters/IndexedDbCurriculumRepository';
 import { createBundledCurriculumPacks, EnsureCurriculumBundle } from '@/modules/curriculum/public';
 import { InstallExamPacks } from '../curriculum/InstallExamPacks';
+import { choiceGradingRule } from '@/domain/choiceGradingRules';
 import { IndexedDbOutboxRepository } from '@/modules/task/adapters/IndexedDbOutboxRepository';
 import { IndexedDbCommandReceiptRepository } from '@/modules/task/adapters/IndexedDbCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -278,7 +279,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     learningEvidenceRepository,
     outboxRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    choiceGradingRule
   );
   const correctLearningEvidence = new CorrectLearningEvidence(
     unitOfWork,

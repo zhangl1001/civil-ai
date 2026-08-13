@@ -351,9 +351,13 @@ function selectOption(optionId: string) {
   const questionId = current.id;
   const previous = answers.value[questionId] ?? [];
   const multiAnswer = isMultiAnswerChoice(current.content);
-  const next = multiAnswer
+  // Held in option order, not click order: the answer key is normalised the same
+  // way, so "我的答案" and "正确答案" can never disagree on ordering.
+  const order = current.content.options.map((option) => option.id);
+  const toggled = multiAnswer
     ? (previous.includes(optionId) ? previous.filter((item) => item !== optionId) : [...previous, optionId])
     : [optionId];
+  const next = [...toggled].sort((left, right) => order.indexOf(left) - order.indexOf(right));
   if (previous.length && (previous.length !== next.length || previous.some((item) => !next.includes(item)))) {
     answerChanges.value[questionId] = (answerChanges.value[questionId] || 0) + 1;
   }

@@ -1,5 +1,6 @@
 import type { EnsurePromptBundle, PromptRegistry } from '@/capabilities/ai-runtime/public';
 import { installCurriculumLabels } from '@/domain/labels';
+import { installChoiceGradingRule } from '@/domain/choiceGradingRules';
 import { installWrittenFormats } from '@/domain/writtenFormats';
 import type { AlignCandidateCurriculum, CandidateRepository } from '@/modules/candidate/public';
 import { projectExamSubjects, type BundledCurriculumPack, type EnsureCurriculumBundle } from '@/modules/curriculum/public';
@@ -36,8 +37,10 @@ export class InstallExamPacks {
     // Prompts resolve against the active track first and fall back to the
     // shared catalog, so a pack only ships the wording it actually changes.
     this.promptRegistry.activateExamType(active.examType);
+    const subjects = projectExamSubjects(active.bundle);
     installCurriculumLabels(active.bundle.capabilityNodes);
-    installWrittenFormats(projectExamSubjects(active.bundle));
+    installWrittenFormats(subjects);
+    installChoiceGradingRule(subjects);
   }
 
   /**

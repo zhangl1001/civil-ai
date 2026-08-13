@@ -7,6 +7,7 @@ import { capacitorRuntime, installNativePlatformClass } from './platform/capacit
 import { probeNativeStreamingHttp } from './platform/NativeStreamingHttpAdapter';
 import { installDatabaseStallRecovery } from './platform/DatabaseStallRecovery';
 import { installCurriculumLabels } from './domain/labels';
+import { installChoiceGradingRule } from './domain/choiceGradingRules';
 import { installWrittenFormats } from './domain/writtenFormats';
 import { createBundledCurriculumPacks, projectExamSubjects } from './modules/curriculum/public';
 
@@ -23,8 +24,10 @@ installDatabaseStallRecovery();
 // render; the runtime swaps in the candidate's own pack once it resolves.
 const [defaultExamPack] = createBundledCurriculumPacks();
 if (defaultExamPack) {
+  const defaultSubjects = projectExamSubjects(defaultExamPack.bundle);
   installCurriculumLabels(defaultExamPack.bundle.capabilityNodes);
-  installWrittenFormats(projectExamSubjects(defaultExamPack.bundle));
+  installWrittenFormats(defaultSubjects);
+  installChoiceGradingRule(defaultSubjects);
 }
 
 void probeNativeStreamingHttp().then((available) => {

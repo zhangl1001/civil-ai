@@ -9,7 +9,12 @@ import {
   type QuestionRecord
 } from '@/modules/content/public';
 import { choiceAttemptAnswer } from '../domain/ChoiceAttemptAnswer';
-import { CHOICE_GRADER_VERSION, gradeChoiceAnswer } from '../domain/ChoiceGradingPolicy';
+import {
+  CHOICE_GRADER_VERSION,
+  DEFAULT_CHOICE_GRADING_RULE,
+  gradeChoiceAnswer,
+  type ChoiceGradingRule
+} from '../domain/ChoiceGradingPolicy';
 import type { OutboxRepository } from '@/modules/task/public';
 import type { LearningThreadRecord, LearningThreadRepository } from '@/modules/teaching/public';
 import type {
@@ -90,7 +95,13 @@ export class SubmitObjectiveSession {
     private readonly evidenceRepository: LearningEvidenceRepository,
     private readonly outboxRepository: OutboxRepository,
     private readonly clock: Clock,
-    private readonly ids: IdGenerator
+    private readonly ids: IdGenerator,
+    /**
+     * Scoring rule of the active exam package. Injected rather than read from
+     * app state inside the grader, so this use case stays testable and the
+     * domain policy stays pure.
+     */
+    private readonly choiceGradingRule: () => ChoiceGradingRule = () => DEFAULT_CHOICE_GRADING_RULE
   ) {}
 
   async execute(command: SubmitObjectiveSessionCommand): Promise<ObjectiveSessionSubmissionResult> {
@@ -201,7 +212,12 @@ export class SubmitObjectiveSession {
       const hintLevel = answer.hintLevel ?? 0;
       const selectedOptionIds = selectedOptionIdsOf(answer, question);
       const correctOptionIds = correctOptionIdsOf(question.content);
-      const grade = gradeChoiceAnswer(question.content.templateCode, correctOptionIds, selectedOptionIds);
+      const grade = gradeChoiceAnswer(
+        question.content.templateCode,
+        correctOptionIds,
+        selectedOptionIds,
+        this.choiceGradingRule()
+      );
       const result = grade.result;
       const attemptId = this.ids.next('AttemptId');
       return {
@@ -510,9 +526,12 @@ function speedScore(elapsedMs: number, targetMs: number): number {
  * a regenerated question must never grade against an option that no longer exists.
  */
 function selectedOptionIdsOf(answer: ObjectiveAnswerInput, question: QuestionRecord): readonly string[] {
-  const available = new Set(question.content.options.map((option) => option.id));
+  const order = question.content.options.map((option) => option.id);
+  const available = new Set(order);
   const selected = (answer.optionIds ?? []).map((optionId) => optionId.trim()).filter((optionId) => available.has(optionId));
-  return [...new Set(selected)];
+  // Stored in option order so the recorded answer reads the same everywhere it
+  // is shown, regardless of the order the learner tapped.
+  return [...new Set(selected)].sort((left, right) => order.indexOf(left) - order.indexOf(right));
 }
 
 function sessionTypeFor(role: AssessmentRole): typeof LearningSessionType[keyof typeof LearningSessionType] {

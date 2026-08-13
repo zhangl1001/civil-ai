@@ -1,6 +1,13 @@
 import type { SubjectCode } from '@/kernel/public';
 import type { ExamSubjectView } from '@/modules/curriculum/public';
 import type { ExamPackOption } from './ExamPackSelectionFeature';
+import {
+  CompanionTone,
+  ExplanationDepth,
+  ProactiveLevel,
+  StudyMode,
+  TeachingOrder
+} from '@/modules/candidate/public';
 import { OnboardingMessage } from './onboardingMessages';
 
 /** Editable score fields, keyed by subject code because the pack decides the subjects. */
@@ -28,6 +35,27 @@ export function applyScoreDefaults(
     if (!subject.score) continue;
     current[subject.code] ??= String(subject.score.defaultCurrent);
     target[subject.code] ??= String(subject.score.defaultTarget);
+  }
+}
+
+/**
+ * Restores saved scores, keeping only subjects the active package still offers.
+ * A draft can outlive the package it was written against, so stale subject keys
+ * are dropped rather than resurrected into a form that cannot be submitted.
+ */
+export function restoreScoreEntries(
+  subjects: readonly ExamSubjectView[],
+  saved: Readonly<Record<string, unknown>>,
+  current: ScoreEntries,
+  target: ScoreEntries
+): void {
+  const offered = new Set<string>(subjects.map((subject) => subject.code));
+  for (const [field, entries] of [['currentScores', current], ['targetScores', target]] as const) {
+    const record = saved[field];
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+    for (const [code, value] of Object.entries(record as Record<string, unknown>)) {
+      if (offered.has(code) && typeof value === 'string') entries[code] = value;
+    }
   }
 }
 
@@ -66,4 +94,37 @@ export function subjectScoreInputs(
       maxScore: subject.score.maxScore
     }];
   });
+}
+
+export interface StudyRhythmForm {
+  readonly studyMode: string;
+  readonly weeklyStudyDays: number;
+  readonly weekdayMinutes: number;
+  readonly weekendMinutes: number;
+  readonly maxFocusMinutes: number;
+  readonly teachingOrder: string;
+  readonly proactiveLevel: string;
+}
+
+/** Maps the rhythm step onto the candidate cycle command's study and preference blocks. */
+export function studyRhythmInput(form: StudyRhythmForm) {
+  return {
+    study: {
+      mode: form.studyMode as typeof StudyMode[keyof typeof StudyMode],
+      weeklyStudyDays: form.weeklyStudyDays,
+      weekdayMinutes: form.weekdayMinutes,
+      weekendMinutes: form.weekendMinutes,
+      maxFocusMinutes: form.maxFocusMinutes,
+      availableWindows: [],
+      interruptionRisks: []
+    },
+    preferences: {
+      teachingOrder: form.teachingOrder as typeof TeachingOrder[keyof typeof TeachingOrder],
+      explanationDepth: ExplanationDepth.Balanced,
+      proactiveLevel: form.proactiveLevel as typeof ProactiveLevel[keyof typeof ProactiveLevel],
+      companionTone: CompanionTone.Gentle,
+      quietHours: [],
+      accessibility: {}
+    }
+  };
 }
