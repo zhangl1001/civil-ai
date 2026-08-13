@@ -35,7 +35,7 @@
         <legend>行测模块</legend>
         <div class="choice-row">
           <button type="button" :class="{ active: !form.module }" @click="form.module = ''">全部模块</button>
-          <button v-for="item in APTITUDE_PRACTICE_MODULE_OPTIONS" :key="item.code" type="button" :class="{ active: form.module === item.code }" @click="form.module = item.code">{{ item.name }}</button>
+          <button v-for="item in moduleOptions" :key="item.code" type="button" :class="{ active: form.module === item.code }" @click="form.module = item.code">{{ item.name }}</button>
         </div>
       </fieldset>
 
@@ -71,7 +71,7 @@
 import { reactive, watch } from 'vue';
 import { SearchIcon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
-import { APTITUDE_PRACTICE_MODULE_OPTIONS, PROVINCE_OPTIONS } from '@/domain/labels';
+import { curriculumModuleOptions, PROVINCE_OPTIONS } from '@/domain/labels';
 import {
   TrueQuestionResearchExamType,
   TrueQuestionResearchSourcePreference,
@@ -92,6 +92,7 @@ const emit = defineEmits<{
   submit: [criteria: TrueQuestionResearchCriteria];
 }>();
 
+const moduleOptions = curriculumModuleOptions();
 const form = reactive<TrueQuestionResearchCriteria>(defaultTrueQuestionResearchCriteria(props));
 
 watch(() => props.modelValue, (visible) => {

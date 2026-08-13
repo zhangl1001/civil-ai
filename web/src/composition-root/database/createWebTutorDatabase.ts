@@ -14,7 +14,8 @@ import {
   UpdateScoreTargets
 } from '@/modules/candidate/public';
 import { IndexedDbCurriculumRepository } from '@/modules/curriculum/adapters/IndexedDbCurriculumRepository';
-import { createBundledNationalCurriculum, EnsureCurriculumBundle } from '@/modules/curriculum/public';
+import { createBundledCurriculumPacks, EnsureCurriculumBundle } from '@/modules/curriculum/public';
+import { InstallExamPacks } from '../curriculum/InstallExamPacks';
 import { IndexedDbOutboxRepository } from '@/modules/task/adapters/IndexedDbOutboxRepository';
 import { IndexedDbCommandReceiptRepository } from '@/modules/task/adapters/IndexedDbCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -201,7 +202,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const outboxRepository = new IndexedDbOutboxRepository(database, transactionScope);
   const commandReceiptRepository = new IndexedDbCommandReceiptRepository(database, transactionScope);
   const ensureCurriculum = new EnsureCurriculumBundle(unitOfWork, curriculumRepository);
-  const bundledCurriculum = createBundledNationalCurriculum();
+  const curriculumPacks = createBundledCurriculumPacks();
   const ensureContentMetadata = new EnsureContentMetadata(unitOfWork, contentRepository);
   const bundledContentMetadata = createBundledContentMetadata();
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
@@ -574,11 +575,10 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     getCandidateHome,
     updateLearningPreferences,
     updateScoreTargets,
-    defaultCurriculumVersionId: bundledCurriculum.curriculum.id,
+    curriculumPacks,
     initialize: async () => {
       await database.open();
-      await ensureCurriculum.execute(bundledCurriculum);
-      await alignCandidateCurriculum.execute(bundledCurriculum);
+      await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository).execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
       await ensurePromptBundle.execute(structuredObjectivePromptV2);
       await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);

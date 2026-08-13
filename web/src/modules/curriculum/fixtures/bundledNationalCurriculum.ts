@@ -56,6 +56,7 @@ export function createBundledNationalCurriculum(): CurriculumBundle {
       parentId: node.parentId as CapabilityNodeId | undefined,
       code: node.code,
       name: node.name,
+      shortName: 'shortName' in node ? node.shortName : undefined,
       nodeType: node.nodeType as CapabilityNodeType,
       subject: node.subject as SubjectCode,
       module: node.module,

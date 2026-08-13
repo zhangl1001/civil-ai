@@ -257,7 +257,7 @@ import BottomSheet from '@/components/layout/BottomSheet.vue';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import { AppStateView, InitialRefreshState, PullToRefresh } from '@/capabilities/design-system/public';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { APTITUDE_PRACTICE_MODULE_OPTIONS, practiceModuleLabel } from '@/domain/labels';
+import { curriculumModuleOptions, practiceModuleLabel } from '@/domain/labels';
 import { AssessmentRole } from '@/kernel/public';
 import type { AgentRunView } from '@/modules/agent/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
@@ -363,7 +363,7 @@ const customCapabilityId = ref('');
 const customCount = ref(10);
 let pollTimer: number | undefined;
 let practiceCenterFeaturePromise: Promise<PracticeCenterFeature> | undefined;
-const moduleDefinitions = APTITUDE_PRACTICE_MODULE_OPTIONS;
+const moduleDefinitions = curriculumModuleOptions();
 const curriculumNodesById = computed(() => new Map(curriculumNodes.value.map((item) => [item.id, item])));
 const availableModules = computed(() => {
   const available = new Set(capabilities.value.map((item) => item.module));

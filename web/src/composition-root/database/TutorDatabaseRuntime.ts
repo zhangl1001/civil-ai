@@ -8,7 +8,6 @@ import type {
   TutorDatabaseLifecycle,
   UnitOfWork
 } from '@/capabilities/database/public';
-import type { CurriculumVersionId } from '@/kernel/public';
 import type {
   AgentMemoryRepository,
   AgentRunExecutionRegistry,
@@ -54,7 +53,7 @@ import type {
   ScanQuestionImportDraft
 } from '@/modules/content/public';
 import type { ConversationStore } from '@/modules/conversation/public';
-import type { CurriculumRepository } from '@/modules/curriculum/public';
+import type { BundledCurriculumPack, CurriculumRepository } from '@/modules/curriculum/public';
 import type {
   CompleteObjectivePractice,
   ConfirmErrorDiagnosis,
@@ -206,7 +205,8 @@ export interface TutorDatabaseRuntime {
   readonly getCandidateHome: GetCandidateHome;
   readonly updateLearningPreferences: UpdateLearningPreferences;
   readonly updateScoreTargets: UpdateScoreTargets;
-  readonly defaultCurriculumVersionId: CurriculumVersionId;
+  /** Exam tracks bundled with the app, in the order they are offered. */
+  readonly curriculumPacks: readonly BundledCurriculumPack[];
   initialize(): Promise<void>;
   close(): Promise<void>;
   resetForDevelopment(): Promise<void>;

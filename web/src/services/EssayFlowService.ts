@@ -1,3 +1,4 @@
+import { isLongFormTopic } from '@/domain/writtenFormats';
 import { ExamDeliveryKind } from '@/modules/curriculum/public';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
@@ -35,8 +36,7 @@ function today(): string {
 }
 
 function typeFromTopic(topic: string): EssayContext['type'] {
-  if (topic === '申发论述') return 'long';
-  return 'short';
+  return isLongFormTopic(topic) ? 'long' : 'short';
 }
 
 export class EssayFlowService {

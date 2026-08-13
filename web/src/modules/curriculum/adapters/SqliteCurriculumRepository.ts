@@ -63,6 +63,7 @@ interface CapabilityNodeRow extends SqlRow {
   parent_id: string | null;
   code: string;
   name: string;
+  short_name: string | null;
   node_type: CapabilityNodeType;
   subject: string;
   module: string;
@@ -144,13 +145,14 @@ export class SqliteCurriculumRepository implements CurriculumRepository {
     for (const node of bundle.capabilityNodes) {
       await transaction.run(
         `INSERT INTO capability_nodes(
-          id, curriculum_version_id, parent_id, code, name, node_type, subject, module, sequence,
+          id, curriculum_version_id, parent_id, code, name, short_name, node_type, subject, module, sequence,
           score_weight, default_target_accuracy, default_target_seconds, mastery_policy_json, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           parent_id = excluded.parent_id,
           code = excluded.code,
           name = excluded.name,
+          short_name = excluded.short_name,
           node_type = excluded.node_type,
           subject = excluded.subject,
           module = excluded.module,
@@ -166,6 +168,7 @@ export class SqliteCurriculumRepository implements CurriculumRepository {
           node.parentId ?? null,
           node.code,
           node.name,
+          node.shortName ?? null,
           node.nodeType,
           node.subject,
           node.module,
@@ -268,10 +271,11 @@ export class SqliteCurriculumRepository implements CurriculumRepository {
   private insertNode(transaction: SqlTransaction, value: CapabilityNode): Promise<unknown> {
     return transaction.run(
       `INSERT INTO capability_nodes(
-        id, curriculum_version_id, parent_id, code, name, node_type, subject, module, sequence,
+        id, curriculum_version_id, parent_id, code, name, short_name, node_type, subject, module, sequence,
         score_weight, default_target_accuracy, default_target_seconds, mastery_policy_json, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [value.id, value.curriculumVersionId, value.parentId ?? null, value.code, value.name, value.nodeType,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [value.id, value.curriculumVersionId, value.parentId ?? null, value.code, value.name,
+        value.shortName ?? null, value.nodeType,
         value.subject, value.module, value.sequence, value.scoreWeight, value.defaultTargetAccuracy ?? null,
         value.defaultTargetSeconds ?? null, JSON.stringify(value.masteryPolicy), value.status]
     );
@@ -335,6 +339,7 @@ export class SqliteCurriculumRepository implements CurriculumRepository {
       parentId: row.parent_id as CapabilityNodeId | null ?? undefined,
       code: row.code,
       name: row.name,
+      shortName: row.short_name ?? undefined,
       nodeType: row.node_type,
       subject: row.subject as SubjectCode,
       module: row.module,

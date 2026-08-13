@@ -145,7 +145,7 @@
                       :y="axis.labelY"
                       :text-anchor="axis.anchor"
                     >
-                      {{ axis.shortName }}
+                      {{ axis.name }}
                     </text>
                   </svg>
                   <div class="radar-legend">

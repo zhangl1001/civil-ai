@@ -4,12 +4,12 @@
     "packageType": "curriculum",
     "examType": "civil_service",
     "regionScope": "national",
-    "version": "2.3.0",
+    "version": "2.6.0",
     "status": "published",
     "source": "bundled",
-    "contentHash": "sha256:4fc80c3ee8747f2a06944441a808707ddb707c07c461919deda80d6c00ed30ff",
+    "contentHash": "sha256:487060e3b12d7785594c6fc6caca0812c11cea7a9ca3fb4ba228c886aea4f6fe",
     "schemaVersion": "1",
-    "releaseNotes": "新增各科目 exam_delivery 策略，声明作答形态与模考方案，取代应用层硬编码",
+    "releaseNotes": "申论声明可选题型与长文形态，应用不再按题名字符串判断",
     "publishedAt": 1784016000000,
     "installedAt": 1784016000000
   },
@@ -19,7 +19,7 @@
       "metadataPackageId": "metadata:curriculum:civil-service-national:v2",
       "examType": "civil_service",
       "regionScope": "national",
-      "version": "2.3.0",
+      "version": "2.6.0",
       "status": "published",
       "createdAt": 1784016000000
     },
@@ -28,6 +28,7 @@
         "id": "capability:aptitude",
         "code": "aptitude",
         "name": "行政职业能力测验",
+        "shortName": "行测",
         "nodeType": "subject",
         "subject": "aptitude",
         "module": "aptitude",
@@ -271,6 +272,7 @@
         "parentId": "capability:aptitude",
         "code": "aptitude.verbal",
         "name": "言语理解与表达",
+        "shortName": "言语理解",
         "nodeType": "module",
         "subject": "aptitude",
         "module": "verbal",
@@ -680,6 +682,7 @@
         "id": "capability:interview",
         "code": "interview",
         "name": "结构化面试",
+        "shortName": "面试",
         "nodeType": "subject",
         "subject": "interview",
         "module": "interview",
@@ -834,6 +837,7 @@
         "version": "1.0.0",
         "config": {
           "deliveryKind": "objective",
+          "score": { "maxScore": 100, "defaultCurrent": 50, "defaultTarget": 80 },
           "mockExam": {
             "defaultQuestionCount": 120,
             "defaultDurationMinutes": 120,
@@ -855,6 +859,14 @@
         "version": "1.0.0",
         "config": {
           "deliveryKind": "subjective",
+          "score": { "maxScore": 100, "defaultCurrent": 50, "defaultTarget": 70 },
+          "writtenFormats": [
+            { "name": "归纳概括", "longForm": false },
+            { "name": "综合分析", "longForm": false },
+            { "name": "提出对策", "longForm": false },
+            { "name": "贯彻执行", "longForm": false },
+            { "name": "申发论述", "longForm": true }
+          ],
           "mockExam": {
             "defaultQuestionCount": 1,
             "defaultDurationMinutes": 180,

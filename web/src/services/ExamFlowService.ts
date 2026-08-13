@@ -1,6 +1,7 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 import type { SubjectCode } from '@/kernel/public';
 import type { EssayMockType, ExamStartContext } from '@/domain/examMock';
+import { defaultLongFormTopic, defaultShortFormTopic } from '@/domain/writtenFormats';
 import { ExamDeliveryKind, GetExamSubjects, type ExamSubjectView } from '@/modules/curriculum/public';
 import {
   LearningAssetKind,
@@ -62,9 +63,6 @@ const PreferenceKey = {
   FocusTags: 'exam-focus-tags',
   EssayType: 'exam-essay-type'
 } as const;
-
-const ESSAY_LONG_TOPIC = '申发论述';
-const ESSAY_SHORT_TOPIC = '申论小题';
 
 function today(): string {
   const now = new Date();
@@ -231,16 +229,17 @@ export class ExamFlowService {
     this.writeContext(context);
 
     if (subject.deliveryKind === ExamDeliveryKind.Objective) {
+      const subjectName = subject.shortName?.trim() || subject.name;
       return generationTaskService.enqueue({
         idempotencyKey,
         intent: 'mock',
-        title: `${subject.name}模考`,
+        title: `${subjectName}模考`,
         detail: `${context.questionCount} 题 · ${context.durationMinutes} 分钟`,
-        module: subject.name,
+        module: subjectName,
         sourceId: `mock:${subject.code}:${context.date}:${context.questionCount}`,
         payload: {
           subjectCode: subject.code,
-          subjectName: subject.name,
+          subjectName,
           deliveryKind: subject.deliveryKind,
           modules: subject.modules.map((item) => item.name),
           date: context.date,
@@ -253,14 +252,14 @@ export class ExamFlowService {
 
     // Subjective mock exams are currently backed by essay assets. A second
     // subjective mock subject would move this mapping into the delivery policy.
-    const topic = context.essayType === 'long' ? ESSAY_LONG_TOPIC : ESSAY_SHORT_TOPIC;
+    const topic = (context.essayType === 'long' ? defaultLongFormTopic() : defaultShortFormTopic()) ?? subject.name;
     return essayFlowService.enqueueQuestionGeneration({
       date: context.date,
       topic,
       type: context.essayType,
       entryMode: 'self',
       purpose: 'mock'
-    }, { questionCount: 1, title: `${subject.name}模考`, idempotencyKey });
+    }, { questionCount: 1, title: `${subject.shortName?.trim() || subject.name}模考`, idempotencyKey });
   }
 }
 

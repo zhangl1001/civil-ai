@@ -52,6 +52,8 @@ export interface CapabilityNode {
   readonly parentId?: CapabilityNodeId;
   readonly code: string;
   readonly name: string;
+  /** Compact display name for chips, tabs and chart axes. Absent when `name` already fits. */
+  readonly shortName?: string;
   readonly nodeType: CapabilityNodeType;
   readonly subject: SubjectCode;
   readonly module: string;

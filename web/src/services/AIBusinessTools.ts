@@ -4,6 +4,7 @@ import { examFlowService } from '@/services/ExamFlowService';
 import { monthlyDigestService } from '@/services/MonthlyDigestService';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
+import { defaultShortFormTopic, isLongFormTopic } from '@/domain/writtenFormats';
 import { AssessmentRole } from '@/kernel/public';
 import { QuestionSetEntryMode } from '@/modules/content/public';
 import { ExamDeliveryKind, type CapabilityNode } from '@/modules/curriculum/public';
@@ -113,8 +114,8 @@ export class AIBusinessTools {
     }
 
     if (call.name === 'generate_essay') {
-      const essayTopic = asString(args.essayTopic) || '申论小题';
-      const essayType = args.essayType === 'long' || essayTopic === '申发论述' ? 'long' : 'short';
+      const essayTopic = asString(args.essayTopic) || defaultShortFormTopic() || '';
+      const essayType = args.essayType === 'long' || isLongFormTopic(essayTopic) ? 'long' : 'short';
       const context: EssayGenerationContext = {
         date: today(),
         topic: essayTopic,

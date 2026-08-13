@@ -11,6 +11,11 @@ export function essayTypeLabel(type: EssayMockType): string {
   return type === 'long' ? '大作文' : '小题';
 }
 
+/** Subject name for headings and buttons, matching how the rest of the app names it. */
+export function subjectDisplayName(subject: ExamSubjectView): string {
+  return subject.shortName?.trim() || subject.name;
+}
+
 export function mockHeadline(subject: ExamSubjectView): string {
   return subject.deliveryKind === ExamDeliveryKind.Objective
     ? '生成套卷，按考试节奏完成训练'
@@ -18,7 +23,7 @@ export function mockHeadline(subject: ExamSubjectView): string {
 }
 
 export function mockStartLabel(subject: ExamSubjectView): string {
-  return `生成并进入${subject.name}模考`;
+  return `生成并进入${subjectDisplayName(subject)}模考`;
 }
 
 export function mockConfigTitle(subject: ExamSubjectView, context: ExamStartContext): string {
@@ -36,5 +41,5 @@ export function mockConfigSummary(subject: ExamSubjectView, context: ExamStartCo
 }
 
 export function emptyHistoryTitle(subject: ExamSubjectView): string {
-  return `还没有${subject.name}模考记录`;
+  return `还没有${subjectDisplayName(subject)}模考记录`;
 }

@@ -26,11 +26,17 @@ try {
 
   const aptitude = subjects[0];
   assert.equal(aptitude.name, '行政职业能力测验');
+  // Short names let compact UI stay readable without truncating in the page.
+  assert.equal(aptitude.shortName, '行测');
   assert.equal(aptitude.deliveryKind, curriculum.ExamDeliveryKind.Objective);
   // Modules replace the former hard-coded XC_MODULES list, ordered by sequence.
   assert.deepEqual(
     aptitude.modules.map((item) => item.name),
     ['判断推理', '言语理解与表达', '资料分析', '数量关系', '常识判断']
+  );
+  assert.deepEqual(
+    aptitude.modules.map((item) => item.shortName ?? item.name),
+    ['判断推理', '言语理解', '资料分析', '数量关系', '常识判断']
   );
   assert.equal(aptitude.mockExam.defaultQuestionCount, 120);
   assert.deepEqual(aptitude.mockExam.schemes.map((item) => item.code), ['national', 'provincial', 'compact']);
@@ -44,6 +50,9 @@ try {
   const interview = subjects[2];
   assert.equal(interview.deliveryKind, curriculum.ExamDeliveryKind.Subjective);
   assert.equal(interview.mockExam, undefined);
+  assert.equal(interview.shortName, '面试');
+  // Subjects whose full name already fits carry no short name.
+  assert.equal(essay.shortName, undefined);
 
   // A subject whose delivery policy is missing or unparseable is not offered
   // rather than guessed at.
@@ -97,6 +106,38 @@ try {
   assert.equal(newest[0].deliveryKind, curriculum.ExamDeliveryKind.Subjective);
 
   assert.deepEqual(await new curriculum.GetExamSubjects({ async findBundle() { return undefined; } }).execute(versionId), []);
+
+  // Scoring bands drive the exam profile form, so only scored subjects carry one.
+  assert.deepEqual(subjects[0].score, { maxScore: 100, defaultCurrent: 50, defaultTarget: 80 });
+  assert.deepEqual(subjects[1].score, { maxScore: 100, defaultCurrent: 50, defaultTarget: 70 });
+  assert.equal(subjects[2].score, undefined);
+
+  // A target above the band would render an unreachable goal, so it is rejected.
+  const impossibleTarget = {
+    ...bundle,
+    assessmentPolicies: bundle.assessmentPolicies.map((item) => item.id === 'policy:aptitude:delivery:v1'
+      ? { ...item, config: { ...item.config, score: { maxScore: 100, defaultCurrent: 50, defaultTarget: 150 } } }
+      : item)
+  };
+  const rejectedScore = await new curriculum.GetExamSubjects(repositoryFor(impossibleTarget)).execute(versionId);
+  assert.equal(rejectedScore[0].score, undefined);
+
+  // Every bundled pack must be installable and expose at least one scored subject.
+  const packs = curriculum.createBundledCurriculumPacks();
+  assert(packs.length >= 1, 'at least one exam pack must be bundled');
+  const examTypes = packs.map((pack) => pack.examType);
+  assert.equal(new Set(examTypes).size, examTypes.length, 'exam pack examType must be unique');
+  for (const pack of packs) {
+    assert(pack.examName, `pack ${pack.examType} needs a display name`);
+    assert.equal(typeof pack.regionScoped, 'boolean');
+    const packSubjects = await new curriculum.GetExamSubjects(repositoryFor(pack.bundle)).execute(pack.bundle.curriculum.id);
+    assert(packSubjects.length > 0, `pack ${pack.examType} exposes no subjects`);
+    assert(
+      packSubjects.some((subject) => subject.score !== undefined),
+      `pack ${pack.examType} has no scored subject, so the profile form would be empty`
+    );
+    assert.equal(pack.bundle.metadataPackage.examType, pack.examType, 'pack examType must match its metadata');
+  }
 
   console.log(`Exam subject projection verification passed (${subjects.length} subjects).`);
 } finally { await server.close(); }

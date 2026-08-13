@@ -104,7 +104,7 @@
             </button>
           </div>
         </section>
-        <section v-if="customTopic !== '申发论述'">
+        <section v-if="!isLongFormTopic(customTopic)">
           <strong>题量</strong>
           <div class="essay-topic-options">
             <button v-for="count in [1, 2, 3]" :key="count" type="button" :class="{ active: customCount === count }" @click="customCount = count">
@@ -134,6 +134,7 @@ import { useRouter } from 'vue-router';
 import { BookOpenCheckIcon, CameraIcon, ChevronRightIcon, FileTextIcon, LandmarkIcon, LoaderCircleIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
+import { isLongFormTopic, writtenFormatNames } from '@/domain/writtenFormats';
 import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import PracticeSubjectMark from './PracticeSubjectMark.vue';
@@ -192,7 +193,7 @@ const showCustomSheet = ref(false);
 const customTopic = ref('归纳概括');
 const customCount = ref(1);
 const allStates = ref<readonly EssayPracticeSet[]>([]);
-const essayTopics = ['归纳概括', '综合分析', '提出对策', '贯彻执行', '申发论述'];
+const essayTopics = computed(() => writtenFormatNames());
 const modes = [
   { value: 'tutor' as const, label: '私教学习', icon: SparklesIcon },
   { value: 'self' as const, label: '自主刷题', icon: SlidersHorizontalIcon },
@@ -200,7 +201,7 @@ const modes = [
 ];
 const modeLabel = computed(() => modes.find((item) => item.value === props.modelValue)?.label || '私教学习');
 const modeCopy = computed(() => {
-  if (props.modelValue === 'self') return { eyebrow: '自主练习', title: '自己选择申论题型与材料', description: '围绕归纳概括、综合分析、提出对策、贯彻执行和申发论述自主训练。' };
+  if (props.modelValue === 'self') return { eyebrow: '自主练习', title: '自己选择题型与材料', description: `围绕${essayTopics.value.join('、')}自主训练。` };
   if (props.modelValue === 'true') return { eyebrow: '真题校准', title: '用真实申论材料校准作答能力', description: '按年份、地区和题型练习真题，批改结果进入同一套能力证据链。' };
   return { eyebrow: '当前私教主线', title: '申论讲解、作答与复盘', description: '私教根据备考阶段、薄弱维度和剩余时间安排材料学习、作答训练与批改。' };
 });
@@ -280,7 +281,7 @@ async function submitCustom() {
   await startGeneration({
     entryMode: 'self',
     topic: customTopic.value,
-    count: customTopic.value === '申发论述' ? 1 : customCount.value
+    count: isLongFormTopic(customTopic.value) ? 1 : customCount.value
   });
 }
 
@@ -299,7 +300,7 @@ async function startGeneration(input: {
     entryMode: input.entryMode,
     purpose: input.entryMode === 'true' ? 'true_question' : 'practice',
     topic: input.topic,
-    type: input.type || (input.topic === '申发论述' ? 'long' : 'short'),
+    type: input.type || (isLongFormTopic(input.topic) ? 'long' : 'short'),
     date: new Date().toLocaleDateString('en-CA'),
     ...input.linkage
   };
@@ -389,7 +390,7 @@ async function retryGeneration() {
   await startGeneration({
     entryMode: normalizedMode(context.entryMode),
     topic: context.topic,
-    count: context.topic === '申发论述' ? 1 : pendingQuestionCount.value
+    count: isLongFormTopic(context.topic) ? 1 : pendingQuestionCount.value
   });
 }
 

@@ -36,6 +36,7 @@ import adaptiveDailyPlanningSql from './035_adaptive_daily_planning.sql?raw';
 import learningDataMaintenanceSql from './036_learning_data_maintenance.sql?raw';
 import learningAssetPurposeSql from './037_learning_asset_purpose.sql?raw';
 import learningProgressSql from './038_learning_progress.sql?raw';
+import capabilityShortNameSql from './039_capability_short_name.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -266,5 +267,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'learning_progress',
     checksum: 'sha256:3a90bf25e5fab7270e24fd50a802be8297ea8e35bd6d156991ee0afe4ca70000',
     sql: learningProgressSql
+  },
+  {
+    version: 39,
+    name: 'capability_short_name',
+    checksum: 'sha256:7408e054489b83b5771f28f7da99214bdf83d570baabb11d2c240b5c1350000a',
+    sql: capabilityShortNameSql
   }
 ];

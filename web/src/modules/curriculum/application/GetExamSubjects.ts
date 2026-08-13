@@ -1,5 +1,10 @@
 import type { CapabilityNodeId, CurriculumVersionId, JsonObject, SubjectCode } from '@/kernel/public';
-import type { AssessmentPolicyVersion, CapabilityNode, CurriculumRepository } from '../contracts/CurriculumRepository';
+import type {
+  AssessmentPolicyVersion,
+  CapabilityNode,
+  CurriculumBundle,
+  CurriculumRepository
+} from '../contracts/CurriculumRepository';
 import {
   AssessmentPolicyStatus,
   AssessmentPolicyType,
@@ -15,6 +20,26 @@ export interface ExamMockScheme {
   readonly durationMinutes: number;
 }
 
+/**
+ * Scoring band for one subject. Present only for subjects a candidate sets a
+ * score target on, which is what the exam profile form renders.
+ */
+export interface ExamSubjectScore {
+  readonly maxScore: number;
+  readonly defaultCurrent: number;
+  readonly defaultTarget: number;
+}
+
+/**
+ * One answer format a subjective subject offers, such as a short structured
+ * answer or a full essay. `longForm` drives single-question papers and the
+ * long-writing editor, replacing name matching in application code.
+ */
+export interface ExamWrittenFormat {
+  readonly name: string;
+  readonly longForm: boolean;
+}
+
 /** Mock paper defaults for one subject. Absent when the subject has no mock exam. */
 export interface ExamMockPaperSpec {
   readonly defaultQuestionCount: number;
@@ -27,14 +52,20 @@ export interface ExamSubjectModule {
   readonly capabilityNodeId: CapabilityNodeId;
   readonly code: string;
   readonly name: string;
+  readonly shortName?: string;
 }
 
 export interface ExamSubjectView {
   readonly code: SubjectCode;
   readonly name: string;
+  /** Compact form for headings and buttons. Absent when `name` already fits. */
+  readonly shortName?: string;
   readonly capabilityNodeId: CapabilityNodeId;
   readonly deliveryKind: ExamDeliveryKind;
   readonly modules: readonly ExamSubjectModule[];
+  readonly score?: ExamSubjectScore;
+  /** Answer formats offered for a subjective subject, in package order. */
+  readonly writtenFormats: readonly ExamWrittenFormat[];
   readonly mockExam?: ExamMockPaperSpec;
 }
 
@@ -51,39 +82,54 @@ export class GetExamSubjects {
 
   async execute(curriculumVersionId: CurriculumVersionId): Promise<readonly ExamSubjectView[]> {
     const bundle = await this.curriculumRepository.findBundle(curriculumVersionId);
-    if (!bundle) return [];
-
-    const activeNodes = bundle.capabilityNodes.filter((node) => node.status === ACTIVE_NODE_STATUS);
-    const deliveryPolicyBySubject = latestPublishedDeliveryPolicies(bundle.assessmentPolicies);
-
-    return activeNodes
-      .filter((node) => node.nodeType === CapabilityNodeType.Subject)
-      .sort(bySequence)
-      .flatMap((node) => {
-        const policy = deliveryPolicyBySubject.get(node.subject);
-        // A subject without a published, parseable exam_delivery policy cannot be
-        // routed to an answering flow, so it is not offered rather than guessed.
-        if (!policy) return [];
-        const deliveryKind = parseExamDeliveryKind(readValue(policy.config, 'deliveryKind'));
-        if (!deliveryKind) return [];
-        const mockExam = readMockPaperSpec(readValue(policy.config, 'mockExam'));
-        return [{
-          code: node.subject,
-          name: node.name,
-          capabilityNodeId: node.id,
-          deliveryKind,
-          modules: modulesOf(activeNodes, node.subject),
-          ...(mockExam ? { mockExam } : {})
-        }];
-      });
+    return bundle ? projectExamSubjects(bundle) : [];
   }
+}
+
+/**
+ * Same projection over a package already in hand. Lets startup activate a pack
+ * without a database round trip.
+ */
+export function projectExamSubjects(bundle: CurriculumBundle): readonly ExamSubjectView[] {
+  const activeNodes = bundle.capabilityNodes.filter((node) => node.status === ACTIVE_NODE_STATUS);
+  const deliveryPolicyBySubject = latestPublishedDeliveryPolicies(bundle.assessmentPolicies);
+
+  return activeNodes
+    .filter((node) => node.nodeType === CapabilityNodeType.Subject)
+    .sort(bySequence)
+    .flatMap((node) => {
+      const policy = deliveryPolicyBySubject.get(node.subject);
+      // A subject without a published, parseable exam_delivery policy cannot be
+      // routed to an answering flow, so it is not offered rather than guessed.
+      if (!policy) return [];
+      const deliveryKind = parseExamDeliveryKind(readValue(policy.config, 'deliveryKind'));
+      if (!deliveryKind) return [];
+      const mockExam = readMockPaperSpec(readValue(policy.config, 'mockExam'));
+      const score = readSubjectScore(readValue(policy.config, 'score'));
+      return [{
+        code: node.subject,
+        name: node.name,
+        ...(node.shortName ? { shortName: node.shortName } : {}),
+        capabilityNodeId: node.id,
+        deliveryKind,
+        modules: modulesOf(activeNodes, node.subject),
+        ...(score ? { score } : {}),
+        writtenFormats: readWrittenFormats(readValue(policy.config, 'writtenFormats')),
+        ...(mockExam ? { mockExam } : {})
+      }];
+    });
 }
 
 function modulesOf(activeNodes: readonly CapabilityNode[], subject: SubjectCode): readonly ExamSubjectModule[] {
   return activeNodes
     .filter((node) => node.nodeType === CapabilityNodeType.Module && node.subject === subject)
     .sort(bySequence)
-    .map((node) => ({ capabilityNodeId: node.id, code: node.module, name: node.name }));
+    .map((node) => ({
+      capabilityNodeId: node.id,
+      code: node.module,
+      name: node.name,
+      ...(node.shortName ? { shortName: node.shortName } : {})
+    }));
 }
 
 function bySequence(left: CapabilityNode, right: CapabilityNode): number {
@@ -105,6 +151,28 @@ function latestPublishedDeliveryPolicies(
 
 function compareVersions(left: string, right: string): number {
   return left.localeCompare(right, undefined, { numeric: true });
+}
+
+function readWrittenFormats(value: unknown): readonly ExamWrittenFormat[] {
+  return readArray(value).flatMap((item) => {
+    const record = asRecord(item);
+    const name = typeof record?.name === 'string' ? record.name.trim() : '';
+    if (!name) return [];
+    return [{ name, longForm: record?.longForm === true }];
+  });
+}
+
+function readSubjectScore(value: unknown): ExamSubjectScore | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const maxScore = readPositiveInteger(record.maxScore);
+  const defaultTarget = readPositiveInteger(record.defaultTarget);
+  const defaultCurrent = readPositiveInteger(record.defaultCurrent);
+  if (maxScore === undefined || defaultTarget === undefined || defaultCurrent === undefined) return undefined;
+  // Targets outside the band would render an unreachable goal, so the whole
+  // score block is rejected rather than silently clamped.
+  if (defaultTarget > maxScore || defaultCurrent > maxScore) return undefined;
+  return { maxScore, defaultCurrent, defaultTarget };
 }
 
 function readMockPaperSpec(value: unknown): ExamMockPaperSpec | undefined {

@@ -26,11 +26,14 @@ export type {
   MetadataPackage
 } from './contracts/CurriculumRepository';
 export { createBundledNationalCurriculum } from './fixtures/bundledNationalCurriculum';
+export { createBundledCurriculumPacks, type BundledCurriculumPack } from './fixtures/bundledCurriculumPacks';
 export { EnsureCurriculumBundle } from './application/EnsureCurriculumBundle';
-export { GetExamSubjects } from './application/GetExamSubjects';
+export { GetExamSubjects, projectExamSubjects } from './application/GetExamSubjects';
 export type {
   ExamMockPaperSpec,
   ExamMockScheme,
   ExamSubjectModule,
-  ExamSubjectView
+  ExamSubjectScore,
+  ExamSubjectView,
+  ExamWrittenFormat
 } from './application/GetExamSubjects';

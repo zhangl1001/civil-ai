@@ -2,9 +2,9 @@ import { AgentExecutionBudgetTier } from '../domain/AgentExecutionBudget';
 import type { AgentSkillManifest } from '../domain/AgentSkillRegistry';
 import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import type { JsonObject } from '@/kernel/public';
-import { APTITUDE_PRACTICE_MODULE_OPTIONS } from '@/domain/labels';
+import { APTITUDE_MODULE_CODES } from '@/domain/practiceModuleCodes';
 
-const aptitudeModuleCodes = APTITUDE_PRACTICE_MODULE_OPTIONS.map((item) => item.code);
+const aptitudeModuleCodes = [...APTITUDE_MODULE_CODES];
 
 const emptyObjectSchema = {
   type: 'object',

@@ -13,12 +13,16 @@ const server = await createServer({
 });
 
 try {
-  const [tutoring, agent, planNavigation, planPresenter] = await Promise.all([
+  const [tutoring, agent, planNavigation, planPresenter, labels, curriculumModule] = await Promise.all([
     server.ssrLoadModule('/src/modules/tutoring/public.ts'),
     server.ssrLoadModule('/src/modules/agent/public.ts'),
     server.ssrLoadModule('/src/features/planning/DailyPlanNavigation.ts'),
-    server.ssrLoadModule('/src/features/planning/DailyPlanPresenter.ts')
+    server.ssrLoadModule('/src/features/planning/DailyPlanPresenter.ts'),
+    server.ssrLoadModule('/src/domain/labels.ts'),
+    server.ssrLoadModule('/src/modules/curriculum/public.ts')
   ]);
+  // Module display names come from the installed package, exactly as main.ts does.
+  labels.installCurriculumLabels(curriculumModule.createBundledNationalCurriculum().capabilityNodes);
   assert(agent.tutorToolCatalog.some((tool) => tool.name === 'tutor.read_daily_context'));
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('lecture')).path, '/vue/study/lecture');
   assert.equal(planNavigation.dailyPlanItemLocation(planItem('diagnosis')).path, '/vue/diagnosis');

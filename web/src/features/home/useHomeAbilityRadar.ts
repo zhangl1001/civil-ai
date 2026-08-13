@@ -1,5 +1,5 @@
 import { computed } from 'vue';
-import { APTITUDE_PRACTICE_MODULE_OPTIONS } from '@/domain/labels';
+import { curriculumModuleOptions } from '@/domain/labels';
 
 interface AbilityRadarSource {
   readonly value: {
@@ -12,7 +12,7 @@ interface AbilityRadarSource {
 }
 
 export function useHomeAbilityRadar(quality: AbilityRadarSource) {
-  const modules = computed(() => APTITUDE_PRACTICE_MODULE_OPTIONS.map((option) => {
+  const modules = computed(() => curriculumModuleOptions().map((option) => {
     const module = quality.value?.modules.find((item) => item.code === option.code);
     return { name: option.name, accuracy: module?.accuracy || 0, total: module?.total || 0 };
   }));
@@ -22,7 +22,6 @@ export function useHomeAbilityRadar(quality: AbilityRadarSource) {
     const label = radarPoint(index, modules.value.length, 1.18);
     return {
       name: module.name,
-      shortName: module.name.length > 4 ? module.name.slice(0, 4) : module.name,
       x: point.x,
       y: point.y,
       labelX: label.x,

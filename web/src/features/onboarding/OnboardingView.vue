@@ -28,7 +28,15 @@
         <FormField label="计划名称" :error="fieldErrors.projectName">
           <input v-model.trim="form.projectName" placeholder="例如：2027 国考" maxlength="80" />
         </FormField>
-        <FormField label="考试范围">
+        <FormField v-if="examPackOptions.length > 1" label="备考方向">
+          <SegmentedControl
+            :model-value="form.examType"
+            label="备考方向"
+            :options="examPackOptions"
+            @update:model-value="switchExamPack"
+          />
+        </FormField>
+        <FormField v-if="isRegionScoped" label="考试范围">
           <SegmentedControl v-model="form.examScope" label="考试范围" :options="examScopeOptions" />
         </FormField>
         <div class="form-grid">
@@ -44,7 +52,7 @@
               @input="formatExamDateInput"
             />
           </FormField>
-          <FormField label="报考地区">
+          <FormField v-if="isRegionScoped" label="报考地区">
             <div class="province-picker" role="listbox" aria-label="报考地区">
               <button
                 v-for="item in provinceOptions"
@@ -72,32 +80,17 @@
           </div>
         </header>
 
-        <div class="score-block">
+        <div v-for="subject in scoredSubjects" :key="subject.code" class="score-block">
           <div class="score-heading">
-            <strong>行政职业能力测验</strong>
-            <span>满分 100</span>
+            <strong>{{ subject.name }}</strong>
+            <span>满分 {{ subject.score?.maxScore }}</span>
           </div>
           <div class="form-grid">
             <FormField label="当前分" hint="不确定可留空">
-              <input v-model="form.currentAptitude" type="number" inputmode="decimal" min="0" max="100" step="0.5" placeholder="待诊断" />
+              <input v-model="form.currentScores[subject.code]" type="number" inputmode="decimal" min="0" :max="subject.score?.maxScore" step="0.5" placeholder="待诊断" />
             </FormField>
             <FormField label="目标分">
-              <input v-model="form.targetAptitude" type="number" inputmode="decimal" min="0" max="100" step="0.5" />
-            </FormField>
-          </div>
-        </div>
-
-        <div class="score-block">
-          <div class="score-heading">
-            <strong>申论</strong>
-            <span>满分 100</span>
-          </div>
-          <div class="form-grid">
-            <FormField label="当前分" hint="不确定可留空">
-              <input v-model="form.currentEssay" type="number" inputmode="decimal" min="0" max="100" step="0.5" placeholder="待诊断" />
-            </FormField>
-            <FormField label="目标分">
-              <input v-model="form.targetEssay" type="number" inputmode="decimal" min="0" max="100" step="0.5" />
+              <input v-model="form.targetScores[subject.code]" type="number" inputmode="decimal" min="0" :max="subject.score?.maxScore" step="0.5" />
             </FormField>
           </div>
         </div>
@@ -174,9 +167,11 @@ import {
   StudyMode,
   TeachingOrder
 } from '@/modules/candidate/public';
-import type { JsonObject, LocalDate, SubjectCode, TimeZoneId } from '@/kernel/public';
+import type { JsonObject, LocalDate, TimeZoneId } from '@/kernel/public';
 import { OnboardingMessage, resolveOnboardingError } from './onboardingMessages';
 import { OnboardingDraftFeature } from './OnboardingDraftFeature';
+import { ExamPackSelectionFeature, type ExamPackOption } from './ExamPackSelectionFeature';
+import { applyScoreDefaults, examNameFor, scoreValidationError, subjectScoreInputs } from './ExamProfileScores';
 
 const OnboardingStep = {
   Goal: 1,
@@ -195,14 +190,14 @@ let draftFeaturePromise: Promise<OnboardingDraftFeature> | undefined;
 
 const form = reactive({
   projectName: '',
+  examType: '',
   examScope: 'national',
   examDate: '',
   province: '',
   position: '',
-  currentAptitude: '50',
-  targetAptitude: '80',
-  currentEssay: '50',
-  targetEssay: '70',
+  /** Keyed by subject code: the exam package decides which subjects are scored. */
+  currentScores: {} as Record<string, string>,
+  targetScores: {} as Record<string, string>,
   studyMode: StudyMode.PartTime as string,
   weeklyStudyDays: 6,
   weekdayMinutes: 120,
@@ -237,6 +232,12 @@ const proactiveOptions = [
   { value: ProactiveLevel.Balanced, label: '适中' },
   { value: ProactiveLevel.Active, label: '主动督学' }
 ] as const;
+const examPacks = ref<readonly ExamPackOption[]>([]);
+const activePack = computed(() => examPacks.value.find((pack) => pack.examType === form.examType));
+const scoredSubjects = computed(() => activePack.value?.scoredSubjects ?? []);
+const examPackOptions = computed(() => examPacks.value.map((pack) => ({ value: pack.examType, label: pack.examName })));
+// Scope and province are only meaningful for tracks sat at more than one level.
+const isRegionScoped = computed(() => activePack.value?.regionScoped ?? false);
 const provincialProvinceOptions = PROVINCE_OPTIONS.map((name) => ({ value: name, label: name }));
 const provinceOptions = computed(() => (
   form.examScope === 'national'
@@ -255,9 +256,26 @@ watch(() => form.examScope, (scope) => {
 }, { immediate: true });
 
 onMounted(async () => {
+  await loadExamPacks();
   await restoreDraft();
   watch(form, scheduleDraftSave, { deep: true });
 });
+
+/** Offered tracks and their scored subjects come from the installed packages. */
+async function loadExamPacks() {
+  examPacks.value = await new ExamPackSelectionFeature(await initializeTutorRuntime()).load();
+  const restored = examPacks.value.find((pack) => pack.examType === form.examType);
+  form.examType = (restored ?? examPacks.value[0])?.examType ?? '';
+  applyScoreDefaults(scoredSubjects.value, form.currentScores, form.targetScores);
+}
+
+function switchExamPack(examType: string) {
+  if (form.examType === examType) return;
+  form.examType = examType;
+  form.currentScores = {};
+  form.targetScores = {};
+  applyScoreDefaults(scoredSubjects.value, form.currentScores, form.targetScores);
+}
 
 onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer);
@@ -334,13 +352,7 @@ function validateStep(target: number): boolean {
     return !fieldErrors.projectName && !fieldErrors.examDate;
   }
   if (target === OnboardingStep.Baseline) {
-    const values = [form.currentAptitude, form.targetAptitude, form.currentEssay, form.targetEssay]
-      .filter((value) => value !== '')
-      .map(Number);
-    if (values.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
-      fieldErrors.scores = OnboardingMessage.InvalidScore;
-    }
-    if (form.targetAptitude === '' || form.targetEssay === '') fieldErrors.scores = OnboardingMessage.RequiredField;
+    fieldErrors.scores = scoreValidationError(scoredSubjects.value, form.currentScores, form.targetScores) ?? '';
     return !fieldErrors.scores;
   }
   if (
@@ -355,7 +367,8 @@ function validateStep(target: number): boolean {
 }
 
 async function submit() {
-  if (submitting.value || !validateStep(OnboardingStep.Rhythm)) return;
+  const pack = activePack.value;
+  if (submitting.value || !pack || !validateStep(OnboardingStep.Rhythm)) return;
   submitting.value = true;
   submitMessage.value = '';
   try {
@@ -368,27 +381,14 @@ async function submit() {
       draftId: draftId(),
       projectName: form.projectName,
       timeZone: timeZone as TimeZoneId,
-      examType: 'civil_service',
-      examName: form.examScope === 'national' ? '国家公务员考试' : `${form.province || ''}公务员考试`,
+      examType: pack.examType,
+      examName: examNameFor(pack, form.examScope, form.province),
       province: form.province,
       position: form.position,
       examDate: form.examDate as LocalDate,
       phase: ExamPhase.Foundation,
-      curriculumVersionId: runtime.defaultCurriculumVersionId,
-      subjectScores: [
-        {
-          subject: 'aptitude' as SubjectCode,
-          currentScore: optionalScore(form.currentAptitude),
-          targetScore: Number(form.targetAptitude),
-          maxScore: 100
-        },
-        {
-          subject: 'essay' as SubjectCode,
-          currentScore: optionalScore(form.currentEssay),
-          targetScore: Number(form.targetEssay),
-          maxScore: 100
-        }
-      ],
+      curriculumVersionId: pack.curriculumVersionId,
+      subjectScores: subjectScoreInputs(scoredSubjects.value, form.currentScores, form.targetScores),
       study: {
         mode: form.studyMode as typeof StudyMode[keyof typeof StudyMode],
         weeklyStudyDays: form.weeklyStudyDays,
@@ -414,10 +414,6 @@ async function submit() {
   } finally {
     submitting.value = false;
   }
-}
-
-function optionalScore(value: string): number | undefined {
-  return value === '' ? undefined : Number(value);
 }
 
 function formatExamDateInput(event: Event) {

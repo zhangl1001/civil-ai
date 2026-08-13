@@ -6,6 +6,9 @@ import { bootstrapLocalApp } from './services/AppBootstrap';
 import { capacitorRuntime, installNativePlatformClass } from './platform/capacitor';
 import { probeNativeStreamingHttp } from './platform/NativeStreamingHttpAdapter';
 import { installDatabaseStallRecovery } from './platform/DatabaseStallRecovery';
+import { installCurriculumLabels } from './domain/labels';
+import { installWrittenFormats } from './domain/writtenFormats';
+import { createBundledCurriculumPacks, projectExamSubjects } from './modules/curriculum/public';
 
 // Global styles
 import './assets/styles/design-tokens.css';
@@ -14,6 +17,15 @@ import 'katex/dist/katex.min.css';
 
 installNativePlatformClass();
 installDatabaseStallRecovery();
+
+// Names come from the exam package, not from application code. The first
+// bundled pack is a static import, so the UI has labels before the first
+// render; the runtime swaps in the candidate's own pack once it resolves.
+const [defaultExamPack] = createBundledCurriculumPacks();
+if (defaultExamPack) {
+  installCurriculumLabels(defaultExamPack.bundle.capabilityNodes);
+  installWrittenFormats(projectExamSubjects(defaultExamPack.bundle));
+}
 
 void probeNativeStreamingHttp().then((available) => {
   if (available) console.info('[AITransport] Native streaming transport is ready.');

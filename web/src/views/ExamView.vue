@@ -5,7 +5,7 @@
     <PullToRefresh class="exam-content" :on-refresh="loadDashboard">
       <section class="exam-hero app-card">
         <div>
-          <span>{{ subject?.name }}模考</span>
+          <span>{{ subject ? subjectDisplayName(subject) : '' }}模考</span>
           <strong>{{ subject ? mockHeadline(subject) : '' }}</strong>
           <em>模考用于阶段校准，结果会回流到练习记录、错题本和能力画像。</em>
         </div>
@@ -94,7 +94,7 @@
             :class="{ active: subject?.code === item.code }"
             @click="switchSubject(item)"
           >
-            {{ item.name }}
+            {{ subjectDisplayName(item) }}
           </button>
         </div>
 
@@ -173,6 +173,7 @@ import { durationText, groupHistoryByMonth } from '@/features/exam/ExamHistoryPr
 import {
   emptyHistoryTitle,
   essayTypeLabel,
+  subjectDisplayName,
   mockConfigSummary,
   mockConfigTitle,
   mockHeadline,
