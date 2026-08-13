@@ -18,10 +18,7 @@ import {
   UpdateScoreTargets
 } from '@/modules/candidate/public';
 import { SqliteCurriculumRepository } from '@/modules/curriculum/adapters/SqliteCurriculumRepository';
-import {
-  createBundledNationalCurriculum,
-  EnsureCurriculumBundle
-} from '@/modules/curriculum/public';
+import { createBundledNationalCurriculum, EnsureCurriculumBundle } from '@/modules/curriculum/public';
 import { SqliteOutboxRepository } from '@/modules/task/adapters/SqliteOutboxRepository';
 import { SqliteCommandReceiptRepository } from '@/modules/task/adapters/SqliteCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -57,6 +54,7 @@ import {
   ImportQuestionSource,
   LearningAssetStore,
   PublishQuestionImportDraft,
+  RetireQuestionSet,
   RunStructuredObjectiveGenerationWorkflow,
   ScanQuestionImportDraft
 } from '@/modules/content/public';
@@ -251,6 +249,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     new UuidV7IdGenerator(clock)
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
+  const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
   const getGenerationStatus = new GetGenerationStatus(generationRepository, contentRepository);
   const createLearningThread = new CreateLearningThread(
     unitOfWork,
@@ -537,6 +536,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
     applyQuestionSetEnrichment,
+    retireQuestionSet,
     ensureQuestionSetEnrichment,
     getGenerationStatus,
     createLearningThread,

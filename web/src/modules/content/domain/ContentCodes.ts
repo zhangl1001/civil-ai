@@ -1,6 +1,7 @@
 export const ContentBlockType = {
   Text: 'text',
   DataTable: 'data_table',
+  StatisticalChart: 'statistical_chart',
   SvgDiagram: 'svg_diagram',
   Image: 'image',
   Formula: 'formula',

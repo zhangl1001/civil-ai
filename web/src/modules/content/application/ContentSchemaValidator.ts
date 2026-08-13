@@ -8,6 +8,9 @@ import type {
   DataTableColumn,
   FormulaBlock,
   ImageBlock,
+  StatisticalChartBlock,
+  StatisticalChartPoint,
+  StatisticalChartSeries,
   TextBlock,
   SvgDiagramBlock
 } from '../contracts/ContentDocument';
@@ -31,6 +34,16 @@ const MAX_BLOCK_DEPTH = 4;
 const blockTypes = new Set<string>(Object.values(ContentBlockType));
 const calloutKinds = new Set<string>(Object.values(CalloutKind));
 const alignments = new Set<string>(Object.values(ContentAlignment));
+const statisticalChartTypes = new Set<string>([
+  'bar',
+  'horizontal_bar',
+  'line',
+  'pie',
+  'doughnut',
+  'stacked_bar',
+  'combo',
+  'scatter'
+]);
 
 export class ContentSchemaValidator {
   parseDocument(input: unknown): Result<ContentDocument, ContentValidationFailure> {
@@ -130,6 +143,7 @@ function parseBlock(
     return source === undefined ? undefined : { id, type, source } satisfies TextBlock;
   }
   if (type === ContentBlockType.DataTable) return parseDataTable(id, record, path, issues);
+  if (type === ContentBlockType.StatisticalChart) return parseStatisticalChart(id, record, path, issues);
   if (type === ContentBlockType.SvgDiagram) {
     const markup = readString(record.markup, `${path}.markup`, issues);
     const alt = readString(record.alt, `${path}.alt`, issues);
@@ -219,6 +233,124 @@ function parseDataTable(
     rows: rows as Array<Readonly<Record<string, DataTableCell>>>,
     sourceNote: readOptionalString(record.sourceNote, `${path}.sourceNote`, issues)
   };
+}
+
+function parseStatisticalChart(
+  id: string,
+  record: Record<string, unknown>,
+  path: string,
+  issues: ContentValidationIssue[]
+): StatisticalChartBlock | undefined {
+  const chartType = readString(record.chartType, `${path}.chartType`, issues);
+  if (!chartType || !statisticalChartTypes.has(chartType)) {
+    issue(issues, 'content.chart_type_invalid', `${path}.chartType`, 'Unknown statistical chart type');
+  }
+  const categories = parseChartCategories(record.categories, `${path}.categories`, issues);
+  if (!Array.isArray(record.series) || record.series.length === 0) {
+    issue(issues, 'content.chart_series_invalid', `${path}.series`, 'Chart must contain at least one series');
+    return undefined;
+  }
+  const series = record.series.map((item, index) => parseChartSeries(
+    item,
+    `${path}.series[${index}]`,
+    categories?.length ?? 0,
+    chartType,
+    issues
+  ));
+  const ids = new Set(series.filter(Boolean).map((item) => item!.id));
+  if (ids.size !== series.length) {
+    issue(issues, 'content.chart_series_duplicate', `${path}.series`, 'Chart series ids must be unique');
+  }
+  if (!chartType || !statisticalChartTypes.has(chartType) || !categories || series.some((item) => !item)) {
+    return undefined;
+  }
+  return {
+    id,
+    type: ContentBlockType.StatisticalChart,
+    chartType: chartType as StatisticalChartBlock['chartType'],
+    title: readOptionalString(record.title, `${path}.title`, issues),
+    unit: readOptionalString(record.unit, `${path}.unit`, issues),
+    categories,
+    series: series as StatisticalChartSeries[],
+    sourceNote: readOptionalString(record.sourceNote, `${path}.sourceNote`, issues)
+  };
+}
+
+function parseChartCategories(
+  input: unknown,
+  path: string,
+  issues: ContentValidationIssue[]
+): readonly string[] | undefined {
+  if (!Array.isArray(input)) {
+    issue(issues, 'content.chart_categories_invalid', path, 'Chart categories must be an array');
+    return undefined;
+  }
+  const categories = input.map((item, index) => readString(item, `${path}[${index}]`, issues));
+  return categories.some((item) => !item) ? undefined : categories as string[];
+}
+
+function parseChartSeries(
+  input: unknown,
+  path: string,
+  categoryCount: number,
+  chartType: string | undefined,
+  issues: ContentValidationIssue[]
+): StatisticalChartSeries | undefined {
+  const record = asRecord(input, path, issues);
+  if (!record) return undefined;
+  const id = readString(record.id, `${path}.id`, issues);
+  const label = readString(record.label, `${path}.label`, issues);
+  const renderAs = record.renderAs === 'bar' || record.renderAs === 'line' ? record.renderAs : undefined;
+  if (record.renderAs !== undefined && !renderAs) {
+    issue(issues, 'content.chart_render_type_invalid', `${path}.renderAs`, 'Series render type must be bar or line');
+  }
+  if (chartType === 'scatter') {
+    const points = parseChartPoints(record.points, `${path}.points`, issues);
+    return id && label && points ? { id, label, points } : undefined;
+  }
+  if (!Array.isArray(record.values) || record.values.length !== categoryCount || categoryCount === 0) {
+    issue(
+      issues,
+      'content.chart_values_invalid',
+      `${path}.values`,
+      'Series values must match the category count'
+    );
+    return undefined;
+  }
+  const values = record.values.map((value, index) => {
+    if (value !== null && typeof value !== 'number') {
+      issue(issues, 'content.chart_value_invalid', `${path}.values[${index}]`, 'Chart value must be a number or null');
+      return undefined;
+    }
+    return value;
+  });
+  if (!id || !label || values.some((value) => value === undefined)) return undefined;
+  return { id, label, values: values as Array<number | null>, ...(renderAs ? { renderAs } : {}) };
+}
+
+function parseChartPoints(
+  input: unknown,
+  path: string,
+  issues: ContentValidationIssue[]
+): readonly StatisticalChartPoint[] | undefined {
+  if (!Array.isArray(input) || input.length === 0) {
+    issue(issues, 'content.chart_points_invalid', path, 'Scatter series must contain points');
+    return undefined;
+  }
+  const points = input.map((item, index) => {
+    const record = asRecord(item, `${path}[${index}]`, issues);
+    if (!record) return undefined;
+    if (typeof record.x !== 'number' || typeof record.y !== 'number') {
+      issue(issues, 'content.chart_point_invalid', `${path}[${index}]`, 'Chart point requires numeric x and y');
+      return undefined;
+    }
+    return {
+      x: record.x,
+      y: record.y,
+      label: readOptionalString(record.label, `${path}[${index}].label`, issues)
+    } satisfies StatisticalChartPoint;
+  });
+  return points.some((point) => !point) ? undefined : points as StatisticalChartPoint[];
 }
 
 function parseColumn(input: unknown, path: string, issues: ContentValidationIssue[]): DataTableColumn | undefined {

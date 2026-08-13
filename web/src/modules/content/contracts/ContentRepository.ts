@@ -288,12 +288,14 @@ export interface ContentRepository {
   ): Promise<readonly QuestionSetLibraryEntry[]>;
   queryQuestionSetLibrary(query: QuestionSetLibraryQuery): Promise<readonly QuestionSetLibraryEntry[]>;
   listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]>;
+  /** Includes ready and retired sets so backups retain content referenced by completed learning facts. */
   listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]>;
   updateQuestionSetPracticeStatus(
     questionSetId: QuestionSetId,
     status: QuestionSetPracticeStatus,
     context: TransactionContext
   ): Promise<void>;
+  retireQuestionSet(questionSetId: QuestionSetId, context: TransactionContext): Promise<void>;
   applyQuestionSetEnrichment(
     patch: QuestionSetEnrichmentPatch,
     context: TransactionContext

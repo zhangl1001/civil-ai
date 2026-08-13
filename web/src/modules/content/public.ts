@@ -111,6 +111,10 @@ export type {
   DataTableBlock,
   DataTableCell,
   DataTableColumn,
+  StatisticalChartBlock,
+  StatisticalChartPoint,
+  StatisticalChartSeries,
+  StatisticalChartType,
   FormulaBlock,
   ImageBlock,
   TextBlock,
@@ -131,6 +135,7 @@ export {
   ApplyQuestionSetEnrichment,
   type ApplyQuestionSetEnrichmentResult
 } from './application/ApplyQuestionSetEnrichment';
+export { RetireQuestionSet } from './application/RetireQuestionSet';
 export { questionSetPracticeStatusLabel } from './domain/QuestionSetPracticePresentation';
 export type {
   QuestionContent,

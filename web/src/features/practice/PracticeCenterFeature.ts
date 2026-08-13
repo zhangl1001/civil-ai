@@ -9,6 +9,7 @@ import {
   type QuestionSetLibraryQuery
 } from '@/modules/content/public';
 import { TutorDailyPracticeFeature } from './TutorDailyPracticeFeature';
+import { cancelQuestionSetRuns } from './cancelQuestionSetRuns';
 
 /** Read model used by the practice center; generation commands remain explicit page actions. */
 export class PracticeCenterFeature {
@@ -103,6 +104,18 @@ export class PracticeCenterFeature {
           limit: query?.limit ?? 40
         })
       : [];
+  }
+
+  async retireQuestionSet(questionSetId: string): Promise<void> {
+    const bundle = await this.runtime.contentRepository.findQuestionSet(
+      questionSetId as Parameters<TutorDatabaseRuntime['contentRepository']['findQuestionSet']>[0]
+    );
+    const cycle = await this.runtime.candidateRepository.findCurrentCycle();
+    if (!bundle || !cycle || bundle.questionSet.examCycleId !== cycle.examCycle.id) {
+      throw new Error('题组不存在或不属于当前备考档案。');
+    }
+    await cancelQuestionSetRuns(this.runtime, questionSetId);
+    await this.runtime.retireQuestionSet.execute(bundle.questionSet.id);
   }
 
   async resolveLearningThread(questionSetId: string): Promise<string> {

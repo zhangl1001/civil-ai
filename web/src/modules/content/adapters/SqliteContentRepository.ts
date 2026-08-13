@@ -50,10 +50,9 @@ import type {
   QuestionQualityStatus,
   QuestionSetPracticeStatus,
   QuestionSetPurpose,
-  QuestionSetStatus,
   QuestionTemplateCode
 } from '../domain/ContentCodes';
-import { QuestionSetEntryMode } from '../domain/ContentCodes';
+import { QuestionSetEntryMode, QuestionSetStatus } from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
 import { resolveQuestionSetEntryMode } from '../domain/QuestionSetEntryModePolicy';
 import type {
@@ -311,7 +310,7 @@ export class SqliteContentRepository implements ContentRepository {
 
   async listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]> {
     const rows = await this.database.query<QuestionSetRow>(
-      `SELECT * FROM question_sets WHERE exam_cycle_id = ? AND status = 'ready'
+      `SELECT * FROM question_sets WHERE exam_cycle_id = ? AND status IN ('ready', 'retired')
        ORDER BY created_at DESC`,
       [examCycleId]
     );
@@ -333,6 +332,13 @@ export class SqliteContentRepository implements ContentRepository {
        SET practice_status = ?
        WHERE id = ? AND practice_status IN (${currentStatuses.map(() => '?').join(', ')})`,
       [status, questionSetId, ...currentStatuses]
+    );
+  }
+
+  async retireQuestionSet(questionSetId: QuestionSetId, context: TransactionContext): Promise<void> {
+    await this.transactionScope.resolve(context).run(
+      `UPDATE question_sets SET status = ? WHERE id = ? AND status = ?`,
+      [QuestionSetStatus.Retired, questionSetId, QuestionSetStatus.Ready]
     );
   }
 

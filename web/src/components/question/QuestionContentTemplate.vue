@@ -2,7 +2,7 @@
   <article :class="['question-content-template', `question-template-${definition.code}`, `question-layout-${layout}`]">
     <template v-for="region in orderedRegions" :key="region">
       <section v-if="region === QuestionRegionCode.Material && question.material" class="question-region question-region-material">
-        <ContentDocumentRenderer :document="question.material" text-variant="compact" />
+        <ContentDocumentRenderer :document="question.material" :text-variant="materialTextVariant" />
       </section>
 
       <section v-else-if="region === QuestionRegionCode.Prompt" class="question-region question-region-prompt">
@@ -46,6 +46,7 @@ import QuestionOptionList from '@/components/question/QuestionOptionList.vue';
 import {
   QuestionRegionCode,
   QuestionRegionLayoutCode,
+  QuestionPresentationCode,
   questionPresentationDefinition,
   questionRegionOrder,
   resolveQuestionPresentation,
@@ -77,6 +78,9 @@ const props = withDefaults(defineProps<{
 
 const definition = computed(() => questionPresentationDefinition(
   props.presentation || resolveQuestionPresentation(props.question)
+));
+const materialTextVariant = computed(() => (
+  definition.value.code === QuestionPresentationCode.DataMaterialChoice ? 'data' : 'compact'
 ));
 const orderedRegions = computed(() => questionRegionOrder(props.layout)
   .filter((region) => definition.value.regions.includes(region)));

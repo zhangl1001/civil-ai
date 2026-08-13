@@ -53,7 +53,9 @@ const props = defineProps<{
   onLoadMore: () => Promise<void> | void;
 }>();
 
-defineEmits<{ open: [set: QuestionSetLibraryEntry] }>();
+defineEmits<{
+  open: [set: QuestionSetLibraryEntry];
+}>();
 
 const viewport = ref<HTMLElement | null>(null);
 watch(() => [props.mode, props.sets[0]?.id], () => viewport.value?.scrollTo({ top: 0 }));

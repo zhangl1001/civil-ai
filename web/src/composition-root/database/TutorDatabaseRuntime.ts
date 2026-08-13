@@ -49,6 +49,7 @@ import type {
   QuestionImportDraftRepository,
   QuestionReferencePackRepository,
   QuestionSourceRepository,
+  RetireQuestionSet,
   RunStructuredObjectiveGenerationWorkflow,
   ScanQuestionImportDraft
 } from '@/modules/content/public';
@@ -168,6 +169,7 @@ export interface TutorDatabaseRuntime {
   readonly createGenerationWorkflow: CreateGenerationWorkflow;
   readonly runStructuredObjectiveGenerationWorkflow: RunStructuredObjectiveGenerationWorkflow;
   readonly applyQuestionSetEnrichment: ApplyQuestionSetEnrichment;
+  readonly retireQuestionSet: RetireQuestionSet;
   readonly ensureQuestionSetEnrichment: EnsureQuestionSetEnrichment;
   readonly getGenerationStatus: GetGenerationStatus;
   readonly createLearningThread: CreateLearningThread;

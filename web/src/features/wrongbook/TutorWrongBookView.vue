@@ -171,12 +171,16 @@ import BottomSheet from '@/components/layout/BottomSheet.vue';
 import CenterDialog from '@/components/layout/CenterDialog.vue';
 import QuestionContentTemplate from '@/components/question/QuestionContentTemplate.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
 import ErrorDiagnosisInsight from '@/components/learning/ErrorDiagnosisInsight.vue';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { practiceModuleLabel } from '@/domain/labels';
 import { errorCauseLabel, type WrongBookDiagnosis, type WrongBookEntry } from '@/modules/evidence/public';
 import { QuestionRegionLayoutCode, type ContentDocument } from '@/modules/content/public';
 import { peekWrongBookEntries, WrongBookFeature } from './WrongBookFeature';
+
+// Named so App.vue can hold this tab root in its <KeepAlive> whitelist.
+defineOptions({ name: 'TutorWrongBookView' });
 
 const router = useRouter();
 const initialEntries = peekWrongBookEntries();
@@ -217,6 +221,9 @@ const flashcard = computed(() => filtered.value[flashcardIndex.value]);
 const showReviewAction = computed(() => mode.value === 'review' && loaded.value && !error.value && filtered.value.length > 0);
 
 onMounted(() => { void load(); });
+// Reloading keeps the listed entries on screen: `loaded` stays true, so the
+// refresh placeholder never comes back once the first page has arrived.
+useCachedViewRefresh(load);
 watch(filtered, () => { if (flashcardIndex.value >= filtered.value.length) flashcardIndex.value = Math.max(0, filtered.value.length - 1); });
 watch(flashcardIndex, () => { revealed.value = false; });
 watch(mode, (next) => {

@@ -10,6 +10,7 @@ import {
   normalizeEssayQuestionSetPurpose,
   type EssayQuestionSetPurpose
 } from '@/domain/essayQuestionSet';
+import { cancelQuestionSetRuns } from './cancelQuestionSetRuns';
 
 export type EssayPracticeMode = 'tutor' | 'self' | 'true';
 
@@ -86,5 +87,14 @@ export class EssayPracticeCenterFeature {
         question: questionFromAsset(asset)
       }))
       .sort((left, right) => right.updatedAt - left.updatedAt || right.key.localeCompare(left.key));
+  }
+
+  async retireSet(set: EssayPracticeSet): Promise<void> {
+    const cycle = await this.runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('当前备考档案不可用。');
+    await cancelQuestionSetRuns(this.runtime, set.context.questionSetId || set.key);
+    for (const kind of [LearningAssetKind.EssayQuestion, LearningAssetKind.EssayDraft] as const) {
+      await this.runtime.learningAssetStore.retireBusinessKey(cycle.examCycle.id, kind, set.key);
+    }
   }
 }

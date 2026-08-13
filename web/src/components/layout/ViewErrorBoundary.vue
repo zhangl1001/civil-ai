@@ -8,8 +8,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onErrorCaptured, ref } from 'vue';
+import { computed, onErrorCaptured, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 
+const route = useRoute();
 const error = ref<unknown>();
 const message = computed(() => error.value instanceof Error ? error.value.message : '请稍后重试，或返回首页重新进入。');
 
@@ -17,6 +19,16 @@ onErrorCaptured((cause) => {
   console.error('[view error boundary]', cause);
   error.value = cause;
   return false;
+});
+
+/**
+ * The boundary used to be re-created per route through a `:key`, which also
+ * discarded every cached tab root on each navigation. Clearing the failure here
+ * keeps the same reset without destroying the view cache. A live failure still
+ * unmounts the slot, so the broken view is rebuilt from scratch on retry.
+ */
+watch(() => route.fullPath, () => {
+  error.value = undefined;
 });
 
 function retry() {

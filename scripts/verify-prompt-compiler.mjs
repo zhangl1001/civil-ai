@@ -66,7 +66,7 @@ try {
   assert(compiled.system.includes('# 第6章 提交前质检'));
   assert(compiled.system.includes('本次生成 5 道题'));
   assert(!compiled.system.includes('{{QUESTION_COUNT}}'));
-  assert.equal(compiled.version, '2.4.2');
+  assert.equal(compiled.version, '2.6.0');
   assert(compiled.system.includes('最小真题参考包'));
   assert(compiled.system.includes('generationVariation'));
   assert(!compiled.responseSchema.properties.questions.items.required.includes('referenceQuestionId'));

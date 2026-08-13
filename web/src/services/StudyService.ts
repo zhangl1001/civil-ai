@@ -1,8 +1,10 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
-import { LearningAssetKind, LearningAssetStatus } from '@/modules/content/public';
+import { LearningAssetKind, LearningAssetStatus, type LearningAssetRecord } from '@/modules/content/public';
 import { LearningProgressStatus, LearningResourceType } from '@/modules/learning-progress/public';
+import type { AgentRunView } from '@/modules/agent/public';
 import { practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
+import { STUDY_LECTURE_DEFAULT_MODULE, studyLectureBusinessKey } from '@/domain/studyLecture';
 import {
   CapabilityRecommendationMode,
   LearnerPriorityAction,
@@ -53,6 +55,15 @@ export interface DailyPlanLearningContext {
   readonly dailyPlanItemId: string;
   readonly capabilityNodeId?: string;
 }
+
+/**
+ * Outcome of asking for a knowledge point's lecture: either one already exists
+ * and can be opened straight away, or a run is now writing it. Callers branch
+ * on this instead of assuming every request costs a generation.
+ */
+export type StudyLectureEntry =
+  | { readonly kind: 'ready'; readonly assetId: string; readonly capabilityNodeId?: string }
+  | { readonly kind: 'generating'; readonly task: AgentRunView };
 
 function score(value: number | undefined, fallback = 0): number {
   return Math.round(Math.max(0, Math.min(1, value ?? fallback)) * 100);
@@ -176,14 +187,36 @@ export class StudyService {
     });
   }
 
+  /**
+   * Opens the lecture for a knowledge point, generating one only when none is
+   * stored yet.
+   *
+   * A lecture is keyed by its knowledge point, so revisiting a point should
+   * reopen what was already written rather than pay for a fresh generation and
+   * make the reader wait through it again. `regenerate` is the explicit escape
+   * hatch for wanting a different take on the same point.
+   */
   async startLearning(
     point: Pick<StudyPoint, 'module' | 'name' | 'capabilityNodeId'> | { module?: string; name: string; capabilityNodeId?: string },
-    planContext?: DailyPlanLearningContext
-  ) {
-    const sourceModule = point.module || '公考';
+    planContext?: DailyPlanLearningContext,
+    options: { readonly regenerate?: boolean } = {}
+  ): Promise<StudyLectureEntry> {
+    const sourceModule = point.module || STUDY_LECTURE_DEFAULT_MODULE;
     const module = practiceModuleLabel(sourceModule);
     const moduleCode = practiceModuleCode(sourceModule) || sourceModule;
-    return generationTaskService.enqueue({
+    if (!options.regenerate) {
+      const stored = await this.findReadyLecture(studyLectureBusinessKey(moduleCode, point.name));
+      if (stored) {
+        return {
+          kind: 'ready',
+          assetId: stored.id,
+          capabilityNodeId: payloadString(stored.payload.capabilityNodeId)
+            || point.capabilityNodeId
+            || planContext?.capabilityNodeId
+        };
+      }
+    }
+    const enqueued = await generationTaskService.enqueue({
       intent: 'study',
       title: '生成考点精讲',
       detail: `${module} · ${point.name}`,
@@ -201,9 +234,27 @@ export class StudyService {
         } : {})
       }
     });
+    return { kind: 'generating', task: enqueued.task };
   }
 
-  async startDailyPlanLecture(context: DailyPlanLearningContext) {
+  /** A stored lecture only counts as reusable once it actually carries content. */
+  private async findReadyLecture(businessKey: string): Promise<LearningAssetRecord | undefined> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) return undefined;
+    const asset = await runtime.learningAssetStore.findLatest(
+      cycle.examCycle.id,
+      LearningAssetKind.StudyLecture,
+      businessKey
+    );
+    if (!asset || asset.status !== LearningAssetStatus.Ready) return undefined;
+    return payloadString(asset.payload.content) ? asset : undefined;
+  }
+
+  async startDailyPlanLecture(
+    context: DailyPlanLearningContext,
+    options: { readonly regenerate?: boolean } = {}
+  ): Promise<StudyLectureEntry> {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
@@ -213,10 +264,10 @@ export class StudyService {
     if (!node || !curriculum) throw new Error('今日计划对应考点已失效，请刷新计划后重试。');
     const byId = new Map(curriculum.capabilityNodes.map((candidate) => [candidate.id, candidate]));
     return this.startLearning({
-      module: moduleAncestor(node, byId)?.name || node.module || '公考',
+      module: moduleAncestor(node, byId)?.name || node.module || STUDY_LECTURE_DEFAULT_MODULE,
       name: node.name,
       capabilityNodeId: node.id
-    }, context);
+    }, context, options);
   }
 
   async markLectureStarted(input: {

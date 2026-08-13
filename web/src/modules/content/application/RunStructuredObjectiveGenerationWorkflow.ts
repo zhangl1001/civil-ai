@@ -313,7 +313,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
       signal,
       expectedCount,
       system: practiceCoreSystem(compiled.system, capability),
-      responseSchema: practiceCoreResponseSchema(compiled.responseSchema, expectedCount),
+      responseSchema: practiceCoreResponseSchema(compiled.responseSchema, expectedCount, capability),
       role: 'content_generation',
       allowValidSubset: true,
       onProgress

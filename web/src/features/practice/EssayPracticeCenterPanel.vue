@@ -88,7 +88,7 @@
       <div class="essay-history">
         <button v-for="item in allStates" :key="item.key" type="button" @click="openSet(item)">
           <span>{{ item.question?.title || item.context.topic }}</span>
-            <em>{{ item.classification === 'legacy_unknown' ? '历史未分类' : modeLabelFor(item.context.entryMode) }} · {{ item.context.date }}</em>
+          <em>{{ item.classification === 'legacy_unknown' ? '历史未分类' : modeLabelFor(item.context.entryMode) }} · {{ item.context.date }}</em>
         </button>
         <AppStateView v-if="!allStates.length" compact title="暂无历史题组" description="完成一次申论生成后会显示在这里。" />
       </div>
@@ -193,7 +193,6 @@ const customTopic = ref('归纳概括');
 const customCount = ref(1);
 const allStates = ref<readonly EssayPracticeSet[]>([]);
 const essayTopics = ['归纳概括', '综合分析', '提出对策', '贯彻执行', '申发论述'];
-
 const modes = [
   { value: 'tutor' as const, label: '私教学习', icon: SparklesIcon },
   { value: 'self' as const, label: '自主刷题', icon: SlidersHorizontalIcon },

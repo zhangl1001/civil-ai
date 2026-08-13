@@ -138,13 +138,19 @@ import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/desi
 import { digestService } from '@/services/DigestService';
 import { studyService, type StudyDashboard, type StudyPoint } from '@/services/StudyService';
 import { essayCenterLocation } from '@/features/practice/EssayNavigation';
+import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
 import { CapabilityRecommendationMode } from '@/modules/mastery/public';
+
+// Named so App.vue can hold this tab root in its <KeepAlive> whitelist.
+defineOptions({ name: 'LearningCenterView' });
 
 const router = useRouter();
 const studyDashboard = ref<StudyDashboard | null>(null);
 const digestCount = ref(0);
 const digestCompleted = ref(false);
-const isLoading = ref(false);
+// True from the start: the first frame runs before onMounted dispatches the
+// load, and a false default left that frame with no state branch to render.
+const isLoading = ref(true);
 const loadError = ref('');
 const preferenceDialogOpen = ref(false);
 const preferencePoint = ref<StudyPoint>();
@@ -208,6 +214,9 @@ const practiceItems = [
 ];
 
 onMounted(loadDashboard);
+// Reloading keeps the rendered advice on screen: loadDashboard only raises the
+// loading state while there is no dashboard to show yet.
+useCachedViewRefresh(loadDashboard);
 
 async function loadDashboard() {
   if (!studyDashboard.value) isLoading.value = true;
@@ -228,11 +237,13 @@ async function loadDashboard() {
 }
 
 async function learn(point: StudyPoint) {
-  const result = await studyService.startLearning(point);
+  const entry = await studyService.startLearning(point);
   await router.push({
     path: '/vue/study/lecture',
     query: {
-      taskId: result.task.id,
+      // A point that already has a lecture opens it directly; only a genuinely
+      // new point routes through the generation task.
+      ...(entry.kind === 'ready' ? { assetId: entry.assetId } : { taskId: entry.task.id }),
       capabilityNodeId: point.capabilityNodeId,
       source: 'learning-center'
     }

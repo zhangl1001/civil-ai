@@ -6,7 +6,7 @@ export async function applyQuestionSetEnrichmentSql(
   patch: QuestionSetEnrichmentPatch
 ): Promise<boolean> {
   const versions = await transaction.query<{ content_version: number }>(
-    'SELECT content_version FROM question_sets WHERE id = ? LIMIT 1',
+    `SELECT content_version FROM question_sets WHERE id = ? AND status = 'ready' LIMIT 1`,
     [patch.questionSetId]
   );
   if (versions[0]?.content_version !== patch.expectedContentVersion) return false;
@@ -52,7 +52,7 @@ export async function applyQuestionSetEnrichmentSql(
   const updatedQuestionSet = await transaction.run(
     `UPDATE question_sets
      SET content_hash = ?, content_version = content_version + 1
-     WHERE id = ? AND content_version = ?`,
+     WHERE id = ? AND content_version = ? AND status = 'ready'`,
     [patch.nextContentHash, patch.questionSetId, patch.expectedContentVersion]
   );
   if (updatedQuestionSet.changes !== 1) throw new Error('Question set enrichment version conflict');

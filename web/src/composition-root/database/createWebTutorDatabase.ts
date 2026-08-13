@@ -14,10 +14,7 @@ import {
   UpdateScoreTargets
 } from '@/modules/candidate/public';
 import { IndexedDbCurriculumRepository } from '@/modules/curriculum/adapters/IndexedDbCurriculumRepository';
-import {
-  createBundledNationalCurriculum,
-  EnsureCurriculumBundle
-} from '@/modules/curriculum/public';
+import { createBundledNationalCurriculum, EnsureCurriculumBundle } from '@/modules/curriculum/public';
 import { IndexedDbOutboxRepository } from '@/modules/task/adapters/IndexedDbOutboxRepository';
 import { IndexedDbCommandReceiptRepository } from '@/modules/task/adapters/IndexedDbCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -54,6 +51,7 @@ import {
   ImportQuestionSource,
   LearningAssetStore,
   PublishQuestionImportDraft,
+  RetireQuestionSet,
   RunStructuredObjectiveGenerationWorkflow,
   ScanQuestionImportDraft
 } from '@/modules/content/public';
@@ -252,6 +250,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     new UuidV7IdGenerator(clock)
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
+  const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
   const getGenerationStatus = new GetGenerationStatus(generationRepository, contentRepository);
   const createLearningThread = new CreateLearningThread(
     unitOfWork,
@@ -538,6 +537,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
     applyQuestionSetEnrichment,
+    retireQuestionSet,
     ensureQuestionSetEnrichment,
     getGenerationStatus,
     createLearningThread,

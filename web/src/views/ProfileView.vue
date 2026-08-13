@@ -314,6 +314,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
 import WebResearchSettingsFields from '@/components/settings/WebResearchSettingsFields.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
@@ -365,6 +366,10 @@ import {
   CandidateProfileFeature,
   peekCandidateProfileSnapshot
 } from '@/features/profile/CandidateProfileFeature';
+
+// Named so App.vue can hold this tab root in its <KeepAlive> whitelist.
+defineOptions({ name: 'ProfileView' });
+
 const router = useRouter();
 let candidateProfileFeaturePromise: Promise<CandidateProfileFeature> | undefined;
 const cachedCandidateSnapshot = peekCandidateProfileSnapshot();
@@ -485,6 +490,16 @@ onMounted(() => {
   void loadAIConfig();
   void loadReminderStatus();
   void loadProfileStats();
+});
+
+/**
+ * Only the learning-derived panels are reloaded on return. The provider and
+ * reminder forms are edited on this page and their inputs survive in the view
+ * cache, so re-reading them would overwrite whatever the user had typed before
+ * switching tabs.
+ */
+useCachedViewRefresh(async () => {
+  await Promise.all([loadCandidateHome(), loadProfileStats()]);
 });
 
 async function loadProfileStats() {

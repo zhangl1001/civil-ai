@@ -81,6 +81,7 @@ export function questionRegionOrder(layout: QuestionRegionLayoutCode): readonly 
 
 function hasDataTable(document: ContentDocument): boolean {
   return document.blocks.some((block) => blockHasType(block, ContentBlockType.DataTable)
+    || blockHasType(block, ContentBlockType.StatisticalChart)
     || (block.type === ContentBlockType.Text && markdownTablePattern.test(block.source)));
 }
 

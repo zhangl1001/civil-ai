@@ -24,9 +24,29 @@ try {
   ]);
   assert.match(
     corePolicy.practiceCoreSystem('base', 'aptitude.data_analysis.growth'),
-    /materialGroups/,
+    /materialGroups\.table/,
     'data analysis must receive its shared-material structural contract'
   );
+  const materialGroupSchema = ai.structuredObjectivePromptV2.responseSchema
+    .properties.materialGroups.items.properties;
+  assert.equal(materialGroupSchema.table.type, 'object');
+  assert.equal(materialGroupSchema.chart.type, 'object');
+  assert.equal(materialGroupSchema.visual.type, 'object');
+  const dataAnalysisSchema = corePolicy.practiceCoreResponseSchema(
+    ai.structuredObjectivePromptV2.responseSchema,
+    2,
+    'aptitude.data_analysis.growth'
+  );
+  const ordinarySchema = corePolicy.practiceCoreResponseSchema(
+    ai.structuredObjectivePromptV2.responseSchema,
+    2,
+    'aptitude.judgment.argument_structure'
+  );
+  assert.equal(dataAnalysisSchema.properties.materialGroups.items.properties.table.type, 'object');
+  assert.equal(dataAnalysisSchema.properties.materialGroups.items.properties.chart.type, 'object');
+  assert.equal(ordinarySchema.properties.materialGroups.items.properties.table, undefined);
+  assert.equal(ordinarySchema.properties.materialGroups.items.properties.chart, undefined);
+  assert.equal(ordinarySchema.properties.materialGroups.items.properties.visual, undefined);
   assert.match(
     corePolicy.practiceCoreSystem('base', 'aptitude.judgment.graphical.position'),
     /viewBox/,

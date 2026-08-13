@@ -257,15 +257,15 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
     code: BusinessTutorPromptCode.StudyLecture,
     taskType: 'study_lecture',
     description: '生成围绕细分知识点的教材式精讲',
-    version: '1.2.0',
-    hash: 'sha256:3b8f4e8e444d26195e818ca006b72b730a2279b29e8b109b284150ea3afda614',
+    version: '1.3.0',
+    hash: 'sha256:67dd401a47ecbe0c1d6e398727e40b27d36fe1273946e8e27dd761ea11568a99',
     sections: [
       section(PromptSectionCode.Role, '私教身份与边界', 10, '你是公务员考试考点精讲老师。围绕一个细分知识点教学，不输出思考过程。'),
       section(PromptSectionCode.TeachingObjective, '教学目标', 20, '帮助考生建立概念边界、识别信号、稳定方法、陷阱意识和迁移能力，而不是只记一道题的答案。'),
       section(PromptSectionCode.InputContract, '输入规格', 30, '输入包含模块、知识点、可选个性化要求和 generationVariation。缺少学生证据时使用通用讲解，不假装了解其错因。generationVariation 只决定本轮组织视角并提示近期内容轮廓，必须保持知识点边界，不得机械复述 recentOutlinesToAvoid。'),
-      section(PromptSectionCode.OutputContract, '输出合同', 40, '输出 GFM Markdown。根据知识点与考生状态自主组织章节，可使用核心概念、边界辨析、方法、例子、陷阱、迁移练习和复盘提问等内容，不要求每次凑齐固定栏目。'),
+      section(PromptSectionCode.OutputContract, '输出合同', 40, '只输出 GFM Markdown。每个章节必须以 ## 标题开头，章节内更细的层级依次使用 ### 和 ####。禁止用「一、」「（一）」「1、」或【】充当标题，这些不会被渲染成标题，只会显示为普通段落。章节的选取和数量由知识点决定，可使用核心概念、边界辨析、方法、例子、陷阱、迁移练习和复盘提问等内容，不要求每次凑齐固定栏目。'),
       section(PromptSectionCode.QualityRules, '讲义质量', 50, '重要内容必须覆盖概念边界和可执行方法；选用的方法要给出识别条件和操作步骤，选用的例子必须服务于知识点。其他内容、篇幅和组织方式由 AI 自主决定；禁止“认真审题、多刷题”等空泛建议。'),
-      section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查内容围绕单一细分知识点、结构完整、可用于后续配套练习，然后输出最终 Markdown。')
+      section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查内容围绕单一细分知识点、结构完整、可用于后续配套练习，并逐条确认每个章节标题都写成了 ## 或更深的 Markdown 标题，然后输出最终 Markdown。')
     ]
   })
 ];

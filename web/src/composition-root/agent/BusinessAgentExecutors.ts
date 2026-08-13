@@ -3,6 +3,7 @@ import { buildEssayRepairPrompt, validateEssayQuestion } from '@/ai/QuestionVali
 import { BusinessTutorPromptCode, parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
 import { practiceModuleLabel } from '@/domain/labels';
+import { studyLectureBusinessKey } from '@/domain/studyLecture';
 import { abortableDelay, mapWithAbortableConcurrency } from '@/kernel/public';
 import type { DigestTab } from '@/domain/digest';
 import { aiChatRepository } from '@/services/AIChatRepository';
@@ -660,7 +661,7 @@ export const studyExecutor: BusinessAgentExecutor = async (task, context) => {
   await context.update(82, '生成精讲内容');
   const saved = await context.saveLearningAsset({
     kind: LearningAssetKind.StudyLecture,
-    businessKey: `study:${moduleCode}:${topic}`,
+    businessKey: studyLectureBusinessKey(moduleCode, topic),
     title: `${module} · ${topic}`,
     payload: {
       module: moduleCode,

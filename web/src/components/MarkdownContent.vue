@@ -63,21 +63,59 @@ const html = computed(() => {
 .markdown-content :deep(p:last-child) {
   margin-bottom: 0;
 }
+/* Headings carry the document structure, so every level has to read as a
+   level: visibly larger than body copy and visibly different from the level
+   above. The deepest levels step down by weight and colour instead of by
+   size, because a heading smaller than its own paragraphs inverts the
+   hierarchy and makes rendered Markdown look unrendered. */
 .markdown-content :deep(h1),
 .markdown-content :deep(h2),
 .markdown-content :deep(h3),
-.markdown-content :deep(h4) {
-  margin: 12px 0 7px;
+.markdown-content :deep(h4),
+.markdown-content :deep(h5),
+.markdown-content :deep(h6) {
   color: var(--text-color);
+  font-weight: var(--type-weight-semibold);
+  line-height: var(--type-line-title);
+}
+.markdown-content :deep(h1) {
+  margin: 20px 0 10px;
+  font-size: var(--type-size-page-title);
+  font-weight: var(--type-weight-bold);
+}
+.markdown-content :deep(h2) {
+  margin: 18px 0 9px;
+  font-size: var(--type-size-section-title);
+}
+.markdown-content :deep(h3) {
+  margin: 15px 0 7px;
+  font-size: var(--type-size-body-large);
+}
+.markdown-content :deep(h4) {
+  margin: 13px 0 6px;
   font-size: var(--type-size-body);
-  line-height: 1.45;
 }
 .markdown-content :deep(h5),
 .markdown-content :deep(h6) {
-  margin: 10px 0 6px;
+  margin: 11px 0 5px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-body);
+}
+.markdown-content :deep(h6) {
+  font-weight: var(--type-weight-medium);
+}
+.markdown-content :deep(h1:first-child),
+.markdown-content :deep(h2:first-child),
+.markdown-content :deep(h3:first-child),
+.markdown-content :deep(h4:first-child),
+.markdown-content :deep(h5:first-child),
+.markdown-content :deep(h6:first-child) {
+  margin-top: 0;
+}
+/* Emphasis has to survive surfaces that dim their body copy to secondary. */
+.markdown-content :deep(strong) {
   color: var(--text-color);
-  font-size: var(--type-size-secondary);
-  line-height: 1.45;
+  font-weight: var(--type-weight-semibold);
 }
 .markdown-content :deep(hr) {
   height: 1px;
@@ -285,6 +323,25 @@ const html = computed(() => {
   margin-top: 6px;
   margin-bottom: 6px;
 }
+/* Dense surfaces drop the whole ladder one step rather than flattening it. */
+.markdown-content-compact :deep(h1) {
+  margin: 14px 0 7px;
+  font-size: var(--type-size-section-title);
+}
+.markdown-content-compact :deep(h2) {
+  margin: 13px 0 6px;
+  font-size: var(--type-size-body-large);
+}
+.markdown-content-compact :deep(h3) {
+  margin: 12px 0 6px;
+  font-size: var(--type-size-body);
+}
+.markdown-content-compact :deep(h4),
+.markdown-content-compact :deep(h5),
+.markdown-content-compact :deep(h6) {
+  margin: 10px 0 5px;
+  font-size: var(--type-size-secondary);
+}
 .markdown-content-chat {
   overflow-wrap: anywhere;
   line-height: 1.58;
@@ -296,10 +353,12 @@ const html = computed(() => {
 .markdown-content-chat :deep(blockquote),
 .markdown-content-chat :deep(pre),
 .markdown-content-chat :deep(.markdown-table-scroll) { margin: 8px 0 0; }
-.markdown-content-chat :deep(h1),
-.markdown-content-chat :deep(h2),
+.markdown-content-chat :deep(h1) { margin: 12px 0 6px; font-size: var(--type-size-section-title); }
+.markdown-content-chat :deep(h2) { margin: 11px 0 6px; font-size: var(--type-size-body-large); }
 .markdown-content-chat :deep(h3),
-.markdown-content-chat :deep(h4) { margin: 10px 0 6px; font-size: var(--type-size-body-large); line-height: 1.35; }
+.markdown-content-chat :deep(h4),
+.markdown-content-chat :deep(h5),
+.markdown-content-chat :deep(h6) { margin: 10px 0 5px; font-size: var(--type-size-body); }
 .markdown-content-chat :deep(pre) {
   border: 1px solid rgba(var(--color-ink-rgb), .07);
   border-radius: 9px;
