@@ -35,8 +35,10 @@ export function usePracticeSelfAutoStart(options: PracticeSelfAutoStartOptions) 
     const count = SUPPORTED_COUNTS.has(requestedCount) ? requestedCount : 10;
     const requestKey = `${capabilityNodeId}:${count}`;
     if (handledKey === requestKey) return;
-    handledKey = requestKey;
+    // Marked only after the task is accepted: a failed start must stay
+    // retryable on this page rather than being swallowed as already handled.
     await options.start({ capabilityNodeId, count });
+    handledKey = requestKey;
 
     const nextQuery = { ...options.route.query };
     delete nextQuery.start;

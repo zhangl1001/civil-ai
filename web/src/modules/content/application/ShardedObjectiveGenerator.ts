@@ -150,13 +150,12 @@ export class ShardedObjectiveGenerator {
     totalCount: number,
     purpose: 'lecture' | 'questions'
   ): CompiledPrompt {
-    return this.promptCompiler.compile(
-      promptBundle.promptCode,
+    return this.promptCompiler.compileBundle(
+      promptBundle,
       generationPromptVariables(aggregate, shard.count),
       purpose === 'lecture'
         ? generationLecturePromptPayload(aggregate, referencePack, totalCount)
-        : generationShardPromptPayload(aggregate, referencePack, shard, totalCount),
-      promptBundle.version
+        : generationShardPromptPayload(aggregate, referencePack, shard, totalCount)
     );
   }
 

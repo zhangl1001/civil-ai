@@ -8,6 +8,7 @@ export {
   LearningSessionType,
   LearningSessionStatus,
   AttemptResult,
+  isMistakenAttempt,
   GradingMethod,
   ConfirmationStatus,
   ErrorCauseCode,

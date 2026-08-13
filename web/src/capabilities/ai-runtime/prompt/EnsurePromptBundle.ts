@@ -19,6 +19,9 @@ export class EnsurePromptBundle {
   async execute(bundle: PromptBundle): Promise<PromptBundleEnsureStatus> {
     const existing = await this.repository.find(bundle.examType, bundle.promptCode, bundle.version);
     if (existing) {
+      // Stored metadata is never overwritten: durable generation specs pin a
+      // prompt version, and rewriting it under them would change the wording a
+      // resumed workflow replays. Content changes require a version bump.
       return samePrompt(existing, bundle)
         ? PromptBundleEnsureStatus.Unchanged
         : reportConflict(existing, bundle);

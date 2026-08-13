@@ -197,8 +197,26 @@ export type GenerationWorkflowStep = typeof GenerationWorkflowStep[keyof typeof 
 
 export const ContentSchemaCode = {
   Document: 'content.document',
-  SingleChoiceQuestion: 'question.single_choice'
+  SingleChoiceQuestion: 'question.single_choice',
+  MultipleChoiceQuestion: 'question.multiple_choice',
+  IndeterminateChoiceQuestion: 'question.indeterminate_choice'
 } as const;
+
+/**
+ * Content schema a template's questions are validated and stored against.
+ * Committing content under another template's schema would make the stored
+ * answer key disagree with its declared version metadata, so callers resolve
+ * the pair here instead of assuming single choice.
+ */
+const QUESTION_SCHEMA_BY_TEMPLATE: Readonly<Record<QuestionTemplateCode, string>> = {
+  [QuestionTemplateCode.SingleChoice]: ContentSchemaCode.SingleChoiceQuestion,
+  [QuestionTemplateCode.MultipleChoice]: ContentSchemaCode.MultipleChoiceQuestion,
+  [QuestionTemplateCode.IndeterminateChoice]: ContentSchemaCode.IndeterminateChoiceQuestion
+};
+
+export function questionSchemaCodeFor(templateCode: QuestionTemplateCode): string {
+  return QUESTION_SCHEMA_BY_TEMPLATE[templateCode];
+}
 
 export const ContentCommandType = {
   CreateGeneration: 'content.create_generation'

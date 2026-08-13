@@ -23,8 +23,8 @@ import type {
   QuestionSourceImportBundle,
   QuestionSourceRepository
 } from '../contracts/QuestionSourceRepository';
+import type { QuestionContent } from '../contracts/QuestionContent';
 import {
-  ContentSchemaCode,
   GenerationWorkflowStatus,
   GenerationWorkflowStep,
   QuestionQualityStatus,
@@ -32,7 +32,8 @@ import {
   QuestionSetPracticeStatus,
   QuestionSetPurpose,
   QuestionSetStatus,
-  QuestionTemplateCode
+  questionSchemaCodeFor,
+  type QuestionTemplateCode
 } from '../domain/ContentCodes';
 import { correctAnswerRecord } from '../domain/ChoiceQuestionAnswer';
 import {
@@ -103,6 +104,11 @@ export class PublishQuestionImportDraft {
       sourceHash: aggregate.draft.rawPayloadHash,
       questionHashes
     }));
+    // A draft publishes as one question set under one template version, so the
+    // candidates must agree on a template and that template's own metadata is
+    // what gets bound — binding single choice to a multi-answer question would
+    // make the stored answer key disagree with its declared schema.
+    const templateCode = singleTemplateCodeOf(candidates);
     const [sameIdentity, sameContent, schema, template] = await Promise.all([
       this.sourceRepository.findSourceByIdentityHash(await buildQuestionSourceIdentityHash({
         sourceType: aggregate.draft.sourceType,
@@ -110,14 +116,14 @@ export class PublishQuestionImportDraft {
         contentHash: aggregate.draft.rawPayloadHash
       })),
       this.sourceRepository.findSourceByContentHash(aggregate.draft.rawPayloadHash),
-      this.contentRepository.findPublishedSchema(ContentSchemaCode.SingleChoiceQuestion),
-      this.contentRepository.findPublishedQuestionTemplate(QuestionTemplateCode.SingleChoice)
+      this.contentRepository.findPublishedSchema(questionSchemaCodeFor(templateCode)),
+      this.contentRepository.findPublishedQuestionTemplate(templateCode)
     ]);
     if (sameIdentity || sameContent) {
       throw new Error('Question source was already published; use its existing question set instead of importing it again');
     }
     if (!schema || !template || template.contentSchemaVersionId !== schema.id) {
-      throw new Error('Published single-choice content metadata is unavailable or incompatible');
+      throw new Error(`Published content metadata for ${templateCode} is unavailable or incompatible`);
     }
 
     const now = this.clock.now();
@@ -318,6 +324,17 @@ export class PublishQuestionImportDraft {
       return resultFromReceipt(concurrent, 'already_published');
     }
   }
+}
+
+/** Every candidate must share a template: a question set binds exactly one template version. */
+function singleTemplateCodeOf(
+  candidates: readonly { readonly content?: QuestionContent }[]
+): QuestionTemplateCode {
+  const codes = [...new Set(candidates.map((candidate) => candidate.content!.templateCode))];
+  if (codes.length !== 1 || !codes[0]) {
+    throw new Error(`Question import draft mixes question templates: ${codes.join(', ')}`);
+  }
+  return codes[0];
 }
 
 function resultFromReceipt(

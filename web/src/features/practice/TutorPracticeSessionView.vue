@@ -156,7 +156,7 @@ import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evide
 import { practiceModuleLabel } from '@/domain/labels';
 import type { AssessmentRole } from '@/kernel/public';
 import { correctOptionIdsOf, hasCompleteExplanation, isMultiAnswerChoice, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
-import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, submittedOptionIds, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
+import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, isMistakenAttempt, submittedOptionIds, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
 import { useAIChatStore } from '@/stores/aiChat';
 import { PracticeSessionFeature } from './PracticeSessionFeature';
 import { PracticeSessionDraftService, type PracticeSessionDraftIdentity } from './PracticeSessionDraftService';
@@ -481,7 +481,7 @@ async function submit() {
       });
     void draftService.clear(runtime, draftIdentity()).catch(() => undefined);
     objectiveSubmissionRecoveryCoordinator.start();
-    if (review.value?.items.some((item) => item.grading.result === 'incorrect')) {
+    if (review.value?.items.some((item) => isMistakenAttempt(item.grading.result))) {
       void watchDiagnoses(reviewSessionIds.value);
     }
   } catch (cause) {
@@ -538,7 +538,7 @@ async function watchDiagnoses(sessionIds: readonly string[]) {
         runtime.getObjectiveSessionReview.execute(sessionId as Parameters<typeof runtime.getObjectiveSessionReview.execute>[0])
       ))));
       if (nextReview) review.value = nextReview;
-      const incorrectItems = nextReview?.items.filter((item) => item.grading.result === 'incorrect') ?? [];
+      const incorrectItems = nextReview?.items.filter((item) => isMistakenAttempt(item.grading.result)) ?? [];
       if (
         incorrectItems.length
         && incorrectItems.every((item) => item.diagnoses.some((diagnosis) => diagnosis.source === 'tutor_ai'))
@@ -606,7 +606,10 @@ function hasSpecificDiagnosisFor(questionId: string): boolean {
   return Boolean(diagnosis && diagnosis.causeCode !== ErrorCauseCode.Unknown);
 }
 function diagnosisPriority(diagnosis: ErrorDiagnosisRecord): number { return diagnosis.source === 'tutor_ai' ? 2 : diagnosis.causeCode === 'unknown' ? 0 : 1; }
-function isIncorrect(questionId: string): boolean { return review.value?.items.find((item) => item.question.id === questionId)?.grading.result === 'incorrect'; }
+function isIncorrect(questionId: string): boolean {
+  const result = review.value?.items.find((item) => item.question.id === questionId)?.grading.result;
+  return result !== undefined && isMistakenAttempt(result);
+}
 async function askAIAboutCurrentQuestion() {
   const current = question.value;
   if (!current || askingAi.value || chat.isSending) return;

@@ -40,10 +40,24 @@ export class InstallExamPacks {
     installWrittenFormats(projectExamSubjects(active.bundle));
   }
 
-  /** The candidate's own pack, falling back to the first bundled one before onboarding. */
+  /**
+   * The candidate's own pack. Before onboarding there is no cycle yet, so the
+   * first bundled pack seeds the UI.
+   *
+   * A cycle whose exam type has no installed pack activates nothing: falling
+   * back would re-point that candidate's curriculum at a different exam, which
+   * silently rewrites their study plan rather than degrading.
+   */
   private async resolveActivePack(): Promise<BundledCurriculumPack | undefined> {
     const cycle = await this.candidateRepository.findCurrentCycle();
-    const examType = cycle?.examCycle.examType;
-    return this.packs.find((pack) => pack.examType === examType) ?? this.packs[0];
+    if (!cycle) return this.packs[0];
+    const owned = this.packs.find((pack) => pack.examType === cycle.examCycle.examType);
+    if (!owned) {
+      console.warn('[ExamPacks] no installed pack for the candidate exam type; leaving the cycle untouched', {
+        examType: cycle.examCycle.examType,
+        installed: this.packs.map((pack) => pack.examType)
+      });
+    }
+    return owned;
   }
 }

@@ -23,6 +23,7 @@ export {
   ContentSchemaCode,
   isQuestionTemplateCode,
   parseQuestionTemplateCode,
+  questionSchemaCodeFor,
   type CalloutKind as CalloutKindCode,
   type ContentAlignment as ContentAlignmentCode,
   type ContentBlockType as ContentBlockTypeCode,

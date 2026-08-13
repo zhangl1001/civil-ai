@@ -54,6 +54,18 @@ try {
   ];
   assert(scores.every((score) => score >= 0 && score <= 1), `score out of range: ${scores}`);
 
+  // --- the review loop must see partial credit ---------------------------------
+  // Adding `partial` to the result set silently dropped those attempts out of the
+  // wrong book, AI diagnosis, tutor conclusions and the post-submit page.
+  assert.equal(evidence.isMistakenAttempt(AttemptResult.Incorrect), true);
+  assert.equal(evidence.isMistakenAttempt(AttemptResult.Partial), true);
+  assert.equal(evidence.isMistakenAttempt(AttemptResult.Correct), false);
+  assert.equal(evidence.isMistakenAttempt(AttemptResult.Unanswered), false);
+  // A partially correct multi-answer attempt is graded partial, so it must enter
+  // the same review loop an outright wrong answer does.
+  const underSelected = gradeChoiceAnswer(multiple, ['A', 'C'], ['A']);
+  assert.equal(evidence.isMistakenAttempt(underSelected.result), true);
+
   // --- persisted answer round trip -------------------------------------------
   const stored = evidence.choiceAttemptAnswer(['A', 'C']);
   assert.deepEqual(stored, { optionIds: ['A', 'C'] });

@@ -103,6 +103,20 @@ try {
   const missingAnswerArray = validator.parseChoiceQuestion({ ...sharedShape, templateCode: content.QuestionTemplateCode.MultipleChoice });
   assert.equal(missingAnswerArray.ok, false);
 
+  // Committing content under another template's schema would make the stored
+  // answer key disagree with its declared version metadata.
+  assert.equal(content.questionSchemaCodeFor(content.QuestionTemplateCode.SingleChoice), 'question.single_choice');
+  assert.equal(content.questionSchemaCodeFor(content.QuestionTemplateCode.MultipleChoice), 'question.multiple_choice');
+  assert.equal(
+    content.questionSchemaCodeFor(content.QuestionTemplateCode.IndeterminateChoice),
+    'question.indeterminate_choice'
+  );
+  assert.equal(
+    new Set(Object.values(content.QuestionTemplateCode).map(content.questionSchemaCodeFor)).size,
+    Object.values(content.QuestionTemplateCode).length,
+    'every template must map to its own content schema'
+  );
+
   const unknownTemplate = validator.parseChoiceQuestion({ ...fixture, templateCode: 'true_false' });
   assert.equal(unknownTemplate.ok, false);
   assert(unknownTemplate.error.issues.some((issue) => issue.code === 'question.template_unsupported'));

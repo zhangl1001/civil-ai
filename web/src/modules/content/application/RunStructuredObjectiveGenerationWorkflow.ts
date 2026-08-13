@@ -173,11 +173,10 @@ export class RunStructuredObjectiveGenerationWorkflow {
             })
           : await this.generateSingleCore(
               aggregate,
-              this.promptCompiler.compile(
-                promptBundle.promptCode,
+              this.promptCompiler.compileBundle(
+                promptBundle,
                 generationPromptVariables(aggregate),
-                generationPromptPayload(aggregate, referencePack),
-                promptBundle.version
+                generationPromptPayload(aggregate, referencePack)
               ),
               gateway,
               deadline.signal,

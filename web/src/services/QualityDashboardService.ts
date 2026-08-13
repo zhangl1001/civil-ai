@@ -2,6 +2,7 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { practiceModuleLabel } from '@/domain/labels';
 import type { CapabilityNode } from '@/modules/curriculum/public';
 import type { ObjectiveSessionFacts } from '@/modules/evidence/public';
+import { isMistakenAttempt } from '@/modules/evidence/public';
 import type { MasteryTrack, ReviewQueueItem } from '@/modules/mastery/public';
 import type { AbilityCalibrationSnapshot } from '@/modules/calibration/public';
 import type { CandidateHomeSnapshot } from '@/modules/candidate/public';
@@ -246,7 +247,7 @@ function buildModules(
       if (!current.latestResultByQuestion.has(attempt.questionId)) {
         current.latestResultByQuestion.set(attempt.questionId, attempt.result);
       }
-      if (attempt.result === 'incorrect') {
+      if (isMistakenAttempt(attempt.result)) {
         current.wrongByQuestion.set(attempt.questionId, (current.wrongByQuestion.get(attempt.questionId) || 0) + 1);
       }
     });
@@ -275,7 +276,7 @@ function buildModules(
       stability: Math.round(weightedAverage(moduleTracks, 'stability') * 100),
       confidence: weightedAverage(moduleTracks, 'confidence'),
       avgSeconds: values.total ? Math.round(values.elapsedMs / values.total / 1000) : 0,
-      openWrongCount: [...values.latestResultByQuestion.values()].filter((result) => result === 'incorrect').length,
+      openWrongCount: [...values.latestResultByQuestion.values()].filter((result) => isMistakenAttempt(result)).length,
       repeatWrongRate: values.wrongByQuestion.size
         ? Math.round([...values.wrongByQuestion.values()].filter((count) => count > 1).length / values.wrongByQuestion.size * 100)
         : 0
