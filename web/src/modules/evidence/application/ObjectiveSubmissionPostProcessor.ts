@@ -1,5 +1,6 @@
 import type { AgentRunId, ExamCycleId, JsonObject, LearningSessionId } from '@/kernel/public';
-import { contentDocumentText } from '@/modules/content/public';
+import { contentDocumentText, correctAnswerLabel } from '@/modules/content/public';
+import { submittedAnswerLabel } from '../domain/ChoiceAttemptAnswer';
 import { ErrorCauseCode } from '../domain/EvidenceCodes';
 import type { GetObjectiveSessionReview, ObjectiveSessionReviewItem } from './GetObjectiveSessionReview';
 import type { RequestAiErrorDiagnosis } from './RequestAiErrorDiagnosis';
@@ -188,8 +189,8 @@ function evidenceContext(item: ObjectiveSessionReviewItem): JsonObject {
       })),
       explanation: contentDocumentText(item.question.content.explanation)
     },
-    standardAnswer: item.question.content.correctOptionId,
-    userAnswer: typeof item.attempt.answer.optionId === 'string' ? item.attempt.answer.optionId : null,
+    standardAnswer: correctAnswerLabel(item.question.content),
+    userAnswer: submittedAnswerLabel(item.attempt.answer) || null,
     deterministicResult: item.grading.result,
     observations: {
       elapsedMs: item.attempt.elapsedMs ?? null,

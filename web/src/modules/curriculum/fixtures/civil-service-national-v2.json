@@ -4,12 +4,12 @@
     "packageType": "curriculum",
     "examType": "civil_service",
     "regionScope": "national",
-    "version": "2.2.0",
+    "version": "2.3.0",
     "status": "published",
     "source": "bundled",
-    "contentHash": "sha256:a5f5901f9ad45ae0af70f5886afbca6bc81ffbfe36829bd13e9e10678e1c683b",
+    "contentHash": "sha256:4fc80c3ee8747f2a06944441a808707ddb707c07c461919deda80d6c00ed30ff",
     "schemaVersion": "1",
-    "releaseNotes": "补齐行测五模块、自主训练细分考点与结构化面试能力维度",
+    "releaseNotes": "新增各科目 exam_delivery 策略，声明作答形态与模考方案，取代应用层硬编码",
     "publishedAt": 1784016000000,
     "installedAt": 1784016000000
   },
@@ -19,7 +19,7 @@
       "metadataPackageId": "metadata:curriculum:civil-service-national:v2",
       "examType": "civil_service",
       "regionScope": "national",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "status": "published",
       "createdAt": 1784016000000
     },
@@ -823,6 +823,55 @@
             { "code": "expression", "weight": 0.25 },
             { "code": "fluency", "weight": 0.15 }
           ]
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:aptitude:delivery:v1",
+        "subject": "aptitude",
+        "policyType": "exam_delivery",
+        "version": "1.0.0",
+        "config": {
+          "deliveryKind": "objective",
+          "mockExam": {
+            "defaultQuestionCount": 120,
+            "defaultDurationMinutes": 120,
+            "schemes": [
+              { "code": "national", "name": "国考标准", "questionCount": 135, "durationMinutes": 120 },
+              { "code": "provincial", "name": "省考标准", "questionCount": 120, "durationMinutes": 120 },
+              { "code": "compact", "name": "精简版", "questionCount": 60, "durationMinutes": 60 }
+            ],
+            "focusTags": ["近5年真题", "高频考点", "易错题型", "时政热点", "新题型预测", "基础巩固", "拔高难题"]
+          }
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:essay:delivery:v1",
+        "subject": "essay",
+        "policyType": "exam_delivery",
+        "version": "1.0.0",
+        "config": {
+          "deliveryKind": "subjective",
+          "mockExam": {
+            "defaultQuestionCount": 1,
+            "defaultDurationMinutes": 180,
+            "schemes": [],
+            "focusTags": []
+          }
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:interview:delivery:v1",
+        "subject": "interview",
+        "policyType": "exam_delivery",
+        "version": "1.0.0",
+        "config": {
+          "deliveryKind": "subjective"
         },
         "status": "published",
         "createdAt": 1784016000000

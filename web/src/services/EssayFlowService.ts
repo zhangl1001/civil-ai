@@ -1,3 +1,4 @@
+import { ExamDeliveryKind } from '@/modules/curriculum/public';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 import {
@@ -104,7 +105,7 @@ export class EssayFlowService {
       sourceId: questionSetId,
       scopeId: essayQuestionSetGenerationScope({ ...context, questionSetId, entryMode, purpose }),
       payload: {
-        subject: '申论',
+        deliveryKind: ExamDeliveryKind.Subjective,
         questionSetId,
         date: context.date,
         essayTopic: context.topic,

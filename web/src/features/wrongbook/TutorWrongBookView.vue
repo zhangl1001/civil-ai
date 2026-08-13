@@ -31,7 +31,7 @@
             <QuestionContentTemplate
               :question="entry.question.content"
               :layout="QuestionRegionLayoutCode.WrongBook"
-              :selected-option-id="selectedOptionId(entry)"
+              :selected-option-ids="selectedOptionIds(entry)"
               reveal-result
               readonly-mode
               compact
@@ -136,7 +136,7 @@
         <QuestionContentTemplate
           :question="flashcard.question.content"
           :layout="QuestionRegionLayoutCode.Flashcard"
-          :selected-option-id="selectedOptionId(flashcard)"
+          :selected-option-ids="selectedOptionIds(flashcard)"
           :reveal-result="revealed"
           readonly-mode
           compact
@@ -175,7 +175,7 @@ import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
 import ErrorDiagnosisInsight from '@/components/learning/ErrorDiagnosisInsight.vue';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { practiceModuleLabel } from '@/domain/labels';
-import { errorCauseLabel, type WrongBookDiagnosis, type WrongBookEntry } from '@/modules/evidence/public';
+import { errorCauseLabel, submittedOptionIds, type WrongBookDiagnosis, type WrongBookEntry } from '@/modules/evidence/public';
 import { QuestionRegionLayoutCode, type ContentDocument } from '@/modules/content/public';
 import { peekWrongBookEntries, WrongBookFeature } from './WrongBookFeature';
 
@@ -272,7 +272,7 @@ function detail(entry: WrongBookEntry): string {
     ? diagnosis.detail
     : '目前只能确认本题答错，暂时还无法判断具体原因。完成深度分析后会自动更新。';
 }
-function selectedOptionId(entry: WrongBookEntry): string { return typeof entry.attempt.answer.optionId === 'string' ? entry.attempt.answer.optionId : ''; }
+function selectedOptionIds(entry: WrongBookEntry): readonly string[] { return submittedOptionIds(entry.attempt.answer); }
 function effectiveDiagnosis(entry: WrongBookEntry): WrongBookDiagnosis | undefined { return [...entry.diagnoses].sort((left, right) => diagnosisPriority(right) - diagnosisPriority(left) || right.diagnosis.createdAt - left.diagnosis.createdAt)[0]; }
 function hasSpecificDiagnosis(entry: WrongBookEntry): boolean {
   const diagnosis = effectiveDiagnosis(entry);

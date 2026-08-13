@@ -6,7 +6,7 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
 import { AssessmentRole } from '@/kernel/public';
 import { QuestionSetEntryMode } from '@/modules/content/public';
-import type { CapabilityNode } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, type CapabilityNode } from '@/modules/curriculum/public';
 import type { MasteryTrack } from '@/modules/mastery/public';
 import { StructuredPracticeTaskCenter } from '@/features/practice/StructuredPracticeTaskCenter';
 import { selectPriorityOrCoverageCapability } from '@/features/practice/CapabilitySelection';
@@ -99,15 +99,17 @@ export class AIBusinessTools {
     }
 
     if (call.name === 'generate_mock') {
+      const subject = await examFlowService.findMockSubject(ExamDeliveryKind.Objective);
+      const mockExam = subject.mockExam;
       const result = await examFlowService.startMock({
-        subject: '行测',
+        subjectCode: subject.code,
         date: today(),
-        questionCount: asNumber(args.questionCount, 120),
-        durationMinutes: 120,
+        questionCount: asNumber(args.questionCount, mockExam?.defaultQuestionCount ?? 120),
+        durationMinutes: mockExam?.defaultDurationMinutes ?? 120,
         tags: [],
         essayType: 'short'
       }, meta.idempotencyKey);
-      return { taskId: result.task.id, reply: taskReply(result, '行测模考') };
+      return { taskId: result.task.id, reply: taskReply(result, `${subject.name}模考`) };
     }
 
     if (call.name === 'generate_essay') {

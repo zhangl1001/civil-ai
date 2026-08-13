@@ -10,11 +10,13 @@
       </section>
 
       <section v-else-if="region === QuestionRegionCode.Options" class="question-region question-region-options">
+        <p v-if="multiSelect" class="question-multi-answer-hint">{{ multiAnswerHint }}</p>
         <QuestionOptionList
           :options="question.options"
           :presentation="definition.code"
-          :selected-option-id="selectedOptionId"
-          :correct-option-id="question.correctOptionId"
+          :selected-option-ids="selectedOptionIds"
+          :correct-option-ids="correctOptionIds"
+          :multi-select="multiSelect"
           :reveal-result="revealResult"
           :readonly-mode="readonlyMode"
           :disabled="disabled"
@@ -24,7 +26,7 @@
       </section>
 
       <section v-else-if="region === QuestionRegionCode.Explanation && showExplanation" class="question-region question-region-explanation">
-        <QuestionExplanationView :document="question.explanation" :correct-option-id="question.correctOptionId">
+        <QuestionExplanationView :document="question.explanation" :correct-answer="correctAnswer">
           <template v-if="layout !== QuestionRegionLayoutCode.Flashcard && $slots.diagnosis" #after-answer>
             <slot name="diagnosis" />
           </template>
@@ -47,19 +49,23 @@ import {
   QuestionRegionCode,
   QuestionRegionLayoutCode,
   QuestionPresentationCode,
+  QuestionTemplateCode,
+  correctAnswerLabel,
+  correctOptionIdsOf,
+  isMultiAnswerChoice,
   questionPresentationDefinition,
   questionRegionOrder,
   resolveQuestionPresentation,
+  type QuestionContent,
   type QuestionPresentationCodeValue,
-  type QuestionRegionLayoutCodeValue,
-  type SingleChoiceQuestionContent
+  type QuestionRegionLayoutCodeValue
 } from '@/modules/content/public';
 
 const props = withDefaults(defineProps<{
-  readonly question: SingleChoiceQuestionContent;
+  readonly question: QuestionContent;
   readonly presentation?: QuestionPresentationCodeValue;
   readonly layout?: QuestionRegionLayoutCodeValue;
-  readonly selectedOptionId?: string;
+  readonly selectedOptionIds?: readonly string[];
   readonly revealResult?: boolean;
   readonly readonlyMode?: boolean;
   readonly disabled?: boolean;
@@ -68,7 +74,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   presentation: undefined,
   layout: QuestionRegionLayoutCode.Practice,
-  selectedOptionId: '',
+  selectedOptionIds: () => [],
   revealResult: false,
   readonlyMode: false,
   disabled: false,
@@ -79,6 +85,12 @@ const props = withDefaults(defineProps<{
 const definition = computed(() => questionPresentationDefinition(
   props.presentation || resolveQuestionPresentation(props.question)
 ));
+const multiSelect = computed(() => isMultiAnswerChoice(props.question));
+const correctOptionIds = computed(() => correctOptionIdsOf(props.question));
+const correctAnswer = computed(() => correctAnswerLabel(props.question));
+const multiAnswerHint = computed(() => props.question.templateCode === QuestionTemplateCode.MultipleChoice
+  ? '多选题 · 至少两个正确选项，少选得部分分，错选不得分'
+  : '不定项选择 · 正确选项数量未知，少选得部分分，错选不得分');
 const materialTextVariant = computed(() => (
   definition.value.code === QuestionPresentationCode.DataMaterialChoice ? 'data' : 'compact'
 ));
@@ -118,5 +130,11 @@ function select(optionId: string): void {
 
 .question-template-graphic_choice .question-region-options {
   padding-top: 2px;
+}
+
+.question-multi-answer-hint {
+  margin: 0 0 8px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-caption);
 }
 </style>

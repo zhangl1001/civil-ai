@@ -1,7 +1,8 @@
 import { parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import type { JsonObject } from '@/kernel/public';
 import type { ContentDocument } from '../contracts/ContentDocument';
-import type { SingleChoiceQuestionContent } from '../contracts/QuestionContent';
+import type { QuestionContent } from '../contracts/QuestionContent';
+import { isQuestionTemplateCode, QuestionTemplateCode } from '../domain/ContentCodes';
 import { ContentSchemaValidator, type ContentValidationIssue } from './ContentSchemaValidator';
 import {
   asOptionalRecord,
@@ -16,7 +17,7 @@ import { authoringMaterialGroups } from './GeneratedMaterialBlockParser';
 export interface GeneratedLectureQuestionSet {
   readonly raw: JsonObject;
   readonly lecture: ContentDocument;
-  readonly questions: readonly SingleChoiceQuestionContent[];
+  readonly questions: readonly QuestionContent[];
   readonly referenceQuestionIds: readonly (string | undefined)[];
 }
 
@@ -71,10 +72,10 @@ export class GeneratedContentParser {
       }]);
     }
     const questionInputs = root.questions.map(decodeEmbeddedJson);
-    const questions: SingleChoiceQuestionContent[] = [];
+    const questions: QuestionContent[] = [];
     const issues: ContentValidationIssue[] = [];
     questionInputs.forEach((question, index) => {
-      const result = this.validator.parseSingleChoiceQuestion(question);
+      const result = this.validator.parseChoiceQuestion(question);
       if (result.ok) questions.push(result.value);
       else issues.push(...result.error.issues.map((issue) => ({ ...issue, path: `$.questions[${index}]${issue.path.slice(1)}` })));
     });
@@ -192,7 +193,8 @@ function authoringQuestion(
   issues: ContentValidationIssue[]
 ): Record<string, unknown> | undefined {
   const question = asOptionalRecord(input);
-  if (question?.templateCode === 'single_choice') {
+  // Already-shaped content (import and repair paths) passes through untouched.
+  if (isQuestionTemplateCode(question?.templateCode)) {
     const { referenceQuestionId: _referenceQuestionId, ...contentQuestion } = question;
     return expectedCapabilityCode
       ? { ...contentQuestion, capabilityCode: expectedCapabilityCode }
@@ -233,7 +235,7 @@ function authoringQuestion(
   });
   const optionIds = options.flatMap((option) => option ? [option.id] : []);
   const explanation = id && correctOptionId
-    ? authoringExplanation(question.explanation, id, correctOptionId, optionIds)
+    ? authoringExplanation(question.explanation, id, [correctOptionId], optionIds)
     : undefined;
   if (!id || !capabilityCode || !prompt || !explanation || !correctOptionId || options.some((option) => !option)) return undefined;
   const requestedMaterialGroupId = optionalAuthorTextValue(question.materialGroupId);
@@ -254,7 +256,7 @@ function authoringQuestion(
       ? authorDocument(`${materialGroupId || id}:material`, materialSource)
       : materialSource;
   return {
-    templateCode: 'single_choice',
+    templateCode: QuestionTemplateCode.SingleChoice,
     schemaVersion: 'question.single_choice.v2',
     capabilityCode,
     ...(materialGroupId ? { materialGroupId } : {}),
@@ -296,7 +298,7 @@ function countMaterialGroupUses(input: unknown): ReadonlyMap<string, number> {
 function authoringExplanation(
   input: unknown,
   questionId: string,
-  correctOptionId: string,
+  correctOptionIds: readonly string[],
   optionIds: readonly string[]
 ): Record<string, unknown> | undefined {
   const explanation = asOptionalRecord(decodeEmbeddedJson(input));
@@ -306,8 +308,12 @@ function authoringExplanation(
   const steps = flexibleAuthorTextArray(explanation.steps);
   const pitfalls = flexibleAuthorTextArray(explanation.pitfalls);
   const optionAnalysis = authorOptionAnalysis(explanation.optionAnalysis, optionIds);
-  const correctAnalyses = optionAnalysis.filter((item) => item.verdict === 'correct');
-  const safeOptionAnalysis = correctAnalyses.length === 1 && correctAnalyses[0]?.optionId === correctOptionId
+  // Option analysis is dropped unless the options it marks correct are exactly
+  // the answer key, so a contradictory explanation never reaches the learner.
+  const analysedCorrect = optionAnalysis.filter((item) => item.verdict === 'correct').map((item) => item.optionId);
+  const expected = new Set(correctOptionIds);
+  const safeOptionAnalysis = analysedCorrect.length === expected.size
+    && analysedCorrect.every((optionId) => expected.has(optionId))
     ? optionAnalysis
     : [];
   const blocks = [
@@ -356,11 +362,11 @@ export function authoringLectureDocument(input: unknown): ContentDocument {
 export function authoringExplanationDocument(
   input: unknown,
   questionId: string,
-  correctOptionId: string,
+  correctOptionIds: readonly string[],
   optionIds: readonly string[]
 ): ContentDocument {
   return (
-    authoringExplanation(input, questionId, correctOptionId, optionIds)
+    authoringExplanation(input, questionId, correctOptionIds, optionIds)
     ?? { schemaVersion: 'content.v1', blocks: [] }
   ) as unknown as ContentDocument;
 }

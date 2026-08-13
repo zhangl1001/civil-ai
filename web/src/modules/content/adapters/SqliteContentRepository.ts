@@ -613,7 +613,7 @@ export class SqliteContentRepository implements ContentRepository {
   }
 
   private mapQuestion(row: QuestionRow): QuestionRecord {
-    const parsed = this.validator.parseSingleChoiceQuestion(parseJson(row.content_json, 'questions.content_json'));
+    const parsed = this.validator.parseChoiceQuestion(parseJson(row.content_json, 'questions.content_json'));
     if (!parsed.ok) throw new TypeError(`Invalid question content ${row.id}`);
     return {
       id: row.id as QuestionId,

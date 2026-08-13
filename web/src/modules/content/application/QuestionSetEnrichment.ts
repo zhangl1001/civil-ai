@@ -2,6 +2,7 @@ import { parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import type { QuestionId } from '@/kernel/public';
 import type { CommittedQuestionSetBundle } from '../contracts/ContentRepository';
 import type { ContentDocument } from '../contracts/ContentDocument';
+import { correctOptionIdsOf } from '../domain/ChoiceQuestionAnswer';
 import { ContentDocumentType } from '../domain/ContentCodes';
 import {
   contentBlockText,
@@ -80,7 +81,7 @@ export function parseQuestionSetEnrichment(
       const explanation = authoringExplanationDocument(
         value.explanation,
         String(question.id),
-        question.content.correctOptionId,
+        correctOptionIdsOf(question.content),
         question.content.options.map((option) => option.id)
       );
       if (hasRenderableContent(explanation)) explanations.set(question.id, explanation);

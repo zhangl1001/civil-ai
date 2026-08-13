@@ -126,7 +126,7 @@ function referencePayload(referencePack: TrueQuestionReferencePack): JsonObject 
       material: question.material ?? null,
       prompt: question.prompt,
       options: question.options.map((option) => ({ ...option })),
-      correctOptionId: question.correctOptionId,
+      correctAnswer: question.correctAnswer,
       structuralSignature: question.structuralSignature
     }))
   };
@@ -158,7 +158,7 @@ function compactReferencePayload(
       material: question.material ?? null,
       prompt: question.prompt,
       options: question.options.map((option) => ({ ...option })),
-      correctOptionId: question.correctOptionId,
+      correctAnswer: question.correctAnswer,
       structuralSignature: question.structuralSignature
     }))
   };

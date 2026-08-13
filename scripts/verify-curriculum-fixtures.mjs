@@ -52,10 +52,57 @@ for (const node of nodes) {
   }
 }
 
+// Exam flows resolve a subject's answering mode from metadata, so every subject
+// node must carry a published, parseable exam_delivery policy.
+const policies = fixture.payload.assessmentPolicies;
+const deliveryKinds = new Set(['objective', 'subjective']);
+const deliveryBySubject = new Map();
+for (const policy of policies) {
+  if (policy.policyType !== 'exam_delivery') continue;
+  if (policy.status !== 'published') continue;
+  if (deliveryBySubject.has(policy.subject)) {
+    errors.push(`duplicate published exam_delivery policy for subject: ${policy.subject}`);
+  }
+  deliveryBySubject.set(policy.subject, policy);
+}
+
+for (const node of nodes.filter((item) => item.nodeType === 'subject' && item.status === 'active')) {
+  const policy = deliveryBySubject.get(node.subject);
+  if (!policy) {
+    errors.push(`subject ${node.subject} has no published exam_delivery policy`);
+    continue;
+  }
+  if (!deliveryKinds.has(policy.config.deliveryKind)) {
+    errors.push(`subject ${node.subject} has invalid deliveryKind: ${policy.config.deliveryKind}`);
+  }
+  const mockExam = policy.config.mockExam;
+  if (mockExam === undefined) continue;
+  if (!Number.isInteger(mockExam.defaultQuestionCount) || mockExam.defaultQuestionCount <= 0) {
+    errors.push(`subject ${node.subject} has invalid mockExam.defaultQuestionCount`);
+  }
+  if (!Number.isInteger(mockExam.defaultDurationMinutes) || mockExam.defaultDurationMinutes <= 0) {
+    errors.push(`subject ${node.subject} has invalid mockExam.defaultDurationMinutes`);
+  }
+  const schemeCodes = new Set();
+  for (const scheme of mockExam.schemes ?? []) {
+    if (!scheme.code || schemeCodes.has(scheme.code)) {
+      errors.push(`subject ${node.subject} has duplicate or empty mock scheme code: ${scheme.code}`);
+    }
+    if (!scheme.name) errors.push(`subject ${node.subject} mock scheme ${scheme.code} has no name`);
+    if (!Number.isInteger(scheme.questionCount) || scheme.questionCount <= 0) {
+      errors.push(`subject ${node.subject} mock scheme ${scheme.code} has invalid questionCount`);
+    }
+    if (!Number.isInteger(scheme.durationMinutes) || scheme.durationMinutes <= 0) {
+      errors.push(`subject ${node.subject} mock scheme ${scheme.code} has invalid durationMinutes`);
+    }
+    schemeCodes.add(scheme.code);
+  }
+}
+
 if (errors.length > 0) {
   console.error('Curriculum fixture verification failed:');
   errors.forEach((error) => console.error(`- ${error}`));
   process.exit(1);
 }
 
-console.log(`Curriculum fixture verification passed (${nodes.length} nodes, ${fixture.payload.capabilityEdges.length} edges).`);
+console.log(`Curriculum fixture verification passed (${nodes.length} nodes, ${fixture.payload.capabilityEdges.length} edges, ${deliveryBySubject.size} exam_delivery policies).`);

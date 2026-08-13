@@ -22,6 +22,16 @@ export {
   QuestionExposureType
 } from './domain/EvidenceCodes';
 export { errorCauseLabel } from './domain/ErrorCausePresentation';
+export {
+  choiceAttemptAnswer,
+  submittedAnswerLabel,
+  submittedOptionIds
+} from './domain/ChoiceAttemptAnswer';
+export {
+  CHOICE_GRADER_VERSION,
+  gradeChoiceAnswer,
+  type ChoiceAnswerGrade
+} from './domain/ChoiceGradingPolicy';
 export type {
   AttemptRecord,
   DecisionObservationRecord,

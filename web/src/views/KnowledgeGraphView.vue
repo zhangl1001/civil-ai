@@ -47,35 +47,47 @@
       </template>
     </PullToRefresh>
 
-    <div v-if="selectedPoint" class="detail-overlay" @click.self="selectedPoint = null">
-      <section class="detail-card app-card">
-        <h4>{{ selectedPoint.name }}</h4>
-        <span>{{ selectedPoint.module }} · {{ selectedPoint.group }}</span>
+    <CenterDialog
+      v-model="pointDialogOpen"
+      :title="selectedPoint?.name || '考点详情'"
+      :subtitle="selectedPoint ? `${selectedPoint.module} · ${selectedPoint.group}` : ''"
+      variant="content"
+    >
+      <template v-if="selectedPoint">
         <div class="detail-stats">
           <p><b>{{ selectedPoint.total }}</b><em>题数</em></p>
           <p><b>{{ selectedPoint.accuracy }}%</b><em>正确率</em></p>
           <p><b>{{ selectedPoint.wrongCount }}</b><em>错题</em></p>
         </div>
-        <button class="primary-button" type="button" @click="startPoint(selectedPoint)"><TargetIcon /> 练这个考点</button>
-        <button class="secondary-button" type="button" @click="selectedPoint = null">关闭</button>
-      </section>
-    </div>
+        <button class="detail-primary-action primary-button" type="button" @click="startPoint(selectedPoint)">
+          <TargetIcon />练这个考点
+        </button>
+      </template>
+    </CenterDialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ArrowLeftIcon, ChevronRightIcon, MapIcon, TargetIcon } from 'lucide-vue-next';
 import { AppStateView, PullToRefresh } from '@/capabilities/design-system/public';
 import { goBackOrHome } from '@/router/navigation';
 import { knowledgeGraphService, type KnowledgeGraphDashboard, type KnowledgePointNode } from '@/services/KnowledgeGraphService';
+import CenterDialog from '@/components/layout/CenterDialog.vue';
+import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 
 const router = useRouter();
 const dashboard = ref<KnowledgeGraphDashboard | null>(null);
 const isLoading = ref(false);
 const openedModules = ref<string[]>([]);
 const selectedPoint = ref<KnowledgePointNode | null>(null);
+const pointDialogOpen = computed({
+  get: () => selectedPoint.value !== null,
+  set: (open: boolean) => {
+    if (!open) selectedPoint.value = null;
+  }
+});
 
 onMounted(load);
 
@@ -97,18 +109,19 @@ function toggleModule(name: string) {
 
 function startWeakest() {
   const point = dashboard.value?.weakest;
-  router.push({
-    path: '/vue/practice/session',
-    query: { mode: 'self', capabilityNodeId: point?.id || '' }
-  });
+  if (point) startPoint(point);
 }
 
 function startPoint(point: KnowledgePointNode) {
   selectedPoint.value = null;
-  router.push({
-    path: '/vue/practice/session',
-    query: { mode: 'self', capabilityNodeId: point.id }
-  });
+  router.push(practiceDetailLocation({
+    subject: 'aptitude',
+    mode: 'self',
+    capabilityNodeId: point.id,
+    count: 5,
+    autoStart: true,
+    source: 'knowledge-graph'
+  }));
 }
 
 function goBack() {
@@ -143,8 +156,6 @@ h3{margin:0;font-size: var(--type-size-section-title)}
 .point-row{width:100%;min-height:48px;gap:10px;padding:6px 0;border:none;border-top:1px solid rgba(var(--color-ink-rgb), .06);background:transparent;color:var(--text-color);font:inherit;text-align:left}
 .point-row>i{width:8px;height:8px;border-radius:50%;flex-shrink:0}.point-row>i.mastered{background:#2e7d32}.point-row>i.learning{background:#ef6c00}.point-row>i.weak{background:#d93025}.point-row>i.new{background:rgba(var(--color-ink-rgb), .22)}
 .point-row span{flex:1;font-size: var(--type-size-secondary)}.point-row small{max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary-color);font-size: var(--type-size-micro)}.point-row em{width:38px;text-align:right;color:var(--text-secondary-color);font-style:normal;font-size: var(--type-size-micro);font-weight: var(--type-weight-semibold)}
-.detail-overlay{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.42)}
-.detail-card{width:100%;max-width:340px;padding:18px}.detail-card h4{margin:0;font-size: var(--type-size-section-title)}.detail-card>span{display:block;margin-top:3px;color:var(--text-secondary-color);font-size: var(--type-size-caption)}
 .detail-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}.detail-stats p{margin:0;border-radius:12px;padding:10px 4px;background:rgba(var(--color-ink-rgb), .04);text-align:center}.detail-stats b,.detail-stats em{display:block}.detail-stats b{font-size: var(--type-size-section-title)}.detail-stats em{color:var(--text-secondary-color);font-size: var(--type-size-micro);font-style:normal;font-weight: var(--type-weight-semibold)}
-.detail-card .primary-button,.detail-card .secondary-button{width:100%;margin-top:8px}.secondary-button{height:42px;border:none;border-radius:12px;background:rgba(var(--color-ink-rgb), .07);color:var(--text-secondary-color);font-size: var(--type-size-body);font-weight: var(--type-weight-semibold)}
+.detail-primary-action{width:100%;margin-top:2px}.detail-primary-action svg{width:16px;height:16px}
 </style>

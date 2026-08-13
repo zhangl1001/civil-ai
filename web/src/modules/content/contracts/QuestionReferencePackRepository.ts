@@ -22,7 +22,8 @@ export interface TrueQuestionReferenceExample {
     readonly id: string;
     readonly text: string;
   }[];
-  readonly correctOptionId: string;
+  /** Answer key as displayed, e.g. `A` for single choice or `ABD` for multi-answer. */
+  readonly correctAnswer: string;
   readonly structuralSignature: JsonObject;
 }
 

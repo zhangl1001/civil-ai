@@ -21,6 +21,7 @@ import {
   LearningAssetKind
 } from '@/modules/content/public';
 import { AgentRunInputIncompatibleError } from '@/modules/agent/public';
+import { ExamDeliveryKind, parseExamDeliveryKind } from '@/modules/curriculum/public';
 import { completeFreshGeneratedContent, learningAssetReferences } from './FreshGeneratedContent';
 import type {
   BusinessAgentExecutionContext,
@@ -379,8 +380,9 @@ function clamp01(value: number): number {
 }
 
 export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
-  const subject = asString(task.payload?.subject) === '申论' ? '申论' : '行测';
-  if (subject === '申论') {
+  const deliveryKind = parseExamDeliveryKind(task.payload?.deliveryKind) ?? ExamDeliveryKind.Objective;
+  const subjectName = asString(task.payload?.subjectName) || '模考';
+  if (deliveryKind === ExamDeliveryKind.Subjective) {
     const essayTopic = asString(task.payload?.essayTopic) || '申论模考';
     const essayType = asString(task.payload?.essayType) === 'long' ? 'long' : 'short';
     const essayQuestionCount = Math.max(1, Math.min(3, Number(task.payload?.essayQuestionCount || 1)));
@@ -460,9 +462,10 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
   const saved = await context.saveLearningAsset({
     kind: LearningAssetKind.MockManifest,
     businessKey: `mock:${date}:${task.id}`,
-    title: `行测模考 · ${date}`,
+    title: `${subjectName} · ${date}`,
     payload: {
-      subject: '行测',
+      subjectName,
+      deliveryKind,
       date,
       durationMinutes: Number(task.payload?.durationMinutes || 120),
       requestedCount,
@@ -473,7 +476,7 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
   });
   await context.setResult({
     resultRef: saved.id,
-    payload: { assetId: saved.id, manifestId: saved.id, subject: '行测' }
+    payload: { assetId: saved.id, manifestId: saved.id, deliveryKind }
   });
   await context.update(94, `已写入 ${sections.reduce((sum, section) => sum + section.count, 0)} 道模考题`);
 };

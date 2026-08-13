@@ -248,11 +248,17 @@ async function verifyPracticeDraftLifecycle(practiceDraft) {
     questions: [{
       id: 'question:1',
       content: { options: [{ id: 'A' }, { id: 'B' }] }
+    }, {
+      id: 'question:multi',
+      content: { options: [{ id: 'A' }, { id: 'B' }, { id: 'C' }] }
     }]
   };
   await service.save(runtime, { questionSetId: 'set:draft' }, {
-    version: 1,
-    answers: { 'question:1': 'B', 'question:removed': 'A' },
+    answers: {
+      'question:1': ['B'],
+      'question:multi': ['A', 'C'],
+      'question:removed': ['A']
+    },
     elapsedByQuestion: { 'question:1': 1_200 },
     answerChanges: { 'question:1': 1 },
     currentQuestionId: 'question:1',
@@ -263,7 +269,8 @@ async function verifyPracticeDraftLifecycle(practiceDraft) {
   });
   const restored = await service.load(runtime, { questionSetId: 'set:draft' }, draftBundle);
   assert.equal(practiceStatus, 'in_progress');
-  assert.deepEqual(restored.answers, { 'question:1': 'B' });
+  // Multi-answer selections survive; answers to questions that no longer exist do not.
+  assert.deepEqual(restored.answers, { 'question:1': ['B'], 'question:multi': ['A', 'C'] });
   assert.equal(restored.currentQuestionId, 'question:1');
   assert.equal(restored.remainingSeconds, 295);
   await service.clear(runtime, { questionSetId: 'set:draft' });

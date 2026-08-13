@@ -14,6 +14,7 @@ import type {
   TrueQuestionReferenceExample,
   TrueQuestionReferencePack
 } from '../contracts/QuestionReferencePackRepository';
+import { correctAnswerLabel } from '../domain/ChoiceQuestionAnswer';
 import { contentDocumentText } from '../domain/ContentDocumentText';
 import { QuestionOriginType } from '../domain/QuestionSourceCodes';
 
@@ -225,7 +226,7 @@ function toReferenceExample(question: QuestionRecord): TrueQuestionReferenceExam
     material,
     prompt,
     options,
-    correctOptionId: question.content.correctOptionId,
+    correctAnswer: correctAnswerLabel(question.content),
     structuralSignature: {
       hasMaterial: Boolean(material),
       usesSharedMaterial: Boolean(question.content.materialGroupId),

@@ -114,7 +114,7 @@ try {
     elapsedMs: 41_000,
     answers: [{
       questionId: 'question:test:1',
-      optionId: 'A',
+      optionIds: ['A'],
       elapsedMs: 41_000,
       confidence: 0.8,
       hintLevel: 0,
@@ -400,7 +400,7 @@ try {
     elapsedMs: 20_000,
     answers: [{
       questionId: 'question:test:2',
-      optionId: 'D',
+      optionIds: ['D'],
       elapsedMs: 20_000,
       answerChangeCount: 0
     }]
@@ -538,14 +538,22 @@ function questionSet() {
       id: 'question:test:1',
       capabilityNodeId: 'capability:aptitude:judgment:weaken',
       contentVersion: 1,
-      content: { options: [{ id: 'A' }, { id: 'B' }, { id: 'C' }, { id: 'D' }] },
-      correctAnswer: { optionId: 'B' }
+      content: {
+        templateCode: 'single_choice',
+        correctOptionId: 'B',
+        options: [{ id: 'A' }, { id: 'B' }, { id: 'C' }, { id: 'D' }]
+      },
+      correctAnswer: { optionIds: ['B'] }
     }, {
       id: 'question:test:2',
       capabilityNodeId: 'capability:aptitude:judgment:weaken',
       contentVersion: 1,
-      content: { options: [{ id: 'A' }, { id: 'B' }, { id: 'C' }, { id: 'D' }] },
-      correctAnswer: { optionId: 'D' }
+      content: {
+        templateCode: 'single_choice',
+        correctOptionId: 'D',
+        options: [{ id: 'A' }, { id: 'B' }, { id: 'C' }, { id: 'D' }]
+      },
+      correctAnswer: { optionIds: ['D'] }
     }]
   };
 }

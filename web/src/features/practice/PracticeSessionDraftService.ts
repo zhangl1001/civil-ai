@@ -5,7 +5,8 @@ import {
   type CommittedQuestionSetBundle
 } from '@/modules/content/public';
 
-const DRAFT_VERSION = 1;
+/** v2 stores each answer as a list of option ids so multi-answer templates fit. */
+const DRAFT_VERSION = 2;
 
 export interface PracticeSessionDraftIdentity {
   readonly questionSetId?: string;
@@ -14,7 +15,7 @@ export interface PracticeSessionDraftIdentity {
 
 export interface PracticeSessionDraft {
   readonly version: typeof DRAFT_VERSION;
-  readonly answers: Readonly<Record<string, string>>;
+  readonly answers: Readonly<Record<string, readonly string[]>>;
   readonly elapsedByQuestion: Readonly<Record<string, number>>;
   readonly answerChanges: Readonly<Record<string, number>>;
   readonly currentQuestionId?: string;
@@ -23,6 +24,9 @@ export interface PracticeSessionDraft {
   readonly remainingSeconds: number;
   readonly updatedAt: number;
 }
+
+/** Callers describe the progress; the service owns the stored version. */
+export type PracticeSessionDraftInput = Omit<PracticeSessionDraft, 'version'>;
 
 export class PracticeSessionDraftService {
   private saveQueue: Promise<void> = Promise.resolve();
@@ -47,11 +51,11 @@ export class PracticeSessionDraftService {
   async save(
     runtime: TutorDatabaseRuntime,
     identity: PracticeSessionDraftIdentity,
-    draft: PracticeSessionDraft
+    draft: PracticeSessionDraftInput
   ): Promise<void> {
     const snapshot = {
       ...draft,
-      answers: { ...draft.answers },
+      answers: Object.fromEntries(Object.entries(draft.answers).map(([key, item]) => [key, [...item]])),
       elapsedByQuestion: { ...draft.elapsedByQuestion },
       answerChanges: { ...draft.answerChanges }
     };
@@ -114,7 +118,7 @@ function parseDraft(payload: Record<string, unknown>, bundle: CommittedQuestionS
     String(question.id),
     new Set(question.content.options.map((option) => option.id))
   ]));
-  const answers = stringMap(payload.answers, (questionId, optionId) => validOptions.get(questionId)?.has(optionId) === true);
+  const answers = optionIdsMap(payload.answers, validOptions);
   const elapsedByQuestion = numberMap(payload.elapsedByQuestion, (questionId) => validOptions.has(questionId));
   const answerChanges = numberMap(payload.answerChanges, (questionId) => validOptions.has(questionId));
   const currentQuestionId = typeof payload.currentQuestionId === 'string' && validOptions.has(payload.currentQuestionId)
@@ -133,14 +137,21 @@ function parseDraft(payload: Record<string, unknown>, bundle: CommittedQuestionS
   };
 }
 
-function stringMap(
+/**
+ * Restores selections, dropping any option the current question no longer has.
+ * A regenerated question set must not resurrect answers to options that moved.
+ */
+function optionIdsMap(
   value: unknown,
-  accept: (key: string, item: string) => boolean
-): Record<string, string> {
+  validOptions: ReadonlyMap<string, ReadonlySet<string>>
+): Record<string, readonly string[]> {
   if (!isRecord(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter(
-    (entry): entry is [string, string] => typeof entry[1] === 'string' && accept(entry[0], entry[1])
-  ));
+  return Object.fromEntries(Object.entries(value).flatMap(([questionId, item]) => {
+    const options = validOptions.get(questionId);
+    if (!options || !Array.isArray(item)) return [];
+    const optionIds = item.filter((entry): entry is string => typeof entry === 'string' && options.has(entry));
+    return optionIds.length ? [[questionId, [...new Set(optionIds)]]] : [];
+  }));
 }
 
 function numberMap(value: unknown, accept: (key: string) => boolean): Record<string, number> {

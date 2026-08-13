@@ -21,6 +21,8 @@ export {
   ContentEventType,
   ContentResourceType,
   ContentSchemaCode,
+  isQuestionTemplateCode,
+  parseQuestionTemplateCode,
   type CalloutKind as CalloutKindCode,
   type ContentAlignment as ContentAlignmentCode,
   type ContentBlockType as ContentBlockTypeCode,
@@ -40,6 +42,14 @@ export {
   resolveQuestionPresentation,
   type QuestionPresentationDefinition
 } from './domain/QuestionPresentation';
+export {
+  correctAnswerLabel,
+  correctAnswerRecord,
+  correctOptionIdsOf,
+  isMultiAnswerChoice,
+  isSingleChoice,
+  maxSelectableOptions
+} from './domain/ChoiceQuestionAnswer';
 export {
   GeneratedContentBlockCode,
   GeneratedContentValidationTier,
@@ -138,6 +148,8 @@ export {
 export { RetireQuestionSet } from './application/RetireQuestionSet';
 export { questionSetPracticeStatusLabel } from './domain/QuestionSetPracticePresentation';
 export type {
+  ChoiceQuestionShape,
+  MultiAnswerChoiceQuestionContent,
   QuestionContent,
   SingleChoiceOption,
   SingleChoiceQuestionContent

@@ -14,6 +14,7 @@ import {
 } from '@/modules/agent/public';
 import {
   ContentEnrichmentKind,
+  correctOptionIdsOf,
   findQuestionSetEnrichmentNeeds,
   hasQuestionSetEnrichmentNeeds,
   parseQuestionSetEnrichment,
@@ -275,7 +276,7 @@ function enrichmentPayload(
         id: option.id,
         content: option.content
       })),
-      correctOptionId: question.content.correctOptionId
+      correctOptionIds: correctOptionIdsOf(question.content)
     }));
   const lectureQuestionSamples = needs.lecture
     ? representativeQuestions(bundle.questions, 8).map((question) => ({
@@ -287,7 +288,7 @@ function enrichmentPayload(
           id: option.id,
           content: option.content
         })),
-        correctOptionId: question.content.correctOptionId
+        correctOptionIds: correctOptionIdsOf(question.content)
       }))
     : [];
   const context = bundle.generationSpec.contextSnapshot;

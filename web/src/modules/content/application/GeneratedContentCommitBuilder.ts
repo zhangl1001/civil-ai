@@ -18,6 +18,7 @@ import {
   QuestionSetPurpose,
   QuestionSetStatus
 } from '../domain/ContentCodes';
+import { correctAnswerRecord } from '../domain/ChoiceQuestionAnswer';
 import {
   QuestionCalibrationRole,
   QuestionDerivationType,
@@ -86,7 +87,7 @@ export class GeneratedContentCommitBuilder {
             : QuestionCalibrationRole.None,
         isOfficial: false,
         content: question,
-        correctAnswer: { optionId: question.correctOptionId },
+        correctAnswer: correctAnswerRecord(question),
         qualityStatus: QuestionQualityStatus.Published,
         contentHash: questionHashes[index],
         contentSchemaVersionId: spec.contentSchemaVersionId,

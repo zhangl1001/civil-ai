@@ -1,5 +1,5 @@
 import type { ContentBlock, ContentDocument } from '../contracts/ContentDocument';
-import type { SingleChoiceQuestionContent } from '../contracts/QuestionContent';
+import type { ChoiceQuestionShape } from '../contracts/QuestionContent';
 import {
   ContentBlockType,
   QuestionPresentationCode,
@@ -50,8 +50,9 @@ const regionLayoutDefinitions: Readonly<Record<QuestionRegionLayoutCode, readonl
   ]
 };
 
+/** Presentation depends only on the question's layout, never on its answer key. */
 export function resolveQuestionPresentation(
-  question: Omit<SingleChoiceQuestionContent, 'presentationCode'> & { readonly presentationCode?: string }
+  question: Omit<ChoiceQuestionShape, 'presentationCode'> & { readonly presentationCode?: string }
 ): QuestionPresentationCode {
   if (isPresentationCode(question.presentationCode)) return question.presentationCode;
   const documents = [question.material, question.prompt, ...question.options.map((option) => option.content)]

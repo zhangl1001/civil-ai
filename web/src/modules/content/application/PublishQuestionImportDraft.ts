@@ -34,6 +34,7 @@ import {
   QuestionSetStatus,
   QuestionTemplateCode
 } from '../domain/ContentCodes';
+import { correctAnswerRecord } from '../domain/ChoiceQuestionAnswer';
 import {
   QuestionImportCandidateStatus,
   QuestionImportDraftStatus
@@ -195,7 +196,7 @@ export class PublishQuestionImportDraft {
       calibrationRole: QuestionCalibrationRole.Anchor,
       isOfficial: aggregate.draft.sourceType === QuestionOriginType.Official,
       content: candidate.content!,
-      correctAnswer: { optionId: candidate.content!.correctOptionId },
+      correctAnswer: correctAnswerRecord(candidate.content!),
       qualityStatus: QuestionQualityStatus.Published,
       contentHash: candidate.contentHash!,
       contentSchemaVersionId: schema.id,

@@ -1,4 +1,7 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
+import type { SubjectCode } from '@/kernel/public';
+import type { EssayMockType, ExamStartContext } from '@/domain/examMock';
+import { ExamDeliveryKind, GetExamSubjects, type ExamSubjectView } from '@/modules/curriculum/public';
 import {
   LearningAssetKind,
   LearningAssetPurpose,
@@ -10,73 +13,62 @@ import { essayFlowService } from './EssayFlowService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 import { normalizeEssayQuestionSetMode, type EssayQuestionSetMode } from '@/domain/essayQuestionSet';
 
-export type ExamSubject = '行测' | '申论';
-export type EssayMockType = 'short' | 'long';
-
-export interface ExamScheme {
-  label: string;
-  count: number;
-  durationMinutes: number;
-}
-
-export interface ExamStartContext {
-  subject: ExamSubject;
-  date: string;
-  questionCount: number;
-  durationMinutes: number;
-  tags: string[];
-  essayType: EssayMockType;
-}
+export type { EssayMockType, ExamStartContext } from '@/domain/examMock';
 
 export interface ExamHistoryItem {
-  id: string;
-  subject: ExamSubject;
-  date: string;
-  title: string;
-  questionCount: number;
-  correctCount: number;
-  accuracy: number;
-  durationMs?: number;
-  createdAt: number;
-  manifestId?: string;
-  questionSetId?: string;
-  essayEntryMode?: EssayQuestionSetMode;
-  essayTopic?: string;
-  essayType?: EssayMockType;
-  essayPurpose?: 'mock';
+  readonly id: string;
+  readonly subjectCode: SubjectCode;
+  readonly date: string;
+  readonly title: string;
+  readonly questionCount: number;
+  readonly correctCount: number;
+  readonly accuracy: number;
+  readonly durationMs?: number;
+  readonly createdAt: number;
+  readonly manifestId?: string;
+  readonly questionSetId?: string;
+  readonly essayEntryMode?: EssayQuestionSetMode;
+  readonly essayTopic?: string;
+  readonly essayType?: EssayMockType;
+  readonly essayPurpose?: 'mock';
 }
 
 export interface ExamStats {
-  total: number;
-  averageAccuracy: number;
-  bestAccuracy: number;
-  latest?: ExamHistoryItem;
+  readonly total: number;
+  readonly averageAccuracy: number;
+  readonly bestAccuracy: number;
+  readonly latest?: ExamHistoryItem;
 }
 
 export interface ExamDashboard {
-  projectName: string;
-  defaultQuestionCount: number;
-  schemes: ExamScheme[];
-  focusTags: string[];
-  history: ExamHistoryItem[];
-  stats: ExamStats;
+  readonly projectName: string;
+  /** Subjects the installed curriculum package offers a mock exam for. */
+  readonly subjects: readonly ExamSubjectView[];
+  readonly subject: ExamSubjectView;
+  readonly history: readonly ExamHistoryItem[];
+  readonly stats: ExamStats;
 }
 
-const XC_MODULES = ['资料分析', '判断推理', '言语理解', '数量关系', '常识判断'];
-const FOCUS_TAGS = ['近5年真题', '高频考点', '易错题型', '时政热点', '新题型预测', '基础巩固', '拔高难题'];
-const SCHEMES: ExamScheme[] = [
-  { label: '国考标准', count: 135, durationMinutes: 120 },
-  { label: '省考标准', count: 120, durationMinutes: 120 },
-  { label: '精简版', count: 60, durationMinutes: 60 }
-];
+/**
+ * Storage keys owned by this flow. `exam-subject-code` replaced the earlier
+ * `exam-subject` key because the stored value changed from a display name to a
+ * curriculum subject code; a stale name simply resolves to no subject.
+ */
+const PreferenceKey = {
+  SubjectCode: 'exam-subject-code',
+  Date: 'exam-date',
+  QuestionCount: 'exam-question-count',
+  DurationMinutes: 'exam-duration-minutes',
+  FocusTags: 'exam-focus-tags',
+  EssayType: 'exam-essay-type'
+} as const;
+
+const ESSAY_LONG_TOPIC = '申发论述';
+const ESSAY_SHORT_TOPIC = '申论小题';
 
 function today(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
-function normalizeSubject(value?: string): ExamSubject {
-  return value === '申论' ? '申论' : '行测';
 }
 
 function normalizeDate(value: string | null | undefined): string {
@@ -88,14 +80,13 @@ function normalizePositiveNumber(value: string | number | null | undefined, fall
   return Number.isFinite(next) && next > 0 ? next : fallback;
 }
 
-function normalizeTags(value: string | null | undefined): string[] {
-  return (value || '高频考点,近5年真题')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
+function normalizeTags(value: string | null | undefined, allowed: readonly string[]): readonly string[] {
+  const stored = (value || '').split(',').map((item) => item.trim()).filter(Boolean);
+  const selected = stored.filter((item) => allowed.includes(item));
+  return selected.length ? selected : allowed.slice(0, 2);
 }
 
-function statsFrom(history: ExamHistoryItem[]): ExamStats {
+function statsFrom(history: readonly ExamHistoryItem[]): ExamStats {
   const accuracies = history.map((item) => item.accuracy).filter((value) => Number.isFinite(value));
   return {
     total: history.length,
@@ -105,7 +96,7 @@ function statsFrom(history: ExamHistoryItem[]): ExamStats {
   };
 }
 
-function essayMockStats(total: number, history: ExamHistoryItem[]): ExamStats {
+function essayMockStats(total: number, history: readonly ExamHistoryItem[]): ExamStats {
   // Essay mock question assets are not scored records yet. Keep the aggregate
   // explicitly unscored instead of deriving misleading values from page one.
   return {
@@ -117,44 +108,64 @@ function essayMockStats(total: number, history: ExamHistoryItem[]): ExamStats {
 }
 
 export class ExamFlowService {
-  readContext(): ExamStartContext {
-    const subject = normalizeSubject(localStorage.getItem('exam-subject') || '行测');
-    const questionCount = normalizePositiveNumber(localStorage.getItem('exam-question-count'), 120);
-    return {
-      subject,
-      date: normalizeDate(localStorage.getItem('exam-date')),
-      questionCount,
-      durationMinutes: normalizePositiveNumber(localStorage.getItem('exam-duration-minutes'), questionCount <= 60 ? 60 : 120),
-      tags: normalizeTags(localStorage.getItem('exam-focus-tags')),
-      essayType: localStorage.getItem('exam-essay-type') === 'long' ? 'long' : 'short'
-    };
-  }
-
-  writeContext(patch: Partial<ExamStartContext>): ExamStartContext {
-    const raw = { ...this.readContext(), ...patch };
-    const next: ExamStartContext = {
-      ...raw,
-      subject: normalizeSubject(raw.subject),
-      date: normalizeDate(raw.date),
-      questionCount: normalizePositiveNumber(raw.questionCount, 120),
-      durationMinutes: normalizePositiveNumber(raw.durationMinutes, 120),
-      tags: Array.isArray(raw.tags) ? raw.tags.filter(Boolean) : normalizeTags(undefined),
-      essayType: raw.essayType === 'long' ? 'long' : 'short'
-    };
-    localStorage.setItem('exam-subject', next.subject);
-    localStorage.setItem('exam-date', next.date);
-    localStorage.setItem('exam-question-count', String(next.questionCount));
-    localStorage.setItem('exam-duration-minutes', String(next.durationMinutes));
-    localStorage.setItem('exam-focus-tags', next.tags.join(','));
-    localStorage.setItem('exam-essay-type', next.essayType);
-    return next;
-  }
-
-  async dashboard(subject: ExamSubject): Promise<ExamDashboard> {
+  /** Subjects the installed curriculum package offers a mock exam for, in package order. */
+  async listMockSubjects(): Promise<readonly ExamSubjectView[]> {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
-    const [assets, essayMockTotal] = subject === '行测'
+    return mockSubjectsOf(runtime, cycle.examCycle.curriculumVersionId);
+  }
+
+  /** First mock-capable subject answered the given way. Used by agent tools that ask for a kind, not a name. */
+  async findMockSubject(deliveryKind: ExamDeliveryKind): Promise<ExamSubjectView> {
+    const subjects = await this.listMockSubjects();
+    const subject = subjects.find((item) => item.deliveryKind === deliveryKind);
+    if (!subject) throw new Error('当前考试大纲没有可用的模考科目。');
+    return subject;
+  }
+
+  readContext(subject: ExamSubjectView): ExamStartContext {
+    const mockExam = subject.mockExam;
+    const defaultQuestionCount = mockExam?.defaultQuestionCount ?? 1;
+    const questionCount = normalizePositiveNumber(localStorage.getItem(PreferenceKey.QuestionCount), defaultQuestionCount);
+    return {
+      subjectCode: subject.code,
+      date: normalizeDate(localStorage.getItem(PreferenceKey.Date)),
+      questionCount,
+      durationMinutes: normalizePositiveNumber(
+        localStorage.getItem(PreferenceKey.DurationMinutes),
+        mockExam?.defaultDurationMinutes ?? 120
+      ),
+      tags: normalizeTags(localStorage.getItem(PreferenceKey.FocusTags), mockExam?.focusTags ?? []),
+      essayType: localStorage.getItem(PreferenceKey.EssayType) === 'long' ? 'long' : 'short'
+    };
+  }
+
+  writeContext(context: ExamStartContext): void {
+    localStorage.setItem(PreferenceKey.SubjectCode, context.subjectCode);
+    localStorage.setItem(PreferenceKey.Date, context.date);
+    localStorage.setItem(PreferenceKey.QuestionCount, String(context.questionCount));
+    localStorage.setItem(PreferenceKey.DurationMinutes, String(context.durationMinutes));
+    localStorage.setItem(PreferenceKey.FocusTags, context.tags.join(','));
+    localStorage.setItem(PreferenceKey.EssayType, context.essayType);
+  }
+
+  /** Subject to open on entry: the last one used, else the first the package offers. */
+  selectInitialSubject(subjects: readonly ExamSubjectView[]): ExamSubjectView | undefined {
+    const stored = localStorage.getItem(PreferenceKey.SubjectCode);
+    return subjects.find((subject) => subject.code === stored) ?? subjects[0];
+  }
+
+  async dashboard(subjectCode?: SubjectCode): Promise<ExamDashboard> {
+    const runtime = await initializeTutorRuntime();
+    const cycle = await runtime.candidateRepository.findCurrentCycle();
+    if (!cycle) throw new Error('请先完成备考档案。');
+    const subjects = await mockSubjectsOf(runtime, cycle.examCycle.curriculumVersionId);
+    const subject = subjects.find((item) => item.code === subjectCode) ?? this.selectInitialSubject(subjects);
+    if (!subject) throw new Error('当前考试大纲没有可用的模考科目。');
+
+    const isObjective = subject.deliveryKind === ExamDeliveryKind.Objective;
+    const [assets, essayMockTotal] = isObjective
       ? await runtime.learningAssetStore.list({
         examCycleId: cycle.examCycle.id,
         kinds: [LearningAssetKind.MockManifest],
@@ -165,12 +176,12 @@ export class ExamFlowService {
         listEssayMockAssets(runtime, cycle.examCycle.id, 0, 30),
         countEssayMockAssets(runtime, cycle.examCycle.id)
       ]);
-    const recentSessions = subject === '行测'
+    const recentSessions = isObjective
       ? await runtime.learningSessionRepository.listRecent(cycle.examCycle.id, 500)
       : [];
     const history = assets
       .map((asset): ExamHistoryItem | undefined => {
-        if (subject === '申论') return essayMockHistoryItem(asset);
+        if (!isObjective) return essayMockHistoryItem(asset, subject.code);
         const sections = Array.isArray(asset.payload.sections) ? asset.payload.sections : [];
         const setIds = new Set(sections.flatMap((item) => {
           const record = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {};
@@ -183,7 +194,7 @@ export class ExamFlowService {
         return {
           id: asset.id,
           manifestId: asset.id,
-          subject,
+          subjectCode: subject.code,
           date: typeof asset.payload.date === 'string' ? asset.payload.date : new Date(asset.createdAt).toISOString().slice(0, 10),
           title: asset.title,
           questionCount,
@@ -198,59 +209,74 @@ export class ExamFlowService {
 
     return {
       projectName: cycle.project.name,
-      defaultQuestionCount: 120,
-      schemes: SCHEMES,
-      focusTags: FOCUS_TAGS,
+      subjects,
+      subject,
       history,
-      stats: subject === '申论'
-        ? essayMockStats(essayMockTotal, history)
-        : statsFrom(history)
+      stats: isObjective ? statsFrom(history) : essayMockStats(essayMockTotal, history)
     };
   }
 
-  async listEssayMockHistory(offset: number, limit: number): Promise<ExamHistoryItem[]> {
+  async listEssayMockHistory(subjectCode: SubjectCode, offset: number, limit: number): Promise<readonly ExamHistoryItem[]> {
     const runtime = await initializeTutorRuntime();
     const cycle = await runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
     const assets = await listEssayMockAssets(runtime, cycle.examCycle.id, offset, limit);
-    return assets.map(essayMockHistoryItem);
+    return assets.map((asset) => essayMockHistoryItem(asset, subjectCode));
   }
 
   async startMock(context: ExamStartContext, idempotencyKey?: string): Promise<AgentTaskEnqueueResult> {
-    const normalized = this.writeContext(context);
-    if (normalized.subject === '行测') {
-      const result = await generationTaskService.enqueue({
+    const subjects = await this.listMockSubjects();
+    const subject = subjects.find((item) => item.code === context.subjectCode);
+    if (!subject) throw new Error('所选科目不在当前考试大纲中。');
+    this.writeContext(context);
+
+    if (subject.deliveryKind === ExamDeliveryKind.Objective) {
+      return generationTaskService.enqueue({
         idempotencyKey,
         intent: 'mock',
-        title: '行测模考',
-        detail: `${normalized.questionCount} 题 · ${normalized.durationMinutes} 分钟`,
-        module: '行测',
-        sourceId: `mock:行测:${normalized.date}:${normalized.questionCount}`,
+        title: `${subject.name}模考`,
+        detail: `${context.questionCount} 题 · ${context.durationMinutes} 分钟`,
+        module: subject.name,
+        sourceId: `mock:${subject.code}:${context.date}:${context.questionCount}`,
         payload: {
-          subject: '行测',
-          modules: XC_MODULES,
-          date: normalized.date,
-          questionCount: normalized.questionCount,
-          durationMinutes: normalized.durationMinutes,
-          focusTags: normalized.tags
+          subjectCode: subject.code,
+          subjectName: subject.name,
+          deliveryKind: subject.deliveryKind,
+          modules: subject.modules.map((item) => item.name),
+          date: context.date,
+          questionCount: context.questionCount,
+          durationMinutes: context.durationMinutes,
+          focusTags: [...context.tags]
         }
       });
-      return result;
     }
 
-    const topic = normalized.essayType === 'long' ? '申发论述' : '申论小题';
+    // Subjective mock exams are currently backed by essay assets. A second
+    // subjective mock subject would move this mapping into the delivery policy.
+    const topic = context.essayType === 'long' ? ESSAY_LONG_TOPIC : ESSAY_SHORT_TOPIC;
     return essayFlowService.enqueueQuestionGeneration({
-      date: normalized.date,
+      date: context.date,
       topic,
-      type: normalized.essayType,
+      type: context.essayType,
       entryMode: 'self',
       purpose: 'mock'
-    }, { questionCount: 1, title: '申论模考', idempotencyKey });
+    }, { questionCount: 1, title: `${subject.name}模考`, idempotencyKey });
   }
-
 }
 
 export const examFlowService = new ExamFlowService();
+
+/**
+ * Built per call rather than held in the runtime: it is a stateless projection
+ * over `curriculumRepository`, which the runtime already publishes.
+ */
+async function mockSubjectsOf(
+  runtime: Awaited<ReturnType<typeof initializeTutorRuntime>>,
+  curriculumVersionId: Parameters<GetExamSubjects['execute']>[0]
+): Promise<readonly ExamSubjectView[]> {
+  const subjects = await new GetExamSubjects(runtime.curriculumRepository).execute(curriculumVersionId);
+  return subjects.filter((subject) => subject.mockExam !== undefined);
+}
 
 async function listEssayMockAssets(
   runtime: Awaited<ReturnType<typeof initializeTutorRuntime>>,
@@ -286,14 +312,14 @@ function countEssayMockAssets(
   });
 }
 
-function essayMockHistoryItem(asset: LearningAssetRecord): ExamHistoryItem {
+function essayMockHistoryItem(asset: LearningAssetRecord, subjectCode: SubjectCode): ExamHistoryItem {
   const rawContext = asset.payload.essayContext;
   const essayContext = rawContext && typeof rawContext === 'object' && !Array.isArray(rawContext)
     ? rawContext as Record<string, unknown>
     : {};
   return {
     id: asset.id,
-    subject: '申论',
+    subjectCode,
     date: typeof essayContext.date === 'string'
       ? essayContext.date
       : new Date(asset.createdAt).toISOString().slice(0, 10),

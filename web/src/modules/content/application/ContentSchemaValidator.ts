@@ -14,8 +14,14 @@ import type {
   TextBlock,
   SvgDiagramBlock
 } from '../contracts/ContentDocument';
-import type { SingleChoiceOption, SingleChoiceQuestionContent } from '../contracts/QuestionContent';
-import { CalloutKind, ContentAlignment, ContentBlockType, QuestionTemplateCode } from '../domain/ContentCodes';
+import type { QuestionContent, SingleChoiceOption } from '../contracts/QuestionContent';
+import {
+  CalloutKind,
+  ContentAlignment,
+  ContentBlockType,
+  parseQuestionTemplateCode,
+  QuestionTemplateCode
+} from '../domain/ContentCodes';
 import { resolveQuestionPresentation } from '../domain/QuestionPresentation';
 import { ImageSourceKind, resolveImageSource } from '@/capabilities/content-rendering/public';
 
@@ -52,13 +58,13 @@ export class ContentSchemaValidator {
     return document && issues.length === 0 ? success(document) : failure({ code: 'content.schema_invalid', issues });
   }
 
-  parseSingleChoiceQuestion(input: unknown): Result<SingleChoiceQuestionContent, ContentValidationFailure> {
+  parseChoiceQuestion(input: unknown): Result<QuestionContent, ContentValidationFailure> {
     const issues: ContentValidationIssue[] = [];
     const record = asRecord(input, '$', issues);
     if (!record) return failure({ code: 'content.schema_invalid', issues });
-    const templateCode = readString(record.templateCode, '$.templateCode', issues);
-    if (templateCode !== QuestionTemplateCode.SingleChoice) {
-      issue(issues, 'question.template_unsupported', '$.templateCode', 'Only single_choice is supported by this schema version');
+    const templateCode = parseQuestionTemplateCode(readString(record.templateCode, '$.templateCode', issues));
+    if (!templateCode) {
+      issue(issues, 'question.template_unsupported', '$.templateCode', 'Unsupported question template');
     }
     const schemaVersion = readString(record.schemaVersion, '$.schemaVersion', issues);
     const capabilityCode = readString(record.capabilityCode, '$.capabilityCode', issues);
@@ -75,28 +81,23 @@ export class ContentSchemaValidator {
       : parseDocument(record.material, '$.material', issues, 0);
     const materialGroupId = readOptionalString(record.materialGroupId, '$.materialGroupId', issues);
     const options = parseOptions(record.options, issues);
-    const correctOptionId = readString(record.correctOptionId, '$.correctOptionId', issues);
-    if (options && correctOptionId && !options.some((option) => option.id === correctOptionId)) {
-      issue(issues, 'question.answer_missing', '$.correctOptionId', 'Correct option must reference one option id');
-    }
-    if (issues.length || !schemaVersion || !capabilityCode || !prompt || !explanation || !options || !correctOptionId) {
+    const answer = templateCode && options ? parseAnswerKey(templateCode, record, options, issues) : undefined;
+    if (issues.length || !templateCode || !schemaVersion || !capabilityCode || !prompt || !explanation || !options || !answer) {
       return failure({ code: 'content.schema_invalid', issues });
     }
-    const normalized = {
-      templateCode: QuestionTemplateCode.SingleChoice,
+    const layout = {
       schemaVersion,
       capabilityCode,
       materialGroupId,
       material,
       prompt,
       options,
-      correctOptionId,
       explanation
     };
-    return success({
-      ...normalized,
-      presentationCode: resolveQuestionPresentation(normalized)
-    });
+    const presentationCode = resolveQuestionPresentation(layout);
+    return success(answer.templateCode === QuestionTemplateCode.SingleChoice
+      ? { ...layout, presentationCode, templateCode: answer.templateCode, correctOptionId: answer.correctOptionId }
+      : { ...layout, presentationCode, templateCode: answer.templateCode, correctOptionIds: answer.correctOptionIds });
   }
 }
 
@@ -389,9 +390,70 @@ function parseRow(
   return row;
 }
 
+type ChoiceAnswerKey =
+  | { readonly templateCode: typeof QuestionTemplateCode.SingleChoice; readonly correctOptionId: string }
+  | {
+    readonly templateCode: typeof QuestionTemplateCode.MultipleChoice | typeof QuestionTemplateCode.IndeterminateChoice;
+    readonly correctOptionIds: readonly string[];
+  };
+
+const MULTIPLE_CHOICE_MINIMUM_ANSWERS = 2;
+
+/**
+ * Answer keys are validated against the question's own options, so a template
+ * can never be committed with an answer that references a missing option.
+ */
+function parseAnswerKey(
+  templateCode: QuestionTemplateCode,
+  record: Record<string, unknown>,
+  options: readonly SingleChoiceOption[],
+  issues: ContentValidationIssue[]
+): ChoiceAnswerKey | undefined {
+  const available = new Set(options.map((option) => option.id));
+  if (templateCode === QuestionTemplateCode.SingleChoice) {
+    const correctOptionId = readString(record.correctOptionId, '$.correctOptionId', issues);
+    if (!correctOptionId) return undefined;
+    if (!available.has(correctOptionId)) {
+      issue(issues, 'question.answer_missing', '$.correctOptionId', 'Correct option must reference one option id');
+      return undefined;
+    }
+    return { templateCode, correctOptionId };
+  }
+
+  const input = record.correctOptionIds;
+  if (!Array.isArray(input) || input.some((item) => typeof item !== 'string')) {
+    issue(issues, 'question.answer_missing', '$.correctOptionIds', 'Multi answer question requires a correctOptionIds array');
+    return undefined;
+  }
+  const correctOptionIds = input as readonly string[];
+  if (new Set(correctOptionIds).size !== correctOptionIds.length) {
+    issue(issues, 'question.answer_duplicate', '$.correctOptionIds', 'Correct option ids must be unique');
+    return undefined;
+  }
+  if (correctOptionIds.some((optionId) => !available.has(optionId))) {
+    issue(issues, 'question.answer_missing', '$.correctOptionIds', 'Correct options must reference existing option ids');
+    return undefined;
+  }
+  const minimum = templateCode === QuestionTemplateCode.MultipleChoice ? MULTIPLE_CHOICE_MINIMUM_ANSWERS : 1;
+  if (correctOptionIds.length < minimum) {
+    issue(
+      issues,
+      'question.answer_insufficient',
+      '$.correctOptionIds',
+      `Template ${templateCode} requires at least ${minimum} correct options`
+    );
+    return undefined;
+  }
+  if (correctOptionIds.length === options.length) {
+    issue(issues, 'question.answer_trivial', '$.correctOptionIds', 'Every option cannot be correct');
+    return undefined;
+  }
+  return { templateCode, correctOptionIds };
+}
+
 function parseOptions(input: unknown, issues: ContentValidationIssue[]): readonly SingleChoiceOption[] | undefined {
   if (!Array.isArray(input) || input.length < 2 || input.length > 8) {
-    issue(issues, 'question.options_invalid', '$.options', 'Single choice question requires between two and eight options');
+    issue(issues, 'question.options_invalid', '$.options', 'Choice question requires between two and eight options');
     return undefined;
   }
   const options = input.map((option, index) => {

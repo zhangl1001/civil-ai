@@ -8,7 +8,7 @@ export interface SubmitPracticeBundleCommand {
   readonly learningThreadId: string;
   readonly submissionScope: string;
   readonly startedAt: number;
-  readonly answers: Readonly<Record<string, string>>;
+  readonly answers: Readonly<Record<string, readonly string[]>>;
   readonly elapsedByQuestion: Readonly<Record<string, number>>;
   readonly answerChanges: Readonly<Record<string, number>>;
   readonly assessmentRoleOverride?: AssessmentRole;
@@ -30,7 +30,7 @@ export function submitPracticeBundle(command: SubmitPracticeBundleCommand) {
     elapsedMs: Date.now() - command.startedAt,
     answers: command.bundle.questions.map((item) => ({
       questionId: item.id,
-      optionId: command.answers[item.id],
+      optionIds: command.answers[item.id] ?? [],
       elapsedMs: command.elapsedByQuestion[item.id],
       answerChangeCount: command.answerChanges[item.id] || 0
     }))

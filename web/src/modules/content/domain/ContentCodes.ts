@@ -39,10 +39,24 @@ export const ContentAlignment = {
 export type ContentAlignment = typeof ContentAlignment[keyof typeof ContentAlignment];
 
 export const QuestionTemplateCode = {
-  SingleChoice: 'single_choice'
+  SingleChoice: 'single_choice',
+  /** Two or more correct options, stated up front. */
+  MultipleChoice: 'multiple_choice',
+  /** Number of correct options is not disclosed; one correct option is valid. */
+  IndeterminateChoice: 'indeterminate_choice'
 } as const;
 
 export type QuestionTemplateCode = typeof QuestionTemplateCode[keyof typeof QuestionTemplateCode];
+
+const QUESTION_TEMPLATE_CODES: readonly string[] = Object.values(QuestionTemplateCode);
+
+export function isQuestionTemplateCode(value: unknown): value is QuestionTemplateCode {
+  return typeof value === 'string' && QUESTION_TEMPLATE_CODES.includes(value);
+}
+
+export function parseQuestionTemplateCode(value: unknown): QuestionTemplateCode | undefined {
+  return isQuestionTemplateCode(value) ? value : undefined;
+}
 
 export const QuestionPresentationCode = {
   StandardChoice: 'standard_choice',

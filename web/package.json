@@ -10,6 +10,8 @@
     "check:data-maintenance": "node ../scripts/verify-data-maintenance.mjs",
     "check:architecture": "node ../scripts/check-architecture.mjs",
     "check:metadata": "node ../scripts/verify-curriculum-fixtures.mjs",
+    "check:exam-subjects": "node ../scripts/verify-exam-subjects.mjs",
+    "check:choice-grading": "node ../scripts/verify-choice-grading.mjs",
     "check:content-schema": "node ../scripts/verify-content-schema.mjs",
     "check:content-quality-benchmark": "node ../scripts/verify-content-quality-benchmark.mjs",
     "check:content-metadata": "node ../scripts/verify-content-metadata.mjs",
@@ -40,7 +42,7 @@
     "check:ability-calibration": "node ../scripts/verify-ability-calibration.mjs",
     "check:interview-training": "node ../scripts/verify-interview-training.mjs",
     "typecheck": "vue-tsc",
-    "build": "npm run check:code-quality && npm run check:release-security && npm run check:architecture && npm run check:sqlite-migrations && npm run check:data-maintenance && npm run check:metadata && npm run check:content-metadata && npm run check:content-schema && npm run check:content-quality-benchmark && npm run check:prompt-compiler && npm run check:provider-gateway && npm run check:web-research && npm run check:document-input && npm run check:generation-workflow && npm run check:generation-diversity && npm run check:generation-foundation && npm run check:content-enrichment && npm run check:question-source-foundation && npm run check:question-import-workflow && npm run check:true-question-practice && npm run check:question-set-retirement && npm run check:true-question-reference-pack && npm run check:study-lecture-library && npm run check:essay-question-sets && npm run check:proactive-tutor-loop && npm run check:learning-evidence && npm run check:learning-reliability && npm run check:ios-lifecycle-recovery && npm run check:agent-runtime && npm run check:agent-loop && npm run check:pi-agent-runtime && npm run check:chat-context && npm run check:mastery-policy && npm run check:ability-calibration && npm run check:interview-training && npm run typecheck && vite build",
+    "build": "npm run check:code-quality && npm run check:release-security && npm run check:architecture && npm run check:sqlite-migrations && npm run check:data-maintenance && npm run check:metadata && npm run check:exam-subjects && npm run check:content-metadata && npm run check:content-schema && npm run check:choice-grading && npm run check:content-quality-benchmark && npm run check:prompt-compiler && npm run check:provider-gateway && npm run check:web-research && npm run check:document-input && npm run check:generation-workflow && npm run check:generation-diversity && npm run check:generation-foundation && npm run check:content-enrichment && npm run check:question-source-foundation && npm run check:question-import-workflow && npm run check:true-question-practice && npm run check:question-set-retirement && npm run check:true-question-reference-pack && npm run check:study-lecture-library && npm run check:essay-question-sets && npm run check:proactive-tutor-loop && npm run check:learning-evidence && npm run check:learning-reliability && npm run check:ios-lifecycle-recovery && npm run check:agent-runtime && npm run check:agent-loop && npm run check:pi-agent-runtime && npm run check:chat-context && npm run check:mastery-policy && npm run check:ability-calibration && npm run check:interview-training && npm run typecheck && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

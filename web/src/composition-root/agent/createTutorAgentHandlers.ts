@@ -23,7 +23,7 @@ import {
   type RunStructuredObjectiveGenerationWorkflow,
   type ScanQuestionImportDraft
 } from '@/modules/content/public';
-import type { CurriculumRepository } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, type CurriculumRepository } from '@/modules/curriculum/public';
 import type {
   ErrorDiagnosisRepository,
   RecordSubjectiveAssessment,
@@ -525,7 +525,7 @@ function completedNavigation(
     if (intent === 'study' && assetId) {
       return { route: '/vue/study/lecture', params: { ...fallbackParams, assetId } };
     }
-    if (intent === 'mock' && assetId && result.subject === '行测') {
+    if (intent === 'mock' && assetId && result.deliveryKind === ExamDeliveryKind.Objective) {
       return { route: '/vue/practice/objective-session', params: { ...fallbackParams, manifestId: assetId } };
     }
     return {

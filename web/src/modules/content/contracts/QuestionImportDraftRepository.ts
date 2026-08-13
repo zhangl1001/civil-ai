@@ -11,7 +11,7 @@ import type {
   QuestionSetId,
   QuestionSourceId
 } from '@/kernel/public';
-import type { SingleChoiceQuestionContent } from './QuestionContent';
+import type { QuestionContent } from './QuestionContent';
 import type {
   QuestionImportCandidateStatus,
   QuestionImportDraftStatus,
@@ -45,7 +45,7 @@ export interface QuestionImportCandidateRecord {
   readonly draftId: QuestionImportDraftId;
   readonly sequence: number;
   readonly raw: JsonObject;
-  readonly content?: SingleChoiceQuestionContent;
+  readonly content?: QuestionContent;
   readonly contentHash?: string;
   readonly difficulty: number;
   readonly status: QuestionImportCandidateStatus;

@@ -1,6 +1,6 @@
 import { canonicalJson, type JsonObject } from '@/kernel/public';
 import type { ContentDocument } from '../contracts/ContentDocument';
-import type { SingleChoiceQuestionContent } from '../contracts/QuestionContent';
+import type { QuestionContent } from '../contracts/QuestionContent';
 import { contentBlockText, contentDocumentText } from '../domain/ContentDocumentText';
 import { QuestionPresentationCode } from '../domain/ContentCodes';
 import {
@@ -141,10 +141,10 @@ function isAcceptablePartialCount(
 }
 
 function validateMaterialGroups(
-  questions: readonly SingleChoiceQuestionContent[],
+  questions: readonly QuestionContent[],
   issues: ContentQualityIssue[]
 ): void {
-  const groups = new Map<string, Array<{ question: SingleChoiceQuestionContent; index: number }>>();
+  const groups = new Map<string, Array<{ question: QuestionContent; index: number }>>();
   questions.forEach((question, index) => {
     if (!question.materialGroupId) return;
     const current = groups.get(question.materialGroupId) ?? [];
@@ -181,7 +181,7 @@ function validateMaterialGroups(
 }
 
 function validateQuestion(
-  question: SingleChoiceQuestionContent,
+  question: QuestionContent,
   index: number,
   issues: ContentQualityIssue[],
   fingerprints: Set<string>,

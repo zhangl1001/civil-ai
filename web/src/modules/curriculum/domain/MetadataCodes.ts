@@ -46,3 +46,38 @@ export const AssessmentPolicyStatus = {
 } as const;
 
 export type AssessmentPolicyStatus = typeof AssessmentPolicyStatus[keyof typeof AssessmentPolicyStatus];
+
+/**
+ * Policy types are evolvable metadata, so the contract keeps `policyType` open.
+ * These constants only name the types this codebase resolves, so call sites do
+ * not repeat raw strings.
+ */
+export const AssessmentPolicyType = {
+  Mastery: 'mastery',
+  GradingRubric: 'grading_rubric',
+  ExamDelivery: 'exam_delivery'
+} as const;
+
+export type AssessmentPolicyType = typeof AssessmentPolicyType[keyof typeof AssessmentPolicyType];
+
+/**
+ * How a subject is answered and graded. Objective subjects have a deterministic
+ * answer key; subjective subjects are graded against a rubric. Exam flows branch
+ * on this instead of on a subject name, so a new exam pack only ships metadata.
+ */
+export const ExamDeliveryKind = {
+  Objective: 'objective',
+  Subjective: 'subjective'
+} as const;
+
+export type ExamDeliveryKind = typeof ExamDeliveryKind[keyof typeof ExamDeliveryKind];
+
+const EXAM_DELIVERY_KINDS: readonly string[] = Object.values(ExamDeliveryKind);
+
+export function isExamDeliveryKind(value: unknown): value is ExamDeliveryKind {
+  return typeof value === 'string' && EXAM_DELIVERY_KINDS.includes(value);
+}
+
+export function parseExamDeliveryKind(value: unknown): ExamDeliveryKind | undefined {
+  return isExamDeliveryKind(value) ? value : undefined;
+}

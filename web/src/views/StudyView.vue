@@ -35,25 +35,27 @@
       />
       <template v-else-if="lectureContent">
         <LectureContent :markdown="lectureContent" surface />
-        <button
-          v-if="!lectureCompleted"
-          type="button"
-          class="complete-learning-button"
-          :disabled="isCompleting"
-          @click="completeLecture"
-        >
-          <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成本节' }}
-        </button>
-        <p v-else class="completion-notice"><CheckCircle2Icon />本节已完成，下一步请用练习验证掌握</p>
-        <button
-          v-if="loadedTopic"
-          type="button"
-          class="regenerate-lecture-button"
-          :disabled="isDispatching"
-          @click="regenerateLecture"
-        >
-          <RefreshCwIcon />{{ isDispatching ? '正在重新生成' : '换一版讲义' }}
-        </button>
+        <div class="lecture-action-row">
+          <button
+            v-if="!lectureCompleted"
+            type="button"
+            class="complete-learning-button"
+            :disabled="isCompleting"
+            @click="completeLecture"
+          >
+            <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成讲义' }}
+          </button>
+          <p v-else class="completion-notice"><CheckCircle2Icon />本节已完成</p>
+          <button
+            v-if="loadedTopic"
+            type="button"
+            class="regenerate-lecture-button"
+            :disabled="isDispatching"
+            @click="regenerateLecture"
+          >
+            <RefreshCwIcon />{{ isDispatching ? '正在重新生成' : '换一版讲义' }}
+          </button>
+        </div>
       </template>
       <template v-else-if="dashboard">
         <section class="study-hero app-card">
@@ -443,10 +445,11 @@ async function learnQuery() {
 .tree-group div { display:flex; flex-wrap:wrap; gap:7px; }
 .tree-group button { max-width:100%; min-height:31px; padding:0 10px; border:0; border-radius:9px; background:rgba(var(--color-ink-rgb), .06); color:var(--text-color); font-size: var(--type-size-caption); font-weight: var(--type-weight-semibold); font-family: inherit; }
 .tree-group span { display:inline-flex; align-items:center; justify-content:center; min-width:15px; height:15px; margin-left:4px; padding:0 4px; border-radius:8px; background:#dc2626; color:#fff; font-size: var(--type-size-micro); }
-.complete-learning-button { align-self:center; min-height:40px; border:0; border-radius:20px; padding:0 18px; display:inline-flex; align-items:center; gap:7px; background:rgba(var(--color-brand-rgb),.13); color:var(--primary-color); font:inherit; font-size:var(--type-size-secondary); font-weight:var(--type-weight-semibold); }
+.lecture-action-row { display:flex; align-items:center; justify-content:center; gap:8px; padding:2px 6px 6px; }
+.complete-learning-button { min-width:0; min-height:40px; border:0; border-radius:20px; padding:0 18px; display:inline-flex; align-items:center; justify-content:center; gap:7px; background:rgba(var(--color-brand-rgb),.12); color:var(--primary-color); font:inherit; font-size:var(--type-size-secondary); font-weight:var(--type-weight-semibold); }
 .complete-learning-button svg,.completion-notice svg,.regenerate-lecture-button svg { width:16px; height:16px; }
-/* Secondary to 完成本节: regenerating is the deliberate exception, not the default. */
-.regenerate-lecture-button { align-self:center; min-height:36px; border:0; border-radius:18px; padding:0 14px; display:inline-flex; align-items:center; gap:6px; background:transparent; color:var(--text-secondary-color); font:inherit; font-size:var(--type-size-caption); }
+/* Regeneration remains available without competing with the completion action. */
+.regenerate-lecture-button { min-height:36px; border:0; border-radius:18px; padding:0 12px; display:inline-flex; align-items:center; justify-content:center; gap:5px; background:rgba(var(--color-ink-rgb),.035); color:rgba(var(--color-ink-rgb),.52); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-medium); }
 .regenerate-lecture-button:disabled { opacity:.55; }
-.completion-notice { margin:0; display:flex; align-items:center; justify-content:center; gap:7px; color:var(--primary-color); font-size:var(--type-size-caption); }
+.completion-notice { min-height:40px; margin:0; padding:0 10px; display:flex; align-items:center; justify-content:center; gap:6px; color:var(--primary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 </style>

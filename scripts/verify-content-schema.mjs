@@ -24,12 +24,12 @@ try {
   const fixture = JSON.parse(await fs.readFile(fixturePath, 'utf8'));
   const validator = new content.ContentSchemaValidator();
 
-  const valid = validator.parseSingleChoiceQuestion(fixture);
+  const valid = validator.parseChoiceQuestion(fixture);
   assert.equal(valid.ok, true);
   assert.equal(valid.value.options.length, 4);
   assert.equal(valid.value.correctOptionId, 'B');
   assert.equal(valid.value.explanation.blocks[0].type, content.ContentBlockType.Callout);
-  const nullableOptionalFields = validator.parseSingleChoiceQuestion({
+  const nullableOptionalFields = validator.parseChoiceQuestion({
     ...fixture,
     material: null,
     explanation: {
@@ -41,16 +41,71 @@ try {
   assert.equal(nullableOptionalFields.value.material, undefined);
   assert.equal(nullableOptionalFields.value.explanation.blocks[0].title, undefined);
 
-  const wrongAnswer = validator.parseSingleChoiceQuestion({ ...fixture, correctOptionId: 'E' });
+  const wrongAnswer = validator.parseChoiceQuestion({ ...fixture, correctOptionId: 'E' });
   assert.equal(wrongAnswer.ok, false);
   assert(wrongAnswer.error.issues.some((issue) => issue.code === 'question.answer_missing'));
 
-  const duplicateOptions = validator.parseSingleChoiceQuestion({
+  const duplicateOptions = validator.parseChoiceQuestion({
     ...fixture,
     options: fixture.options.map((option, index) => ({ ...option, id: index < 2 ? 'A' : option.id }))
   });
   assert.equal(duplicateOptions.ok, false);
   assert(duplicateOptions.error.issues.some((issue) => issue.code === 'question.option_id_duplicate'));
+
+  // --- multi answer templates -------------------------------------------------
+  const { correctOptionId: _singleAnswer, ...sharedShape } = fixture;
+  const multiAnswerFixture = {
+    ...sharedShape,
+    templateCode: content.QuestionTemplateCode.MultipleChoice,
+    correctOptionIds: ['A', 'C']
+  };
+
+  const multiAnswer = validator.parseChoiceQuestion(multiAnswerFixture);
+  assert.equal(multiAnswer.ok, true);
+  assert.equal(multiAnswer.value.templateCode, content.QuestionTemplateCode.MultipleChoice);
+  assert.deepEqual([...multiAnswer.value.correctOptionIds], ['A', 'C']);
+  assert.equal(content.isMultiAnswerChoice(multiAnswer.value), true);
+  assert.equal(content.correctAnswerLabel(multiAnswer.value), 'AC');
+  // Answer keys read back in option order regardless of how they were written.
+  const unorderedKey = validator.parseChoiceQuestion({ ...multiAnswerFixture, correctOptionIds: ['C', 'A'] });
+  assert.equal(content.correctAnswerLabel(unorderedKey.value), 'AC');
+
+  const singleChoiceStaysSingle = validator.parseChoiceQuestion(fixture);
+  assert.equal(content.isSingleChoice(singleChoiceStaysSingle.value), true);
+  assert.deepEqual([...content.correctOptionIdsOf(singleChoiceStaysSingle.value)], ['B']);
+
+  const indeterminate = validator.parseChoiceQuestion({
+    ...sharedShape,
+    templateCode: content.QuestionTemplateCode.IndeterminateChoice,
+    correctOptionIds: ['B']
+  });
+  // 不定项 may have exactly one correct option; 多选 may not.
+  assert.equal(indeterminate.ok, true);
+  const tooFewForMultiple = validator.parseChoiceQuestion({ ...multiAnswerFixture, correctOptionIds: ['B'] });
+  assert.equal(tooFewForMultiple.ok, false);
+  assert(tooFewForMultiple.error.issues.some((issue) => issue.code === 'question.answer_insufficient'));
+
+  const everyOptionCorrect = validator.parseChoiceQuestion({
+    ...multiAnswerFixture,
+    correctOptionIds: fixture.options.map((option) => option.id)
+  });
+  assert.equal(everyOptionCorrect.ok, false);
+  assert(everyOptionCorrect.error.issues.some((issue) => issue.code === 'question.answer_trivial'));
+
+  const unknownAnswerOption = validator.parseChoiceQuestion({ ...multiAnswerFixture, correctOptionIds: ['A', 'Z'] });
+  assert.equal(unknownAnswerOption.ok, false);
+  assert(unknownAnswerOption.error.issues.some((issue) => issue.code === 'question.answer_missing'));
+
+  const duplicateAnswerIds = validator.parseChoiceQuestion({ ...multiAnswerFixture, correctOptionIds: ['A', 'A'] });
+  assert.equal(duplicateAnswerIds.ok, false);
+  assert(duplicateAnswerIds.error.issues.some((issue) => issue.code === 'question.answer_duplicate'));
+
+  const missingAnswerArray = validator.parseChoiceQuestion({ ...sharedShape, templateCode: content.QuestionTemplateCode.MultipleChoice });
+  assert.equal(missingAnswerArray.ok, false);
+
+  const unknownTemplate = validator.parseChoiceQuestion({ ...fixture, templateCode: 'true_false' });
+  assert.equal(unknownTemplate.ok, false);
+  assert(unknownTemplate.error.issues.some((issue) => issue.code === 'question.template_unsupported'));
 
   const objectAsMarkdown = validator.parseDocument({
     schemaVersion: 'content.v1',

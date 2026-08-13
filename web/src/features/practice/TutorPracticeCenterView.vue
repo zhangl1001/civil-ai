@@ -285,6 +285,7 @@ import { usePracticeQuestionSetPagination, type PracticeCenterMode } from './use
 import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteria';
 import { usePracticeModeSwipe } from './PracticeModeSwipe';
 import { practiceModeCopy } from './PracticeModePresentation';
+import { usePracticeSelfAutoStart } from './usePracticeSelfAutoStart';
 import PracticeSubjectSwitcher from './PracticeSubjectSwitcher.vue';
 import PracticeSubjectMark from './PracticeSubjectMark.vue';
 import EssayPracticeCenterPanel from './EssayPracticeCenterPanel.vue';
@@ -416,6 +417,18 @@ const trueQuestionFilterSummary = computed(() => {
   ].filter(Boolean);
   return filters.length ? filters.join(' · ') : `全部来源 · ${trueQuestionFacets.value.length}套`;
 });
+const { tryStart: autoStartRequestedSelfPractice } = usePracticeSelfAutoStart({
+  route,
+  router,
+  loading,
+  start: async ({ count }) => {
+    activeSubject.value = PracticeSubject.Aptitude;
+    activeMode.value = QuestionSetEntryMode.Self;
+    customCount.value = count;
+    initializeCustomSelection();
+    await generateCustom();
+  }
+});
 onMounted(async () => {
   await load();
   await loadResearchDraftFromRoute();
@@ -424,6 +437,7 @@ onMounted(async () => {
     && route.query.mode === 'tutor'
     && route.query.start
   ) await startTutorPractice();
+  await autoStartRequestedSelfPractice();
   pollTimer = window.setInterval(() => void refreshTasks(), 1200);
 });
 
@@ -483,6 +497,8 @@ function initializeCustomSelection() {
   customModule.value = requested.module;
   customQuestionTypeId.value = questionTypeIdFor(requested);
   customCapabilityId.value = requested.id;
+  const requestedCount = Number(route.query.count);
+  if ([5, 10, 15, 20, 25].includes(requestedCount)) customCount.value = requestedCount;
 }
 
 function restoreTasks(activeRuns: readonly AgentRunView[]) {

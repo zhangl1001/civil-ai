@@ -50,7 +50,7 @@
       <QuestionContentTemplate :key="`${question.id}:${question.contentVersion}`"
         :question="question.content"
         :presentation="questionPresentation"
-        :selected-option-id="answers[question.id]"
+        :selected-option-ids="answers[question.id]"
         :reveal-result="submitted"
         :readonly-mode="submitted || submissionPersisted"
         :disabled="submitting || submissionPersisted"
@@ -98,7 +98,7 @@
     <main v-else class="app-page-scroll session-scroll session-loading" aria-busy="true"><div class="session-loading-block" aria-hidden="true"></div><p class="session-loading-label">{{ error || '正在读取题目...' }}</p></main>
     <footer v-if="bundle && activeTab === 'questions' && (!isSharedMaterialQuestion || index === bundle.questions.length - 1)" class="session-actions">
       <button v-if="!isSharedMaterialQuestion" :disabled="submitting || index === 0" @click="changeQuestion(index - 1)">上一题</button>
-      <button v-if="!isSharedMaterialQuestion && index < bundle.questions.length - 1" :disabled="submitting || (!submitted && !answers[question?.id || ''])" @click="changeQuestion(index + 1)">下一题</button>
+      <button v-if="!isSharedMaterialQuestion && index < bundle.questions.length - 1" :disabled="submitting || (!submitted && !answers[question?.id || '']?.length)" @click="changeQuestion(index + 1)">下一题</button>
       <button v-else-if="submitted" @click="showAnswerCard = true">查看答题卡</button>
       <button v-else :disabled="submitting" @click="requestSubmit">
         {{ submitting ? submissionProgressText : submissionPersisted ? '继续整理解析' : '交卷' }}
@@ -155,13 +155,14 @@ import { agentWorkerCoordinator, initializeTutorRuntime } from '@/composition-ro
 import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evidence/ObjectiveSubmissionRecoveryCoordinator';
 import { practiceModuleLabel } from '@/domain/labels';
 import type { AssessmentRole } from '@/kernel/public';
-import { contentDocumentText, hasCompleteExplanation, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
-import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
+import { correctOptionIdsOf, hasCompleteExplanation, isMultiAnswerChoice, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
+import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, submittedOptionIds, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
 import { useAIChatStore } from '@/stores/aiChat';
 import { PracticeSessionFeature } from './PracticeSessionFeature';
 import { PracticeSessionDraftService, type PracticeSessionDraftIdentity } from './PracticeSessionDraftService';
 import { resolveQuestionSwipe } from './QuestionSwipeNavigation';
 import { submitPracticeBundle } from './SubmitPracticeBundle';
+import { practiceQuestionChatContext } from './PracticeQuestionChatContext';
 import { usePracticeContentCompletion } from './usePracticeContentCompletion';
 const route = useRoute();
 const chat = useAIChatStore();
@@ -171,7 +172,7 @@ const manifestSections = ref<Array<{
   learningThreadId: string;
   module: string;
 }>>([]);
-const error = ref(''); const index = ref(0); const answers = ref<Record<string, string>>({});
+const error = ref(''); const index = ref(0); const answers = ref<Record<string, readonly string[]>>({});
 const activeTab = ref<'lecture' | 'questions'>('questions');
 const submitted = ref(false); const submitting = ref(false); const showAnswerCard = ref(false); const showSubmitConfirm = ref(false);
 const diagnosing = ref(false); const review = ref<ObjectiveSessionReview>();
@@ -249,7 +250,7 @@ const materialGroupSize = computed(() => materialGroupQuestions.value.length);
 const materialGroupPosition = computed(() => (
   Math.max(0, materialGroupQuestions.value.findIndex((item) => item.id === question.value?.id)) + 1
 ));
-const answeredCount = computed(() => bundle.value?.questions.filter((item) => !!answers.value[item.id]).length ?? 0);
+const answeredCount = computed(() => bundle.value?.questions.filter((item) => answers.value[item.id]?.length).length ?? 0);
 const unansweredCount = computed(() => (bundle.value?.questions.length ?? 0) - answeredCount.value);
 const causeOptions = Object.entries(errorCauseLabel)
   .filter(([code]) => code !== ErrorCauseCode.Unknown)
@@ -258,7 +259,7 @@ const causeOptions = Object.entries(errorCauseLabel)
 const cardQuestions = computed<AnswerCardQuestionItem[]>(() =>
   (bundle.value?.questions || []).map((item) => ({
     id: item.id,
-    correctOptionId: item.content.correctOptionId
+    correctOptionIds: correctOptionIdsOf(item.content)
   }))
 );
 const submissionProgressText = computed(() => contentCompleting.value ? '正在整理解析...' : '提交中...');
@@ -302,8 +303,8 @@ async function load() {
       : new Set([value.questionSet.id]);
     if (loaded.previousReviews.length) {
       answers.value = Object.fromEntries(loaded.previousReviews.flatMap((previous) => previous.items).flatMap(({ attempt }) => {
-        const optionId = typeof attempt.answer.optionId === 'string' ? attempt.answer.optionId : '';
-        return optionId ? [[attempt.questionId, optionId]] : [];
+        const optionIds = submittedOptionIds(attempt.answer);
+        return optionIds.length ? [[attempt.questionId, optionIds]] : [];
       }));
       const previousAttempts = loaded.previousReviews.flatMap((previous) => previous.items.map((item) => item.attempt));
       elapsedByQuestion.value = Object.fromEntries(previousAttempts.map((attempt) => [attempt.questionId, attempt.elapsedMs || 0]));
@@ -345,16 +346,26 @@ async function load() {
   }
 }
 function selectOption(optionId: string) {
-  if (!question.value || submitted.value || submitting.value || submissionPersisted.value) return;
-  const questionId = question.value.id;
-  const previous = answers.value[questionId];
-  if (previous && previous !== optionId) answerChanges.value[questionId] = (answerChanges.value[questionId] || 0) + 1;
+  const current = question.value;
+  if (!current || submitted.value || submitting.value || submissionPersisted.value) return;
+  const questionId = current.id;
+  const previous = answers.value[questionId] ?? [];
+  const multiAnswer = isMultiAnswerChoice(current.content);
+  const next = multiAnswer
+    ? (previous.includes(optionId) ? previous.filter((item) => item !== optionId) : [...previous, optionId])
+    : [optionId];
+  if (previous.length && (previous.length !== next.length || previous.some((item) => !next.includes(item)))) {
+    answerChanges.value[questionId] = (answerChanges.value[questionId] || 0) + 1;
+  }
   if (elapsedByQuestion.value[questionId] === undefined) {
     elapsedByQuestion.value[questionId] = Math.max(0, Date.now() - questionStartedAt);
   }
-  answers.value[questionId] = optionId;
+  answers.value[questionId] = next;
   scheduleDraftSave();
   if (autoAdvanceTimer) window.clearTimeout(autoAdvanceTimer);
+  // Multi-answer questions must not auto-advance: the first tap is rarely the
+  // whole answer, so the learner moves on explicitly.
+  if (multiAnswer) return;
   if (index.value < (bundle.value?.questions.length ?? 1) - 1) {
     const expectedQuestionId = questionId;
     autoAdvanceTimer = window.setTimeout(() => {
@@ -497,7 +508,6 @@ async function persistDraft(existingRuntime?: Awaited<ReturnType<typeof initiali
   try {
     const runtime = existingRuntime ?? await initializeTutorRuntime();
     await draftService.save(runtime, draftIdentity(), {
-      version: 1,
       answers: answers.value,
       elapsedByQuestion: elapsedByQuestion.value,
       answerChanges: answerChanges.value,
@@ -603,33 +613,14 @@ async function askAIAboutCurrentQuestion() {
   askingAi.value = true;
   try {
     const diagnosis = effectiveDiagnosisFor(current.id);
-    const selectedOptionId = answers.value[current.id] || '未作答';
-    const material = current.content.material ? contentDocumentText(current.content.material) : '';
-    const prompt = contentDocumentText(current.content.prompt);
-    const options = current.content.options.map((option) => (
-      `${option.id}. ${contentDocumentText(option.content)}`
-    )).join('\n');
     const title = capabilityName.value || practiceCategory.value || '错题讲解';
-    const context = [
-      '我想针对当前题目进行一次深度学习。请把它当作我的个人错题辅导，不要只复述答案。',
-      '',
-      '## 当前学习上下文',
-      `- 模块：${moduleLabel(bundle.value?.questionSet.module || '')}`,
-      `- 知识点：${capabilityName.value || '请根据题目识别'}`,
-      `- 我的答案：${selectedOptionId}`,
-      `- 正确答案：${current.content.correctOptionId}`,
-      diagnosis ? `- 已有错因：${errorCauseLabel[diagnosis.causeCode]}，${diagnosis.detail}` : '- 已有错因：尚未形成',
-      material ? `\n### 共用材料\n${material}` : '',
-      `\n### 题干\n${prompt}`,
-      `\n### 选项\n${options}`,
-      '',
-      '## 辅导要求',
-      '1. 先指出本题考查的细分知识点和必要的前置知识。',
-      '2. 按步骤还原正确推理链，并逐项比较干扰项。',
-      '3. 结合我的答案和错因，指出我的思考在哪一步偏离。',
-      '4. 总结一个可迁移的方法和易错提醒。',
-      '5. 最后用一个简短追问检查我是否真正理解；不要输出内部思考过程。'
-    ].filter(Boolean).join('\n');
+    const context = practiceQuestionChatContext({
+      content: current.content,
+      moduleLabel: moduleLabel(bundle.value?.questionSet.module || ''),
+      capabilityName: capabilityName.value,
+      selectedOptionIds: answers.value[current.id] ?? [],
+      diagnosisText: diagnosis ? `${errorCauseLabel[diagnosis.causeCode]}，${diagnosis.detail}` : undefined
+    });
     await chat.init();
     await chat.newSession(`${title} · 深度学习`);
     await chat.open(context);

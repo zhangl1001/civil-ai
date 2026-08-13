@@ -3,10 +3,13 @@ import type {
   AgentRunId, CapabilityNodeId, Clock, IdGenerator, InstantMs, JsonObject, LearningSessionId, LearningThreadId, QuestionSetId, ReviewQueueItemId
 } from '@/kernel/public';
 import {
+  correctOptionIdsOf,
   QuestionSetPracticeStatus,
   type ContentRepository,
   type QuestionRecord
 } from '@/modules/content/public';
+import { choiceAttemptAnswer } from '../domain/ChoiceAttemptAnswer';
+import { CHOICE_GRADER_VERSION, gradeChoiceAnswer } from '../domain/ChoiceGradingPolicy';
 import type { OutboxRepository } from '@/modules/task/public';
 import type { LearningThreadRecord, LearningThreadRepository } from '@/modules/teaching/public';
 import type {
@@ -35,7 +38,8 @@ import { objectiveEvidencePolicyV2 } from '../domain/ObjectiveEvidencePolicy';
 
 export interface ObjectiveAnswerInput {
   readonly questionId: string;
-  readonly optionId?: string;
+  /** Selected options. Empty or omitted means the question was left unanswered. */
+  readonly optionIds?: readonly string[];
   readonly elapsedMs?: number;
   readonly confidence?: number;
   readonly hintLevel?: number;
@@ -195,11 +199,10 @@ export class SubmitObjectiveSession {
     const attempts = questions.map((question) => {
       const answer = answerByQuestionId.get(question.id)!;
       const hintLevel = answer.hintLevel ?? 0;
-      const selectedOptionId = answer.optionId?.trim() || undefined;
-      const correctOptionId = correctOptionIdOf(question);
-      const result = selectedOptionId === undefined
-        ? AttemptResult.Unanswered
-        : selectedOptionId === correctOptionId ? AttemptResult.Correct : AttemptResult.Incorrect;
+      const selectedOptionIds = selectedOptionIdsOf(answer, question);
+      const correctOptionIds = correctOptionIdsOf(question.content);
+      const grade = gradeChoiceAnswer(question.content.templateCode, correctOptionIds, selectedOptionIds);
+      const result = grade.result;
       const attemptId = this.ids.next('AttemptId');
       return {
         question,
@@ -212,9 +215,9 @@ export class SubmitObjectiveSession {
           learningThreadId: thread.id,
           assessmentRole,
           questionContentVersion: question.contentVersion,
-          answer: { optionId: selectedOptionId ?? null },
+          answer: choiceAttemptAnswer(selectedOptionIds),
           result,
-          score: result === AttemptResult.Correct ? 1 : 0,
+          score: grade.score,
           elapsedMs: answer.elapsedMs,
           confidence: answer.confidence,
           hintLevel,
@@ -223,7 +226,8 @@ export class SubmitObjectiveSession {
           idempotencyKey: `${command.idempotencyKey}:attempt:${question.id}`
         },
         answer,
-        correctOptionId,
+        selectedOptionIds,
+        correctOptionIds,
         result
       };
     });
@@ -263,12 +267,12 @@ export class SubmitObjectiveSession {
       id: this.ids.next('GradingResultId'),
       attemptId: item.attempt.id,
       gradingMethod: GradingMethod.Deterministic,
-      graderVersion: 'objective-single-choice:v1',
+      graderVersion: CHOICE_GRADER_VERSION,
       result: item.result,
       score: item.attempt.score,
       normalizedFeedback: {
-        selectedOptionId: item.answer.optionId ?? null,
-        correctOptionId: item.correctOptionId,
+        selectedOptionIds: [...item.selectedOptionIds],
+        correctOptionIds: [...item.correctOptionIds],
         result: item.result
       },
       confidence: 1,
@@ -501,12 +505,14 @@ function speedScore(elapsedMs: number, targetMs: number): number {
   return Math.round(Math.max(0, 1 - (elapsedMs - targetMs) / (targetMs * 1.5)) * 10_000) / 10_000;
 }
 
-function correctOptionIdOf(question: QuestionRecord): string {
-  const value = question.correctAnswer.optionId;
-  if (typeof value !== 'string' || !question.content.options.some((option) => option.id === value)) {
-    throw new Error(`Question has invalid single-choice answer contract: ${question.id}`);
-  }
-  return value;
+/**
+ * Selections are re-checked against the question's own options: a stale draft or
+ * a regenerated question must never grade against an option that no longer exists.
+ */
+function selectedOptionIdsOf(answer: ObjectiveAnswerInput, question: QuestionRecord): readonly string[] {
+  const available = new Set(question.content.options.map((option) => option.id));
+  const selected = (answer.optionIds ?? []).map((optionId) => optionId.trim()).filter((optionId) => available.has(optionId));
+  return [...new Set(selected)];
 }
 
 function sessionTypeFor(role: AssessmentRole): typeof LearningSessionType[keyof typeof LearningSessionType] {
