@@ -17,7 +17,7 @@ export class EnsurePromptBundle {
   ) {}
 
   async execute(bundle: PromptBundle): Promise<PromptBundleEnsureStatus> {
-    const existing = await this.repository.find(bundle.promptCode, bundle.version);
+    const existing = await this.repository.find(bundle.examType, bundle.promptCode, bundle.version);
     if (existing) {
       return samePrompt(existing, bundle)
         ? PromptBundleEnsureStatus.Unchanged
@@ -27,7 +27,7 @@ export class EnsurePromptBundle {
       await this.unitOfWork.run((context) => this.repository.install(bundle, context));
       return PromptBundleEnsureStatus.Installed;
     } catch (error) {
-      const concurrentInstall = await this.repository.find(bundle.promptCode, bundle.version);
+      const concurrentInstall = await this.repository.find(bundle.examType, bundle.promptCode, bundle.version);
       if (!concurrentInstall) throw error;
       return samePrompt(concurrentInstall, bundle)
         ? PromptBundleEnsureStatus.Unchanged
@@ -42,6 +42,7 @@ function samePrompt(installed: PromptBundle, bundled: PromptBundle): boolean {
 
 function reportConflict(installed: PromptBundle, bundled: PromptBundle): PromptBundleEnsureStatus {
   console.warn('[PromptMetadata] bundled prompt version conflicts with installed metadata', {
+    examType: bundled.examType,
     promptCode: bundled.promptCode,
     version: bundled.version,
     bundledContentHash: bundled.contentHash,

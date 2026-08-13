@@ -18,6 +18,7 @@ export {
 } from './contracts/ProviderGateway';
 export {
   PromptSectionCode,
+  SHARED_PROMPT_EXAM_TYPE,
   type CompiledPrompt,
   type PromptBundle,
   type PromptSection,
@@ -37,7 +38,7 @@ export { errorDiagnosisPromptV1 } from './fixtures/errorDiagnosisPromptV1';
 export { errorDiagnosisBatchPromptV1 } from './fixtures/errorDiagnosisBatchPromptV1';
 export {
   BusinessTutorPromptCode,
-  businessTutorPromptCatalog
+  createBusinessTutorPromptCatalog
 } from './fixtures/businessTutorPromptCatalog';
 export type { PromptRepository } from './contracts/PromptRepository';
 export {

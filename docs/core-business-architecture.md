@@ -1,8 +1,12 @@
-# 核心业务模块架构
+# Core Tutoring Business Architecture / 教育 Agent 核心业务模块架构
 
 > 文档性质：公开架构参考
 > 架构：本地优先模块化单体，SQLite 为 iOS 真相源，IndexedDB 为 Web 同合同适配。  
 > 原则：模块按业务事实和写入所有权拆分，通过公开 Command、Query、DTO 和 Event 组合。
+
+## English summary
+
+This document defines ownership and collaboration boundaries for three foundation-level domains: structured educational content, user-facing messages, and learner capability analysis. The civil-service reference application supplies exam cycles, curricula, question policies, rubrics, and teaching workflows through explicit domain contracts. Foundation services must not infer or hard-code those policies.
 
 ## 1. 模块总览
 
@@ -24,6 +28,8 @@ AI Runtime             Provider、Prompt、Schema、调用账本和预算
 ```
 
 支撑模块不拥有三个核心模块的业务规则。Agent 只负责调用用例，不直接写内容、消息或能力画像表。
+
+以上模块是教育 Agent 基础层的业务边界。文中出现的考生、考试周期、行测、申论和面试是当前公考参考应用的领域实现，不构成基础层对其他教育场景的固定假设。
 
 ## 2. 内容生成模块
 

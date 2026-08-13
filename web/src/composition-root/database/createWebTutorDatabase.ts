@@ -23,7 +23,6 @@ import type { Clock } from '@/kernel/public';
 import { IndexedDbPromptRepository } from '@/capabilities/ai-runtime/adapters/IndexedDbPromptRepository';
 import { IndexedDbAIInvocationRepository } from '@/capabilities/ai-runtime/adapters/IndexedDbAIInvocationRepository';
 import {
-  businessTutorPromptCatalog,
   EnsurePromptBundle,
   errorDiagnosisBatchPromptV1,
   errorDiagnosisPromptV1,
@@ -212,7 +211,6 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   promptRegistry.register(questionImportPolicyV1);
   promptRegistry.register(errorDiagnosisPromptV1);
   promptRegistry.register(errorDiagnosisBatchPromptV1);
-  businessTutorPromptCatalog.forEach((bundle) => promptRegistry.register(bundle));
   const promptCompiler = new PromptCompiler(promptRegistry);
   const generationContextCompiler = new GenerationContextCompiler(
     candidateRepository,
@@ -578,16 +576,13 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     curriculumPacks,
     initialize: async () => {
       await database.open();
-      await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository).execute();
+      await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry).execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
       await ensurePromptBundle.execute(structuredObjectivePromptV2);
       await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
       await ensurePromptBundle.execute(questionImportPolicyV1);
       await ensurePromptBundle.execute(errorDiagnosisPromptV1);
       await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);
-      for (const bundle of businessTutorPromptCatalog) {
-        await ensurePromptBundle.execute(bundle);
-      }
       await recoverExpiredAgentRuns.execute();
     },
     close: async () => database.close(),

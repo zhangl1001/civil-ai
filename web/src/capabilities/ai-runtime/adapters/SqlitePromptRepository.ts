@@ -8,6 +8,7 @@ import type { PromptBundle, PromptSection, PromptSectionCode } from '../prompt/P
 interface PromptRow extends SqlRow {
   definition_id: string;
   version_id: string;
+  exam_type: string;
   prompt_code: string;
   task_type: string;
   description: string;
@@ -28,23 +29,23 @@ export class SqlitePromptRepository implements PromptRepository {
   async install(bundle: PromptBundle, context: TransactionContext): Promise<void> {
     const transaction = this.transactionScope.resolve(context);
     await transaction.run(
-      `INSERT INTO prompt_definitions(id, prompt_code, task_type, description, status, created_at)
-       VALUES (?, ?, ?, ?, 'active', ?)
-       ON CONFLICT(prompt_code) DO UPDATE SET
+      `INSERT INTO prompt_definitions(id, exam_type, prompt_code, task_type, description, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?)
+       ON CONFLICT(exam_type, prompt_code) DO UPDATE SET
          task_type = excluded.task_type,
          description = excluded.description,
          status = 'active'`,
-      [bundle.definitionId, bundle.promptCode, bundle.taskType, bundle.description, bundle.createdAt]
+      [bundle.definitionId, bundle.examType, bundle.promptCode, bundle.taskType, bundle.description, bundle.createdAt]
     );
     await transaction.run(
       `INSERT INTO prompt_versions(
         id, prompt_definition_id, version, manifest_json, sections_json,
         compatible_schema_versions_json, content_hash, status, created_at
       ) VALUES (
-        ?, (SELECT id FROM prompt_definitions WHERE prompt_code = ?),
+        ?, (SELECT id FROM prompt_definitions WHERE exam_type = ? AND prompt_code = ?),
         ?, ?, ?, ?, ?, 'published', ?
       )`,
-      [bundle.versionId, bundle.promptCode, bundle.version, JSON.stringify({
+      [bundle.versionId, bundle.examType, bundle.promptCode, bundle.version, JSON.stringify({
         requiredVariables: bundle.requiredVariables,
         responseSchema: bundle.responseSchema
       }), JSON.stringify(bundle.sections), JSON.stringify(bundle.compatibleSchemaVersions),
@@ -52,17 +53,18 @@ export class SqlitePromptRepository implements PromptRepository {
     );
   }
 
-  async find(promptCode: string, version: string): Promise<PromptBundle | undefined> {
+  async find(examType: string, promptCode: string, version: string): Promise<PromptBundle | undefined> {
     const rows = await this.database.query<PromptRow>(
       `SELECT definition.id AS definition_id, prompt.id AS version_id,
-              definition.prompt_code, definition.task_type, definition.description,
+              definition.exam_type, definition.prompt_code, definition.task_type, definition.description,
               prompt.version, prompt.manifest_json, prompt.sections_json,
               prompt.compatible_schema_versions_json, prompt.content_hash, prompt.created_at
        FROM prompt_versions prompt
        JOIN prompt_definitions definition ON definition.id = prompt.prompt_definition_id
-       WHERE definition.prompt_code = ? AND prompt.version = ? AND prompt.status = 'published'
+       WHERE definition.exam_type = ? AND definition.prompt_code = ?
+         AND prompt.version = ? AND prompt.status = 'published'
        LIMIT 1`,
-      [promptCode, version]
+      [examType, promptCode, version]
     );
     return rows[0] ? mapPrompt(rows[0]) : undefined;
   }
@@ -70,7 +72,7 @@ export class SqlitePromptRepository implements PromptRepository {
   async findById(versionId: PromptVersionId): Promise<PromptBundle | undefined> {
     const rows = await this.database.query<PromptRow>(
       `SELECT definition.id AS definition_id, prompt.id AS version_id,
-              definition.prompt_code, definition.task_type, definition.description,
+              definition.exam_type, definition.prompt_code, definition.task_type, definition.description,
               prompt.version, prompt.manifest_json, prompt.sections_json,
               prompt.compatible_schema_versions_json, prompt.content_hash, prompt.created_at
        FROM prompt_versions prompt
@@ -87,6 +89,7 @@ function mapPrompt(row: PromptRow): PromptBundle {
   return {
       definitionId: row.definition_id,
       versionId: row.version_id as PromptVersionId,
+      examType: row.exam_type,
       promptCode: row.prompt_code,
       taskType: row.task_type,
       description: row.description,

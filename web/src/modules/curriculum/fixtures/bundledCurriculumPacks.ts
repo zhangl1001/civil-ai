@@ -1,3 +1,4 @@
+import { createBusinessTutorPromptCatalog, type PromptBundle } from '@/capabilities/ai-runtime/public';
 import type { CurriculumBundle } from '../contracts/CurriculumRepository';
 import { createBundledNationalCurriculum } from './bundledNationalCurriculum';
 
@@ -19,6 +20,8 @@ export interface BundledCurriculumPack {
    */
   readonly regionScoped: boolean;
   readonly bundle: CurriculumBundle;
+  /** Prompts whose wording belongs to this track. Anything absent falls back to the shared prompt. */
+  readonly promptBundles: readonly PromptBundle[];
 }
 
 export function createBundledCurriculumPacks(): readonly BundledCurriculumPack[] {
@@ -28,7 +31,8 @@ export function createBundledCurriculumPacks(): readonly BundledCurriculumPack[]
       examName: '公务员考试',
       summary: '行测与申论，覆盖国考与省考',
       regionScoped: true,
-      bundle: createBundledNationalCurriculum()
+      bundle: createBundledNationalCurriculum(),
+      promptBundles: createBusinessTutorPromptCatalog('civil_service')
     }
   ];
 }

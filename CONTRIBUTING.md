@@ -1,6 +1,6 @@
 # Contributing to Civil AI
 
-Thank you for improving Civil AI. Contributions may include bug reports, documentation, tests, provider adapters, accessibility improvements, and focused product changes.
+Thank you for improving Civil AI. The repository is a reference implementation of an adaptive tutoring agent foundation with a civil-service exam application. Contributions may include bug reports, documentation, tests, provider adapters, learning-evidence and agent-runtime improvements, accessibility work, and focused reference-domain changes.
 
 ## Before opening a change
 

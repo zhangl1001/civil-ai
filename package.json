@@ -37,7 +37,11 @@
     "test": "npm run smoke:ios"
   },
   "keywords": [
+    "adaptive-tutoring",
     "ai-agent",
+    "education-agent",
+    "learning-evidence",
+    "agent-runtime",
     "civil-service-exam",
     "capacitor",
     "local-first",
@@ -52,7 +56,7 @@
     "@capacitor/ios": "^8.4.1",
     "@capacitor/status-bar": "^8.0.2"
   },
-  "description": "A local-first AI tutor and agent runtime for civil-service exam preparation.",
+  "description": "A local-first adaptive tutoring agent foundation reference implementation with a civil-service exam application.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zhangl1001/civil-ai.git"

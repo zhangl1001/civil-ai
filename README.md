@@ -5,9 +5,9 @@
 [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](web/package.json)
 [![iOS](https://img.shields.io/badge/iOS-Capacitor-lightgrey.svg)](ios/App/App.xcodeproj)
 
-Civil AI is a local-first AI tutor for China's civil-service examinations and a reusable reference implementation for on-device agent workflows.
+Civil AI is a local-first adaptive tutoring agent foundation for iOS and Web. It provides reusable infrastructure for evidence-driven learning decisions, provider-neutral agent execution, structured educational content, and recoverable on-device workflows. China's civil-service examination preparation is the repository's current end-to-end reference domain.
 
-中文定位：面向个人完整备考周期的本地优先 AI 公考私教。系统围绕建档、计划、学习、练习、批改、错因诊断、间隔复习和能力变化建立持续闭环，而不是只提供聊天或批量生题。
+中文定位：Civil AI 是面向 iOS 与 Web 的本地优先自适应教育 Agent 基础实现，提供学习证据驱动决策、模型无关 Agent 执行、结构化教学内容和可恢复端侧工作流等可复用能力；公考备考是当前完整跑通的参考领域。
 
 > Civil AI is under active development. Questions, model output, predictions, and learning advice are educational aids, not official examination guidance.
 
@@ -15,13 +15,25 @@ Civil AI is not affiliated with an examination authority, question setter, or tr
 
 ## Why this project exists
 
-Most study products optimize for question volume. Civil AI explores a different model: use deterministic learning evidence and an AI tutor together to decide what a candidate should learn, practise, review, or revisit next.
+Many learning products optimize content delivery or question volume without maintaining a reliable model of what the learner understands, forgets, or can transfer. Civil AI explores a different model: deterministic learning evidence and an adaptive tutoring agent jointly decide what a learner should study, practise, review, or revisit next.
 
 The application is designed around three principles:
 
 - **Local-first ownership:** structured learning data stays on the device by default.
 - **Evidence before autonomy:** the agent can make teaching decisions, while deterministic services own scores, state transitions, validation, and persistence.
 - **Provider neutrality:** model providers are adapters, not business dependencies.
+
+## Foundation and reference domain
+
+The repository deliberately separates reusable educational-agent mechanisms from domain-specific teaching content. It is not a generic platform assembled only from abstractions: the civil-service exam application exercises the foundation through a complete learning loop and exposes where the contracts must work in practice.
+
+| Layer | Includes | Current maturity |
+| --- | --- | --- |
+| Portable runtime capabilities | Agent loop, provider gateway, Tool/Skill registries, content rendering, and Web research | Reused through explicit application ports and covered by focused conformance checks |
+| Tutoring foundation contracts | Context assembly, task recovery, structured content, learner evidence, mastery projection, planning, and local persistence | Implemented end to end, but some contracts still use exam-domain identifiers and have not yet been validated by a second learning domain |
+| Civil-service exam reference domain | Exam cycles, aptitude/essay/interview curricula, question presentations, grading rubrics, review strategies, and candidate-facing workflows | Current production-shaped reference application |
+
+The architecture is designed for reuse, but the repository does not claim that every module is already a standalone domain-neutral package. Reference-domain policies remain explicit instead of being presented as universally valid educational rules.
 
 ## Current capabilities
 
@@ -48,7 +60,7 @@ flowchart LR
     AGENT --> DOM
 ```
 
-The repository separates business modules from reusable capabilities:
+The repository separates business modules from reusable capabilities and candidate extraction boundaries:
 
 | Area | Purpose | Reusable boundary |
 | --- | --- | --- |

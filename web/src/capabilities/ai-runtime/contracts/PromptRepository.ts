@@ -4,6 +4,6 @@ import type { PromptVersionId } from '@/kernel/public';
 
 export interface PromptRepository {
   install(bundle: PromptBundle, context: TransactionContext): Promise<void>;
-  find(promptCode: string, version: string): Promise<PromptBundle | undefined>;
+  find(examType: string, promptCode: string, version: string): Promise<PromptBundle | undefined>;
   findById(versionId: PromptVersionId): Promise<PromptBundle | undefined>;
 }

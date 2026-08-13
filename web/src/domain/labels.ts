@@ -3,7 +3,7 @@ import type { CapabilityNode } from '@/modules/curriculum/public';
 import type { LearningEventType } from './learning';
 import type { PracticeMode } from './practice';
 
-export { APTITUDE_MODULE_CODES, PracticeModuleCode } from './practiceModuleCodes';
+export { PracticeModuleCode } from './practiceModuleCodes';
 
 export const DEFAULT_PRACTICE_MODULE = '专项练习';
 

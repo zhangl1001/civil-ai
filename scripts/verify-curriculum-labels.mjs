@@ -52,13 +52,9 @@ try {
     ['判断推理', '言语理解', '资料分析', '数量关系', '常识判断']
   );
 
-  // Tool schemas keep a static code list; it must stay in step with the package.
-  const packagedModuleCodes = labels.curriculumModuleOptions().map((item) => item.code);
-  assert.deepEqual(
-    [...labels.APTITUDE_MODULE_CODES].sort(),
-    [...packagedModuleCodes].sort(),
-    'APTITUDE_MODULE_CODES drifted from the curriculum module nodes'
-  );
+  // No application-side module list survives: tool schemas describe the field
+  // and the installed package is the only source of valid codes.
+  assert.equal(labels.APTITUDE_MODULE_CODES, undefined);
 
   assert.equal(labels.calendarTaskTitle('review', 'judgment'), '判断推理复习');
   assert.equal(labels.calendarTaskTitle('practice', 'verbal'), '言语理解练习');

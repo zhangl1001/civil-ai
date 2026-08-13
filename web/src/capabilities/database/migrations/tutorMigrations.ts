@@ -37,6 +37,7 @@ import learningDataMaintenanceSql from './036_learning_data_maintenance.sql?raw'
 import learningAssetPurposeSql from './037_learning_asset_purpose.sql?raw';
 import learningProgressSql from './038_learning_progress.sql?raw';
 import capabilityShortNameSql from './039_capability_short_name.sql?raw';
+import promptExamScopeSql from './040_prompt_exam_scope.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -273,5 +274,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'capability_short_name',
     checksum: 'sha256:7408e054489b83b5771f28f7da99214bdf83d570baabb11d2c240b5c1350000a',
     sql: capabilityShortNameSql
+  },
+  {
+    version: 40,
+    name: 'prompt_exam_scope',
+    checksum: 'sha256:b6d0cccb2484fffef34eb52f7911289e747133b68afba5ddfdcb1a4d79041f34',
+    sql: promptExamScopeSql
   }
 ];

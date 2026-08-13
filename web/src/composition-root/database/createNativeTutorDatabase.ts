@@ -26,7 +26,6 @@ import { UuidV7IdGenerator } from '@/capabilities/platform/public';
 import { SqlitePromptRepository } from '@/capabilities/ai-runtime/adapters/SqlitePromptRepository';
 import { SqliteAIInvocationRepository } from '@/capabilities/ai-runtime/adapters/SqliteAIInvocationRepository';
 import {
-  businessTutorPromptCatalog,
   EnsurePromptBundle,
   errorDiagnosisBatchPromptV1,
   errorDiagnosisPromptV1,
@@ -211,7 +210,6 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   promptRegistry.register(questionImportPolicyV1);
   promptRegistry.register(errorDiagnosisPromptV1);
   promptRegistry.register(errorDiagnosisBatchPromptV1);
-  businessTutorPromptCatalog.forEach((bundle) => promptRegistry.register(bundle));
   const promptCompiler = new PromptCompiler(promptRegistry);
   const generationContextCompiler = new GenerationContextCompiler(
     candidateRepository,
@@ -577,16 +575,13 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     curriculumPacks,
     initialize: async () => {
       await migrationRunner.migrate(clock.now());
-      await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository).execute();
+      await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry).execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
       await ensurePromptBundle.execute(structuredObjectivePromptV2);
       await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
       await ensurePromptBundle.execute(questionImportPolicyV1);
       await ensurePromptBundle.execute(errorDiagnosisPromptV1);
       await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);
-      for (const bundle of businessTutorPromptCatalog) {
-        await ensurePromptBundle.execute(bundle);
-      }
       await recoverExpiredAgentRuns.execute();
       await database.healthCheck();
     },

@@ -2,9 +2,9 @@
 
 This roadmap communicates product direction and contribution opportunities. It is not a promise of release dates. Priorities may change after user feedback, device testing, security review, or provider changes.
 
-## Product direction
+## Project direction
 
-Civil AI aims to become a local-first AI tutor that can explain what a candidate should do next and support that decision with learning evidence. The target loop is:
+Civil AI aims to provide a local-first adaptive tutoring foundation that can explain what a learner should do next and support that decision with durable learning evidence. The civil-service exam application is the current end-to-end reference domain. Its target loop is:
 
 `candidate profile -> capability baseline -> daily plan -> learning and practice -> grading -> diagnosis -> targeted remediation -> spaced review -> measurable capability change`
 
@@ -24,10 +24,11 @@ Civil AI aims to become a local-first AI tutor that can explain what a candidate
 - Add richer lecture-to-practice linkage and verify that generated exercises cover the intended knowledge point.
 - Expand accessibility, reduced-motion behavior, and device-size visual regression coverage.
 
-## Later: reusable local agent platform
+## Later: foundation hardening and reuse
 
-- Extract stable agent-runtime, provider-gateway, content-block, and local-database boundaries for reuse.
+- Stabilize and document the agent-runtime, provider-gateway, content-block, learner-evidence, and local-database boundaries for reuse.
 - Document third-party provider adapter contracts and conformance tests.
+- Add a small domain-adapter example that proves the tutoring foundation can host a second learning domain without importing civil-service policies.
 - Add an Android shell after the iOS lifecycle and data contracts are stable.
 - Support privacy-preserving optional sync without making a cloud service mandatory.
 

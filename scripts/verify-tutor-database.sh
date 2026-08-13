@@ -3,42 +3,6 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-foundation_schema_file="$project_root/web/src/capabilities/database/migrations/001_foundation.sql"
-content_schema_file="$project_root/web/src/capabilities/database/migrations/002_content_ai_foundation.sql"
-learning_evidence_schema_file="$project_root/web/src/capabilities/database/migrations/003_learning_evidence.sql"
-error_diagnosis_confirmation_schema_file="$project_root/web/src/capabilities/database/migrations/004_error_diagnosis_confirmations.sql"
-tutor_agent_runtime_schema_file="$project_root/web/src/capabilities/database/migrations/005_tutor_agent_runtime.sql"
-mastery_planning_schema_file="$project_root/web/src/capabilities/database/migrations/006_mastery_planning_foundation.sql"
-review_execution_schema_file="$project_root/web/src/capabilities/database/migrations/007_review_execution_linkage.sql"
-task_message_center_schema_file="$project_root/web/src/capabilities/database/migrations/008_task_message_center.sql"
-proactive_signals_schema_file="$project_root/web/src/capabilities/database/migrations/009_plan_feedback_proactive_signals.sql"
-learning_assets_schema_file="$project_root/web/src/capabilities/database/migrations/010_learning_assets.sql"
-conversations_schema_file="$project_root/web/src/capabilities/database/migrations/011_conversations.sql"
-learning_asset_indexes_schema_file="$project_root/web/src/capabilities/database/migrations/012_learning_asset_and_session_indexes.sql"
-agent_run_target_index_schema_file="$project_root/web/src/capabilities/database/migrations/013_agent_run_target_index.sql"
-conversation_message_logs_schema_file="$project_root/web/src/capabilities/database/migrations/014_conversation_message_logs.sql"
-conversation_session_index_schema_file="$project_root/web/src/capabilities/database/migrations/015_conversation_session_index.sql"
-agent_workspace_sessions_schema_file="$project_root/web/src/capabilities/database/migrations/016_agent_workspace_sessions.sql"
-practice_session_drafts_schema_file="$project_root/web/src/capabilities/database/migrations/017_practice_session_drafts.sql"
-agent_work_pools_schema_file="$project_root/web/src/capabilities/database/migrations/018_agent_work_pools.sql"
-practice_manifests_schema_file="$project_root/web/src/capabilities/database/migrations/019_practice_manifests.sql"
-error_diagnosis_guidance_schema_file="$project_root/web/src/capabilities/database/migrations/020_error_diagnosis_guidance.sql"
-question_set_practice_status_schema_file="$project_root/web/src/capabilities/database/migrations/021_question_set_practice_status.sql"
-question_source_foundation_schema_file="$project_root/web/src/capabilities/database/migrations/022_question_source_foundation.sql"
-question_import_drafts_schema_file="$project_root/web/src/capabilities/database/migrations/023_question_import_drafts.sql"
-true_question_reference_packs_schema_file="$project_root/web/src/capabilities/database/migrations/024_true_question_reference_packs.sql"
-tutor_cycle_conclusions_schema_file="$project_root/web/src/capabilities/database/migrations/025_tutor_cycle_conclusions.sql"
-ability_calibration_snapshots_schema_file="$project_root/web/src/capabilities/database/migrations/026_ability_calibration_snapshots.sql"
-web_research_import_method_schema_file="$project_root/web/src/capabilities/database/migrations/027_web_research_import_method.sql"
-reference_pack_comparison_questions_schema_file="$project_root/web/src/capabilities/database/migrations/028_reference_pack_comparison_questions.sql"
-question_set_library_pagination_schema_file="$project_root/web/src/capabilities/database/migrations/029_question_set_library_pagination.sql"
-agent_execution_classes_schema_file="$project_root/web/src/capabilities/database/migrations/030_agent_execution_classes.sql"
-agent_run_lease_fencing_schema_file="$project_root/web/src/capabilities/database/migrations/031_agent_run_lease_fencing.sql"
-agent_tool_receipts_schema_file="$project_root/web/src/capabilities/database/migrations/032_agent_tool_receipts.sql"
-agent_run_hierarchy_schema_file="$project_root/web/src/capabilities/database/migrations/033_agent_run_hierarchy.sql"
-generation_spec_agent_run_source_schema_file="$project_root/web/src/capabilities/database/migrations/034_generation_spec_agent_run_source.sql"
-adaptive_daily_planning_schema_file="$project_root/web/src/capabilities/database/migrations/035_adaptive_daily_planning.sql"
-learning_data_maintenance_schema_file="$project_root/web/src/capabilities/database/migrations/036_learning_data_maintenance.sql"
 database_file="$(mktemp "${TMPDIR:-/tmp}/zhangl-tutor-schema.sqlite.XXXXXX")"
 
 cleanup() {
@@ -46,35 +10,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Every migration in the directory is applied, in version order. Enumerating the
+# directory rather than naming files by hand stops a new migration from silently
+# skipping this check, which is how 037-040 went unverified.
+migrations_dir="$project_root/web/src/capabilities/database/migrations"
+migration_reads=""
+for migration_file in "$migrations_dir"/*.sql; do
+  migration_reads="${migration_reads}.read ${migration_file}"$'\n'
+done
+
 sqlite3 "$database_file" <<SQL
 .bail on
 PRAGMA foreign_keys = ON;
-.read $foundation_schema_file
-.read $content_schema_file
-.read $learning_evidence_schema_file
-.read $error_diagnosis_confirmation_schema_file
-.read $tutor_agent_runtime_schema_file
-.read $mastery_planning_schema_file
-.read $review_execution_schema_file
-.read $task_message_center_schema_file
-.read $proactive_signals_schema_file
-.read $learning_assets_schema_file
-.read $conversations_schema_file
-.read $learning_asset_indexes_schema_file
-.read $agent_run_target_index_schema_file
-.read $conversation_message_logs_schema_file
-.read $conversation_session_index_schema_file
-.read $agent_workspace_sessions_schema_file
-.read $practice_session_drafts_schema_file
-.read $agent_work_pools_schema_file
-.read $practice_manifests_schema_file
-.read $error_diagnosis_guidance_schema_file
-.read $question_set_practice_status_schema_file
-.read $question_source_foundation_schema_file
-.read $question_import_drafts_schema_file
-.read $true_question_reference_packs_schema_file
-.read $tutor_cycle_conclusions_schema_file
-.read $ability_calibration_snapshots_schema_file
+${migration_reads}
 
 INSERT INTO metadata_packages(
   id, package_type, exam_type, region_scope, version, status, source,
@@ -158,7 +106,7 @@ INSERT INTO prompt_versions(
 
 INSERT INTO prompt_definitions(id, prompt_code, task_type, description, status, created_at)
 VALUES ('prompt-question-reinstall', 'question.generate.weakening', 'content_generation', '生成削弱论证题新版', 'active', 1100)
-ON CONFLICT(prompt_code) DO UPDATE SET
+ON CONFLICT(exam_type, prompt_code) DO UPDATE SET
   task_type = excluded.task_type,
   description = excluded.description,
   status = 'active';
@@ -168,10 +116,15 @@ INSERT INTO prompt_versions(
   compatible_schema_versions_json, content_hash, status, created_at
 ) VALUES (
   'prompt-question-v2',
-  (SELECT id FROM prompt_definitions WHERE prompt_code = 'question.generate.weakening'),
+  (SELECT id FROM prompt_definitions WHERE exam_type = 'shared' AND prompt_code = 'question.generate.weakening'),
   '1.1.0', '{}', '[]', '["question.single_choice.v1"]',
   '1123456789abcdef', 'published', 1100
 );
+
+-- Two exam packs may ship their own wording for the same prompt code; only the
+-- pair (exam_type, prompt_code) is unique.
+INSERT INTO prompt_definitions(id, exam_type, prompt_code, task_type, description, status, created_at)
+VALUES ('prompt-question-law', 'law', 'question.generate.weakening', 'content_generation', '法考版削弱题', 'active', 1200);
 
 INSERT INTO generation_specs(
   id, exam_cycle_id, capability_node_id, content_kind, assessment_role,
@@ -366,16 +319,6 @@ INSERT INTO question_reference_packs(
   'true-question-reference.v1', 'reference-pack-0123456789abcdef', 1800
 );
 
-.read $web_research_import_method_schema_file
-.read $reference_pack_comparison_questions_schema_file
-.read $question_set_library_pagination_schema_file
-.read $agent_execution_classes_schema_file
-.read $agent_run_lease_fencing_schema_file
-.read $agent_tool_receipts_schema_file
-.read $agent_run_hierarchy_schema_file
-.read $generation_spec_agent_run_source_schema_file
-.read $adaptive_daily_planning_schema_file
-.read $learning_data_maintenance_schema_file
 
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
@@ -442,8 +385,10 @@ expect_count "SELECT COUNT(*) FROM projects WHERE id='project-1';" "1" "project 
 expect_count "SELECT COUNT(*) FROM questions WHERE id='question-1';" "1" "official source-linked question retained"
 expect_count "SELECT COUNT(*) FROM question_source_links WHERE id='source-link-1';" "1" "official source link retained"
 expect_count "SELECT COUNT(*) FROM content_schema_versions;" "1" "global content schemas after project deletion"
-expect_count "SELECT COUNT(*) FROM prompt_definitions WHERE prompt_code='question.generate.weakening';" "1" "prompt definition after version upgrade"
+expect_count "SELECT COUNT(*) FROM prompt_definitions WHERE exam_type='shared' AND prompt_code='question.generate.weakening';" "1" "prompt definition after version upgrade"
 expect_count "SELECT COUNT(*) FROM prompt_versions WHERE prompt_definition_id='prompt-question';" "2" "prompt versions after definition reuse"
+expect_count "SELECT COUNT(*) FROM prompt_definitions WHERE prompt_code='question.generate.weakening';" "2" "same prompt code owned by two exam packs"
+expect_count "SELECT exam_type FROM prompt_definitions WHERE id='prompt-question';" "shared" "pre-existing prompts migrate to the shared scope"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='work_pool';" "1" "agent work pool column"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='lease_epoch';" "1" "agent lease epoch column"
 expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='daily_plan_blocks';" "1" "daily plan block table"

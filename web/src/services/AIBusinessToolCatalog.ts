@@ -59,8 +59,7 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
       properties: {
         module: {
           type: 'string',
-          description: '行测模块 code。只从工具 schema 的枚举中选择；不要自行拼接模块名称。',
-          enum: [...APTITUDE_MODULE_CODES]
+          description: '当前考试大纲的模块 code。不要自行拼接名称；填错会被拒绝并返回可用取值。'
         },
         knowledgePoint: { type: 'string', description: '用户明确指定的细分知识点；未指定时省略，由学习档案选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 120 },
@@ -104,8 +103,7 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
       properties: {
         module: {
           type: 'string',
-          description: '错题模块 code。只从工具 schema 的枚举中选择；不要自行拼接模块名称。',
-          enum: [...APTITUDE_MODULE_CODES]
+          description: '当前考试大纲的错题模块 code。不要自行拼接名称；填错会被拒绝并返回可用取值。'
         },
         knowledgePoint: { type: 'string', description: '用户明确指定的错题知识点；未指定时根据能力轨迹选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 60 }
@@ -160,7 +158,6 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
     parameters: { type: 'object', required: [], properties: {} }
   }
 ];
-import { APTITUDE_MODULE_CODES } from '@/domain/labels';
 
 function lowGenerationImpact(): AgentToolImpact {
   return { cost: 'low', network: 'none', persistence: 'reversible' };

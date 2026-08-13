@@ -1,4 +1,5 @@
 import type { InstantMs, JsonObject, PromptVersionId } from '@/kernel/public';
+import { SHARED_PROMPT_EXAM_TYPE } from '../prompt/PromptContracts';
 import type { PromptBundle } from '../prompt/PromptContracts';
 import { PromptSectionCode } from '../prompt/PromptContracts';
 import { GENERATION_AUTONOMY_LIMITS } from '../prompt/GenerationBoundaryPolicy';
@@ -243,13 +244,14 @@ const responseSchema: JsonObject = {
 };
 
 export const structuredObjectivePromptV2: PromptBundle = {
+  examType: SHARED_PROMPT_EXAM_TYPE,
   definitionId: 'prompt-definition:content-generate-structured-objective',
   versionId: 'prompt-version:content-generate-structured-objective:v17' as PromptVersionId,
   promptCode: 'content.generate.aptitude.structured_objective',
   taskType: 'lecture_with_questions',
   description: '围绕指定能力节点生成结构化讲义与单选训练题',
   version: '2.6.0',
-  contentHash: 'sha256:a1b13553e8674e1663b2ca4b71fe188bee01c714a5b0ff1ebf5196d0f6790425',
+  contentHash: 'sha256:ed5c65ba89ebaa26aebc8aec8b8f8734554ca850d7571c1acaea634e02e2d308',
   createdAt: 1784016000000 as InstantMs,
   requiredVariables: ['QUESTION_COUNT', 'ASSESSMENT_ROLE', 'DIFFICULTY_MIN', 'DIFFICULTY_MAX'],
   compatibleSchemaVersions: ['content.v1', 'question.single_choice.v2'],

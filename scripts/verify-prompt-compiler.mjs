@@ -14,6 +14,16 @@ const server = await createServer({
   appType: 'custom'
 });
 
+/**
+ * The content hash covers the wording, not the addressing. `examType` and the
+ * ids derived from it are excluded so two packs shipping identical wording
+ * produce the same hash.
+ */
+function promptContentPayload(bundle) {
+  const { examType: _examType, definitionId: _definitionId, versionId: _versionId, ...content } = bundle;
+  return content;
+}
+
 try {
   const [runtime, sqlitePrompt] = await Promise.all([
     server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts'),
@@ -26,12 +36,14 @@ try {
     runtime.errorDiagnosisPromptV1,
     runtime.errorDiagnosisBatchPromptV1
   ]) {
-    const { contentHash, ...hashPayload } = prompt;
+    const { contentHash, ...hashPayload } = promptContentPayload(prompt);
     const expectedHash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(hashPayload)).digest('hex')}`;
     assert.equal(contentHash, expectedHash, `prompt ${prompt.promptCode} content hash mismatch; expected ${expectedHash}`);
   }
-  for (const bundle of runtime.businessTutorPromptCatalog) {
-    const { contentHash: businessHash, ...businessHashPayload } = bundle;
+  // Pack prompts only resolve once their track is active.
+  registry.activateExamType('civil_service');
+  for (const bundle of runtime.createBusinessTutorPromptCatalog('civil_service')) {
+    const { contentHash: businessHash, ...businessHashPayload } = promptContentPayload(bundle);
     const expectedBusinessHash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(businessHashPayload)).digest('hex')}`;
     assert.equal(
       businessHash,
@@ -47,6 +59,35 @@ try {
     assert(businessCompiled.system.startsWith('# 第1章'));
     assert(businessCompiled.user.includes('"audit": true'));
   }
+  // --- exam pack scoping ------------------------------------------------------
+  const civilEssay = runtime.createBusinessTutorPromptCatalog('civil_service')
+    .find((bundle) => bundle.promptCode === 'content.generate.essay.question');
+  const lawEssay = runtime.createBusinessTutorPromptCatalog('law')
+    .find((bundle) => bundle.promptCode === 'content.generate.essay.question');
+  // Two packs may ship the same prompt code; ids must not collide on the primary key.
+  assert.notEqual(civilEssay.definitionId, lawEssay.definitionId);
+  assert.notEqual(civilEssay.versionId, lawEssay.versionId);
+  // Identical wording hashes the same regardless of which pack ships it.
+  assert.equal(civilEssay.contentHash, lawEssay.contentHash);
+
+  const scoped = new runtime.PromptRegistry();
+  for (const bundle of runtime.createBusinessTutorPromptCatalog('civil_service')) scoped.register(bundle);
+  for (const bundle of runtime.createBusinessTutorPromptCatalog('law')) scoped.register(bundle);
+  scoped.register(runtime.structuredObjectivePromptV2);
+
+  // Registering both packs no longer throws on the shared prompt code.
+  scoped.activateExamType('civil_service');
+  assert.equal(scoped.resolve('content.generate.essay.question').examType, 'civil_service');
+  scoped.activateExamType('law');
+  assert.equal(scoped.resolve('content.generate.essay.question').examType, 'law');
+  // A prompt the pack does not override falls back to the shared catalog.
+  assert.equal(
+    scoped.resolve('content.generate.aptitude.structured_objective').examType,
+    runtime.SHARED_PROMPT_EXAM_TYPE
+  );
+  // An unknown code names the active track, so the failure is diagnosable.
+  assert.throws(() => scoped.resolve('content.generate.nonexistent'), /not registered for law/);
+
   registry.register(runtime.structuredObjectivePromptV2);
   const compiler = new runtime.PromptCompiler(registry);
   const compiled = compiler.compile(
@@ -94,7 +135,7 @@ try {
   assert(enrichmentPrompt.system.includes('它们全部不可修改'));
   assert.equal(enrichmentPrompt.responseSchema.required[0], 'explanations');
 
-  const essayGeneration = runtime.businessTutorPromptCatalog.find(
+  const essayGeneration = runtime.createBusinessTutorPromptCatalog('civil_service').find(
     (item) => item.promptCode === runtime.BusinessTutorPromptCode.EssayGeneration
   );
   assert(essayGeneration);
@@ -104,7 +145,7 @@ try {
     'teaching list length is an AI decision, not a structural requirement'
   );
   assert.equal(essayGeneration.responseSchema.properties.lecture.properties.clues.maxItems, 8);
-  const dailyDigest = runtime.businessTutorPromptCatalog.find(
+  const dailyDigest = runtime.createBusinessTutorPromptCatalog('civil_service').find(
     (item) => item.promptCode === runtime.BusinessTutorPromptCode.DailyDigest
   );
   assert(dailyDigest);
@@ -192,9 +233,15 @@ try {
     }
   );
   await sqlitePromptRepository.install(runtime.errorDiagnosisPromptV1, { transactionId: 'prompt-install:test' });
-  assert.match(promptInstallStatements[0].sql, /ON CONFLICT\(prompt_code\) DO UPDATE/);
-  assert.match(promptInstallStatements[1].sql, /SELECT id FROM prompt_definitions WHERE prompt_code = \?/);
-  assert.equal(promptInstallStatements[1].params[1], runtime.errorDiagnosisPromptV1.promptCode);
+  // Upsert and lookup are scoped to the owning pack, not the bare prompt code.
+  assert.match(promptInstallStatements[0].sql, /ON CONFLICT\(exam_type, prompt_code\) DO UPDATE/);
+  assert.match(
+    promptInstallStatements[1].sql,
+    /SELECT id FROM prompt_definitions WHERE exam_type = \? AND prompt_code = \?/
+  );
+  assert.equal(promptInstallStatements[1].params[1], runtime.SHARED_PROMPT_EXAM_TYPE);
+  assert.equal(promptInstallStatements[1].params[2], runtime.errorDiagnosisPromptV1.promptCode);
+  assert.equal(promptInstallStatements[0].params[1], runtime.SHARED_PROMPT_EXAM_TYPE);
   console.log('Prompt compiler verification passed.');
 } finally {
   await server.close();

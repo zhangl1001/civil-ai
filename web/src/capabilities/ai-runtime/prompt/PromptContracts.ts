@@ -18,8 +18,13 @@ export interface PromptSection {
   readonly template: string;
 }
 
+/** Prompts every exam pack reuses. A pack overrides one by shipping its own. */
+export const SHARED_PROMPT_EXAM_TYPE = 'shared';
+
 export interface PromptBundle {
   readonly definitionId: string;
+  /** Exam pack that owns this wording, or `shared` when every pack reuses it. */
+  readonly examType: string;
   readonly versionId: PromptVersionId;
   readonly promptCode: string;
   readonly taskType: string;

@@ -1,4 +1,5 @@
 import type { InstantMs, JsonObject, PromptVersionId } from '@/kernel/public';
+import { SHARED_PROMPT_EXAM_TYPE } from '../prompt/PromptContracts';
 import type { PromptBundle } from '../prompt/PromptContracts';
 import { PromptSectionCode } from '../prompt/PromptContracts';
 
@@ -83,13 +84,14 @@ const responseSchema: JsonObject = {
 };
 
 export const errorDiagnosisPromptV1: PromptBundle = {
+  examType: SHARED_PROMPT_EXAM_TYPE,
   definitionId: 'prompt-definition:error-diagnosis',
   versionId: 'prompt-version:error-diagnosis:v4' as PromptVersionId,
   promptCode: 'teaching.diagnose.objective-error',
   taskType: 'error_diagnosis',
   description: '根据题目、误选项、标准解析和作答观察生成可核验的结构化错因候选',
   version: '1.3.0',
-  contentHash: 'sha256:5a3d969ca346aa78ca0fea2df6d3070a8b9d2f92483ab38b6d38a72b28e28b3b',
+  contentHash: 'sha256:13fea496311f6ba433b27d064c183cd714b7cb311ee8e9ab020745b3cce1ee76',
   createdAt: 1784016000000 as InstantMs,
   requiredVariables: ['SUBJECT'],
   compatibleSchemaVersions: ['question.single_choice.v2'],

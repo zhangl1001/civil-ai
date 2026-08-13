@@ -131,7 +131,7 @@ function section(
   return { code, title, order, template };
 }
 
-function bundle(input: {
+function bundle(examType: string, input: {
   code: string;
   taskType: string;
   description: string;
@@ -140,9 +140,12 @@ function bundle(input: {
   schema?: JsonObject;
   sections: readonly PromptSection[];
 }): PromptBundle {
-  const suffix = input.code.replaceAll('.', '-');
+  // Ids carry the exam type: two packs may ship the same prompt code, and the
+  // definition id is a primary key.
+  const suffix = `${examType}:${input.code}`.replaceAll('.', '-');
   const version = input.version ?? '1.0.0';
   return {
+    examType,
     definitionId: `prompt-definition:${suffix}`,
     versionId: `prompt-version:${suffix}:${input.version ? `v${version}` : 'v1'}` as PromptVersionId,
     promptCode: input.code,
@@ -158,13 +161,19 @@ function bundle(input: {
   };
 }
 
-export const businessTutorPromptCatalog: readonly PromptBundle[] = [
-  bundle({
+/**
+ * Tutoring prompts an exam pack owns: their wording carries the exam's voice,
+ * scoring vocabulary and paper conventions. A pack builds the catalog with its
+ * own exam type so two packs can ship different wording for the same task.
+ */
+export function createBusinessTutorPromptCatalog(examType: string): readonly PromptBundle[] {
+  return [
+  bundle(examType, {
     code: BusinessTutorPromptCode.EssayGeneration,
     taskType: 'essay_question_generation',
     description: '生成与细分申论知识点配套的材料、题目和讲义',
     version: '1.2.0',
-    hash: 'sha256:fe376792d9696fb109402e129e0b4b5f0c653c72651371649eebae4bbb7c547c',
+    hash: 'sha256:ade4a92935e3ecca502cd58bcc226b2c383259a536913de50617f3591a3fe551',
     schema: essayGenerationSchema,
     sections: [
       section(PromptSectionCode.Role, '命题身份与边界', 10, '你是公务员考试申论教研员。内部完成选点、构题和质检，只输出最终 JSON，不输出思考过程、草稿、前言或代码围栏。'),
@@ -175,12 +184,12 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查 JSON 可解析、字段完整、讲义与题目知识点一致、材料足以支撑作答、没有思考过程，然后只输出最终 JSON。')
     ]
   }),
-  bundle({
+  bundle(examType, {
     code: BusinessTutorPromptCode.EssayGrade,
     taskType: 'essay_grade',
     description: '基于给定材料和评分量表批改申论作答',
     version: '1.1.0',
-    hash: 'sha256:dcee70677c24122eb7c5680aa7ae488c6f7a507286f5b183882cec59b0136200',
+    hash: 'sha256:e1ae377de69f5c92b66a6c2fc657196d156ca7f5c3c5bb5c4ba7cb86ef59b83b',
     schema: essayGradeSchema,
     sections: [
       section(PromptSectionCode.Role, '阅卷身份与边界', 10, '你是严格的公务员申论阅卷老师。必须基于给定材料、作答要求和考生原文举证，不能只按文风泛评，不输出思考过程。'),
@@ -191,12 +200,12 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查五个维度齐全、分数范围正确、评价有原文证据、建议可执行，然后只输出最终 JSON。')
     ]
   }),
-  bundle({
+  bundle(examType, {
     code: BusinessTutorPromptCode.InterviewQuestions,
     taskType: 'interview_question_generation',
     description: '按结构化面试题型补充可复用的训练题池',
     version: '1.0.0',
-    hash: 'sha256:ce15960eafdbd286516fc1ee87fa7b59c8bc6a340c5e5be335b3e9fba5c4201c',
+    hash: 'sha256:a2055a569d8f592f0cafa0f42793686729e5774c2f6512688b3476a3981caadb',
     schema: interviewQuestionsSchema,
     sections: [
       section(PromptSectionCode.Role, '命题身份与边界', 10, '你是公务员结构化面试教研员。生成原创模拟题，不冒充官方真题，不输出思考过程。'),
@@ -207,12 +216,12 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查 JSON 可解析、字段完整、题型合法、题目互不重复且与近期题目有实质差异，然后只输出最终 JSON。')
     ]
   }),
-  bundle({
+  bundle(examType, {
     code: BusinessTutorPromptCode.InterviewReview,
     taskType: 'interview_review',
     description: '依据真实作答与可用语音指标生成结构化面试复盘',
     version: '1.2.0',
-    hash: 'sha256:0ecc9fd7f643086f6c44029a91d22f8f08cf6b6e0bdc07e72c0d03313c5cc42a',
+    hash: 'sha256:1408b0548d417f58979f37b6e43b1f1f1e7373cfc1e3f508f1f383ccc525cfe8',
     schema: interviewReviewSchema,
     sections: [
       section(PromptSectionCode.Role, '教练身份与边界', 10, '你是公务员面试教练。依据输入记录复盘，严格但鼓励，不虚构现场表现，不输出思考过程。'),
@@ -223,12 +232,12 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查四维评分齐全、有输入证据、没有臆测，并只输出最终 JSON。')
     ]
   }),
-  bundle({
+  bundle(examType, {
     code: BusinessTutorPromptCode.DailyDigest,
     taskType: 'daily_digest',
     description: '生成每日时政或知识积累',
     version: '1.7.0',
-    hash: 'sha256:48ffff4e778f3bc5e38e363e40988f321a4fba02e946581ac80a921739fc51b8',
+    hash: 'sha256:6ff465d32d464c7245a4c0be6714c8a2c573386c943107fe5e7d821de2934bb5',
     sections: [
       section(PromptSectionCode.Role, '教师身份', 10, '你是个人公考 AI 私教的每日积累编辑。输出 GFM Markdown，不输出思考过程。'),
       section(PromptSectionCode.TeachingObjective, '学习目标', 20, '生成一份能用于当天学习、申论素材迁移和后续复盘的积累讲义。type=news 专指公考时政，既包括重要政策、重要会议、改革发展、经济民生、国家治理、法治生态和科技创新，也包括具有公共治理意义的重大社会热点、公共安全与应急事件、国际形势与外交、重大工程和文化成果；排除纯娱乐八卦、单纯体育赛况、消费资讯和没有公共议题价值的泛生活热搜。自主选择少量高价值主题，重要内容必须讲清事实或概念、考试关联、可迁移表达和复习动作，不能只是新闻摘要或知识点名词列表。'),
@@ -238,12 +247,12 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查事实表述保守可靠、重点主题有明确考试关联、迁移表达或复习动作，结构适合阅读且没有思考过程，然后只输出最终 Markdown。')
     ]
   }),
-  bundle({
+  bundle(examType, {
     code: BusinessTutorPromptCode.MonthlyDigest,
     taskType: 'monthly_digest',
     description: '把每日热点聚合成月度复盘',
     version: '1.2.0',
-    hash: 'sha256:b93966b61bfba6789eb2f0b4a1cf267eec32b03c469b44304b960633daf6299d',
+    hash: 'sha256:2215d52fb24401892a5842df652399e29fca8ca39ef60ec7249099e93c4c575d',
     sections: [
       section(PromptSectionCode.Role, '复盘教师身份', 10, '你是公务员考试时政复盘老师。只基于输入的每日积累做归纳，不补造事件，不输出思考过程。'),
       section(PromptSectionCode.TeachingObjective, '复盘目标', 20, '把零散热点整理为主题主线、可迁移申论角度、行测常识关注点和下月复习安排。'),
@@ -253,12 +262,12 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
       section(PromptSectionCode.SelfCheck, '提交前质检', 60, '检查所有结论可由输入支持、结构适合手机阅读、没有思考过程。')
     ]
   }),
-  bundle({
+  bundle(examType, {
     code: BusinessTutorPromptCode.StudyLecture,
     taskType: 'study_lecture',
     description: '生成围绕细分知识点的教材式精讲',
     version: '1.3.0',
-    hash: 'sha256:67dd401a47ecbe0c1d6e398727e40b27d36fe1273946e8e27dd761ea11568a99',
+    hash: 'sha256:7dcf2efee3f1f9e2fb69eb91b3baaadf949bc4bae8754bebcf8e533bc5d02a32',
     sections: [
       section(PromptSectionCode.Role, '私教身份与边界', 10, '你是公务员考试考点精讲老师。围绕一个细分知识点教学，不输出思考过程。'),
       section(PromptSectionCode.TeachingObjective, '教学目标', 20, '帮助考生建立概念边界、识别信号、稳定方法、陷阱意识和迁移能力，而不是只记一道题的答案。'),
@@ -269,3 +278,4 @@ export const businessTutorPromptCatalog: readonly PromptBundle[] = [
     ]
   })
 ];
+}

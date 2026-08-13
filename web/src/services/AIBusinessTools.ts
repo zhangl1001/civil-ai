@@ -3,11 +3,11 @@ import { essayFlowService, type EssayGenerationContext } from '@/services/EssayF
 import { examFlowService } from '@/services/ExamFlowService';
 import { monthlyDigestService } from '@/services/MonthlyDigestService';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
+import { curriculumModuleOptions, practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
 import { defaultShortFormTopic, isLongFormTopic } from '@/domain/writtenFormats';
-import { AssessmentRole } from '@/kernel/public';
+import { AssessmentRole, type SubjectCode } from '@/kernel/public';
 import { QuestionSetEntryMode } from '@/modules/content/public';
-import { ExamDeliveryKind, type CapabilityNode } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, projectExamSubjects, type CapabilityNode } from '@/modules/curriculum/public';
 import type { MasteryTrack } from '@/modules/mastery/public';
 import { StructuredPracticeTaskCenter } from '@/features/practice/StructuredPracticeTaskCenter';
 import { selectPriorityOrCoverageCapability } from '@/features/practice/CapabilitySelection';
@@ -65,14 +65,20 @@ export class AIBusinessTools {
       const requestedModule = asString(args.module);
       const knowledgePoint = asString(args.knowledgePoint);
       const tracks = await runtime.masteryRepository.listPriorityTracks(cycle.examCycle.id, 100);
-      const capability = resolvePracticeCapability(
+      const objectiveSubject = projectExamSubjects(curriculum)
+        .find((subject) => subject.deliveryKind === ExamDeliveryKind.Objective);
+      const capability = objectiveSubject && resolvePracticeCapability(
         curriculum.capabilityNodes,
+        objectiveSubject.code,
         requestedModule,
         knowledgePoint,
         tracks
       );
-      const moduleLabel = capability?.module ? practiceModuleLabel(capability.module) : requestedModule || '行测';
-      if (!capability) throw new Error(`当前大纲还没有可训练的“${requestedModule}”细分能力，请换一个已开放模块。`);
+      // Tool schemas cannot enumerate modules, because the installed exam pack
+      // decides them. An unusable value is rejected with the valid set so the
+      // model can correct itself on the next call.
+      if (!capability) throw new Error(unusableModuleMessage(requestedModule));
+      const moduleLabel = practiceModuleLabel(capability.module);
       const count = Math.min(20, Math.max(1, Math.round(asNumber(args.questionCount, review ? 6 : 8))));
       const scopeKey = `practice:${review ? 'review' : 'chat'}:${capability.id}`;
       const task = await new StructuredPracticeTaskCenter(runtime).start({
@@ -172,8 +178,18 @@ export class AIBusinessTools {
   }
 }
 
+function unusableModuleMessage(requestedModule: string): string {
+  const available = curriculumModuleOptions();
+  const offered = available.map((item) => `${item.code}（${item.name}）`).join('、');
+  const wanted = requestedModule ? `“${requestedModule}”` : '默认模块';
+  return offered
+    ? `当前大纲没有可训练的${wanted}。可用模块：${offered}。`
+    : `当前大纲还没有可训练的${wanted}。`;
+}
+
 function resolvePracticeCapability(
   nodes: readonly CapabilityNode[],
+  subject: SubjectCode,
   requestedModule: string,
   knowledgePoint: string,
   tracks: readonly MasteryTrack[]
@@ -182,7 +198,7 @@ function resolvePracticeCapability(
   const trainable = nodes
     .filter((node) => (
       node.status === 'active'
-      && node.subject === 'aptitude'
+      && node.subject === subject
       && (!moduleCode || node.module === moduleCode)
       && (node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point')
     ))
