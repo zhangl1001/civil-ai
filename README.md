@@ -66,6 +66,15 @@ The architecture is designed for reuse, but the repository does not claim that e
 
 The civil-service adapter currently demonstrates candidate profiles, target scores, daily plans, objective and subjective practice, grading, error diagnosis, wrong-answer review, spaced review, essay workflows, interview training, and capability reporting. These workflows validate the foundation; their exam-specific policies remain isolated in the reference domain.
 
+## Reference application preview
+
+These screenshots use a synthetic learner profile and maintainer-authored demonstration data. The Chinese mobile interface is the current reference adapter; the reusable contracts are documented in English throughout the repository.
+
+| Evidence-driven tutor home | Trustworthy baseline diagnosis | Adaptive practice orchestration |
+| --- | --- | --- |
+| <img src="docs/assets/reference-app/adaptive-home.jpg" alt="Evidence-driven tutor home" width="250"> | <img src="docs/assets/reference-app/evidence-diagnosis.jpg" alt="Trustworthy baseline diagnosis" width="250"> | <img src="docs/assets/reference-app/adaptive-practice.jpg" alt="Adaptive practice orchestration" width="250"> |
+| The primary action changes with learner evidence instead of presenting a static feature dashboard. | Self-reported scores remain untrusted until objective evidence establishes a usable baseline. | Tutor, self-directed, and reference-question paths share one task and question-set foundation. |
+
 ## Architecture
 
 ```mermaid

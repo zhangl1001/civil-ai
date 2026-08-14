@@ -1,10 +1,14 @@
-# AI 私教服务架构设计
+# Adaptive Tutoring Agent Service Architecture / 自适应教育 Agent 服务架构
 
 > 文档性质：公开架构参考
 > 上位约束：[Civil AI 教育 Agent 架构宪法](./architecture-constitution.md)
 > 业务边界：[核心业务模块架构](./core-business-architecture.md)
 > 部署方式：本地 TypeScript 服务层直接访问用户配置的模型供应商，不依赖自建云服务。
 > Agent Runtime 边界决策：[ADR-001：供应商无关的本地 Tutor Agent Runtime](./adr-001-provider-neutral-agent-runtime.md)
+
+## English summary
+
+This document defines the reusable adaptive tutoring service layer. The Agent interprets learner intent, selects registered Skills and Tools, and coordinates recoverable workflows; deterministic application use cases retain ownership of validation, authorization, learning evidence, and persistence. Civil-service teaching policies are loaded by the reference application's registries and composition roots rather than embedded in the Agent kernel.
 
 ## 1. 设计目标
 

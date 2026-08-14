@@ -24,14 +24,13 @@ body:
     attributes:
       label: Primary area
       options:
-        - Candidate onboarding and exam cycle
-        - Daily planning and proactive tutoring
-        - Practice, grading, and wrong-book review
-        - Essay or interview learning
-        - Agent runtime, tools, and skills
-        - Content generation and rendering
+        - Agent runtime, providers, tools, and skills
+        - Learner evidence, mastery, and adaptive planning
+        - Learning-domain adapter, curriculum, and rubrics
+        - Structured content generation and rendering
         - Local data, SQLite, and recovery
         - iOS experience and native capabilities
+        - Civil-service reference application
         - Documentation and maintainership
         - Other
     validations:
