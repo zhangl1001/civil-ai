@@ -1,4 +1,8 @@
-import type { PromptCompiler, ProviderGateway } from '@/capabilities/ai-runtime/public';
+import type {
+  PromptCompiler,
+  PromptRegistry,
+  ProviderGateway
+} from '@/capabilities/ai-runtime/public';
 import { AssessmentRole, type CapabilityNodeId, type JsonObject } from '@/kernel/public';
 import {
   AgentRunAction,
@@ -38,7 +42,8 @@ import type {
 import type { UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import type { RequestStructuredPractice } from '@/modules/teaching/public';
 import { aiBusinessTools, type AIBusinessToolCall, type AIBusinessToolName, type AIBusinessToolResult } from '@/services/AIBusinessTools';
-import { practiceModuleCode } from '@/domain/labels';
+import { selectPracticeCapability } from './selectPracticeCapability';
+import { compilePinned, pinPromptResolution } from './DurablePromptPinning';
 import type { GenerationIntent } from '@/services/GenerationTaskService';
 import {
   createStructuredPracticeAgentHandler,
@@ -73,6 +78,7 @@ export interface TutorAgentHandlerDependencies {
   readonly diagnoses: ErrorDiagnosisRepository;
   readonly runErrorDiagnosis: RunAiErrorDiagnosis;
   readonly promptCompiler: PromptCompiler;
+  readonly promptRegistry: PromptRegistry;
   readonly transitionAgentRun: TransitionAgentRun;
   readonly updateAgentRunProgress: UpdateAgentRunProgress;
   readonly invokeAgentModel: InvokeAgentModel;
@@ -241,10 +247,11 @@ async function executeBusinessOperation(
   };
   let resultData: JsonObject = {};
   const executionSignal = signal ?? new AbortController().signal;
+  const promptPins = await pinPromptResolution(run, dependencies);
   const context: BusinessAgentExecutionContext = {
     signal: executionSignal,
     compilePrompt: (promptCode, payload) => {
-      const compiled = dependencies.promptCompiler.compile(promptCode, {}, payload);
+      const compiled = compilePinned(promptPins, dependencies, promptCode, payload);
       return {
         system: compiled.system,
         user: compiled.user,
@@ -298,23 +305,7 @@ async function executeBusinessOperation(
       const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
       const nodes = curriculum?.capabilityNodes
         .filter((node) => node.status === 'active' && node.subject === 'aptitude') ?? [];
-      const moduleCode = practiceModuleCode(input.module);
-      const candidates = moduleCode ? nodes.filter((node) => node.module === moduleCode) : nodes;
-      const matched = (
-        input.knowledgePoint
-          ? candidates.find((node) => (
-            node.name.includes(input.knowledgePoint!)
-            || input.knowledgePoint!.includes(node.name)
-            || node.code.includes(input.knowledgePoint!)
-          ))
-          : undefined
-      );
-      const trainable = candidates.filter((node) => node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point');
-      const indexed = trainable.length
-        ? trainable[Math.max(0, Math.floor(input.capabilityIndex ?? 0)) % trainable.length]
-        : undefined;
-      const capability = matched ?? indexed ?? candidates.find((node) => node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point')
-        ?? nodes[0];
+      const capability = selectPracticeCapability(nodes, input);
       if (!capability) throw new Error('当前大纲没有可用的行测能力节点。');
       await context.update(42, '调用 AI 生成结构化讲义和题目');
       const aggregate = await dependencies.requestStructuredPractice.execute({

@@ -30,8 +30,13 @@ export {
   GenerationConstraintClass,
   type GenerationConstraintClass as GenerationConstraintClassValue
 } from './prompt/GenerationBoundaryPolicy';
-export { PromptRegistry } from './prompt/PromptRegistry';
+export {
+  PromptRegistry,
+  type PinnedPromptRef,
+  type PromptResolutionPins
+} from './prompt/PromptRegistry';
 export { structuredObjectivePromptV2 } from './fixtures/structuredObjectivePromptV2';
+export { sharedPromptBundles } from './fixtures/sharedPromptBundles';
 export { questionSetEnrichmentPromptV1 } from './fixtures/questionSetEnrichmentPromptV1';
 export { questionImportPolicyV1 } from './fixtures/questionImportPolicyV1';
 export { errorDiagnosisPromptV1 } from './fixtures/errorDiagnosisPromptV1';
@@ -52,6 +57,7 @@ export {
   PromptBundleEnsureStatus,
   type PromptBundleEnsureStatus as PromptBundleEnsureStatusCode
 } from './prompt/EnsurePromptBundle';
+export { installPromptBundles } from './prompt/InstallPromptBundles';
 export { FetchHttpTransport, type HttpTransport, type HttpTransportRequest } from './contracts/HttpTransport';
 export { AnthropicGateway, type AnthropicGatewayConfig } from './providers/AnthropicGateway';
 export {

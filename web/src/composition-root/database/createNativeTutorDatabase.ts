@@ -1,3 +1,5 @@
+import { activeGradingPolicy } from '@/domain/choiceGradingRules';
+import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { Capacitor } from '@capacitor/core';
 import { CapacitorSqliteDatabase } from '@/capabilities/database/adapters/sqlite/CapacitorSqliteDatabase';
 import { SqliteTutorDataMaintenance } from '@/capabilities/database/adapters/sqlite/SqliteTutorDataMaintenance';
@@ -28,12 +30,8 @@ import { SqlitePromptRepository } from '@/capabilities/ai-runtime/adapters/Sqlit
 import { SqliteAIInvocationRepository } from '@/capabilities/ai-runtime/adapters/SqliteAIInvocationRepository';
 import {
   EnsurePromptBundle,
-  errorDiagnosisBatchPromptV1,
-  errorDiagnosisPromptV1,
   PromptCompiler,
   PromptRegistry,
-  questionImportPolicyV1,
-  questionSetEnrichmentPromptV1,
   structuredObjectivePromptV2
 } from '@/capabilities/ai-runtime/public';
 import { SqliteContentRepository } from '@/modules/content/adapters/SqliteContentRepository';
@@ -177,7 +175,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     contentRepository,
     questionSourceRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    activeGradingPolicy
   );
   const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new SqlitePromptRepository(database, transactionScope);
@@ -206,11 +205,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const bundledContentMetadata = createBundledContentMetadata();
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
   const promptRegistry = new PromptRegistry();
-  promptRegistry.register(structuredObjectivePromptV2);
-  promptRegistry.register(questionSetEnrichmentPromptV1);
-  promptRegistry.register(questionImportPolicyV1);
-  promptRegistry.register(errorDiagnosisPromptV1);
-  promptRegistry.register(errorDiagnosisBatchPromptV1);
+
   const promptCompiler = new PromptCompiler(promptRegistry);
   const generationContextCompiler = new GenerationContextCompiler(
     candidateRepository,
@@ -246,7 +241,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     questionSourceRepository,
     promptCompiler,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    activeGradingPolicy
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
   const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
@@ -376,6 +372,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
       diagnoses: errorDiagnosisRepository,
       runErrorDiagnosis: runAiErrorDiagnosis,
       promptCompiler,
+      promptRegistry,
       transitionAgentRun,
       updateAgentRunProgress,
       invokeAgentModel,
@@ -579,11 +576,9 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
       await migrationRunner.migrate(clock.now());
       await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry).execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
-      await ensurePromptBundle.execute(structuredObjectivePromptV2);
-      await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
-      await ensurePromptBundle.execute(questionImportPolicyV1);
-      await ensurePromptBundle.execute(errorDiagnosisPromptV1);
-      await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);
+      // Registered only once the database has accepted them, so the runtime
+      // never holds wording storage rejected.
+      await installPromptBundles(ensurePromptBundle, promptRegistry, sharedPromptBundles);
       await recoverExpiredAgentRuns.execute();
       await database.healthCheck();
     },

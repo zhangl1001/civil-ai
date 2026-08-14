@@ -37,6 +37,17 @@ export class EnsurePromptBundle {
         : reportConflict(concurrentInstall, bundle);
     }
   }
+
+  /**
+   * What the database actually holds for this prompt version.
+   *
+   * On a conflict the stored copy wins: durable work replays by version, so the
+   * runtime has to compile the wording that was persisted rather than the copy
+   * this build happens to ship. Undefined only when nothing is stored yet.
+   */
+  async installed(bundle: PromptBundle): Promise<PromptBundle | undefined> {
+    return this.repository.find(bundle.examType, bundle.promptCode, bundle.version);
+  }
 }
 
 function samePrompt(installed: PromptBundle, bundled: PromptBundle): boolean {

@@ -1,3 +1,5 @@
+import { activeGradingPolicy } from '@/domain/choiceGradingRules';
+import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { IndexedDbTransactionScope, IndexedDbUnitOfWork } from '@/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork';
 import { TutorIndexedDb } from '@/capabilities/database/adapters/indexeddb/TutorIndexedDb';
 import { IndexedDbTutorDataMaintenance } from '@/capabilities/database/adapters/indexeddb/IndexedDbTutorDataMaintenance';
@@ -25,12 +27,8 @@ import { IndexedDbPromptRepository } from '@/capabilities/ai-runtime/adapters/In
 import { IndexedDbAIInvocationRepository } from '@/capabilities/ai-runtime/adapters/IndexedDbAIInvocationRepository';
 import {
   EnsurePromptBundle,
-  errorDiagnosisBatchPromptV1,
-  errorDiagnosisPromptV1,
   PromptCompiler,
   PromptRegistry,
-  questionImportPolicyV1,
-  questionSetEnrichmentPromptV1,
   structuredObjectivePromptV2
 } from '@/capabilities/ai-runtime/public';
 import { IndexedDbContentRepository } from '@/modules/content/adapters/IndexedDbContentRepository';
@@ -176,7 +174,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     contentRepository,
     questionSourceRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    activeGradingPolicy
   );
   const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new IndexedDbPromptRepository(database, transactionScope);
@@ -207,11 +206,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const bundledContentMetadata = createBundledContentMetadata();
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
   const promptRegistry = new PromptRegistry();
-  promptRegistry.register(structuredObjectivePromptV2);
-  promptRegistry.register(questionSetEnrichmentPromptV1);
-  promptRegistry.register(questionImportPolicyV1);
-  promptRegistry.register(errorDiagnosisPromptV1);
-  promptRegistry.register(errorDiagnosisBatchPromptV1);
+
   const promptCompiler = new PromptCompiler(promptRegistry);
   const generationContextCompiler = new GenerationContextCompiler(
     candidateRepository,
@@ -247,7 +242,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     questionSourceRepository,
     promptCompiler,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    activeGradingPolicy
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
   const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
@@ -377,6 +373,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
       diagnoses: errorDiagnosisRepository,
       runErrorDiagnosis: runAiErrorDiagnosis,
       promptCompiler,
+      promptRegistry,
       transitionAgentRun,
       updateAgentRunProgress,
       invokeAgentModel,
@@ -580,11 +577,9 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
       await database.open();
       await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry).execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
-      await ensurePromptBundle.execute(structuredObjectivePromptV2);
-      await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
-      await ensurePromptBundle.execute(questionImportPolicyV1);
-      await ensurePromptBundle.execute(errorDiagnosisPromptV1);
-      await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);
+      // Registered only once the database has accepted them, so the runtime
+      // never holds wording storage rejected.
+      await installPromptBundles(ensurePromptBundle, promptRegistry, sharedPromptBundles);
       await recoverExpiredAgentRuns.execute();
     },
     close: async () => database.close(),

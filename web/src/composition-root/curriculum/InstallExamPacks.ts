@@ -1,4 +1,4 @@
-import type { EnsurePromptBundle, PromptRegistry } from '@/capabilities/ai-runtime/public';
+import { installPromptBundles, type EnsurePromptBundle, type PromptRegistry } from '@/capabilities/ai-runtime/public';
 import { installCurriculumLabels } from '@/domain/labels';
 import { installChoiceGradingRule } from '@/domain/choiceGradingRules';
 import { installWrittenFormats } from '@/domain/writtenFormats';
@@ -26,10 +26,7 @@ export class InstallExamPacks {
   async execute(): Promise<void> {
     for (const pack of this.packs) {
       await this.ensureCurriculum.execute(pack.bundle);
-      for (const prompt of pack.promptBundles) {
-        this.promptRegistry.register(prompt);
-        await this.ensurePromptBundle.execute(prompt);
-      }
+      await installPromptBundles(this.ensurePromptBundle, this.promptRegistry, pack.promptBundles);
     }
     const active = await this.resolveActivePack();
     if (!active) return;
