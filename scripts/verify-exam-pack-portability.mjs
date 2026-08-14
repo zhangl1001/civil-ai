@@ -5,7 +5,7 @@
 // modules, score bands and 少选 rule all differ from 公务员考试. Anything that
 // still assumes 行测 shows up as a failure rather than as a surprise in the app.
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
@@ -121,6 +121,57 @@ try {
     'generation must select subjects by delivery kind, never by the civil-service subject code'
   );
   assert.match(generationSource, /ExamDeliveryKind\.Objective/);
+
+  // --- flows are chosen by how a subject is answered ---------------------------
+  const delivery = await server.ssrLoadModule('/src/domain/subjectDelivery.ts');
+  const planNavigation = await server.ssrLoadModule('/src/features/planning/DailyPlanNavigation.ts');
+  const practiceSubject = await server.ssrLoadModule('/src/features/practice/PracticeSubject.ts');
+  delivery.installSubjectDelivery(subjects);
+  assert.equal(delivery.subjectDeliveryKind('education_theory'), 'objective');
+  assert.equal(delivery.subjectDeliveryKind('aptitude'), undefined, 'another track\'s subject is unknown here');
+  assert.equal(delivery.isInterviewSubject('education_theory'), false);
+
+  const planItem = { id: 'item:1', itemType: 'independent_practice', capabilityNodeId: 'capability:edu-theory:pedagogy:principles', exitCriteria: {} };
+  const route = planNavigation.dailyPlanItemLocation(planItem, 'education_theory');
+  assert.equal(route.path, '/vue/practice');
+  assert.equal(route.query.subject, 'aptitude', 'an objective subject reaches the objective flow whatever it is called');
+
+  // The label follows the package, so this track never says 行测 on screen.
+  assert.equal(practiceSubject.practiceSubjectLabel('aptitude'), '教综');
+
+  // The civil-service track keeps its own answer, including the interview flow.
+  const civil = curriculum.projectExamSubjects(packs.find((pack) => pack.examType === 'civil_service').bundle);
+  delivery.installSubjectDelivery(civil);
+  assert.equal(delivery.subjectDeliveryKind('interview'), 'interview');
+  assert.equal(
+    planNavigation.dailyPlanItemLocation(planItem, 'interview').path,
+    '/vue/interview',
+    'the interview flow is reached by delivery kind, not by subject code'
+  );
+  assert.equal(practiceSubject.practiceSubjectLabel('essay'), '申论');
+
+  // --- the schema must not decide which subjects exist -------------------------
+  // A CHECK listing subject codes rejects a package's rows outright, which no
+  // amount of application-level indirection can work around.
+  const migrationDirectory = path.join(root, 'src/capabilities/database/migrations');
+  const migrationFiles = (await readdir(migrationDirectory)).filter((name) => name.endsWith('.sql'));
+  const currentSubjectChecks = [];
+  for (const name of migrationFiles) {
+    const sql = await readFile(path.join(migrationDirectory, name), 'utf8');
+    // Only the live shape matters: a rebuilt table's old definition is history.
+    for (const match of sql.matchAll(/subject TEXT NOT NULL CHECK\(subject IN \(([^)]*)\)\)/g)) {
+      currentSubjectChecks.push(`${name}: ${match[1]}`);
+    }
+  }
+  assert.deepEqual(
+    currentSubjectChecks.filter((entry) => !entry.startsWith('035_')),
+    [],
+    'no migration after the original may constrain subject to a fixed set of codes'
+  );
+  const latestBlockShape = await readFile(
+    path.join(migrationDirectory, '042_daily_plan_block_subject.sql'), 'utf8'
+  );
+  assert.match(latestBlockShape, /subject TEXT NOT NULL CHECK\(length\(subject\) > 0\)/);
 
   console.log(`Exam pack portability verification passed (${packs.length} packages, ${subjects.length} subjects on the second track).`);
 } finally {

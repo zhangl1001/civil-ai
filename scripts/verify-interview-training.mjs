@@ -56,6 +56,13 @@ try {
   assert.equal(prompts.BusinessTutorPromptCode.InterviewQuestions, 'content.generate.interview.questions');
   assert.equal(prompts.BusinessTutorPromptCode.InterviewReview, 'teaching.review.interview');
 
+  // Routing reads how the subject is answered, so the active package has to be
+  // installed first — a subject code alone no longer names a flow.
+  const curriculum = await server.ssrLoadModule('/src/modules/curriculum/public.ts');
+  const delivery = await server.ssrLoadModule('/src/domain/subjectDelivery.ts');
+  delivery.installSubjectDelivery(
+    curriculum.projectExamSubjects(curriculum.createBundledNationalCurriculum())
+  );
   const location = navigation.dailyPlanItemLocation(planItem(), 'interview');
   assert.equal(location.path, '/vue/interview');
   assert.equal(location.query.dailyPlanItemId, 'DailyPlanItemId:interview');

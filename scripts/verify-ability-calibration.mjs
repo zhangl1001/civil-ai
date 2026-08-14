@@ -130,6 +130,27 @@ function curriculumBundle() {
       {
         id: 'cap:essay:material', code: 'essay.material_analysis', name: '材料分析', module: 'essay',
         subject: 'essay', nodeType: 'knowledge_point', status: 'active', scoreWeight: 1
+      },
+      // Subject nodes carry the delivery policies below; calibration reads them
+      // to learn which subjects it can model accuracy for at all.
+      {
+        id: 'subject:aptitude', code: 'aptitude', name: '行政职业能力测验', module: 'aptitude',
+        subject: 'aptitude', nodeType: 'subject', status: 'active', scoreWeight: 1, sequence: 10
+      },
+      {
+        id: 'subject:essay', code: 'essay', name: '申论', module: 'essay',
+        subject: 'essay', nodeType: 'subject', status: 'active', scoreWeight: 1, sequence: 20
+      }
+    ],
+    capabilityEdges: [],
+    assessmentPolicies: [
+      {
+        id: 'policy:aptitude:delivery', subject: 'aptitude', policyType: 'exam_delivery',
+        version: '1.0.0', status: 'published', config: { deliveryKind: 'objective' }
+      },
+      {
+        id: 'policy:essay:delivery', subject: 'essay', policyType: 'exam_delivery',
+        version: '1.0.0', status: 'published', config: { deliveryKind: 'subjective' }
       }
     ]
   };

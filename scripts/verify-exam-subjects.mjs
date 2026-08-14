@@ -46,9 +46,11 @@ try {
   assert.equal(essay.deliveryKind, curriculum.ExamDeliveryKind.Subjective);
   assert.equal(essay.mockExam.defaultDurationMinutes, 180);
 
-  // Interview declares a delivery kind but no mock paper, so exam flows skip it.
+  // Interview is its own delivery kind, not a flavour of subjective: the flow
+  // that answers it is reached by kind rather than by the subject's code.
   const interview = subjects[2];
-  assert.equal(interview.deliveryKind, curriculum.ExamDeliveryKind.Subjective);
+  assert.equal(interview.deliveryKind, curriculum.ExamDeliveryKind.Interview);
+  assert.notEqual(interview.deliveryKind, essay.deliveryKind);
   assert.equal(interview.mockExam, undefined);
   assert.equal(interview.shortName, '面试');
   // Subjects whose full name already fits carry no short name.

@@ -39,6 +39,7 @@ import learningProgressSql from './038_learning_progress.sql?raw';
 import capabilityShortNameSql from './039_capability_short_name.sql?raw';
 import promptExamScopeSql from './040_prompt_exam_scope.sql?raw';
 import questionSetGradingPolicySql from './041_question_set_grading_policy.sql?raw';
+import dailyPlanBlockSubjectSql from './042_daily_plan_block_subject.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -287,5 +288,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'question_set_grading_policy',
     checksum: 'sha256:03fae1ebae62deeffebaed6cb9b4eca96795c8f3310ff763414d7ab303e14f37',
     sql: questionSetGradingPolicySql
+  },
+  {
+    version: 42,
+    name: 'daily_plan_block_subject',
+    checksum: 'sha256:002849a0ed05555ba063b5bcbd26a8d9dd50464745b17ed9ac9b96a8ae2b903f',
+    sql: dailyPlanBlockSubjectSql
   }
 ];

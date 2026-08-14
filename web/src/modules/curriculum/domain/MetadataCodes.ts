@@ -65,9 +65,16 @@ export type AssessmentPolicyType = typeof AssessmentPolicyType[keyof typeof Asse
  * answer key; subjective subjects are graded against a rubric. Exam flows branch
  * on this instead of on a subject name, so a new exam pack only ships metadata.
  */
+/**
+ * How a subject is answered, which is what decides where the app sends a
+ * candidate. Interview is its own kind rather than a flavour of subjective:
+ * calling it subjective forced every caller to special-case the civil-service
+ * subject code to find the interview flow.
+ */
 export const ExamDeliveryKind = {
   Objective: 'objective',
-  Subjective: 'subjective'
+  Subjective: 'subjective',
+  Interview: 'interview'
 } as const;
 
 export type ExamDeliveryKind = typeof ExamDeliveryKind[keyof typeof ExamDeliveryKind];

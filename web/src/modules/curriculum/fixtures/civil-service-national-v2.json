@@ -4,12 +4,12 @@
     "packageType": "curriculum",
     "examType": "civil_service",
     "regionScope": "national",
-    "version": "2.7.0",
+    "version": "2.8.0",
     "status": "published",
     "source": "bundled",
-    "contentHash": "sha256:16f476384e42978be99c7960dbb12cfb09c8b993e3c8500de0b2e7e2af50acdd",
+    "contentHash": "sha256:ec68cc39c9455fd687ed8840ac255a4d3abf9946098e9331cc21d1e9342cba45",
     "schemaVersion": "1",
-    "releaseNotes": "客观题少选计分规则进入考试包策略，不再写死在判分代码里",
+    "releaseNotes": "面试独立为一种答题方式，路由不再按科目代码特判",
     "publishedAt": 1784016000000,
     "installedAt": 1784016000000
   },
@@ -19,7 +19,7 @@
       "metadataPackageId": "metadata:curriculum:civil-service-national:v2",
       "examType": "civil_service",
       "regionScope": "national",
-      "version": "2.7.0",
+      "version": "2.8.0",
       "status": "published",
       "createdAt": 1784016000000
     },
@@ -34,7 +34,10 @@
         "module": "aptitude",
         "sequence": 10,
         "scoreWeight": 1,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -47,7 +50,10 @@
         "module": "judgment",
         "sequence": 20,
         "scoreWeight": 0.25,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -60,7 +66,10 @@
         "module": "judgment",
         "sequence": 30,
         "scoreWeight": 0.1,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -75,7 +84,10 @@
         "scoreWeight": 0.02,
         "defaultTargetAccuracy": 0.85,
         "defaultTargetSeconds": 65,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -90,7 +102,10 @@
         "scoreWeight": 0.02,
         "defaultTargetAccuracy": 0.82,
         "defaultTargetSeconds": 70,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -105,7 +120,10 @@
         "scoreWeight": 0.025,
         "defaultTargetAccuracy": 0.8,
         "defaultTargetSeconds": 75,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -120,7 +138,10 @@
         "scoreWeight": 0.012,
         "defaultTargetAccuracy": 0.82,
         "defaultTargetSeconds": 70,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -135,7 +156,10 @@
         "scoreWeight": 0.013,
         "defaultTargetAccuracy": 0.78,
         "defaultTargetSeconds": 80,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -150,7 +174,10 @@
         "scoreWeight": 0.02,
         "defaultTargetAccuracy": 0.8,
         "defaultTargetSeconds": 75,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -165,7 +192,10 @@
         "scoreWeight": 0.02,
         "defaultTargetAccuracy": 0.78,
         "defaultTargetSeconds": 80,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -178,7 +208,10 @@
         "module": "judgment",
         "sequence": 102,
         "scoreWeight": 0.05,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -193,7 +226,10 @@
         "scoreWeight": 0.02,
         "defaultTargetAccuracy": 0.75,
         "defaultTargetSeconds": 70,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -208,7 +244,10 @@
         "scoreWeight": 0.02,
         "defaultTargetAccuracy": 0.75,
         "defaultTargetSeconds": 75,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -221,7 +260,10 @@
         "module": "judgment",
         "sequence": 105,
         "scoreWeight": 0.04,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -236,7 +278,10 @@
         "scoreWeight": 0.03,
         "defaultTargetAccuracy": 0.8,
         "defaultTargetSeconds": 65,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -249,7 +294,10 @@
         "module": "judgment",
         "sequence": 107,
         "scoreWeight": 0.04,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -264,7 +312,10 @@
         "scoreWeight": 0.03,
         "defaultTargetAccuracy": 0.82,
         "defaultTargetSeconds": 50,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -278,7 +329,10 @@
         "module": "verbal",
         "sequence": 110,
         "scoreWeight": 0.3,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -291,7 +345,10 @@
         "module": "verbal",
         "sequence": 115,
         "scoreWeight": 0.14,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -306,7 +363,10 @@
         "scoreWeight": 0.08,
         "defaultTargetAccuracy": 0.8,
         "defaultTargetSeconds": 70,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -321,7 +381,10 @@
         "scoreWeight": 0.06,
         "defaultTargetAccuracy": 0.8,
         "defaultTargetSeconds": 70,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -336,7 +399,10 @@
         "scoreWeight": 0.06,
         "defaultTargetAccuracy": 0.82,
         "defaultTargetSeconds": 65,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -349,7 +415,10 @@
         "module": "verbal",
         "sequence": 128,
         "scoreWeight": 0.12,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -364,7 +433,10 @@
         "scoreWeight": 0.08,
         "defaultTargetAccuracy": 0.78,
         "defaultTargetSeconds": 55,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -379,7 +451,10 @@
         "scoreWeight": 0.06,
         "defaultTargetAccuracy": 0.76,
         "defaultTargetSeconds": 55,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -392,7 +467,10 @@
         "module": "data_analysis",
         "sequence": 140,
         "scoreWeight": 0.2,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -405,7 +483,10 @@
         "module": "data_analysis",
         "sequence": 145,
         "scoreWeight": 0.16,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -420,7 +501,10 @@
         "scoreWeight": 0.06,
         "defaultTargetAccuracy": 0.85,
         "defaultTargetSeconds": 75,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -435,7 +519,10 @@
         "scoreWeight": 0.06,
         "defaultTargetAccuracy": 0.82,
         "defaultTargetSeconds": 80,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -450,7 +537,10 @@
         "scoreWeight": 0.05,
         "defaultTargetAccuracy": 0.84,
         "defaultTargetSeconds": 75,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -465,7 +555,10 @@
         "scoreWeight": 0.05,
         "defaultTargetAccuracy": 0.82,
         "defaultTargetSeconds": 80,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -478,7 +571,10 @@
         "module": "quantity",
         "sequence": 170,
         "scoreWeight": 0.15,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -491,7 +587,10 @@
         "module": "quantity",
         "sequence": 175,
         "scoreWeight": 0.12,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -506,7 +605,10 @@
         "scoreWeight": 0.04,
         "defaultTargetAccuracy": 0.72,
         "defaultTargetSeconds": 95,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -521,7 +623,10 @@
         "scoreWeight": 0.04,
         "defaultTargetAccuracy": 0.7,
         "defaultTargetSeconds": 100,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -536,7 +641,10 @@
         "scoreWeight": 0.035,
         "defaultTargetAccuracy": 0.72,
         "defaultTargetSeconds": 95,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -551,7 +659,10 @@
         "scoreWeight": 0.035,
         "defaultTargetAccuracy": 0.68,
         "defaultTargetSeconds": 110,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -564,7 +675,10 @@
         "module": "common_sense",
         "sequence": 200,
         "scoreWeight": 0.1,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -577,7 +691,10 @@
         "module": "common_sense",
         "sequence": 205,
         "scoreWeight": 0.08,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -592,7 +709,10 @@
         "scoreWeight": 0.03,
         "defaultTargetAccuracy": 0.7,
         "defaultTargetSeconds": 45,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -607,7 +727,10 @@
         "scoreWeight": 0.03,
         "defaultTargetAccuracy": 0.68,
         "defaultTargetSeconds": 45,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -622,7 +745,10 @@
         "scoreWeight": 0.025,
         "defaultTargetAccuracy": 0.7,
         "defaultTargetSeconds": 45,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -637,7 +763,10 @@
         "scoreWeight": 0.025,
         "defaultTargetAccuracy": 0.68,
         "defaultTargetSeconds": 45,
-        "masteryPolicy": { "policyCode": "aptitude_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "aptitude_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -649,7 +778,10 @@
         "module": "essay",
         "sequence": 300,
         "scoreWeight": 1,
-        "masteryPolicy": { "policyCode": "essay_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "essay_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -662,7 +794,10 @@
         "module": "essay",
         "sequence": 310,
         "scoreWeight": 0.45,
-        "masteryPolicy": { "policyCode": "essay_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "essay_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -675,7 +810,10 @@
         "module": "essay",
         "sequence": 320,
         "scoreWeight": 0.55,
-        "masteryPolicy": { "policyCode": "essay_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "essay_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -688,7 +826,10 @@
         "module": "interview",
         "sequence": 400,
         "scoreWeight": 1,
-        "masteryPolicy": { "policyCode": "interview_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "interview_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -701,7 +842,10 @@
         "module": "interview",
         "sequence": 410,
         "scoreWeight": 0.35,
-        "masteryPolicy": { "policyCode": "interview_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "interview_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -714,7 +858,10 @@
         "module": "interview",
         "sequence": 420,
         "scoreWeight": 0.25,
-        "masteryPolicy": { "policyCode": "interview_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "interview_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -727,7 +874,10 @@
         "module": "interview",
         "sequence": 430,
         "scoreWeight": 0.25,
-        "masteryPolicy": { "policyCode": "interview_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "interview_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       },
       {
@@ -740,16 +890,44 @@
         "module": "interview",
         "sequence": 440,
         "scoreWeight": 0.15,
-        "masteryPolicy": { "policyCode": "interview_default", "policyVersion": "1.0.0" },
+        "masteryPolicy": {
+          "policyCode": "interview_default",
+          "policyVersion": "1.0.0"
+        },
         "status": "active"
       }
     ],
     "capabilityEdges": [
-      { "fromNodeId": "capability:aptitude:judgment:argument-structure", "toNodeId": "capability:aptitude:judgment:weaken", "relationType": "prerequisite", "weight": 1 },
-      { "fromNodeId": "capability:aptitude:judgment:causal-reasoning", "toNodeId": "capability:aptitude:judgment:weaken", "relationType": "prerequisite", "weight": 0.8 },
-      { "fromNodeId": "capability:aptitude:judgment:weaken", "toNodeId": "capability:aptitude:judgment:strengthen", "relationType": "related", "weight": 0.8 },
-      { "fromNodeId": "capability:aptitude:judgment:weaken", "toNodeId": "capability:aptitude:judgment:assumption", "relationType": "transfer", "weight": 0.7 },
-      { "fromNodeId": "capability:aptitude:judgment:weaken-method", "toNodeId": "capability:aptitude:judgment:weaken-strength", "relationType": "prerequisite", "weight": 0.9 }
+      {
+        "fromNodeId": "capability:aptitude:judgment:argument-structure",
+        "toNodeId": "capability:aptitude:judgment:weaken",
+        "relationType": "prerequisite",
+        "weight": 1
+      },
+      {
+        "fromNodeId": "capability:aptitude:judgment:causal-reasoning",
+        "toNodeId": "capability:aptitude:judgment:weaken",
+        "relationType": "prerequisite",
+        "weight": 0.8
+      },
+      {
+        "fromNodeId": "capability:aptitude:judgment:weaken",
+        "toNodeId": "capability:aptitude:judgment:strengthen",
+        "relationType": "related",
+        "weight": 0.8
+      },
+      {
+        "fromNodeId": "capability:aptitude:judgment:weaken",
+        "toNodeId": "capability:aptitude:judgment:assumption",
+        "relationType": "transfer",
+        "weight": 0.7
+      },
+      {
+        "fromNodeId": "capability:aptitude:judgment:weaken-method",
+        "toNodeId": "capability:aptitude:judgment:weaken-strength",
+        "relationType": "prerequisite",
+        "weight": 0.9
+      }
     ],
     "assessmentPolicies": [
       {
@@ -790,11 +968,26 @@
         "version": "1.0.0",
         "config": {
           "dimensions": [
-            { "code": "relevance", "weight": 0.25 },
-            { "code": "evidence_extraction", "weight": 0.25 },
-            { "code": "structure", "weight": 0.2 },
-            { "code": "reasoning", "weight": 0.2 },
-            { "code": "expression", "weight": 0.1 }
+            {
+              "code": "relevance",
+              "weight": 0.25
+            },
+            {
+              "code": "evidence_extraction",
+              "weight": 0.25
+            },
+            {
+              "code": "structure",
+              "weight": 0.2
+            },
+            {
+              "code": "reasoning",
+              "weight": 0.2
+            },
+            {
+              "code": "expression",
+              "weight": 0.1
+            }
           ]
         },
         "status": "published",
@@ -821,10 +1014,22 @@
         "version": "1.0.0",
         "config": {
           "dimensions": [
-            { "code": "content", "weight": 0.35 },
-            { "code": "structure", "weight": 0.25 },
-            { "code": "expression", "weight": 0.25 },
-            { "code": "fluency", "weight": 0.15 }
+            {
+              "code": "content",
+              "weight": 0.35
+            },
+            {
+              "code": "structure",
+              "weight": 0.25
+            },
+            {
+              "code": "expression",
+              "weight": 0.25
+            },
+            {
+              "code": "fluency",
+              "weight": 0.15
+            }
           ]
         },
         "status": "published",
@@ -837,17 +1042,46 @@
         "version": "1.0.0",
         "config": {
           "deliveryKind": "objective",
-          "score": { "maxScore": 100, "defaultCurrent": 50, "defaultTarget": 80 },
-          "choiceGrading": { "underSelectionCreditWeight": 0.5 },
+          "score": {
+            "maxScore": 100,
+            "defaultCurrent": 50,
+            "defaultTarget": 80
+          },
+          "choiceGrading": {
+            "underSelectionCreditWeight": 0.5
+          },
           "mockExam": {
             "defaultQuestionCount": 120,
             "defaultDurationMinutes": 120,
             "schemes": [
-              { "code": "national", "name": "国考标准", "questionCount": 135, "durationMinutes": 120 },
-              { "code": "provincial", "name": "省考标准", "questionCount": 120, "durationMinutes": 120 },
-              { "code": "compact", "name": "精简版", "questionCount": 60, "durationMinutes": 60 }
+              {
+                "code": "national",
+                "name": "国考标准",
+                "questionCount": 135,
+                "durationMinutes": 120
+              },
+              {
+                "code": "provincial",
+                "name": "省考标准",
+                "questionCount": 120,
+                "durationMinutes": 120
+              },
+              {
+                "code": "compact",
+                "name": "精简版",
+                "questionCount": 60,
+                "durationMinutes": 60
+              }
             ],
-            "focusTags": ["近5年真题", "高频考点", "易错题型", "时政热点", "新题型预测", "基础巩固", "拔高难题"]
+            "focusTags": [
+              "近5年真题",
+              "高频考点",
+              "易错题型",
+              "时政热点",
+              "新题型预测",
+              "基础巩固",
+              "拔高难题"
+            ]
           }
         },
         "status": "published",
@@ -860,13 +1094,32 @@
         "version": "1.0.0",
         "config": {
           "deliveryKind": "subjective",
-          "score": { "maxScore": 100, "defaultCurrent": 50, "defaultTarget": 70 },
+          "score": {
+            "maxScore": 100,
+            "defaultCurrent": 50,
+            "defaultTarget": 70
+          },
           "writtenFormats": [
-            { "name": "归纳概括", "longForm": false },
-            { "name": "综合分析", "longForm": false },
-            { "name": "提出对策", "longForm": false },
-            { "name": "贯彻执行", "longForm": false },
-            { "name": "申发论述", "longForm": true }
+            {
+              "name": "归纳概括",
+              "longForm": false
+            },
+            {
+              "name": "综合分析",
+              "longForm": false
+            },
+            {
+              "name": "提出对策",
+              "longForm": false
+            },
+            {
+              "name": "贯彻执行",
+              "longForm": false
+            },
+            {
+              "name": "申发论述",
+              "longForm": true
+            }
           ],
           "mockExam": {
             "defaultQuestionCount": 1,
@@ -884,7 +1137,7 @@
         "policyType": "exam_delivery",
         "version": "1.0.0",
         "config": {
-          "deliveryKind": "subjective"
+          "deliveryKind": "interview"
         },
         "status": "published",
         "createdAt": 1784016000000

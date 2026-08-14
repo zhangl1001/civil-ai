@@ -82,7 +82,7 @@ for (const node of nodes) {
 // Exam flows resolve a subject's answering mode from metadata, so every subject
 // node must carry a published, parseable exam_delivery policy.
 const policies = fixture.payload.assessmentPolicies;
-const deliveryKinds = new Set(['objective', 'subjective']);
+const deliveryKinds = new Set(['objective', 'subjective', 'interview']);
 const deliveryBySubject = new Map();
 for (const policy of policies) {
   if (policy.policyType !== 'exam_delivery') continue;

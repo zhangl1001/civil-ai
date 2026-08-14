@@ -2,6 +2,7 @@ import { installPromptBundles, type EnsurePromptBundle, type PromptRegistry } fr
 import { installCurriculumLabels } from '@/domain/labels';
 import { installChoiceGradingRule } from '@/domain/choiceGradingRules';
 import { installWrittenFormats } from '@/domain/writtenFormats';
+import { installSubjectDelivery } from '@/domain/subjectDelivery';
 import type { AlignCandidateCurriculum, CandidateRepository } from '@/modules/candidate/public';
 import { projectExamSubjects, type BundledCurriculumPack, type EnsureCurriculumBundle } from '@/modules/curriculum/public';
 
@@ -38,6 +39,7 @@ export class InstallExamPacks {
     installCurriculumLabels(active.bundle.capabilityNodes);
     installWrittenFormats(subjects);
     installChoiceGradingRule(subjects);
+    installSubjectDelivery(subjects);
   }
 
   /**
