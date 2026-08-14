@@ -2,32 +2,35 @@
 
 This roadmap communicates product direction and contribution opportunities. It is not a promise of release dates. Priorities may change after user feedback, device testing, security review, or provider changes.
 
-## Product direction
+## Project direction
 
-Civil AI aims to become a local-first AI tutor that can explain what a candidate should do next and support that decision with learning evidence. The target loop is:
+Civil AI aims to provide a local-first adaptive tutoring foundation that can explain what a learner should do next and support that decision with durable learning evidence. A learning domain supplies its curriculum, capability graph, assessment rules, and teaching policies through explicit adapters. The civil-service exam application is the current end-to-end reference domain.
 
-`candidate profile -> capability baseline -> daily plan -> learning and practice -> grading -> diagnosis -> targeted remediation -> spaced review -> measurable capability change`
+The foundation's target loop is:
 
-## Now: reliable personal learning loop
+`learner profile -> capability baseline -> adaptive plan -> learning and practice -> assessment -> diagnosis -> targeted remediation -> spaced review -> measurable capability change`
 
-- Stabilize structured generation, enrichment, grading, and error-diagnosis latency.
-- Improve daily plans so learning, practice, review, and current-affairs accumulation share one coherent workload budget.
-- Expand real-question import with explicit provenance, rights boundaries, and device-safe document handling.
-- Complete iOS lifecycle, cancellation, SQLite recovery, and background-task validation on physical devices.
-- Publish repeatable release, upgrade, and rollback procedures.
+## Now: reliable foundation and reference loop
 
-## Next: evidence-driven tutoring
+- Stabilize Agent execution, structured generation, enrichment, assessment, and diagnosis latency.
+- Harden cancellation, leases, idempotency, SQLite recovery, and physical-device lifecycle behavior.
+- Define conformance checks for provider adapters, learning-domain metadata, content blocks, and repository ports.
+- Keep the civil-service reference loop reliable across planning, learning, practice, review, essay, and interview workflows.
+- Publish repeatable setup, release, upgrade, rollback, and security-response procedures.
 
-- Improve baseline calibration across aptitude, essay, and interview dimensions.
-- Make mastery confidence, forgetting risk, transfer ability, and time pressure visible to the candidate.
-- Let the tutor adapt teaching depth and question volume to remaining exam time and observed fatigue.
-- Add richer lecture-to-practice linkage and verify that generated exercises cover the intended knowledge point.
+## Next: evidence-driven domain adaptation
+
+- Formalize learning-domain adapters for curricula, rubrics, assessment roles, and teaching strategies.
+- Improve baseline calibration, mastery confidence, forgetting risk, transfer evidence, and time-pressure modeling.
+- Let domain policies adapt teaching depth and workload to learner goals, remaining time, and observed fatigue.
+- Add richer lecture-to-practice linkage and verify that generated exercises cover the intended capability.
 - Expand accessibility, reduced-motion behavior, and device-size visual regression coverage.
 
-## Later: reusable local agent platform
+## Later: validate portability beyond the reference domain
 
-- Extract stable agent-runtime, provider-gateway, content-block, and local-database boundaries for reuse.
+- Stabilize and document the Agent-runtime, provider-gateway, content-block, learner-evidence, and local-database boundaries for reuse.
 - Document third-party provider adapter contracts and conformance tests.
+- Add a small second learning-domain adapter that does not import civil-service policies.
 - Add an Android shell after the iOS lifecycle and data contracts are stable.
 - Support privacy-preserving optional sync without making a cloud service mandatory.
 
@@ -38,6 +41,7 @@ Good starting areas include:
 - documentation and reproducible bug reports;
 - accessibility and mobile layout fixes;
 - provider adapter conformance tests;
+- learning-domain adapter examples and contract tests;
 - SQLite migration and recovery tests;
 - content rendering fixtures for tables, formulas, SVG, and shared passages;
 - performance measurements for generation, grading, and large local datasets.

@@ -1,6 +1,6 @@
 # Contributing to Civil AI
 
-Thank you for improving Civil AI. Contributions may include bug reports, documentation, tests, provider adapters, accessibility improvements, and focused product changes.
+Thank you for improving Civil AI. The repository contains a reusable adaptive education Agent foundation and a civil-service exam reference adapter that validates it end to end. Contributions may include bug reports, documentation, tests, provider adapters, learning-domain contracts, learning-evidence and Agent-runtime improvements, accessibility work, and focused reference-application changes.
 
 ## Before opening a change
 

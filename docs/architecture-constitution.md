@@ -1,8 +1,14 @@
-# Zhangl Agent 架构宪法
+# Civil AI 教育 Agent 架构宪法
 
 > 状态：生效  
 > 适用范围：Vue/Capacitor 客户端、本地数据层、AI 工作流、提示词、iOS 原生插件及后续新增业务。  
-> 产品定位：以尽可能少但足够精准的教学和训练，持续解决个人真实能力缺口，并对目标分提升负责的本地优先 AI 公考私教。
+> 基础层定位：以学习证据为依据、可恢复且模型无关的本地优先自适应教育 Agent 基础实现。
+> 领域适配原则：课程、能力图谱、内容策略、评分规则和教学方法通过版本化合同接入；基础层不预设考试类型或学科。
+> 当前参考应用：以尽可能少但足够精准的教学和训练，持续解决个人真实能力缺口，并对目标分提升负责的 AI 公考私教。
+
+## English scope summary
+
+This constitution separates reusable adaptive-education mechanisms from the current civil-service reference domain. Agent execution, evidence, mastery, planning, structured content, rendering, and persistence belong to the foundation; exam curricula, question types, rubrics, and candidate workflows enter through versioned adapters. The repository describes these as reusable boundaries, not as universally validated abstractions, until a second learning domain exercises them end to end.
 
 ## 1. 宪法效力
 
@@ -22,6 +28,13 @@
 - 当前产品未上线，不保留旧业务模型、旧数据或旧接口兼容层。
 
 ## 2. 产品法则
+
+### 第零条：通用机制与参考领域必须分离
+
+- Agent 运行时、工具与 Skill、上下文、任务、学习证据、掌握度、计划、内容块、渲染和持久化适配器属于教育 Agent 基础层。
+- 考试周期、公考能力图谱、行测/申论/面试题型、评分规则和考生页面属于当前参考领域。
+- 基础层不得依赖公考术语、固定题型或特定考试政策；领域能力通过版本化合同、Registry、Fixture 和 Composition Root 装配。
+- 不得为了宣称“通用”而隐藏真实领域约束。尚未经第二教育领域验证的能力，应表述为可复用边界或参考实现，而不是已验证的通用结论。
 
 ### 第一条：能力结果优先于使用量
 

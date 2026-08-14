@@ -8,6 +8,12 @@ Fixes #
 
 <!-- Which module or capability owns this change? Why is that boundary correct? -->
 
+- [ ] Portable Agent capability
+- [ ] Adaptive tutoring foundation
+- [ ] Learning-domain adapter
+- [ ] Civil-service reference application
+- [ ] Documentation, governance, or release infrastructure
+
 ## User impact
 
 <!-- Describe visible behavior changes and compatibility concerns. -->
