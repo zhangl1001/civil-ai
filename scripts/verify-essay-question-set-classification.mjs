@@ -233,7 +233,9 @@ function verifyIdentityAndTaskScope(identity, tasks) {
   const actionParams = tasks.generationTaskActionParams({
     intent: 'mock',
     payload: {
-      subject: '申论',
+      // What EssayFlowService actually sends. The old fixture passed a subject
+      // display name, which no caller ever set.
+      deliveryKind: 'subjective',
       questionSetId: firstId,
       entryMode: 'tutor',
       essayTopic: '归纳概括',

@@ -40,11 +40,14 @@ try {
   const subjects = curriculum.projectExamSubjects(teacher.bundle);
   assert.deepEqual(
     subjects.map((subject) => subject.code),
-    ['education_theory', 'subject_knowledge'],
+    ['education_theory', 'subject_knowledge', 'teaching_design'],
     'subjects are whatever the package declares'
   );
-  assert.deepEqual(subjects.map((subject) => subject.shortName), ['教综', '学科']);
-  assert.deepEqual(subjects.map((subject) => subject.deliveryKind), ['objective', 'objective']);
+  assert.deepEqual(subjects.map((subject) => subject.shortName), ['教综', '学科', '写作']);
+  assert.deepEqual(
+    subjects.map((subject) => subject.deliveryKind),
+    ['objective', 'objective', 'subjective']
+  );
   assert.equal(subjects[0].score.maxScore, 150, 'score bands come from the package, not a 100-point assumption');
   assert.deepEqual(
     subjects[0].modules.map((module) => module.code),
@@ -73,8 +76,14 @@ try {
   labels.installCurriculumLabels(teacher.bundle.capabilityNodes);
   assert.equal(labels.practiceModuleLabel('pedagogy'), '教育学基础');
   assert.equal(labels.practiceModuleCode('教育学基础'), 'pedagogy');
+  // Written answering is named by the package too: nothing here is 申论.
   writtenFormats.installWrittenFormats(subjects);
-  assert.deepEqual(writtenFormats.writtenFormatNames(), [], 'an all-objective track offers no written formats');
+  assert.deepEqual(writtenFormats.writtenFormatNames(), ['教育案例分析', '教育写作']);
+  assert.equal(writtenFormats.isLongFormTopic('教育写作'), true, 'the package says which format is one long piece');
+  assert.equal(writtenFormats.isLongFormTopic('教育案例分析'), false);
+  assert.equal(writtenFormats.isLongFormTopic('申发论述'), false, 'another track\'s format is unknown here');
+  assert.equal(writtenFormats.defaultLongFormTopic(), '教育写作');
+  assert.equal(writtenFormats.defaultShortFormTopic(), '教育案例分析');
 
   // --- practice targeting works on this package's own modules ------------------
   const nodes = teacher.bundle.capabilityNodes.filter((node) => node.status === 'active');
@@ -103,7 +112,11 @@ try {
     subjects.filter((subject) => subject.deliveryKind === 'objective').map((subject) => subject.code)
   );
   const generationNodes = nodes.filter((node) => objectiveSubjects.has(node.subject));
-  assert.equal(generationNodes.length, nodes.length, 'every node of an all-objective track is generatable');
+  assert.ok(generationNodes.length > 0, 'the objective subjects of this track are generatable');
+  assert.ok(
+    generationNodes.every((node) => node.subject !== 'teaching_design'),
+    'a written subject is not fed to objective generation'
+  );
   assert.ok(
     capabilitySelection.selectPracticeCapability(generationNodes, { module: '心理学基础' }),
     'the generation path must resolve a capability on this package'
@@ -128,6 +141,7 @@ try {
   const practiceSubject = await server.ssrLoadModule('/src/features/practice/PracticeSubject.ts');
   delivery.installSubjectDelivery(subjects);
   assert.equal(delivery.subjectDeliveryKind('education_theory'), 'objective');
+  assert.equal(delivery.subjectDeliveryKind('teaching_design'), 'subjective');
   assert.equal(delivery.subjectDeliveryKind('aptitude'), undefined, 'another track\'s subject is unknown here');
   assert.equal(delivery.isInterviewSubject('education_theory'), false);
 
@@ -136,8 +150,14 @@ try {
   assert.equal(route.path, '/vue/practice');
   assert.equal(route.query.subject, 'aptitude', 'an objective subject reaches the objective flow whatever it is called');
 
-  // The label follows the package, so this track never says 行测 on screen.
+  // A written plan item reaches the written flow, named by this package.
+  const writtenRoute = planNavigation.dailyPlanItemLocation(planItem, 'teaching_design');
+  assert.equal(writtenRoute.path, '/vue/practice');
+  assert.equal(writtenRoute.query.subject, 'essay', 'a subjective subject reaches the written flow');
+
+  // Labels follow the package, so this track never says 行测 or 申论 on screen.
   assert.equal(practiceSubject.practiceSubjectLabel('aptitude'), '教综');
+  assert.equal(practiceSubject.practiceSubjectLabel('essay'), '写作');
 
   // The civil-service track keeps its own answer, including the interview flow.
   const civil = curriculum.projectExamSubjects(packs.find((pack) => pack.examType === 'civil_service').bundle);
@@ -149,6 +169,17 @@ try {
     'the interview flow is reached by delivery kind, not by subject code'
   );
   assert.equal(practiceSubject.practiceSubjectLabel('essay'), '申论');
+
+  // --- written mocks are dispatched by delivery kind, not by a subject name ----
+  const taskContract = await server.ssrLoadModule('/src/services/GenerationTaskContract.ts');
+  const writtenMock = taskContract.generationTaskActionParams({
+    intent: 'mock',
+    payload: { deliveryKind: 'subjective', essayTopic: '教育写作', essayType: 'long' }
+  });
+  assert.equal(writtenMock.type, 'long', 'a written mock reaches the written contract');
+  assert.equal(writtenMock.topic, '教育写作');
+  const untitledGrade = taskContract.generationTaskActionParams({ intent: 'essayGrade', payload: {} });
+  assert.equal(untitledGrade.topic, '教育案例分析', 'the default topic is the package\'s own short format');
 
   // --- the schema must not decide which subjects exist -------------------------
   // A CHECK listing subject codes rejects a package's rows outright, which no

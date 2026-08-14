@@ -1,4 +1,6 @@
 import type { JsonObject } from '@/kernel/public';
+import { ExamDeliveryKind } from '@/modules/curriculum/public';
+import { defaultShortFormTopic } from '@/domain/writtenFormats';
 
 export type GenerationIntent =
   | 'daily'
@@ -43,18 +45,21 @@ export function generationTaskActionParams(input: GenerationTaskInput): JsonObje
       ...linkage,
       entryMode: text(input.payload?.entryMode) || 'self',
       ...(text(input.payload?.questionSetId) ? { questionSetId: text(input.payload?.questionSetId)! } : {}),
-      topic: text(input.payload?.essayTopic) || '申论',
+      topic: text(input.payload?.essayTopic) || defaultShortFormTopic() || '',
       date: text(input.payload?.essayDate) || '',
       type: text(input.payload?.essayType) === 'long' ? 'long' : 'short',
       purpose: text(input.payload?.purpose) || 'practice'
     };
   }
-  if (input.intent === 'mock' && input.payload?.subject === '申论') {
+  // Written mocks are recognised by the delivery kind the caller sends. The
+  // old check compared a payload field nobody set against a civil-service
+  // subject name, so it never matched and could not have for another track.
+  if (input.intent === 'mock' && input.payload?.deliveryKind === ExamDeliveryKind.Subjective) {
     return {
       ...linkage,
       entryMode: text(input.payload?.entryMode) || 'self',
       ...(text(input.payload?.questionSetId) ? { questionSetId: text(input.payload?.questionSetId)! } : {}),
-      topic: text(input.payload?.essayTopic) || '申论',
+      topic: text(input.payload?.essayTopic) || defaultShortFormTopic() || '',
       date: text(input.payload?.date) || '',
       type: text(input.payload?.essayType) === 'long' ? 'long' : 'short',
       purpose: text(input.payload?.purpose) || 'practice',

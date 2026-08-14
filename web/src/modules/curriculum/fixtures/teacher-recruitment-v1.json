@@ -4,12 +4,12 @@
     "packageType": "curriculum",
     "examType": "teacher_recruitment",
     "regionScope": "national",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "status": "published",
     "source": "bundled",
-    "contentHash": "sha256:41908e07865bd5911626530add0fd6640bf09bc3a50507a6afc6dfe5d99ce28b",
+    "contentHash": "sha256:b2d534e8a3e4f5f7defecddea9a92685d1e94cef720c6df589209ce9454e404b",
     "schemaVersion": "1",
-    "releaseNotes": "教师招聘考试薄包，用于验证考试包机制",
+    "releaseNotes": "加入主观题科目，验证写作与案例分析路径",
     "publishedAt": 1784016000000,
     "installedAt": 1784016000000
   },
@@ -19,7 +19,7 @@
       "metadataPackageId": "metadata:curriculum:teacher-recruitment:v1",
       "examType": "teacher_recruitment",
       "regionScope": "national",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "status": "published",
       "createdAt": 1784016000000
     },
@@ -193,6 +193,90 @@
         "scoreWeight": 0.5,
         "defaultTargetAccuracy": 0.75,
         "defaultTargetSeconds": 80
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:teaching-design",
+        "code": "teaching_design",
+        "name": "教育写作与案例分析",
+        "shortName": "写作",
+        "nodeType": "subject",
+        "subject": "teaching_design",
+        "module": "teaching_design",
+        "sequence": 110,
+        "scoreWeight": 1
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:teaching-design:case",
+        "parentId": "capability:teaching-design",
+        "code": "teaching_design.case",
+        "name": "教育案例分析",
+        "nodeType": "module",
+        "subject": "teaching_design",
+        "module": "case_analysis",
+        "sequence": 120,
+        "scoreWeight": 0.5
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:teaching-design:case:diagnose",
+        "parentId": "capability:teaching-design:case",
+        "code": "teaching_design.case.diagnose",
+        "name": "案例问题诊断",
+        "nodeType": "knowledge_point",
+        "subject": "teaching_design",
+        "module": "case_analysis",
+        "sequence": 130,
+        "scoreWeight": 0.5,
+        "defaultTargetAccuracy": 0.7,
+        "defaultTargetSeconds": 600
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:teaching-design:writing",
+        "parentId": "capability:teaching-design",
+        "code": "teaching_design.writing",
+        "name": "教育写作",
+        "nodeType": "module",
+        "subject": "teaching_design",
+        "module": "writing",
+        "sequence": 140,
+        "scoreWeight": 0.5
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:teaching-design:writing:argument",
+        "parentId": "capability:teaching-design:writing",
+        "code": "teaching_design.writing.argument",
+        "name": "教育观点论述",
+        "nodeType": "knowledge_point",
+        "subject": "teaching_design",
+        "module": "writing",
+        "sequence": 150,
+        "scoreWeight": 0.5,
+        "defaultTargetAccuracy": 0.7,
+        "defaultTargetSeconds": 2400
       }
     ],
     "capabilityEdges": [
@@ -309,6 +393,64 @@
             "focusTags": [
               "学科基础",
               "教学设计"
+            ]
+          }
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:teaching_design:mastery:v1",
+        "subject": "teaching_design",
+        "policyType": "mastery",
+        "version": "1.0.0",
+        "config": {
+          "minimumIndependentAttempts": 3,
+          "minimumRetentionAttempts": 1,
+          "minimumTransferAttempts": 1,
+          "targetAccuracy": 0.7,
+          "minimumConfidence": 0.6,
+          "minimumEvidenceQuality": 0.6
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:teaching_design:exam_delivery:v1",
+        "subject": "teaching_design",
+        "policyType": "exam_delivery",
+        "version": "1.0.0",
+        "config": {
+          "deliveryKind": "subjective",
+          "score": {
+            "maxScore": 50,
+            "defaultCurrent": 25,
+            "defaultTarget": 40
+          },
+          "writtenFormats": [
+            {
+              "name": "教育案例分析",
+              "longForm": false
+            },
+            {
+              "name": "教育写作",
+              "longForm": true
+            }
+          ],
+          "mockExam": {
+            "defaultQuestionCount": 2,
+            "defaultDurationMinutes": 120,
+            "schemes": [
+              {
+                "code": "standard",
+                "name": "标准卷",
+                "questionCount": 2,
+                "durationMinutes": 120
+              }
+            ],
+            "focusTags": [
+              "师德师风",
+              "班级管理"
             ]
           }
         },

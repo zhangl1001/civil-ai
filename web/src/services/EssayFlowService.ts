@@ -1,4 +1,5 @@
 import { isLongFormTopic } from '@/domain/writtenFormats';
+import { primarySubjectOfKind } from '@/domain/subjectDelivery';
 import { ExamDeliveryKind } from '@/modules/curriculum/public';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
@@ -99,9 +100,9 @@ export class EssayFlowService {
     return generationTaskService.enqueue({
       idempotencyKey: options.idempotencyKey,
       intent: 'mock',
-      title: options.title || '生成申论题目',
+      title: options.title || `生成${writtenSubjectName()}题目`,
       detail: `${context.topic} · ${count} 题 · ${context.date}`,
-      module: '申论',
+      module: writtenSubjectName(),
       sourceId: questionSetId,
       scopeId: essayQuestionSetGenerationScope({ ...context, questionSetId, entryMode, purpose }),
       payload: {
@@ -124,3 +125,9 @@ export class EssayFlowService {
 }
 
 export const essayFlowService = new EssayFlowService();
+
+/** What the active package calls the subject answered in writing. */
+function writtenSubjectName(): string {
+  const subject = primarySubjectOfKind(ExamDeliveryKind.Subjective);
+  return subject?.shortName ?? subject?.name ?? '主观题';
+}
