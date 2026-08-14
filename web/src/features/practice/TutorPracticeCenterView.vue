@@ -117,6 +117,9 @@
       <EssayPracticeCenterPanel
         v-else
         v-model="activeMode"
+        :daily-plan-item-id="queryText(route.query.dailyPlanItemId)"
+        :capability-node-id="queryText(route.query.capabilityNodeId)"
+        :auto-start="route.query.mode === 'tutor' && Boolean(route.query.start)"
       />
     </PullToRefresh>
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
@@ -254,7 +257,8 @@ import BottomSheet from '@/components/layout/BottomSheet.vue';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import { AppStateView, InitialRefreshState, PullToRefresh } from '@/capabilities/design-system/public';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { APTITUDE_PRACTICE_MODULE_OPTIONS, practiceModuleLabel } from '@/domain/labels';
+import { curriculumModuleOptions, practiceModuleLabel } from '@/domain/labels';
+import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import { AssessmentRole } from '@/kernel/public';
 import type { AgentRunView } from '@/modules/agent/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
@@ -282,6 +286,7 @@ import { usePracticeQuestionSetPagination, type PracticeCenterMode } from './use
 import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteria';
 import { usePracticeModeSwipe } from './PracticeModeSwipe';
 import { practiceModeCopy } from './PracticeModePresentation';
+import { usePracticeSelfAutoStart } from './usePracticeSelfAutoStart';
 import PracticeSubjectSwitcher from './PracticeSubjectSwitcher.vue';
 import PracticeSubjectMark from './PracticeSubjectMark.vue';
 import EssayPracticeCenterPanel from './EssayPracticeCenterPanel.vue';
@@ -359,7 +364,7 @@ const customCapabilityId = ref('');
 const customCount = ref(10);
 let pollTimer: number | undefined;
 let practiceCenterFeaturePromise: Promise<PracticeCenterFeature> | undefined;
-const moduleDefinitions = APTITUDE_PRACTICE_MODULE_OPTIONS;
+const moduleDefinitions = curriculumModuleOptions();
 const curriculumNodesById = computed(() => new Map(curriculumNodes.value.map((item) => [item.id, item])));
 const availableModules = computed(() => {
   const available = new Set(capabilities.value.map((item) => item.module));
@@ -367,7 +372,7 @@ const availableModules = computed(() => {
 });
 const availableQuestionTypes = computed(() => curriculumNodes.value.filter((item) => (
   item.status === 'active'
-  && item.subject === 'aptitude'
+  && objectiveSubjectCodes().has(item.subject)
   && item.module === customModule.value
   && item.nodeType === CapabilityNodeType.QuestionType
 )));
@@ -413,10 +418,27 @@ const trueQuestionFilterSummary = computed(() => {
   ].filter(Boolean);
   return filters.length ? filters.join(' · ') : `全部来源 · ${trueQuestionFacets.value.length}套`;
 });
+const { tryStart: autoStartRequestedSelfPractice } = usePracticeSelfAutoStart({
+  route,
+  router,
+  loading,
+  start: async ({ count }) => {
+    activeSubject.value = PracticeSubject.Aptitude;
+    activeMode.value = QuestionSetEntryMode.Self;
+    customCount.value = count;
+    initializeCustomSelection();
+    return generateCustom();
+  }
+});
 onMounted(async () => {
   await load();
   await loadResearchDraftFromRoute();
-  if (route.query.mode === 'tutor' && route.query.start) await startTutorPractice();
+  if (
+    activeSubject.value === PracticeSubject.Aptitude
+    && route.query.mode === 'tutor'
+    && route.query.start
+  ) await startTutorPractice();
+  await autoStartRequestedSelfPractice();
   pollTimer = window.setInterval(() => void refreshTasks(), 1200);
 });
 
@@ -476,6 +498,8 @@ function initializeCustomSelection() {
   customModule.value = requested.module;
   customQuestionTypeId.value = questionTypeIdFor(requested);
   customCapabilityId.value = requested.id;
+  const requestedCount = Number(route.query.count);
+  if ([5, 10, 15, 20, 25].includes(requestedCount)) customCount.value = requestedCount;
 }
 
 function restoreTasks(activeRuns: readonly AgentRunView[]) {
@@ -532,9 +556,14 @@ async function startTutorPractice() {
   }
 }
 
-async function generateCustom() {
+function queryText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/** Reports whether a task was created; the failure itself is shown via error.value. */
+async function generateCustom(): Promise<boolean> {
   const target = selectedCustomCapability.value;
-  if (!target || launching.value || selfTask.value?.isActive) return;
+  if (!target || launching.value || selfTask.value?.isActive) return false;
   showCustomSheet.value = false;
   launching.value = true;
   error.value = '';
@@ -560,8 +589,10 @@ async function generateCustom() {
       goal: `自主练习${target.name}`
     });
     trackTask(task, QuestionSetEntryMode.Self);
+    return true;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '创建自主练习失败';
+    return false;
   } finally {
     launching.value = false;
   }

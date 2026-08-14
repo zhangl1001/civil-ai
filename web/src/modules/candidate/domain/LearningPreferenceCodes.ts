@@ -13,3 +13,9 @@ export const ProactiveLevel = {
 } as const;
 
 export type ProactiveLevel = typeof ProactiveLevel[keyof typeof ProactiveLevel];
+
+const PROACTIVE_LEVELS: readonly string[] = Object.values(ProactiveLevel);
+
+export function parseProactiveLevel(value: unknown): ProactiveLevel | undefined {
+  return typeof value === 'string' && PROACTIVE_LEVELS.includes(value) ? value as ProactiveLevel : undefined;
+}

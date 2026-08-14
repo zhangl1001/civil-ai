@@ -3,7 +3,7 @@ import type { Clock, IdGenerator, LearningSessionId } from '@/kernel/public';
 import type { CandidateRepository } from '@/modules/candidate/public';
 import type { CurriculumRepository } from '@/modules/curriculum/public';
 import type { GetObjectiveSessionReview } from '@/modules/evidence/public';
-import { ErrorCauseCode } from '@/modules/evidence/public';
+import { ErrorCauseCode, isMistakenAttempt } from '@/modules/evidence/public';
 import type { MasteryRepository, MasteryTrack } from '@/modules/mastery/public';
 import type { DailyPlanRepository } from '@/modules/planning/public';
 import type { TutorCycleRepository } from '../contracts/TutorCycleRepository';
@@ -46,7 +46,7 @@ export class RecordObjectiveTutorConclusion {
       this.mastery.listReviews(cycle.examCycle.id, 40),
       this.plans.findCurrent(cycle.examCycle.id, localDate(this.clock.now(), cycle.examCycle.timeZone))
     ]);
-    const incorrect = sessionReview.items.filter((item) => item.grading.result === 'incorrect');
+    const incorrect = sessionReview.items.filter((item) => isMistakenAttempt(item.grading.result));
     const diagnoses = incorrect.flatMap((item) => item.diagnoses);
     const knownDiagnoses = diagnoses.filter((item) => item.causeCode !== ErrorCauseCode.Unknown);
     const resolvedTracks = tracks.filter((track): track is MasteryTrack => Boolean(track));

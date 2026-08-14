@@ -34,6 +34,40 @@ export interface DataTableBlock extends ContentBlockBase {
   readonly sourceNote?: string;
 }
 
+export type StatisticalChartType =
+  | 'bar'
+  | 'horizontal_bar'
+  | 'line'
+  | 'pie'
+  | 'doughnut'
+  | 'stacked_bar'
+  | 'combo'
+  | 'scatter';
+
+export interface StatisticalChartPoint {
+  readonly x: number;
+  readonly y: number;
+  readonly label?: string;
+}
+
+export interface StatisticalChartSeries {
+  readonly id: string;
+  readonly label: string;
+  readonly values?: readonly (number | null)[];
+  readonly points?: readonly StatisticalChartPoint[];
+  readonly renderAs?: 'bar' | 'line';
+}
+
+export interface StatisticalChartBlock extends ContentBlockBase {
+  readonly type: 'statistical_chart';
+  readonly chartType: StatisticalChartType;
+  readonly title?: string;
+  readonly unit?: string;
+  readonly categories: readonly string[];
+  readonly series: readonly StatisticalChartSeries[];
+  readonly sourceNote?: string;
+}
+
 export interface SvgDiagramBlock extends ContentBlockBase {
   readonly type: 'svg_diagram';
   readonly markup: string;
@@ -65,6 +99,7 @@ export interface CalloutBlock extends ContentBlockBase {
 export type ContentBlock =
   | TextBlock
   | DataTableBlock
+  | StatisticalChartBlock
   | SvgDiagramBlock
   | ImageBlock
   | FormulaBlock

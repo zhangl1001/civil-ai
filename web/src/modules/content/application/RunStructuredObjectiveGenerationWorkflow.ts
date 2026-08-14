@@ -40,11 +40,13 @@ import {
 } from '../domain/ContentCodes';
 import { GenerationWorkflowMachine } from '../domain/GenerationWorkflowMachine';
 import { GeneratedContentCommitBuilder } from './GeneratedContentCommitBuilder';
+import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import { GeneratedContentParseError, GeneratedContentParser, type GeneratedLectureQuestionSet } from './GeneratedContentParser';
 import { GenerationModelInvoker } from './GenerationModelInvoker';
 import {
   createPracticeGenerationPlan,
   coreGenerationTokenBudget,
+  practiceQuestionAcceptanceRatio,
   practiceCoreResponseSchema,
   practiceCoreSystem,
   shouldGeneratePracticeBlocksInParallel
@@ -87,9 +89,11 @@ export class RunStructuredObjectiveGenerationWorkflow {
     private readonly questionSourceRepository: QuestionSourceRepository,
     private readonly promptCompiler: PromptCompiler,
     private readonly clock: Clock,
-    private readonly ids: IdGenerator
+    private readonly ids: IdGenerator,
+    /** Grading rule frozen onto every set this workflow commits. */
+    gradingPolicy: (capabilityNodeId: string) => QuestionSetGradingPolicy | undefined = () => undefined
   ) {
-    this.commitBuilder = new GeneratedContentCommitBuilder(clock, ids);
+    this.commitBuilder = new GeneratedContentCommitBuilder(clock, ids, gradingPolicy);
     this.modelInvoker = new GenerationModelInvoker(
       unitOfWork,
       invocationRepository,
@@ -172,11 +176,10 @@ export class RunStructuredObjectiveGenerationWorkflow {
             })
           : await this.generateSingleCore(
               aggregate,
-              this.promptCompiler.compile(
-                promptBundle.promptCode,
+              this.promptCompiler.compileBundle(
+                promptBundle,
                 generationPromptVariables(aggregate),
-                generationPromptPayload(aggregate, referencePack),
-                promptBundle.version
+                generationPromptPayload(aggregate, referencePack)
               ),
               gateway,
               deadline.signal,
@@ -312,7 +315,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
       signal,
       expectedCount,
       system: practiceCoreSystem(compiled.system, capability),
-      responseSchema: practiceCoreResponseSchema(compiled.responseSchema, expectedCount),
+      responseSchema: practiceCoreResponseSchema(compiled.responseSchema, expectedCount, capability),
       role: 'content_generation',
       allowValidSubset: true,
       onProgress
@@ -491,7 +494,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
     if (
       expectedCount < 1
       || retainedQuestions.length < 1
-      || retainedQuestions.length / expectedCount < 0.8
+      || retainedQuestions.length / expectedCount
+        < practiceQuestionAcceptanceRatio(expectedCapabilityCode)
     ) return undefined;
     try {
       return {

@@ -7,6 +7,7 @@ import type { PromptBundle } from '../prompt/PromptContracts';
 
 interface StoredPromptBundle {
   readonly key: string;
+  readonly examType: string;
   readonly promptCode: string;
   readonly version: string;
   readonly bundle: PromptBundle;
@@ -23,7 +24,8 @@ export class IndexedDbPromptRepository implements PromptRepository {
       type: 'add',
       store: TutorIndexedDbStore.PromptBundles,
       value: {
-        key: promptKey(bundle.promptCode, bundle.version),
+        key: promptKey(bundle.examType, bundle.promptCode, bundle.version),
+        examType: bundle.examType,
         promptCode: bundle.promptCode,
         version: bundle.version,
         bundle
@@ -31,10 +33,10 @@ export class IndexedDbPromptRepository implements PromptRepository {
     });
   }
 
-  async find(promptCode: string, version: string): Promise<PromptBundle | undefined> {
+  async find(examType: string, promptCode: string, version: string): Promise<PromptBundle | undefined> {
     const stored = await this.database.get<StoredPromptBundle>(
       TutorIndexedDbStore.PromptBundles,
-      promptKey(promptCode, version)
+      promptKey(examType, promptCode, version)
     );
     return stored?.bundle;
   }
@@ -45,6 +47,6 @@ export class IndexedDbPromptRepository implements PromptRepository {
   }
 }
 
-function promptKey(promptCode: string, version: string): string {
-  return `${promptCode}@${version}`;
+function promptKey(examType: string, promptCode: string, version: string): string {
+  return `${examType}/${promptCode}@${version}`;
 }

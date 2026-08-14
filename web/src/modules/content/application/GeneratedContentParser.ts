@@ -1,13 +1,28 @@
 import { parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import type { JsonObject } from '@/kernel/public';
 import type { ContentDocument } from '../contracts/ContentDocument';
-import type { SingleChoiceQuestionContent } from '../contracts/QuestionContent';
+import type { QuestionContent } from '../contracts/QuestionContent';
+import {
+  isQuestionTemplateCode,
+  parseQuestionTemplateCode,
+  questionSchemaVersionFor,
+  QuestionTemplateCode
+} from '../domain/ContentCodes';
 import { ContentSchemaValidator, type ContentValidationIssue } from './ContentSchemaValidator';
+import {
+  asOptionalRecord,
+  authoringVisual,
+  decodeEmbeddedJson,
+  normalizeAuthoringSvg,
+  optionalAuthorTextValue,
+  type AuthoringVisual
+} from './GeneratedContentAuthoringUtils';
+import { authoringMaterialGroups } from './GeneratedMaterialBlockParser';
 
 export interface GeneratedLectureQuestionSet {
   readonly raw: JsonObject;
   readonly lecture: ContentDocument;
-  readonly questions: readonly SingleChoiceQuestionContent[];
+  readonly questions: readonly QuestionContent[];
   readonly referenceQuestionIds: readonly (string | undefined)[];
 }
 
@@ -62,10 +77,10 @@ export class GeneratedContentParser {
       }]);
     }
     const questionInputs = root.questions.map(decodeEmbeddedJson);
-    const questions: SingleChoiceQuestionContent[] = [];
+    const questions: QuestionContent[] = [];
     const issues: ContentValidationIssue[] = [];
     questionInputs.forEach((question, index) => {
-      const result = this.validator.parseSingleChoiceQuestion(question);
+      const result = this.validator.parseChoiceQuestion(question);
       if (result.ok) questions.push(result.value);
       else issues.push(...result.error.issues.map((issue) => ({ ...issue, path: `$.questions[${index}]${issue.path.slice(1)}` })));
     });
@@ -104,18 +119,6 @@ function asRecord(input: unknown): Record<string, unknown> {
     }]);
   }
   return input as Record<string, unknown>;
-}
-
-function decodeEmbeddedJson(input: unknown): unknown {
-  if (typeof input !== 'string') return input;
-  const source = input.trim();
-  if (!source.startsWith('{') && !source.startsWith('[')) return input;
-  try {
-    const parsed: unknown = JSON.parse(source);
-    return parsed && typeof parsed === 'object' ? parsed : input;
-  } catch {
-    return input;
-  }
 }
 
 function normalizeAuthoringRoot(
@@ -189,13 +192,16 @@ function authoringSection(
 function authoringQuestion(
   input: unknown,
   index: number,
-  materialGroups: ReadonlyMap<string, string>,
+  materialGroups: ReadonlyMap<string, Record<string, unknown>>,
   materialGroupUseCounts: ReadonlyMap<string, number>,
   expectedCapabilityCode: string | undefined,
   issues: ContentValidationIssue[]
 ): Record<string, unknown> | undefined {
   const question = asOptionalRecord(input);
-  if (question?.templateCode === 'single_choice') {
+  // Already-parsed content (repair paths) passes through untouched. An authored
+  // payload may name its template too, so the stamped schemaVersion — which only
+  // content that has already been through here carries — is what tells them apart.
+  if (isQuestionTemplateCode(question?.templateCode) && typeof question?.schemaVersion === 'string') {
     const { referenceQuestionId: _referenceQuestionId, ...contentQuestion } = question;
     return expectedCapabilityCode
       ? { ...contentQuestion, capabilityCode: expectedCapabilityCode }
@@ -211,7 +217,8 @@ function authoringQuestion(
     ?? requiredAuthorText(question.capabilityCode, `${path}.capabilityCode`, issues);
   const prompt = requiredAuthorText(question.prompt, `${path}.prompt`, issues);
   const promptVisual = authoringVisual(question.visual);
-  const correctOptionId = normalizedOptionId(question.correctOptionId, `${path}.correctOptionId`, issues);
+  const templateCode = parseQuestionTemplateCode(question.templateCode) ?? QuestionTemplateCode.SingleChoice;
+  const correctOptionIds = authoredAnswerKey(templateCode, question, path, issues);
   if (!Array.isArray(question.options)) {
     issues.push({ code: 'generation.options_invalid', path: `${path}.options`, message: 'Options must be an array' });
     return undefined;
@@ -235,10 +242,10 @@ function authoringQuestion(
       : undefined;
   });
   const optionIds = options.flatMap((option) => option ? [option.id] : []);
-  const explanation = id && correctOptionId
-    ? authoringExplanation(question.explanation, id, correctOptionId, optionIds)
+  const explanation = id && correctOptionIds
+    ? authoringExplanation(question.explanation, id, correctOptionIds, optionIds)
     : undefined;
-  if (!id || !capabilityCode || !prompt || !explanation || !correctOptionId || options.some((option) => !option)) return undefined;
+  if (!id || !capabilityCode || !prompt || !explanation || !correctOptionIds || options.some((option) => !option)) return undefined;
   const requestedMaterialGroupId = optionalAuthorTextValue(question.materialGroupId);
   const groupedMaterial = requestedMaterialGroupId ? materialGroups.get(requestedMaterialGroupId) : undefined;
   // A one-question "shared" group is semantically just independent material.
@@ -257,16 +264,60 @@ function authoringQuestion(
       ? authorDocument(`${materialGroupId || id}:material`, materialSource)
       : materialSource;
   return {
-    templateCode: 'single_choice',
-    schemaVersion: 'question.single_choice.v2',
+    templateCode,
+    schemaVersion: questionSchemaVersionFor(templateCode),
     capabilityCode,
     ...(materialGroupId ? { materialGroupId } : {}),
     material,
     prompt: authorDocumentWithVisual(`${id}:prompt`, prompt, promptVisual),
     options,
-    correctOptionId,
+    ...(templateCode === QuestionTemplateCode.SingleChoice
+      ? { correctOptionId: correctOptionIds[0] }
+      : { correctOptionIds }),
     explanation
   };
+}
+
+/**
+ * Answer letters an authored payload declares, normalised to option ids.
+ *
+ * Single choice keeps its scalar field; the multi-answer templates read an
+ * array, which is what lets an imported paper carry a real 多选题 rather than
+ * being flattened to one answer per question.
+ */
+function authoredAnswerKey(
+  templateCode: QuestionTemplateCode,
+  question: Record<string, unknown>,
+  path: string,
+  issues: ContentValidationIssue[]
+): readonly string[] | undefined {
+  if (templateCode === QuestionTemplateCode.SingleChoice) {
+    const correctOptionId = normalizedOptionId(question.correctOptionId, `${path}.correctOptionId`, issues);
+    return correctOptionId ? [correctOptionId] : undefined;
+  }
+  const declared = question.correctOptionIds;
+  if (!Array.isArray(declared) || declared.length === 0) {
+    issues.push({
+      code: 'generation.answer_invalid',
+      path: `${path}.correctOptionIds`,
+      message: 'Multi answer question requires a non-empty correctOptionIds array'
+    });
+    return undefined;
+  }
+  const ids = declared.map((item, position) => (
+    normalizedOptionId(item, `${path}.correctOptionIds[${position}]`, issues)
+  ));
+  if (ids.some((id) => !id)) return undefined;
+  const unique = [...new Set(ids as readonly string[])];
+  if (unique.length !== ids.length) {
+    issues.push({
+      code: 'generation.answer_invalid',
+      path: `${path}.correctOptionIds`,
+      message: 'Correct option ids must be unique'
+    });
+    return undefined;
+  }
+  return unique;
 }
 
 function injectCapabilityCode(
@@ -299,7 +350,7 @@ function countMaterialGroupUses(input: unknown): ReadonlyMap<string, number> {
 function authoringExplanation(
   input: unknown,
   questionId: string,
-  correctOptionId: string,
+  correctOptionIds: readonly string[],
   optionIds: readonly string[]
 ): Record<string, unknown> | undefined {
   const explanation = asOptionalRecord(decodeEmbeddedJson(input));
@@ -309,8 +360,12 @@ function authoringExplanation(
   const steps = flexibleAuthorTextArray(explanation.steps);
   const pitfalls = flexibleAuthorTextArray(explanation.pitfalls);
   const optionAnalysis = authorOptionAnalysis(explanation.optionAnalysis, optionIds);
-  const correctAnalyses = optionAnalysis.filter((item) => item.verdict === 'correct');
-  const safeOptionAnalysis = correctAnalyses.length === 1 && correctAnalyses[0]?.optionId === correctOptionId
+  // Option analysis is dropped unless the options it marks correct are exactly
+  // the answer key, so a contradictory explanation never reaches the learner.
+  const analysedCorrect = optionAnalysis.filter((item) => item.verdict === 'correct').map((item) => item.optionId);
+  const expected = new Set(correctOptionIds);
+  const safeOptionAnalysis = analysedCorrect.length === expected.size
+    && analysedCorrect.every((optionId) => expected.has(optionId))
     ? optionAnalysis
     : [];
   const blocks = [
@@ -359,11 +414,11 @@ export function authoringLectureDocument(input: unknown): ContentDocument {
 export function authoringExplanationDocument(
   input: unknown,
   questionId: string,
-  correctOptionId: string,
+  correctOptionIds: readonly string[],
   optionIds: readonly string[]
 ): ContentDocument {
   return (
-    authoringExplanation(input, questionId, correctOptionId, optionIds)
+    authoringExplanation(input, questionId, correctOptionIds, optionIds)
     ?? { schemaVersion: 'content.v1', blocks: [] }
   ) as unknown as ContentDocument;
 }
@@ -427,23 +482,6 @@ function calloutBlock(id: string, kind: string, title: string, source: string): 
   };
 }
 
-function authoringMaterialGroups(
-  input: unknown
-): ReadonlyMap<string, string> {
-  if (input === undefined) return new Map();
-  if (!Array.isArray(input)) return new Map();
-  const groups = new Map<string, string>();
-  input.forEach((item) => {
-    const group = asOptionalRecord(decodeEmbeddedJson(item));
-    if (!group) return;
-    const id = optionalAuthorTextValue(group.id);
-    const markdown = optionalAuthorTextValue(group.markdown);
-    if (!id || !markdown) return;
-    if (!groups.has(id)) groups.set(id, markdown);
-  });
-  return groups;
-}
-
 function authorDocument(id: string, source: string): Record<string, unknown> {
   return {
     schemaVersion: 'content.v1',
@@ -453,12 +491,6 @@ function authorDocument(id: string, source: string): Record<string, unknown> {
 
 function emptyDocument(id: string): ContentDocument {
   return { schemaVersion: 'content.v1', blocks: [{ id, type: 'text', source: '' }] };
-}
-
-interface AuthoringVisual {
-  readonly svg: string;
-  readonly alt: string;
-  readonly viewBox?: string;
 }
 
 function authorDocumentWithVisual(
@@ -481,35 +513,6 @@ function authorDocumentWithVisual(
   };
 }
 
-function authoringVisual(input: unknown): AuthoringVisual | undefined {
-  const value = asOptionalRecord(decodeEmbeddedJson(input));
-  if (
-    typeof value?.svg !== 'string'
-    || !/^\s*<svg(?:\s|>)[\s\S]*<\/svg>\s*$/i.test(value.svg)
-    || typeof value.alt !== 'string'
-    || !value.alt.trim()
-  ) {
-    return undefined;
-  }
-  return {
-    svg: value.svg.trim(),
-    alt: value.alt.trim(),
-    viewBox: typeof value.viewBox === 'string' && value.viewBox.trim() ? value.viewBox.trim() : undefined
-  };
-}
-
-function normalizeAuthoringSvg(markup: string, viewBox?: string): string {
-  if (/\bviewBox\s*=\s*["'][^"']+["']/i.test(markup)) return markup;
-  const resolvedViewBox = viewBox?.trim() || inferredSvgViewBox(markup) || '0 0 100 100';
-  return markup.replace(/<svg(\s|>)/i, `<svg viewBox="${resolvedViewBox}"$1`);
-}
-
-function inferredSvgViewBox(markup: string): string | undefined {
-  const width = markup.match(/\bwidth\s*=\s*["']([\d.]+)["']/i)?.[1];
-  const height = markup.match(/\bheight\s*=\s*["']([\d.]+)["']/i)?.[1];
-  return width && height ? `0 0 ${width} ${height}` : undefined;
-}
-
 function requiredAuthorText(
   input: unknown,
   path: string,
@@ -518,14 +521,4 @@ function requiredAuthorText(
   if (typeof input === 'string' && input.trim()) return input.trim();
   issues.push({ code: 'generation.author_text_invalid', path, message: 'Expected a non-empty string' });
   return undefined;
-}
-
-function optionalAuthorTextValue(input: unknown): string | undefined {
-  return typeof input === 'string' && input.trim() ? input.trim() : undefined;
-}
-
-function asOptionalRecord(input: unknown): Record<string, unknown> | undefined {
-  return input && typeof input === 'object' && !Array.isArray(input)
-    ? input as Record<string, unknown>
-    : undefined;
 }

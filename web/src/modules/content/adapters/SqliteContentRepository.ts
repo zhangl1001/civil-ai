@@ -1,4 +1,4 @@
-import type { SqlDatabase, SqlRow, SqlTransaction } from '@/capabilities/database/contracts/SqlDatabase';
+import type { SqlDatabase, SqlTransaction } from '@/capabilities/database/contracts/SqlDatabase';
 import type { SqlTransactionScope } from '@/capabilities/database/adapters/sqlite/SqlTransactionScope';
 import type { TransactionContext } from '@/capabilities/database/public';
 import type {
@@ -20,7 +20,6 @@ import type {
   QuestionSetId,
   QuestionTemplateVersionId,
   PromptVersionId,
-  AssessmentRole,
   WorkflowId
 } from '@/kernel/public';
 import { ContentSchemaValidator } from '../application/ContentSchemaValidator';
@@ -33,7 +32,6 @@ import type {
   GenerationSpecRecord,
   GenerationWorkflowRecord,
   LectureRecord,
-  QuestionCapabilityLink,
   QuestionRecord,
   QuestionSetLibraryEntry,
   QuestionSetLibraryQuery,
@@ -41,95 +39,28 @@ import type {
   QuestionSetRecord,
   QuestionTemplateVersion
 } from '../contracts/ContentRepository';
-import type {
-  ContentAssetStatus,
-  ContentDocumentType,
-  GenerationWorkflowStatus,
-  GenerationWorkflowStep,
-  PublishedAssetStatus,
-  QuestionQualityStatus,
-  QuestionSetPracticeStatus,
-  QuestionSetPurpose,
-  QuestionSetStatus,
-  QuestionTemplateCode
-} from '../domain/ContentCodes';
-import { QuestionSetEntryMode } from '../domain/ContentCodes';
+import type { QuestionSetPracticeStatus, QuestionTemplateCode } from '../domain/ContentCodes';
+import { QuestionSetEntryMode, QuestionSetStatus } from '../domain/ContentCodes';
 import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
 import { resolveQuestionSetEntryMode } from '../domain/QuestionSetEntryModePolicy';
-import type {
-  QuestionCalibrationRole,
-  QuestionGenerationIntent,
-  QuestionOriginType
-} from '../domain/QuestionSourceCodes';
+import { parseQuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import { applyQuestionSetEnrichmentSql } from './ApplyQuestionSetEnrichmentSql';
 import { appendQuestionSetLibraryQuery } from './QuestionSetLibraryQuerySql';
 
-interface ReleaseRow extends SqlRow { id: string; content_hash: string; }
-interface SchemaRow extends SqlRow {
-  id: string; schema_code: string; document_type: ContentDocumentType; version: string;
-  schema_json: string; content_hash: string; status: PublishedAssetStatus; created_at: number;
-}
-interface TemplateRow extends SqlRow {
-  id: string; template_code: QuestionTemplateCode; version: string; renderer_code: string;
-  content_schema_version_id: string; config_json: string; content_hash: string;
-  status: PublishedAssetStatus; created_at: number;
-}
-interface SpecRow extends SqlRow {
-  id: string; source_agent_run_id: string | null; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; content_kind: GenerationSpecRecord['contentKind'];
-  assessment_role: AssessmentRole; question_template_version_id: string | null; content_schema_version_id: string;
-  prompt_version_id: string;
-  reference_pack_id: string | null; reference_policy_version: string | null;
-  generation_intent: QuestionGenerationIntent | null; calibration_target: string | null;
-  requested_count: number | null; difficulty_json: string; constraints_json: string; context_snapshot_json: string;
-  content_hash: string; created_at: number;
-}
-interface WorkflowRow extends SqlRow {
-  id: string; exam_cycle_id: string; generation_spec_id: string; workflow_type: GenerationWorkflowRecord['workflowType'];
-  status: GenerationWorkflowStatus; current_step: GenerationWorkflowStep; attempt_count: number;
-  staged_result_json: string | null; validation_json: string; error_code: string | null; idempotency_key: string;
-  started_at: number; completed_at: number | null; updated_at: number; version: number;
-}
-interface DocumentRow extends SqlRow {
-  id: string; exam_cycle_id: string; document_type: ContentDocumentType; schema_version_id: string;
-  title: string | null; content_json: string; content_hash: string; status: ContentAssetStatus;
-  content_version: number; supersedes_document_id: string | null; generator_workflow_id: string | null; created_at: number;
-}
-interface LectureRow extends SqlRow {
-  id: string; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; content_document_id: string;
-  objective: string; status: LectureRecord['status']; version: number; created_at: number;
-}
-interface QuestionSetRow extends SqlRow {
-  id: string; exam_cycle_id: string; learning_thread_id: string | null; teaching_blueprint_id: string | null; capability_node_id: string; generation_spec_id: string;
-  purpose: QuestionSetPurpose; assessment_role: AssessmentRole; module: string; status: QuestionSetStatus;
-  origin_type: QuestionOriginType; source_id: string | null; calibration_role: QuestionCalibrationRole;
-  practice_status: QuestionSetPracticeStatus; entry_mode: QuestionSetEntryMode; question_count: number; content_hash: string | null; content_version: number; created_at: number;
-}
-interface QuestionSetLibraryRow extends QuestionSetRow {
-  constraints_json: string;
-  source_type: QuestionOriginType | null;
-  source_provider: string | null;
-  source_exam_type: string | null;
-  source_exam_year: number | null;
-  source_province: string | null;
-  source_exam_batch: string | null;
-  source_paper_name: string | null;
-  source_section_name: string | null;
-}
-interface QuestionRow extends SqlRow {
-  id: string; question_set_id: string; exam_cycle_id: string; capability_node_id: string;
-  question_template_version_id: string; sequence: number; difficulty: number; cognitive_level: string;
-  purpose: string; assessment_role: AssessmentRole; variant_group_id: string | null; content_json: string;
-  origin_type: QuestionOriginType; source_id: string | null; source_sequence: number | null;
-  lineage_id: string | null; calibration_role: QuestionCalibrationRole; is_official: number;
-  correct_answer_json: string; quality_status: QuestionQualityStatus; content_hash: string;
-  content_schema_version_id: string; content_version: number; generator_workflow_id: string; created_at: number;
-}
-interface CapabilityLinkRow extends SqlRow {
-  question_id: string; capability_node_id: string; relation_role: QuestionCapabilityLink['relationRole']; weight: number;
-}
-interface LectureLinkRow extends SqlRow {
-  lecture_id: string; question_set_id: string; relation_role: 'primary' | 'extension' | 'review';
-}
+import type {
+  CapabilityLinkRow,
+  DocumentRow,
+  LectureLinkRow,
+  LectureRow,
+  QuestionRow,
+  QuestionSetLibraryRow,
+  QuestionSetRow,
+  ReleaseRow,
+  SchemaRow,
+  SpecRow,
+  TemplateRow,
+  WorkflowRow
+} from './SqliteContentRows';
 
 export class SqliteContentRepository implements ContentRepository {
   private readonly validator = new ContentSchemaValidator();
@@ -311,7 +242,7 @@ export class SqliteContentRepository implements ContentRepository {
 
   async listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]> {
     const rows = await this.database.query<QuestionSetRow>(
-      `SELECT * FROM question_sets WHERE exam_cycle_id = ? AND status = 'ready'
+      `SELECT * FROM question_sets WHERE exam_cycle_id = ? AND status IN ('ready', 'retired')
        ORDER BY created_at DESC`,
       [examCycleId]
     );
@@ -333,6 +264,13 @@ export class SqliteContentRepository implements ContentRepository {
        SET practice_status = ?
        WHERE id = ? AND practice_status IN (${currentStatuses.map(() => '?').join(', ')})`,
       [status, questionSetId, ...currentStatuses]
+    );
+  }
+
+  async retireQuestionSet(questionSetId: QuestionSetId, context: TransactionContext): Promise<void> {
+    await this.transactionScope.resolve(context).run(
+      `UPDATE question_sets SET status = ? WHERE id = ? AND status = ?`,
+      [QuestionSetStatus.Retired, questionSetId, QuestionSetStatus.Ready]
     );
   }
 
@@ -448,12 +386,12 @@ export class SqliteContentRepository implements ContentRepository {
       `INSERT INTO question_sets(
         id, exam_cycle_id, learning_thread_id, teaching_blueprint_id, capability_node_id, generation_spec_id, purpose, assessment_role,
         module, origin_type, source_id, calibration_role, status, practice_status, entry_mode,
-        question_count, content_hash, content_version, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        question_count, content_hash, content_version, grading_policy_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [value.id, value.examCycleId, value.learningThreadId ?? null, value.teachingBlueprintId ?? null, value.capabilityNodeId, value.generationSpecId, value.purpose,
         value.assessmentRole, value.module, value.originType ?? 'ai_generated', value.sourceId ?? null,
         value.calibrationRole ?? 'none', value.status, value.practiceStatus, entryMode, value.questionCount, value.contentHash ?? null,
-        value.contentVersion, value.createdAt]
+        value.contentVersion, value.gradingPolicy ? JSON.stringify(value.gradingPolicy) : null, value.createdAt]
     );
   }
 
@@ -602,12 +540,13 @@ export class SqliteContentRepository implements ContentRepository {
       questionCount: row.question_count,
       contentHash: row.content_hash ?? undefined,
       contentVersion: row.content_version,
+      gradingPolicy: parseQuestionSetGradingPolicy(row.grading_policy_json),
       createdAt: row.created_at as InstantMs
     };
   }
 
   private mapQuestion(row: QuestionRow): QuestionRecord {
-    const parsed = this.validator.parseSingleChoiceQuestion(parseJson(row.content_json, 'questions.content_json'));
+    const parsed = this.validator.parseChoiceQuestion(parseJson(row.content_json, 'questions.content_json'));
     if (!parsed.ok) throw new TypeError(`Invalid question content ${row.id}`);
     return {
       id: row.id as QuestionId,

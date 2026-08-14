@@ -21,6 +21,9 @@ export {
   ContentEventType,
   ContentResourceType,
   ContentSchemaCode,
+  isQuestionTemplateCode,
+  parseQuestionTemplateCode,
+  questionSchemaCodeFor,
   type CalloutKind as CalloutKindCode,
   type ContentAlignment as ContentAlignmentCode,
   type ContentBlockType as ContentBlockTypeCode,
@@ -40,6 +43,18 @@ export {
   resolveQuestionPresentation,
   type QuestionPresentationDefinition
 } from './domain/QuestionPresentation';
+export {
+  correctAnswerLabel,
+  correctAnswerRecord,
+  correctOptionIdsOf,
+  isMultiAnswerChoice,
+  isSingleChoice,
+  maxSelectableOptions
+} from './domain/ChoiceQuestionAnswer';
+export {
+  parseQuestionSetGradingPolicy,
+  type QuestionSetGradingPolicy
+} from './domain/QuestionSetGradingPolicy';
 export {
   GeneratedContentBlockCode,
   GeneratedContentValidationTier,
@@ -111,6 +126,10 @@ export type {
   DataTableBlock,
   DataTableCell,
   DataTableColumn,
+  StatisticalChartBlock,
+  StatisticalChartPoint,
+  StatisticalChartSeries,
+  StatisticalChartType,
   FormulaBlock,
   ImageBlock,
   TextBlock,
@@ -131,8 +150,11 @@ export {
   ApplyQuestionSetEnrichment,
   type ApplyQuestionSetEnrichmentResult
 } from './application/ApplyQuestionSetEnrichment';
+export { RetireQuestionSet } from './application/RetireQuestionSet';
 export { questionSetPracticeStatusLabel } from './domain/QuestionSetPracticePresentation';
 export type {
+  ChoiceQuestionShape,
+  MultiAnswerChoiceQuestionContent,
   QuestionContent,
   SingleChoiceOption,
   SingleChoiceQuestionContent

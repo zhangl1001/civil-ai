@@ -5,7 +5,8 @@ export const OnboardingMessage = {
   CurriculumUnavailable: '本地课程元数据不可用，请重新启动应用',
   InvalidScore: '分数必须在 0 到满分之间',
   InvalidDate: '请填写有效的考试日期',
-  RequiredField: '请补全本步骤的必要信息'
+  RequiredField: '请补全本步骤的必要信息',
+  ExamPackUnavailable: '当前备考方向暂不可用，请重新选择'
 } as const;
 
 export function resolveOnboardingError(error: unknown): string {

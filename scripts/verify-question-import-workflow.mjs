@@ -157,6 +157,45 @@ async function verifyWorkflow(content, aiRuntime) {
   });
   assert.equal(repeated.disposition, 'already_published');
   assert.equal(contentRepository.bundles.length, 1, 'idempotent publish must not duplicate the question set');
+
+  // A real 试卷 mixes 单选 and 多选. Each question binds its own template and
+  // schema, so the paper publishes as one set rather than being rejected.
+  const mixedDraft = drafts.stageMixedTemplateDraft();
+  const mixedPublish = await publish.execute({
+    draftId: mixedDraft.draftId,
+    expectedVersion: mixedDraft.version,
+    idempotencyKey: 'publish:official:mixed'
+  });
+  assert.equal(mixedPublish.disposition, 'published');
+  assert.equal(mixedPublish.publishedQuestionCount, 3);
+  const mixedBundle = contentRepository.bundles[1];
+  assert.deepEqual(
+    mixedBundle.questions.map((question) => question.content.templateCode),
+    ['single_choice', 'multiple_choice', 'single_choice']
+  );
+  assert.deepEqual(
+    mixedBundle.questions.map((question) => question.questionTemplateVersionId),
+    [
+      'question-template:single-choice:v2',
+      'question-template:multiple-choice:v2',
+      'question-template:single-choice:v2'
+    ],
+    'each question must bind the template its own content declares'
+  );
+  assert.deepEqual(
+    mixedBundle.questions.map((question) => question.contentSchemaVersionId),
+    [
+      'content-schema:question-single-choice:v2',
+      'content-schema:question-multiple-choice:v2',
+      'content-schema:question-single-choice:v2'
+    ],
+    'each question must bind the schema matching its template'
+  );
+  assert.equal(
+    mixedBundle.generationSpec.questionTemplateVersionId,
+    'question-template:single-choice:v2',
+    'the set-level spec names the template most of the paper uses'
+  );
 }
 
 async function verifyMigrationContract() {
@@ -203,10 +242,71 @@ function validQuestion(id) {
   };
 }
 
+function mixedTemplateContent(templateCode, answer) {
+  const options = ['A', 'B', 'C', 'D'].map((id) => ({
+    id,
+    content: { schemaVersion: 'content.v1', blocks: [{ id: `opt:${id}`, type: 'text', source: id }] }
+  }));
+  return {
+    templateCode,
+    schemaVersion: `question.${templateCode}.v2`,
+    capabilityCode: 'apt.logic',
+    material: null,
+    prompt: { schemaVersion: 'content.v1', blocks: [{ id: 'prompt', type: 'text', source: '题干' }] },
+    options,
+    ...answer,
+    explanation: { schemaVersion: 'content.v1', blocks: [{ id: 'exp', type: 'text', source: '解析' }] }
+  };
+}
+
 class MemoryDraftRepository {
   aggregates = new Map();
   keys = new Map();
   receipts = new Map();
+
+  /**
+   * A confirmed draft holding a paper that mixes 单选 and 多选, built directly
+   * rather than through a scan: the point under test is publishing, and a real
+   * 试卷 rarely uses one question type throughout.
+   */
+  stageMixedTemplateDraft() {
+    const template = [...this.aggregates.values()][0];
+    const draftId = 'question-import-draft:mixed';
+    const contents = [
+      mixedTemplateContent('single_choice', { correctOptionId: 'A' }),
+      mixedTemplateContent('multiple_choice', { correctOptionIds: ['A', 'C'] }),
+      mixedTemplateContent('single_choice', { correctOptionId: 'B' })
+    ];
+    this.aggregates.set(draftId, {
+      draft: {
+        ...template.draft,
+        id: draftId,
+        status: 'confirmed',
+        version: 1,
+        idempotencyKey: 'draft:mixed',
+        rawPayloadHash: 'sha256:mixed-paper',
+        sourceMetadata: {
+          ...template.draft.sourceMetadata,
+          paperName: '2025 年江苏省考 A 类（混合题型）',
+          sectionName: '第二部分'
+        }
+      },
+      candidates: contents.map((content, index) => ({
+        id: `candidate:mixed:${index + 1}`,
+        draftId,
+        sequence: index + 1,
+        raw: {},
+        content,
+        contentHash: `sha256:mixed-${index + 1}`,
+        difficulty: 0.5,
+        status: 'ready',
+        issues: [],
+        createdAt: 1,
+        updatedAt: 1
+      }))
+    });
+    return { draftId, version: 1 };
+  }
 
   async find(id) {
     return this.aggregates.get(id);
@@ -320,8 +420,30 @@ class MemoryContentRepository {
     status: 'published',
     createdAt: 1
   };
-  async findPublishedSchema() { return this.schema; }
-  async findPublishedQuestionTemplate() { return this.template; }
+  metadataFor(templateCode) {
+    const slug = templateCode.replace(/_/g, '-');
+    const schema = {
+      ...this.schema,
+      id: `content-schema:question-${slug}:v2`,
+      schemaCode: `question.${templateCode}`
+    };
+    return {
+      schema,
+      template: {
+        ...this.template,
+        id: `question-template:${slug}:v2`,
+        templateCode,
+        rendererCode: templateCode,
+        contentSchemaVersionId: schema.id
+      }
+    };
+  }
+  async findPublishedSchema(schemaCode) {
+    return this.metadataFor(schemaCode.replace(/^question\./, '')).schema;
+  }
+  async findPublishedQuestionTemplate(templateCode) {
+    return this.metadataFor(templateCode).template;
+  }
   async commitQuestionSet(bundle) { this.bundles.push(bundle); }
   async installMetadata() {}
   async findMetadata() { return undefined; }

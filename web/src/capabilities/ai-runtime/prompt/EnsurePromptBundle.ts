@@ -17,8 +17,11 @@ export class EnsurePromptBundle {
   ) {}
 
   async execute(bundle: PromptBundle): Promise<PromptBundleEnsureStatus> {
-    const existing = await this.repository.find(bundle.promptCode, bundle.version);
+    const existing = await this.repository.find(bundle.examType, bundle.promptCode, bundle.version);
     if (existing) {
+      // Stored metadata is never overwritten: durable generation specs pin a
+      // prompt version, and rewriting it under them would change the wording a
+      // resumed workflow replays. Content changes require a version bump.
       return samePrompt(existing, bundle)
         ? PromptBundleEnsureStatus.Unchanged
         : reportConflict(existing, bundle);
@@ -27,12 +30,23 @@ export class EnsurePromptBundle {
       await this.unitOfWork.run((context) => this.repository.install(bundle, context));
       return PromptBundleEnsureStatus.Installed;
     } catch (error) {
-      const concurrentInstall = await this.repository.find(bundle.promptCode, bundle.version);
+      const concurrentInstall = await this.repository.find(bundle.examType, bundle.promptCode, bundle.version);
       if (!concurrentInstall) throw error;
       return samePrompt(concurrentInstall, bundle)
         ? PromptBundleEnsureStatus.Unchanged
         : reportConflict(concurrentInstall, bundle);
     }
+  }
+
+  /**
+   * What the database actually holds for this prompt version.
+   *
+   * On a conflict the stored copy wins: durable work replays by version, so the
+   * runtime has to compile the wording that was persisted rather than the copy
+   * this build happens to ship. Undefined only when nothing is stored yet.
+   */
+  async installed(bundle: PromptBundle): Promise<PromptBundle | undefined> {
+    return this.repository.find(bundle.examType, bundle.promptCode, bundle.version);
   }
 }
 
@@ -42,6 +56,7 @@ function samePrompt(installed: PromptBundle, bundled: PromptBundle): boolean {
 
 function reportConflict(installed: PromptBundle, bundled: PromptBundle): PromptBundleEnsureStatus {
   console.warn('[PromptMetadata] bundled prompt version conflicts with installed metadata', {
+    examType: bundled.examType,
     promptCode: bundled.promptCode,
     version: bundled.version,
     bundledContentHash: bundled.contentHash,

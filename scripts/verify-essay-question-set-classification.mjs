@@ -24,7 +24,8 @@ try {
     sqliteRepositoryModule,
     answerModule,
     questionTextModule,
-    autosaveModule
+    autosaveModule,
+    tutorPlanModule
   ] = await Promise.all([
     server.ssrLoadModule('/src/domain/essayQuestionSet.ts'),
     server.ssrLoadModule('/src/features/practice/EssayNavigation.ts'),
@@ -35,7 +36,8 @@ try {
     server.ssrLoadModule('/src/modules/content/adapters/SqliteLearningAssetRepository.ts'),
     server.ssrLoadModule('/src/domain/essayAnswer.ts'),
     server.ssrLoadModule('/src/domain/essayQuestionText.ts'),
-    server.ssrLoadModule('/src/services/EssayDraftAutosave.ts')
+    server.ssrLoadModule('/src/services/EssayDraftAutosave.ts'),
+    server.ssrLoadModule('/src/features/practice/EssayTutorPlanFeature.ts')
   ]);
 
   verifyIdentityAndTaskScope(identity, tasks);
@@ -46,10 +48,64 @@ try {
   await verifyRepositoryContract(indexedRepositoryModule, sqliteRepositoryModule);
   verifyAnswerPresentation(answerModule, questionTextModule);
   await verifyDraftAutosave(autosaveModule);
+  verifyEssayTutorPlan(tutorPlanModule);
 
   console.log('Essay question-set classification verification passed.');
 } finally {
   await server.close();
+}
+
+function verifyEssayTutorPlan({ resolveEssayTutorPlanPrescription }) {
+  const expression = {
+    id: 'capability:essay:structured-expression',
+    code: 'essay.structured_expression',
+    name: '结构化表达与论证',
+    nodeType: 'expression_skill',
+    subject: 'essay',
+    module: 'essay',
+    status: 'active'
+  };
+  const aptitude = {
+    id: 'capability:aptitude:judgment:argument-structure',
+    code: 'aptitude.judgment.argument_structure',
+    name: '论点、论据与论证结构识别',
+    nodeType: 'knowledge_point',
+    subject: 'aptitude',
+    module: 'judgment',
+    status: 'active'
+  };
+  const item = {
+    id: 'DailyPlanItemId:essay-review',
+    capabilityNodeId: expression.id,
+    itemType: 'review',
+    status: 'pending',
+    targetCount: 3
+  };
+  const prescription = resolveEssayTutorPlanPrescription({
+    date: '2026-08-12',
+    nodes: [aptitude, expression],
+    preference: { dailyPlanItemId: item.id, capabilityNodeId: expression.id },
+    plan: {
+      plan: { id: 'DailyPlanId:1' },
+      blocks: [],
+      items: [item]
+    }
+  });
+  assert.equal(prescription.context.topic, '结构化表达与论证');
+  assert.equal(prescription.context.capabilityNodeId, expression.id);
+  assert.equal(prescription.context.dailyPlanItemId, item.id);
+  assert.equal(prescription.context.assessmentRole, 'retention');
+  assert.equal(prescription.context.type, 'long');
+  assert.equal(prescription.questionCount, 1);
+  assert.throws(
+    () => resolveEssayTutorPlanPrescription({
+      date: '2026-08-12',
+      nodes: [aptitude, expression],
+      preference: { capabilityNodeId: aptitude.id }
+    }),
+    /不属于申论/,
+    'essay launch must fail closed instead of falling back to an aptitude capability'
+  );
 }
 
 async function verifyDraftAutosave({ EssayDraftAutosave }) {
@@ -177,19 +233,29 @@ function verifyIdentityAndTaskScope(identity, tasks) {
   const actionParams = tasks.generationTaskActionParams({
     intent: 'mock',
     payload: {
-      subject: '申论',
+      // What EssayFlowService actually sends. The old fixture passed a subject
+      // display name, which no caller ever set.
+      deliveryKind: 'subjective',
       questionSetId: firstId,
       entryMode: 'tutor',
       essayTopic: '归纳概括',
       essayType: 'long',
       purpose: 'practice',
-      date: '2026-08-12'
+      date: '2026-08-12',
+      dailyPlanId: 'DailyPlanId:1',
+      dailyPlanItemId: 'DailyPlanItemId:1',
+      capabilityNodeId: 'capability:essay:structured-expression',
+      assessmentRole: 'retention'
     }
   });
   assert.equal(actionParams.entryMode, 'tutor');
   assert.equal(actionParams.questionSetId, firstId);
   assert.equal(actionParams.type, 'long');
   assert.equal(actionParams.purpose, 'practice');
+  assert.equal(actionParams.dailyPlanId, 'DailyPlanId:1');
+  assert.equal(actionParams.dailyPlanItemId, 'DailyPlanItemId:1');
+  assert.equal(actionParams.capabilityNodeId, 'capability:essay:structured-expression');
+  assert.equal(actionParams.assessmentRole, 'retention');
   assert.equal('mode' in actionParams, false, 'essay task navigation must use entryMode consistently');
 
   const legacyParams = tasks.generationTaskActionParams({

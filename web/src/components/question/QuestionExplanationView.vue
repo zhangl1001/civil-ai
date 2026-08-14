@@ -2,7 +2,7 @@
   <section class="question-explanation">
     <header>
       <span>正确答案</span>
-      <b>{{ correctOptionId }}</b>
+      <b>{{ correctAnswer }}</b>
     </header>
     <slot name="after-answer" />
     <article
@@ -29,7 +29,8 @@ import type { ContentBlock, ContentDocument } from '@/modules/content/public';
 
 defineProps<{
   readonly document: ContentDocument;
-  readonly correctOptionId: string;
+  /** Answer key as displayed, e.g. `A` or `ABD`. */
+  readonly correctAnswer: string;
 }>();
 
 function titleFor(block: ContentBlock): string {

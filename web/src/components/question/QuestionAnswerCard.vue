@@ -15,13 +15,13 @@
 <script setup lang="ts">
 export interface AnswerCardQuestionItem {
   id: string;
-  correctOptionId?: string;
+  correctOptionIds?: readonly string[];
 }
 
 const props = defineProps<{
   questions: AnswerCardQuestionItem[];
   currentIndex: number;
-  answers: Record<string, string>;
+  answers: Record<string, readonly string[]>;
   submitted: boolean;
 }>();
 
@@ -30,12 +30,17 @@ defineEmits<{
 }>();
 
 function getItemClass(item: AnswerCardQuestionItem, itemIndex: number) {
-  const answered = !!props.answers[item.id];
-  const isCorrect = item.correctOptionId ? props.answers[item.id] === item.correctOptionId : false;
+  const selected = props.answers[item.id] ?? [];
+  const correct = item.correctOptionIds;
+  // Only a complete, exact match counts as correct on the answer card; partial
+  // credit still reads as wrong here so the learner revisits the question.
+  const isCorrect = correct
+    ? selected.length === correct.length && selected.every((optionId) => correct.includes(optionId))
+    : false;
   return {
     active: itemIndex === props.currentIndex,
-    answered,
-    wrong: props.submitted && answered && !isCorrect
+    answered: selected.length > 0,
+    wrong: props.submitted && selected.length > 0 && !isCorrect
   };
 }
 </script>

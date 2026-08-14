@@ -88,7 +88,7 @@
       <div class="essay-history">
         <button v-for="item in allStates" :key="item.key" type="button" @click="openSet(item)">
           <span>{{ item.question?.title || item.context.topic }}</span>
-            <em>{{ item.classification === 'legacy_unknown' ? '历史未分类' : modeLabelFor(item.context.entryMode) }} · {{ item.context.date }}</em>
+          <em>{{ item.classification === 'legacy_unknown' ? '历史未分类' : modeLabelFor(item.context.entryMode) }} · {{ item.context.date }}</em>
         </button>
         <AppStateView v-if="!allStates.length" compact title="暂无历史题组" description="完成一次申论生成后会显示在这里。" />
       </div>
@@ -104,7 +104,7 @@
             </button>
           </div>
         </section>
-        <section v-if="customTopic !== '申发论述'">
+        <section v-if="!isLongFormTopic(customTopic)">
           <strong>题量</strong>
           <div class="essay-topic-options">
             <button v-for="count in [1, 2, 3]" :key="count" type="button" :class="{ active: customCount === count }" @click="customCount = count">
@@ -134,6 +134,7 @@ import { useRouter } from 'vue-router';
 import { BookOpenCheckIcon, CameraIcon, ChevronRightIcon, FileTextIcon, LandmarkIcon, LoaderCircleIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
+import { isLongFormTopic, writtenFormatNames } from '@/domain/writtenFormats';
 import { AppStateView, InitialRefreshState } from '@/capabilities/design-system/public';
 import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import PracticeSubjectMark from './PracticeSubjectMark.vue';
@@ -146,13 +147,19 @@ import {
   type EssayGenerationContext
 } from '@/composition-root/public';
 import { EssayPracticeCenterFeature, type EssayPracticeMode, type EssayPracticeSet } from './EssayPracticeCenterFeature';
+import { EssayTutorPlanFeature, type EssayTutorPlanPrescription } from './EssayTutorPlanFeature';
 import { essayQuestionSetLocation } from './EssayNavigation';
 import { useTrueQuestionImport } from './useTrueQuestionImport';
 import { useTrueQuestionCapture } from './useTrueQuestionCapture';
 import { DOCUMENT_FILE_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
 
 type Mode = EssayPracticeMode;
-const props = defineProps<{ modelValue: Mode }>();
+const props = defineProps<{
+  modelValue: Mode;
+  dailyPlanItemId?: string;
+  capabilityNodeId?: string;
+  autoStart?: boolean;
+}>();
 defineEmits<{ 'update:modelValue': [value: Mode] }>();
 const router = useRouter();
 const feature = ref<EssayPracticeCenterFeature>();
@@ -162,6 +169,7 @@ const opening = ref(false);
 const activeTask = ref<AgentRunView>();
 const pendingContext = ref<EssayGenerationContext>();
 const pendingQuestionCount = ref(1);
+const tutorPlan = ref<EssayTutorPlanPrescription>();
 const error = ref('');
 const trueQuestionFileInput = ref<HTMLInputElement | null>(null);
 const { importingTrueQuestion, importTrueQuestion } = useTrueQuestionImport(
@@ -185,8 +193,7 @@ const showCustomSheet = ref(false);
 const customTopic = ref('归纳概括');
 const customCount = ref(1);
 const allStates = ref<readonly EssayPracticeSet[]>([]);
-const essayTopics = ['归纳概括', '综合分析', '提出对策', '贯彻执行', '申发论述'];
-
+const essayTopics = computed(() => writtenFormatNames());
 const modes = [
   { value: 'tutor' as const, label: '私教学习', icon: SparklesIcon },
   { value: 'self' as const, label: '自主刷题', icon: SlidersHorizontalIcon },
@@ -194,7 +201,7 @@ const modes = [
 ];
 const modeLabel = computed(() => modes.find((item) => item.value === props.modelValue)?.label || '私教学习');
 const modeCopy = computed(() => {
-  if (props.modelValue === 'self') return { eyebrow: '自主练习', title: '自己选择申论题型与材料', description: '围绕归纳概括、综合分析、提出对策、贯彻执行和申发论述自主训练。' };
+  if (props.modelValue === 'self') return { eyebrow: '自主练习', title: '自己选择题型与材料', description: `围绕${essayTopics.value.join('、')}自主训练。` };
   if (props.modelValue === 'true') return { eyebrow: '真题校准', title: '用真实申论材料校准作答能力', description: '按年份、地区和题型练习真题，批改结果进入同一套能力证据链。' };
   return { eyebrow: '当前私教主线', title: '申论讲解、作答与复盘', description: '私教根据备考阶段、薄弱维度和剩余时间安排材料学习、作答训练与批改。' };
 });
@@ -218,7 +225,11 @@ let taskPollId: number | null = null;
 
 onMounted(async () => {
   await load();
+  if (props.modelValue === 'tutor') await loadTutorPlan();
   await restoreActiveTask();
+  if (props.modelValue === 'tutor' && props.autoStart && !activeTask.value) {
+    await startTutorGeneration();
+  }
   taskPollId = window.setInterval(() => void refreshTask(), 1000);
 });
 onBeforeUnmount(() => {
@@ -227,8 +238,13 @@ onBeforeUnmount(() => {
 watch(() => props.modelValue, async () => {
   activeTask.value = undefined;
   await load();
+  if (props.modelValue === 'tutor') await loadTutorPlan();
   await restoreActiveTask();
 });
+watch(
+  () => [props.dailyPlanItemId, props.capabilityNodeId] as const,
+  () => { if (props.modelValue === 'tutor') void loadTutorPlan(); }
+);
 
 async function load() {
   loading.value = true;
@@ -246,7 +262,7 @@ async function openPractice() {
     return;
   }
   if (props.modelValue === 'tutor') {
-    await startGeneration({ entryMode: 'tutor', topic: '归纳概括', count: 1 });
+    await startTutorGeneration();
     return;
   }
   // 真题只能来自导入，所以这个入口就是文件选择，已导入的题组从下方列表进入。
@@ -265,11 +281,18 @@ async function submitCustom() {
   await startGeneration({
     entryMode: 'self',
     topic: customTopic.value,
-    count: customTopic.value === '申发论述' ? 1 : customCount.value
+    count: isLongFormTopic(customTopic.value) ? 1 : customCount.value
   });
 }
 
-async function startGeneration(input: { entryMode: Mode; topic: string; count: number }) {
+async function startGeneration(input: {
+  entryMode: Mode;
+  topic: string;
+  count: number;
+  type?: EssayGenerationContext['type'];
+  title?: string;
+  linkage?: Pick<EssayGenerationContext, 'capabilityNodeId' | 'dailyPlanId' | 'dailyPlanItemId' | 'reviewQueueItemId' | 'assessmentRole'>;
+}) {
   if (!coordinator.value || activeTask.value?.isActive) return;
   opening.value = true;
   error.value = '';
@@ -277,19 +300,53 @@ async function startGeneration(input: { entryMode: Mode; topic: string; count: n
     entryMode: input.entryMode,
     purpose: input.entryMode === 'true' ? 'true_question' : 'practice',
     topic: input.topic,
-    type: input.topic === '申发论述' ? 'long' : 'short',
-    date: new Date().toISOString().slice(0, 10)
+    type: input.type || (isLongFormTopic(input.topic) ? 'long' : 'short'),
+    date: new Date().toLocaleDateString('en-CA'),
+    ...input.linkage
   };
   pendingContext.value = context;
   pendingQuestionCount.value = input.count;
   try {
-    activeTask.value = await coordinator.value.start(context, input.count);
+    activeTask.value = await coordinator.value.start(context, input.count, { title: input.title });
     pendingContext.value = contextFromTask(activeTask.value) || context;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '申论生成失败';
   } finally {
     opening.value = false;
   }
+}
+
+async function loadTutorPlan() {
+  try {
+    const runtime = await initializeTutorRuntime();
+    tutorPlan.value = await new EssayTutorPlanFeature(runtime).prepare({
+      dailyPlanItemId: props.dailyPlanItemId,
+      capabilityNodeId: props.capabilityNodeId
+    });
+  } catch (cause) {
+    tutorPlan.value = undefined;
+    error.value = cause instanceof Error ? cause.message : '读取申论计划失败';
+  }
+}
+
+async function startTutorGeneration() {
+  if (!tutorPlan.value) await loadTutorPlan();
+  const prescription = tutorPlan.value;
+  if (!prescription) return;
+  await startGeneration({
+    entryMode: 'tutor',
+    topic: prescription.context.topic,
+    type: prescription.context.type,
+    count: prescription.questionCount,
+    title: prescription.title,
+    linkage: {
+      capabilityNodeId: prescription.context.capabilityNodeId,
+      dailyPlanId: prescription.context.dailyPlanId,
+      dailyPlanItemId: prescription.context.dailyPlanItemId,
+      reviewQueueItemId: prescription.context.reviewQueueItemId,
+      assessmentRole: prescription.context.assessmentRole
+    }
+  });
 }
 
 async function restoreActiveTask() {
@@ -333,7 +390,7 @@ async function retryGeneration() {
   await startGeneration({
     entryMode: normalizedMode(context.entryMode),
     topic: context.topic,
-    count: context.topic === '申发论述' ? 1 : pendingQuestionCount.value
+    count: isLongFormTopic(context.topic) ? 1 : pendingQuestionCount.value
   });
 }
 
@@ -381,8 +438,17 @@ function contextFromTask(task: AgentRunView): EssayContext | undefined {
     topic,
     date,
     type: type === 'long' ? 'long' : 'short',
-    purpose: purpose === 'mock' || purpose === 'true_question' ? purpose : 'practice'
+    purpose: purpose === 'mock' || purpose === 'true_question' ? purpose : 'practice',
+    capabilityNodeId: taskActionText(task, 'capabilityNodeId'),
+    dailyPlanId: taskActionText(task, 'dailyPlanId'),
+    dailyPlanItemId: taskActionText(task, 'dailyPlanItemId'),
+    reviewQueueItemId: taskActionText(task, 'reviewQueueItemId'),
+    assessmentRole: taskActionText(task, 'assessmentRole')
   };
+}
+function taskActionText(task: AgentRunView, key: string): string | undefined {
+  const value = task.actionParams[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 function normalizedMode(value?: EssayPracticeMode): Mode { return value === 'tutor' || value === 'true' ? value : 'self'; }
 function modeLabelFor(value?: EssayPracticeMode): string { return modes.find((item) => item.value === normalizedMode(value))?.label || '自主刷题'; }

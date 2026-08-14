@@ -10,6 +10,8 @@ import {
 import type {
   CommittedQuestionSetBundle,
   ContentRepository,
+  ContentSchemaVersion,
+  QuestionTemplateVersion,
   GenerationSpecRecord,
   GenerationWorkflowRecord,
   QuestionRecord
@@ -23,8 +25,8 @@ import type {
   QuestionSourceImportBundle,
   QuestionSourceRepository
 } from '../contracts/QuestionSourceRepository';
+import type { QuestionContent } from '../contracts/QuestionContent';
 import {
-  ContentSchemaCode,
   GenerationWorkflowStatus,
   GenerationWorkflowStep,
   QuestionQualityStatus,
@@ -32,8 +34,11 @@ import {
   QuestionSetPracticeStatus,
   QuestionSetPurpose,
   QuestionSetStatus,
-  QuestionTemplateCode
+  questionSchemaCodeFor,
+  type QuestionTemplateCode
 } from '../domain/ContentCodes';
+import { correctAnswerRecord } from '../domain/ChoiceQuestionAnswer';
+import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import {
   QuestionImportCandidateStatus,
   QuestionImportDraftStatus
@@ -68,8 +73,35 @@ export class PublishQuestionImportDraft {
     private readonly contentRepository: ContentRepository,
     private readonly sourceRepository: QuestionSourceRepository,
     private readonly clock: Clock,
-    private readonly ids: IdGenerator
+    private readonly ids: IdGenerator,
+    /**
+     * Grading rule the set's own subject is scored by, frozen at publish time.
+     * Resolved per capability node because a package may score one objective
+     * subject differently from another.
+     */
+    private readonly gradingPolicy: (capabilityNodeId: string) => QuestionSetGradingPolicy | undefined = () => undefined
   ) {}
+
+  /**
+   * Published template and schema for every template the paper uses. Resolved
+   * together so a paper is rejected before anything is written when one of its
+   * question types has no published metadata.
+   */
+  private async resolveTemplateMetadata(
+    templateCodes: readonly QuestionTemplateCode[]
+  ): Promise<ReadonlyMap<QuestionTemplateCode, { schema: ContentSchemaVersion; template: QuestionTemplateVersion }>> {
+    const resolved = await Promise.all(templateCodes.map(async (templateCode) => {
+      const [schema, template] = await Promise.all([
+        this.contentRepository.findPublishedSchema(questionSchemaCodeFor(templateCode)),
+        this.contentRepository.findPublishedQuestionTemplate(templateCode)
+      ]);
+      if (!schema || !template || template.contentSchemaVersionId !== schema.id) {
+        throw new Error(`Published content metadata for ${templateCode} is unavailable or incompatible`);
+      }
+      return [templateCode, { schema, template }] as const;
+    }));
+    return new Map(resolved);
+  }
 
   async execute(command: PublishQuestionImportDraftCommand): Promise<PublishQuestionImportDraftResult> {
     const idempotencyKey = command.idempotencyKey.trim();
@@ -102,22 +134,23 @@ export class PublishQuestionImportDraft {
       sourceHash: aggregate.draft.rawPayloadHash,
       questionHashes
     }));
-    const [sameIdentity, sameContent, schema, template] = await Promise.all([
+    // Each question binds its own template and schema, so one paper can mix
+    // 单选 and 多选 the way a real 试卷 does. The set-level spec still names one
+    // template — the one most of the paper uses — because a generation spec
+    // describes a single request, not the shape of every question in it.
+    const [sameIdentity, sameContent, metadataByTemplate] = await Promise.all([
       this.sourceRepository.findSourceByIdentityHash(await buildQuestionSourceIdentityHash({
         sourceType: aggregate.draft.sourceType,
         ...aggregate.draft.sourceMetadata,
         contentHash: aggregate.draft.rawPayloadHash
       })),
       this.sourceRepository.findSourceByContentHash(aggregate.draft.rawPayloadHash),
-      this.contentRepository.findPublishedSchema(ContentSchemaCode.SingleChoiceQuestion),
-      this.contentRepository.findPublishedQuestionTemplate(QuestionTemplateCode.SingleChoice)
+      this.resolveTemplateMetadata([...new Set(candidates.map((candidate) => candidate.content!.templateCode))])
     ]);
     if (sameIdentity || sameContent) {
       throw new Error('Question source was already published; use its existing question set instead of importing it again');
     }
-    if (!schema || !template || template.contentSchemaVersionId !== schema.id) {
-      throw new Error('Published single-choice content metadata is unavailable or incompatible');
-    }
+    const { schema, template } = metadataByTemplate.get(dominantTemplateCodeOf(candidates))!;
 
     const now = this.clock.now();
     const sourceId = this.ids.next('QuestionSourceId');
@@ -182,7 +215,7 @@ export class PublishQuestionImportDraft {
       questionSetId,
       examCycleId: aggregate.draft.examCycleId,
       capabilityNodeId: aggregate.draft.capabilityNodeId,
-      questionTemplateVersionId: template.id,
+      questionTemplateVersionId: metadataByTemplate.get(candidate.content!.templateCode)!.template.id,
       sequence: index + 1,
       difficulty: candidate.difficulty,
       cognitiveLevel: 'application',
@@ -195,10 +228,10 @@ export class PublishQuestionImportDraft {
       calibrationRole: QuestionCalibrationRole.Anchor,
       isOfficial: aggregate.draft.sourceType === QuestionOriginType.Official,
       content: candidate.content!,
-      correctAnswer: { optionId: candidate.content!.correctOptionId },
+      correctAnswer: correctAnswerRecord(candidate.content!),
       qualityStatus: QuestionQualityStatus.Published,
       contentHash: candidate.contentHash!,
-      contentSchemaVersionId: schema.id,
+      contentSchemaVersionId: metadataByTemplate.get(candidate.content!.templateCode)!.schema.id,
       contentVersion: 1,
       generatorWorkflowId: workflowId,
       createdAt: now
@@ -216,6 +249,7 @@ export class PublishQuestionImportDraft {
         purpose: QuestionSetPurpose.Anchor,
         assessmentRole: 'anchor',
         module: aggregate.draft.module,
+        gradingPolicy: this.gradingPolicy(aggregate.draft.capabilityNodeId),
         originType: aggregate.draft.sourceType,
         sourceId,
         calibrationRole: QuestionCalibrationRole.Anchor,
@@ -317,6 +351,21 @@ export class PublishQuestionImportDraft {
       return resultFromReceipt(concurrent, 'already_published');
     }
   }
+}
+
+/**
+ * The template most of the paper uses. Names the set-level generation spec,
+ * which describes one request rather than every question's own shape.
+ */
+function dominantTemplateCodeOf(
+  candidates: readonly { readonly content?: QuestionContent }[]
+): QuestionTemplateCode {
+  const counts = new Map<QuestionTemplateCode, number>();
+  for (const candidate of candidates) {
+    const code = candidate.content!.templateCode;
+    counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]![0];
 }
 
 function resultFromReceipt(

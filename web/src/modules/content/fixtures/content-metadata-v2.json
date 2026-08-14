@@ -1,71 +1,274 @@
 {
   "manifest": {
-    "id": "content-metadata:core:v2",
-    "version": "2.0.0",
+    "id": "content-metadata:core:v3",
+    "version": "3.0.0",
     "status": "published",
-    "contentHash": "sha256:0e0e760a9309af469679010176081f09bf886cd89c954d36298361130d32dff9",
-    "createdAt": 1784016000000
+    "contentHash": "sha256:2c26b3cc0de9576fd88cfe3ae585c64710a779dd2fc2fa1c459d7bf509b715cd",
+    "createdAt": 1784102400000
   },
   "payload": {
     "schemaVersions": [
       {
-        "id": "content-schema:document:v2",
+        "id": "content-schema:document:v3",
         "schemaCode": "content.document",
         "documentType": "lecture",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "status": "published",
-        "createdAt": 1784016000000,
+        "createdAt": 1784102400000,
         "schema": {
           "$id": "content.document.v1",
           "type": "object",
-          "required": ["schemaVersion", "blocks"],
+          "required": [
+            "schemaVersion",
+            "blocks"
+          ],
           "additionalProperties": false,
           "properties": {
-            "schemaVersion": { "const": "content.v1" },
-            "blocks": { "type": "array", "minItems": 1 }
+            "schemaVersion": {
+              "const": "content.v1"
+            },
+            "blocks": {
+              "type": "array",
+              "minItems": 1
+            }
           }
         }
       },
       {
-        "id": "content-schema:question-single-choice:v2",
+        "id": "content-schema:question-single-choice:v3",
         "schemaCode": "question.single_choice",
         "documentType": "question",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "status": "published",
-        "createdAt": 1784016000000,
+        "createdAt": 1784102400000,
         "schema": {
           "$id": "question.single_choice.v2",
           "type": "object",
-          "required": ["templateCode", "schemaVersion", "capabilityCode", "prompt", "options", "correctOptionId", "explanation"],
+          "required": [
+            "templateCode",
+            "schemaVersion",
+            "capabilityCode",
+            "prompt",
+            "options",
+            "correctOptionId",
+            "explanation"
+          ],
           "additionalProperties": false,
           "properties": {
-            "templateCode": { "const": "single_choice" },
-            "schemaVersion": { "const": "question.single_choice.v2" },
-            "capabilityCode": { "type": "string", "minLength": 1 },
-            "materialGroupId": { "type": "string", "minLength": 1 },
-            "material": { "$ref": "content.document.v1" },
-            "prompt": { "$ref": "content.document.v1" },
-            "options": { "type": "array", "minItems": 2 },
-            "correctOptionId": { "type": "string", "minLength": 1 },
-            "explanation": { "$ref": "content.document.v1" }
+            "templateCode": {
+              "const": "single_choice"
+            },
+            "schemaVersion": {
+              "const": "question.single_choice.v2"
+            },
+            "capabilityCode": {
+              "type": "string",
+              "minLength": 1
+            },
+            "materialGroupId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "material": {
+              "$ref": "content.document.v1"
+            },
+            "prompt": {
+              "$ref": "content.document.v1"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 2
+            },
+            "correctOptionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "explanation": {
+              "$ref": "content.document.v1"
+            }
+          }
+        }
+      },
+      {
+        "id": "content-schema:question-multiple-choice:v3",
+        "schemaCode": "question.multiple_choice",
+        "documentType": "question",
+        "version": "3.0.0",
+        "status": "published",
+        "createdAt": 1784102400000,
+        "schema": {
+          "$id": "question.multiple_choice.v2",
+          "type": "object",
+          "required": [
+            "templateCode",
+            "schemaVersion",
+            "capabilityCode",
+            "prompt",
+            "options",
+            "correctOptionIds",
+            "explanation"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "templateCode": {
+              "const": "multiple_choice"
+            },
+            "schemaVersion": {
+              "const": "question.multiple_choice.v2"
+            },
+            "capabilityCode": {
+              "type": "string",
+              "minLength": 1
+            },
+            "materialGroupId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "material": {
+              "$ref": "content.document.v1"
+            },
+            "prompt": {
+              "$ref": "content.document.v1"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 2
+            },
+            "explanation": {
+              "$ref": "content.document.v1"
+            },
+            "correctOptionIds": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "content-schema:question-indeterminate-choice:v3",
+        "schemaCode": "question.indeterminate_choice",
+        "documentType": "question",
+        "version": "3.0.0",
+        "status": "published",
+        "createdAt": 1784102400000,
+        "schema": {
+          "$id": "question.indeterminate_choice.v2",
+          "type": "object",
+          "required": [
+            "templateCode",
+            "schemaVersion",
+            "capabilityCode",
+            "prompt",
+            "options",
+            "correctOptionIds",
+            "explanation"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "templateCode": {
+              "const": "indeterminate_choice"
+            },
+            "schemaVersion": {
+              "const": "question.indeterminate_choice.v2"
+            },
+            "capabilityCode": {
+              "type": "string",
+              "minLength": 1
+            },
+            "materialGroupId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "material": {
+              "$ref": "content.document.v1"
+            },
+            "prompt": {
+              "$ref": "content.document.v1"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 2
+            },
+            "explanation": {
+              "$ref": "content.document.v1"
+            },
+            "correctOptionIds": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
           }
         }
       }
     ],
     "questionTemplateVersions": [
       {
-        "id": "question-template:single-choice:v2",
+        "id": "question-template:single-choice:v3",
         "templateCode": "single_choice",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "rendererCode": "single_choice",
-        "contentSchemaVersionId": "content-schema:question-single-choice:v2",
+        "contentSchemaVersionId": "content-schema:question-single-choice:v3",
         "status": "published",
-        "createdAt": 1784016000000,
+        "createdAt": 1784102400000,
         "config": {
           "answerMode": "single",
           "minOptions": 2,
           "maxOptions": 8,
-          "regions": ["material", "prompt", "options", "explanation"],
+          "regions": [
+            "material",
+            "prompt",
+            "options",
+            "explanation"
+          ],
+          "groupingField": "materialGroupId"
+        }
+      },
+      {
+        "id": "question-template:multiple-choice:v3",
+        "templateCode": "multiple_choice",
+        "version": "3.0.0",
+        "rendererCode": "multiple_choice",
+        "contentSchemaVersionId": "content-schema:question-multiple-choice:v3",
+        "status": "published",
+        "createdAt": 1784102400000,
+        "config": {
+          "answerMode": "multiple",
+          "minOptions": 2,
+          "maxOptions": 8,
+          "regions": [
+            "material",
+            "prompt",
+            "options",
+            "explanation"
+          ],
+          "groupingField": "materialGroupId"
+        }
+      },
+      {
+        "id": "question-template:indeterminate-choice:v3",
+        "templateCode": "indeterminate_choice",
+        "version": "3.0.0",
+        "rendererCode": "indeterminate_choice",
+        "contentSchemaVersionId": "content-schema:question-indeterminate-choice:v3",
+        "status": "published",
+        "createdAt": 1784102400000,
+        "config": {
+          "answerMode": "indeterminate",
+          "minOptions": 2,
+          "maxOptions": 8,
+          "regions": [
+            "material",
+            "prompt",
+            "options",
+            "explanation"
+          ],
           "groupingField": "materialGroupId"
         }
       }

@@ -145,7 +145,7 @@
                       :y="axis.labelY"
                       :text-anchor="axis.anchor"
                     >
-                      {{ axis.shortName }}
+                      {{ axis.name }}
                     </text>
                   </svg>
                   <div class="radar-legend">
@@ -193,6 +193,7 @@ import {
   TargetIcon
 } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
 import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import HomeActionGrid from '@/features/home/HomeActionGrid.vue';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
@@ -216,6 +217,9 @@ import {
 import type { LearnerPriorityResult } from '@/modules/mastery/public';
 import { qualityDashboardService, type QualityDashboard } from '@/services/QualityDashboardService';
 
+// Named so App.vue can hold this tab root in its <KeepAlive> whitelist.
+defineOptions({ name: 'HomeView' });
+
 const router = useRouter();
 const candidateHome = ref<CandidateHomeSnapshot | null>(null);
 const quality = ref<QualityDashboard | null>(null);
@@ -231,6 +235,9 @@ const {
 const isTutorLoading = ref(true);
 const tutorLoadError = ref('');
 onMounted(loadTutorHome);
+// Reloading keeps the rendered home on screen: loadTutorHome only raises the
+// skeleton while there is no candidate home to show yet.
+useCachedViewRefresh(loadTutorHome);
 async function loadTutorHome() {
   const showInitialLoading = !candidateHome.value;
   if (showInitialLoading) isTutorLoading.value = true;

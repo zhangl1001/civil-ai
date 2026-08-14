@@ -8,11 +8,20 @@ import type {
   DataTableColumn,
   FormulaBlock,
   ImageBlock,
+  StatisticalChartBlock,
+  StatisticalChartPoint,
+  StatisticalChartSeries,
   TextBlock,
   SvgDiagramBlock
 } from '../contracts/ContentDocument';
-import type { SingleChoiceOption, SingleChoiceQuestionContent } from '../contracts/QuestionContent';
-import { CalloutKind, ContentAlignment, ContentBlockType, QuestionTemplateCode } from '../domain/ContentCodes';
+import type { QuestionContent, SingleChoiceOption } from '../contracts/QuestionContent';
+import {
+  CalloutKind,
+  ContentAlignment,
+  ContentBlockType,
+  parseQuestionTemplateCode,
+  QuestionTemplateCode
+} from '../domain/ContentCodes';
 import { resolveQuestionPresentation } from '../domain/QuestionPresentation';
 import { ImageSourceKind, resolveImageSource } from '@/capabilities/content-rendering/public';
 
@@ -31,6 +40,16 @@ const MAX_BLOCK_DEPTH = 4;
 const blockTypes = new Set<string>(Object.values(ContentBlockType));
 const calloutKinds = new Set<string>(Object.values(CalloutKind));
 const alignments = new Set<string>(Object.values(ContentAlignment));
+const statisticalChartTypes = new Set<string>([
+  'bar',
+  'horizontal_bar',
+  'line',
+  'pie',
+  'doughnut',
+  'stacked_bar',
+  'combo',
+  'scatter'
+]);
 
 export class ContentSchemaValidator {
   parseDocument(input: unknown): Result<ContentDocument, ContentValidationFailure> {
@@ -39,13 +58,13 @@ export class ContentSchemaValidator {
     return document && issues.length === 0 ? success(document) : failure({ code: 'content.schema_invalid', issues });
   }
 
-  parseSingleChoiceQuestion(input: unknown): Result<SingleChoiceQuestionContent, ContentValidationFailure> {
+  parseChoiceQuestion(input: unknown): Result<QuestionContent, ContentValidationFailure> {
     const issues: ContentValidationIssue[] = [];
     const record = asRecord(input, '$', issues);
     if (!record) return failure({ code: 'content.schema_invalid', issues });
-    const templateCode = readString(record.templateCode, '$.templateCode', issues);
-    if (templateCode !== QuestionTemplateCode.SingleChoice) {
-      issue(issues, 'question.template_unsupported', '$.templateCode', 'Only single_choice is supported by this schema version');
+    const templateCode = parseQuestionTemplateCode(readString(record.templateCode, '$.templateCode', issues));
+    if (!templateCode) {
+      issue(issues, 'question.template_unsupported', '$.templateCode', 'Unsupported question template');
     }
     const schemaVersion = readString(record.schemaVersion, '$.schemaVersion', issues);
     const capabilityCode = readString(record.capabilityCode, '$.capabilityCode', issues);
@@ -62,28 +81,23 @@ export class ContentSchemaValidator {
       : parseDocument(record.material, '$.material', issues, 0);
     const materialGroupId = readOptionalString(record.materialGroupId, '$.materialGroupId', issues);
     const options = parseOptions(record.options, issues);
-    const correctOptionId = readString(record.correctOptionId, '$.correctOptionId', issues);
-    if (options && correctOptionId && !options.some((option) => option.id === correctOptionId)) {
-      issue(issues, 'question.answer_missing', '$.correctOptionId', 'Correct option must reference one option id');
-    }
-    if (issues.length || !schemaVersion || !capabilityCode || !prompt || !explanation || !options || !correctOptionId) {
+    const answer = templateCode && options ? parseAnswerKey(templateCode, record, options, issues) : undefined;
+    if (issues.length || !templateCode || !schemaVersion || !capabilityCode || !prompt || !explanation || !options || !answer) {
       return failure({ code: 'content.schema_invalid', issues });
     }
-    const normalized = {
-      templateCode: QuestionTemplateCode.SingleChoice,
+    const layout = {
       schemaVersion,
       capabilityCode,
       materialGroupId,
       material,
       prompt,
       options,
-      correctOptionId,
       explanation
     };
-    return success({
-      ...normalized,
-      presentationCode: resolveQuestionPresentation(normalized)
-    });
+    const presentationCode = resolveQuestionPresentation(layout);
+    return success(answer.templateCode === QuestionTemplateCode.SingleChoice
+      ? { ...layout, presentationCode, templateCode: answer.templateCode, correctOptionId: answer.correctOptionId }
+      : { ...layout, presentationCode, templateCode: answer.templateCode, correctOptionIds: answer.correctOptionIds });
   }
 }
 
@@ -130,6 +144,7 @@ function parseBlock(
     return source === undefined ? undefined : { id, type, source } satisfies TextBlock;
   }
   if (type === ContentBlockType.DataTable) return parseDataTable(id, record, path, issues);
+  if (type === ContentBlockType.StatisticalChart) return parseStatisticalChart(id, record, path, issues);
   if (type === ContentBlockType.SvgDiagram) {
     const markup = readString(record.markup, `${path}.markup`, issues);
     const alt = readString(record.alt, `${path}.alt`, issues);
@@ -221,6 +236,124 @@ function parseDataTable(
   };
 }
 
+function parseStatisticalChart(
+  id: string,
+  record: Record<string, unknown>,
+  path: string,
+  issues: ContentValidationIssue[]
+): StatisticalChartBlock | undefined {
+  const chartType = readString(record.chartType, `${path}.chartType`, issues);
+  if (!chartType || !statisticalChartTypes.has(chartType)) {
+    issue(issues, 'content.chart_type_invalid', `${path}.chartType`, 'Unknown statistical chart type');
+  }
+  const categories = parseChartCategories(record.categories, `${path}.categories`, issues);
+  if (!Array.isArray(record.series) || record.series.length === 0) {
+    issue(issues, 'content.chart_series_invalid', `${path}.series`, 'Chart must contain at least one series');
+    return undefined;
+  }
+  const series = record.series.map((item, index) => parseChartSeries(
+    item,
+    `${path}.series[${index}]`,
+    categories?.length ?? 0,
+    chartType,
+    issues
+  ));
+  const ids = new Set(series.filter(Boolean).map((item) => item!.id));
+  if (ids.size !== series.length) {
+    issue(issues, 'content.chart_series_duplicate', `${path}.series`, 'Chart series ids must be unique');
+  }
+  if (!chartType || !statisticalChartTypes.has(chartType) || !categories || series.some((item) => !item)) {
+    return undefined;
+  }
+  return {
+    id,
+    type: ContentBlockType.StatisticalChart,
+    chartType: chartType as StatisticalChartBlock['chartType'],
+    title: readOptionalString(record.title, `${path}.title`, issues),
+    unit: readOptionalString(record.unit, `${path}.unit`, issues),
+    categories,
+    series: series as StatisticalChartSeries[],
+    sourceNote: readOptionalString(record.sourceNote, `${path}.sourceNote`, issues)
+  };
+}
+
+function parseChartCategories(
+  input: unknown,
+  path: string,
+  issues: ContentValidationIssue[]
+): readonly string[] | undefined {
+  if (!Array.isArray(input)) {
+    issue(issues, 'content.chart_categories_invalid', path, 'Chart categories must be an array');
+    return undefined;
+  }
+  const categories = input.map((item, index) => readString(item, `${path}[${index}]`, issues));
+  return categories.some((item) => !item) ? undefined : categories as string[];
+}
+
+function parseChartSeries(
+  input: unknown,
+  path: string,
+  categoryCount: number,
+  chartType: string | undefined,
+  issues: ContentValidationIssue[]
+): StatisticalChartSeries | undefined {
+  const record = asRecord(input, path, issues);
+  if (!record) return undefined;
+  const id = readString(record.id, `${path}.id`, issues);
+  const label = readString(record.label, `${path}.label`, issues);
+  const renderAs = record.renderAs === 'bar' || record.renderAs === 'line' ? record.renderAs : undefined;
+  if (record.renderAs !== undefined && !renderAs) {
+    issue(issues, 'content.chart_render_type_invalid', `${path}.renderAs`, 'Series render type must be bar or line');
+  }
+  if (chartType === 'scatter') {
+    const points = parseChartPoints(record.points, `${path}.points`, issues);
+    return id && label && points ? { id, label, points } : undefined;
+  }
+  if (!Array.isArray(record.values) || record.values.length !== categoryCount || categoryCount === 0) {
+    issue(
+      issues,
+      'content.chart_values_invalid',
+      `${path}.values`,
+      'Series values must match the category count'
+    );
+    return undefined;
+  }
+  const values = record.values.map((value, index) => {
+    if (value !== null && typeof value !== 'number') {
+      issue(issues, 'content.chart_value_invalid', `${path}.values[${index}]`, 'Chart value must be a number or null');
+      return undefined;
+    }
+    return value;
+  });
+  if (!id || !label || values.some((value) => value === undefined)) return undefined;
+  return { id, label, values: values as Array<number | null>, ...(renderAs ? { renderAs } : {}) };
+}
+
+function parseChartPoints(
+  input: unknown,
+  path: string,
+  issues: ContentValidationIssue[]
+): readonly StatisticalChartPoint[] | undefined {
+  if (!Array.isArray(input) || input.length === 0) {
+    issue(issues, 'content.chart_points_invalid', path, 'Scatter series must contain points');
+    return undefined;
+  }
+  const points = input.map((item, index) => {
+    const record = asRecord(item, `${path}[${index}]`, issues);
+    if (!record) return undefined;
+    if (typeof record.x !== 'number' || typeof record.y !== 'number') {
+      issue(issues, 'content.chart_point_invalid', `${path}[${index}]`, 'Chart point requires numeric x and y');
+      return undefined;
+    }
+    return {
+      x: record.x,
+      y: record.y,
+      label: readOptionalString(record.label, `${path}[${index}].label`, issues)
+    } satisfies StatisticalChartPoint;
+  });
+  return points.some((point) => !point) ? undefined : points as StatisticalChartPoint[];
+}
+
 function parseColumn(input: unknown, path: string, issues: ContentValidationIssue[]): DataTableColumn | undefined {
   const record = asRecord(input, path, issues);
   if (!record) return undefined;
@@ -257,9 +390,70 @@ function parseRow(
   return row;
 }
 
+type ChoiceAnswerKey =
+  | { readonly templateCode: typeof QuestionTemplateCode.SingleChoice; readonly correctOptionId: string }
+  | {
+    readonly templateCode: typeof QuestionTemplateCode.MultipleChoice | typeof QuestionTemplateCode.IndeterminateChoice;
+    readonly correctOptionIds: readonly string[];
+  };
+
+const MULTIPLE_CHOICE_MINIMUM_ANSWERS = 2;
+
+/**
+ * Answer keys are validated against the question's own options, so a template
+ * can never be committed with an answer that references a missing option.
+ */
+function parseAnswerKey(
+  templateCode: QuestionTemplateCode,
+  record: Record<string, unknown>,
+  options: readonly SingleChoiceOption[],
+  issues: ContentValidationIssue[]
+): ChoiceAnswerKey | undefined {
+  const available = new Set(options.map((option) => option.id));
+  if (templateCode === QuestionTemplateCode.SingleChoice) {
+    const correctOptionId = readString(record.correctOptionId, '$.correctOptionId', issues);
+    if (!correctOptionId) return undefined;
+    if (!available.has(correctOptionId)) {
+      issue(issues, 'question.answer_missing', '$.correctOptionId', 'Correct option must reference one option id');
+      return undefined;
+    }
+    return { templateCode, correctOptionId };
+  }
+
+  const input = record.correctOptionIds;
+  if (!Array.isArray(input) || input.some((item) => typeof item !== 'string')) {
+    issue(issues, 'question.answer_missing', '$.correctOptionIds', 'Multi answer question requires a correctOptionIds array');
+    return undefined;
+  }
+  const correctOptionIds = input as readonly string[];
+  if (new Set(correctOptionIds).size !== correctOptionIds.length) {
+    issue(issues, 'question.answer_duplicate', '$.correctOptionIds', 'Correct option ids must be unique');
+    return undefined;
+  }
+  if (correctOptionIds.some((optionId) => !available.has(optionId))) {
+    issue(issues, 'question.answer_missing', '$.correctOptionIds', 'Correct options must reference existing option ids');
+    return undefined;
+  }
+  const minimum = templateCode === QuestionTemplateCode.MultipleChoice ? MULTIPLE_CHOICE_MINIMUM_ANSWERS : 1;
+  if (correctOptionIds.length < minimum) {
+    issue(
+      issues,
+      'question.answer_insufficient',
+      '$.correctOptionIds',
+      `Template ${templateCode} requires at least ${minimum} correct options`
+    );
+    return undefined;
+  }
+  if (correctOptionIds.length === options.length) {
+    issue(issues, 'question.answer_trivial', '$.correctOptionIds', 'Every option cannot be correct');
+    return undefined;
+  }
+  return { templateCode, correctOptionIds };
+}
+
 function parseOptions(input: unknown, issues: ContentValidationIssue[]): readonly SingleChoiceOption[] | undefined {
   if (!Array.isArray(input) || input.length < 2 || input.length > 8) {
-    issue(issues, 'question.options_invalid', '$.options', 'Single choice question requires between two and eight options');
+    issue(issues, 'question.options_invalid', '$.options', 'Choice question requires between two and eight options');
     return undefined;
   }
   const options = input.map((option, index) => {

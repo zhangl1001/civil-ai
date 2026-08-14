@@ -1,3 +1,6 @@
+import { isLongFormTopic } from '@/domain/writtenFormats';
+import { primarySubjectOfKind } from '@/domain/subjectDelivery';
+import { ExamDeliveryKind } from '@/modules/curriculum/public';
 import { generationTaskService } from './GenerationTaskService';
 import type { AgentTaskEnqueueResult } from './GenerationTaskService';
 import {
@@ -15,6 +18,11 @@ export interface EssayGenerationContext {
   type: 'short' | 'long';
   entryMode?: EssayEntryMode;
   purpose?: EssayQuestionSetPurpose;
+  capabilityNodeId?: string;
+  dailyPlanId?: string;
+  dailyPlanItemId?: string;
+  reviewQueueItemId?: string;
+  assessmentRole?: string;
 }
 
 export interface EssayContext extends EssayGenerationContext {
@@ -29,8 +37,7 @@ function today(): string {
 }
 
 function typeFromTopic(topic: string): EssayContext['type'] {
-  if (topic === '申发论述') return 'long';
-  return 'short';
+  return isLongFormTopic(topic) ? 'long' : 'short';
 }
 
 export class EssayFlowService {
@@ -93,23 +100,34 @@ export class EssayFlowService {
     return generationTaskService.enqueue({
       idempotencyKey: options.idempotencyKey,
       intent: 'mock',
-      title: options.title || '生成申论题目',
+      title: options.title || `生成${writtenSubjectName()}题目`,
       detail: `${context.topic} · ${count} 题 · ${context.date}`,
-      module: '申论',
+      module: writtenSubjectName(),
       sourceId: questionSetId,
       scopeId: essayQuestionSetGenerationScope({ ...context, questionSetId, entryMode, purpose }),
       payload: {
-        subject: '申论',
+        deliveryKind: ExamDeliveryKind.Subjective,
         questionSetId,
         date: context.date,
         essayTopic: context.topic,
         essayType: context.type,
         entryMode,
         purpose,
-        essayQuestionCount: count
+        essayQuestionCount: count,
+        ...(context.capabilityNodeId ? { capabilityNodeId: context.capabilityNodeId } : {}),
+        ...(context.dailyPlanId ? { dailyPlanId: context.dailyPlanId } : {}),
+        ...(context.dailyPlanItemId ? { dailyPlanItemId: context.dailyPlanItemId } : {}),
+        ...(context.reviewQueueItemId ? { reviewQueueItemId: context.reviewQueueItemId } : {}),
+        ...(context.assessmentRole ? { assessmentRole: context.assessmentRole } : {})
       }
     });
   }
 }
 
 export const essayFlowService = new EssayFlowService();
+
+/** What the active package calls the subject answered in writing. */
+function writtenSubjectName(): string {
+  const subject = primarySubjectOfKind(ExamDeliveryKind.Subjective);
+  return subject?.shortName ?? subject?.name ?? '主观题';
+}

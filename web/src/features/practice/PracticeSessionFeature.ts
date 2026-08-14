@@ -3,6 +3,7 @@ import {
   findQuestionSetEnrichmentNeeds,
   hasQuestionSetEnrichmentNeeds,
   LearningAssetKind,
+  QuestionSetStatus,
   type CommittedQuestionSetBundle,
   type QuestionSetSourceSummary
 } from '@/modules/content/public';
@@ -40,7 +41,9 @@ export class PracticeSessionFeature {
       )
       : undefined;
     const bundle = manifest?.bundle ?? singleBundle;
-    if (!bundle) throw new Error('题组不存在或已不可用。');
+    if (!bundle || bundle.questionSet.status !== QuestionSetStatus.Ready) {
+      throw new Error('题组不存在或已不可用。');
+    }
 
     const [cycle, source] = await Promise.all([
       this.runtime.candidateRepository.findCurrentCycle(),

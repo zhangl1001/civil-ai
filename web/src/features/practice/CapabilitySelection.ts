@@ -1,11 +1,13 @@
+import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import type { CapabilityNode } from '@/modules/curriculum/public';
 import type { MasteryTrack } from '@/modules/mastery/public';
 
-export function trainableAptitudeNodes(nodes: readonly CapabilityNode[]): readonly CapabilityNode[] {
+export function trainableObjectiveNodes(nodes: readonly CapabilityNode[]): readonly CapabilityNode[] {
+  const objective = objectiveSubjectCodes();
   return nodes
     .filter((node) => (
       node.status === 'active'
-      && node.subject === 'aptitude'
+      && objective.has(node.subject)
       && (node.nodeType === 'knowledge_point' || node.nodeType === 'sub_point')
     ))
     .slice()
@@ -16,7 +18,7 @@ export function selectPriorityOrCoverageCapability(
   nodes: readonly CapabilityNode[],
   tracks: readonly MasteryTrack[]
 ): CapabilityNode | undefined {
-  const trainable = trainableAptitudeNodes(nodes);
+  const trainable = trainableObjectiveNodes(nodes);
   const byId = new Map(trainable.map((node) => [node.id, node]));
   const priority = tracks.find((track) => byId.has(track.capabilityNodeId));
   return (priority ? byId.get(priority.capabilityNodeId) : undefined)
@@ -27,7 +29,7 @@ export function selectCoverageGapCapability(
   nodes: readonly CapabilityNode[],
   tracks: readonly MasteryTrack[]
 ): CapabilityNode | undefined {
-  const trainable = trainableAptitudeNodes(nodes);
+  const trainable = trainableObjectiveNodes(nodes);
   if (!trainable.length) return undefined;
   const sampleByCapability = new Map(tracks.map((track) => [track.capabilityNodeId, track.effectiveSample]));
   const sampleByModule = new Map<string, number>();

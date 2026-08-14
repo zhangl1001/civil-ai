@@ -1,5 +1,9 @@
+import { shallowRef } from 'vue';
+import type { CapabilityNode } from '@/modules/curriculum/public';
 import type { LearningEventType } from './learning';
 import type { PracticeMode } from './practice';
+
+export { PracticeModuleCode } from './practiceModuleCodes';
 
 export const DEFAULT_PRACTICE_MODULE = '专项练习';
 
@@ -10,53 +14,79 @@ export const PROVINCE_OPTIONS = [
   '云南', '西藏', '陕西', '甘肃', '青海', '宁夏', '新疆'
 ] as const;
 
-export const PracticeModuleCode = {
-  Judgment: 'judgment',
-  Verbal: 'verbal',
-  DataAnalysis: 'data_analysis',
-  Quantity: 'quantity',
-  CommonSense: 'common_sense',
-  Aptitude: 'aptitude',
-  Essay: 'essay'
-} as const;
+export interface CurriculumModuleOption {
+  readonly code: string;
+  readonly name: string;
+}
 
-export type PracticeModuleCode = typeof PracticeModuleCode[keyof typeof PracticeModuleCode];
+interface CurriculumLabelCatalog {
+  readonly labelByCode: Readonly<Record<string, string>>;
+  readonly codeByLabel: Readonly<Record<string, string>>;
+  readonly moduleOptions: readonly CurriculumModuleOption[];
+}
 
-export const PRACTICE_MODULE_LABELS: Readonly<Record<string, string>> = {
-  [PracticeModuleCode.Judgment]: '判断推理',
-  [PracticeModuleCode.Verbal]: '言语理解',
-  [PracticeModuleCode.DataAnalysis]: '资料分析',
-  [PracticeModuleCode.Quantity]: '数量关系',
-  [PracticeModuleCode.CommonSense]: '常识判断',
-  [PracticeModuleCode.Aptitude]: '行测',
-  [PracticeModuleCode.Essay]: '申论',
-  行测模考: '行测模考'
-};
+const EMPTY_CATALOG: CurriculumLabelCatalog = { labelByCode: {}, codeByLabel: {}, moduleOptions: [] };
 
-export const APTITUDE_PRACTICE_MODULE_OPTIONS = [
-  { code: PracticeModuleCode.Judgment, name: PRACTICE_MODULE_LABELS[PracticeModuleCode.Judgment] },
-  { code: PracticeModuleCode.Verbal, name: PRACTICE_MODULE_LABELS[PracticeModuleCode.Verbal] },
-  { code: PracticeModuleCode.DataAnalysis, name: PRACTICE_MODULE_LABELS[PracticeModuleCode.DataAnalysis] },
-  { code: PracticeModuleCode.Quantity, name: PRACTICE_MODULE_LABELS[PracticeModuleCode.Quantity] },
-  { code: PracticeModuleCode.CommonSense, name: PRACTICE_MODULE_LABELS[PracticeModuleCode.CommonSense] }
-] as const;
+const SUBJECT_NODE_TYPE = 'subject';
+const MODULE_NODE_TYPE = 'module';
+const ACTIVE_NODE_STATUS = 'active';
+
+/**
+ * Display names for subjects and modules, projected from the active exam
+ * package. Codes are stable and defined in code; the Chinese names are not —
+ * they belong to the package, so a different package renames the whole UI
+ * without touching application code.
+ *
+ * Held in a `shallowRef` because the active package can change: the app installs
+ * the default package before mounting and re-installs the candidate's own
+ * package once the runtime resolves it. Readers stay plain function calls and
+ * any template that used one re-renders on its own.
+ */
+const catalog = shallowRef<CurriculumLabelCatalog>(EMPTY_CATALOG);
+
+export function installCurriculumLabels(nodes: readonly CapabilityNode[]): void {
+  const named = nodes
+    .filter((node) => node.status === ACTIVE_NODE_STATUS)
+    .filter((node) => node.nodeType === SUBJECT_NODE_TYPE || node.nodeType === MODULE_NODE_TYPE);
+  catalog.value = {
+    labelByCode: Object.fromEntries(named.map((node) => [node.module, displayName(node)])),
+    codeByLabel: Object.fromEntries(named.flatMap((node) => {
+      const display = displayName(node);
+      // Both forms resolve back to the code so a name written by the model or
+      // stored on an older record still maps home.
+      return display === node.name ? [[display, node.module]] : [[display, node.module], [node.name, node.module]];
+    })),
+    moduleOptions: named
+      .filter((node) => node.nodeType === MODULE_NODE_TYPE)
+      .sort((left, right) => left.sequence - right.sequence)
+      .map((node) => ({ code: node.module, name: displayName(node) }))
+  };
+}
+
+function displayName(node: CapabilityNode): string {
+  return node.shortName?.trim() || node.name;
+}
+
+/** Modules of the active package, in package order. Drives filters and pickers. */
+export function curriculumModuleOptions(): readonly CurriculumModuleOption[] {
+  return catalog.value.moduleOptions;
+}
 
 export function practiceModuleLabel(code?: string): string {
   const normalized = code?.trim() || '';
-  return PRACTICE_MODULE_LABELS[normalized] || normalized || DEFAULT_PRACTICE_MODULE;
+  return catalog.value.labelByCode[normalized] || normalized || DEFAULT_PRACTICE_MODULE;
 }
 
 export function practiceModuleCode(value?: string): string {
   const normalized = value?.trim() || '';
-  if (PRACTICE_MODULE_LABELS[normalized]) return normalized;
-  return Object.entries(PRACTICE_MODULE_LABELS)
-    .find(([, label]) => label === normalized)?.[0] || normalized;
+  if (catalog.value.labelByCode[normalized]) return normalized;
+  return catalog.value.codeByLabel[normalized] || normalized;
 }
 
 export const LEARNING_EVENT_LABELS: Record<LearningEventType, string> = {
-  practice: '行测练习',
+  practice: '客观题练习',
   review: '错题复习',
-  essay: '申论练习',
+  essay: '主观题练习',
   mock: '模拟考试',
   digest: '每日积累',
   grade: '批改反馈'
@@ -66,7 +96,7 @@ export const PRACTICE_MODE_LABELS: Record<PracticeMode, string> = {
   practice: '练习',
   review: '复习',
   mock: '模考',
-  essay: '申论',
+  essay: '主观题',
   diagnostic: '诊断'
 };
 

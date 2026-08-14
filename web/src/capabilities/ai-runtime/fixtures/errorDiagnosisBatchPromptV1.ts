@@ -1,4 +1,5 @@
 import type { InstantMs, JsonObject, PromptVersionId } from '@/kernel/public';
+import { SHARED_PROMPT_EXAM_TYPE } from '../prompt/PromptContracts';
 import type { PromptBundle } from '../prompt/PromptContracts';
 import { PromptSectionCode } from '../prompt/PromptContracts';
 
@@ -99,13 +100,14 @@ const responseSchema: JsonObject = {
 };
 
 export const errorDiagnosisBatchPromptV1: PromptBundle = {
+  examType: SHARED_PROMPT_EXAM_TYPE,
   definitionId: 'prompt-definition:error-diagnosis-batch',
   versionId: 'prompt-version:error-diagnosis-batch:v2' as PromptVersionId,
   promptCode: 'teaching.diagnose.objective-errors-batch',
   taskType: 'error_diagnosis',
   description: '一次分析同一学习会话内的多道错题，并按题返回可独立校验和落库的错因候选',
   version: '1.1.0',
-  contentHash: 'sha256:662e347a6c08195d2e589ab07d79ee3c863134759312e24d56a784aaab315c7c',
+  contentHash: 'sha256:e0ff194bb2ffdfc6a681a08a5ce6c14bd01ac20876dca2de018e4d10002b9433',
   createdAt: 1785052800000 as InstantMs,
   requiredVariables: ['SUBJECT'],
   compatibleSchemaVersions: ['question.single_choice.v2'],

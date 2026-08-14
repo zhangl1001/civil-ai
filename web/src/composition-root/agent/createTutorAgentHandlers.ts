@@ -1,4 +1,8 @@
-import type { PromptCompiler, ProviderGateway } from '@/capabilities/ai-runtime/public';
+import type {
+  PromptCompiler,
+  PromptRegistry,
+  ProviderGateway
+} from '@/capabilities/ai-runtime/public';
 import { AssessmentRole, type CapabilityNodeId, type JsonObject } from '@/kernel/public';
 import {
   AgentRunAction,
@@ -23,7 +27,7 @@ import {
   type RunStructuredObjectiveGenerationWorkflow,
   type ScanQuestionImportDraft
 } from '@/modules/content/public';
-import type { CurriculumRepository } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, projectExamSubjects, type CurriculumRepository } from '@/modules/curriculum/public';
 import type {
   ErrorDiagnosisRepository,
   RecordSubjectiveAssessment,
@@ -38,7 +42,8 @@ import type {
 import type { UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import type { RequestStructuredPractice } from '@/modules/teaching/public';
 import { aiBusinessTools, type AIBusinessToolCall, type AIBusinessToolName, type AIBusinessToolResult } from '@/services/AIBusinessTools';
-import { practiceModuleCode } from '@/domain/labels';
+import { selectPracticeCapability } from './selectPracticeCapability';
+import { compilePinned, pinPromptResolution } from './DurablePromptPinning';
 import type { GenerationIntent } from '@/services/GenerationTaskService';
 import {
   createStructuredPracticeAgentHandler,
@@ -73,6 +78,7 @@ export interface TutorAgentHandlerDependencies {
   readonly diagnoses: ErrorDiagnosisRepository;
   readonly runErrorDiagnosis: RunAiErrorDiagnosis;
   readonly promptCompiler: PromptCompiler;
+  readonly promptRegistry: PromptRegistry;
   readonly transitionAgentRun: TransitionAgentRun;
   readonly updateAgentRunProgress: UpdateAgentRunProgress;
   readonly invokeAgentModel: InvokeAgentModel;
@@ -241,10 +247,11 @@ async function executeBusinessOperation(
   };
   let resultData: JsonObject = {};
   const executionSignal = signal ?? new AbortController().signal;
+  const promptPins = await pinPromptResolution(run, dependencies);
   const context: BusinessAgentExecutionContext = {
     signal: executionSignal,
     compilePrompt: (promptCode, payload) => {
-      const compiled = dependencies.promptCompiler.compile(promptCode, {}, payload);
+      const compiled = compilePinned(promptPins, dependencies, promptCode, payload);
       return {
         system: compiled.system,
         user: compiled.user,
@@ -296,26 +303,18 @@ async function executeBusinessOperation(
       const cycle = await dependencies.candidates.findCurrentCycle();
       if (!cycle) throw new Error('请先完成备考档案。');
       const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
-      const nodes = curriculum?.capabilityNodes
-        .filter((node) => node.status === 'active' && node.subject === 'aptitude') ?? [];
-      const moduleCode = practiceModuleCode(input.module);
-      const candidates = moduleCode ? nodes.filter((node) => node.module === moduleCode) : nodes;
-      const matched = (
-        input.knowledgePoint
-          ? candidates.find((node) => (
-            node.name.includes(input.knowledgePoint!)
-            || input.knowledgePoint!.includes(node.name)
-            || node.code.includes(input.knowledgePoint!)
-          ))
-          : undefined
+      // Objective practice targets whichever subjects this package answers with
+      // questions, rather than the civil-service subject code: a track whose
+      // subjects are named differently still generates.
+      const objectiveSubjects = new Set(
+        (curriculum ? projectExamSubjects(curriculum) : [])
+          .filter((subject) => subject.deliveryKind === ExamDeliveryKind.Objective)
+          .map((subject) => subject.code as string)
       );
-      const trainable = candidates.filter((node) => node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point');
-      const indexed = trainable.length
-        ? trainable[Math.max(0, Math.floor(input.capabilityIndex ?? 0)) % trainable.length]
-        : undefined;
-      const capability = matched ?? indexed ?? candidates.find((node) => node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point')
-        ?? nodes[0];
-      if (!capability) throw new Error('当前大纲没有可用的行测能力节点。');
+      const nodes = curriculum?.capabilityNodes
+        .filter((node) => node.status === 'active' && objectiveSubjects.has(node.subject)) ?? [];
+      const capability = selectPracticeCapability(nodes, input);
+      if (!capability) throw new Error('当前大纲没有可用的客观题能力节点。');
       await context.update(42, '调用 AI 生成结构化讲义和题目');
       const aggregate = await dependencies.requestStructuredPractice.execute({
         idempotencyKey: `agent-run:${run.run.id}:structured-practice`,
@@ -525,7 +524,7 @@ function completedNavigation(
     if (intent === 'study' && assetId) {
       return { route: '/vue/study/lecture', params: { ...fallbackParams, assetId } };
     }
-    if (intent === 'mock' && assetId && result.subject === '行测') {
+    if (intent === 'mock' && assetId && result.deliveryKind === ExamDeliveryKind.Objective) {
       return { route: '/vue/practice/objective-session', params: { ...fallbackParams, manifestId: assetId } };
     }
     return {

@@ -16,12 +16,16 @@ const server = await createServer({
 
 async function main() {
   try {
-    const [content, practice, truePractice, researchCriteria] = await Promise.all([
+    const [content, practice, truePractice, researchCriteria, labels, curriculum] = await Promise.all([
       server.ssrLoadModule('/src/modules/content/public.ts'),
       server.ssrLoadModule('/src/features/practice/PracticeCenterFeature.ts'),
       server.ssrLoadModule('/src/features/practice/TrueQuestionPracticeFeature.ts'),
-      server.ssrLoadModule('/src/features/practice/TrueQuestionResearchCriteria.ts')
+      server.ssrLoadModule('/src/features/practice/TrueQuestionResearchCriteria.ts'),
+      server.ssrLoadModule('/src/domain/labels.ts'),
+      server.ssrLoadModule('/src/modules/curriculum/public.ts')
     ]);
+    // Module display names come from the installed package, exactly as main.ts does.
+    labels.installCurriculumLabels(curriculum.createBundledNationalCurriculum().capabilityNodes);
     verifySourcePresentation(content);
     await verifyLearningThreadResolution(practice);
     await verifyQuestionSetPagination(practice);

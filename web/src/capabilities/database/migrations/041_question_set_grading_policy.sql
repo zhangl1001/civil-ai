@@ -1,0 +1,11 @@
+-- Freezes the objective grading rule onto each question set.
+--
+-- Grading previously read whichever rule the active exam package happened to
+-- have installed, so a set published under one package and answered after an
+-- upgrade could be marked by a rule its questions were never written for. The
+-- snapshot also carries the policy version and hash that produced it, which is
+-- what makes a stored score explainable after the package moves on.
+--
+-- Null for sets published before this migration: those fall back to the active
+-- package rule, which is exactly the behaviour they were graded under.
+ALTER TABLE question_sets ADD COLUMN grading_policy_json TEXT;

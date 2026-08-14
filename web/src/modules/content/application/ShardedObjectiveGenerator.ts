@@ -18,6 +18,10 @@ import {
   GeneratedContentParseError,
   type GeneratedLectureQuestionSet
 } from './GeneratedContentParser';
+import {
+  canAcceptGraphicalQuestionSubset,
+  recoverGraphicalQuestionSubset
+} from './GraphicalQuestionSubsetPolicy';
 import type { GenerationModelInvoker } from './GenerationModelInvoker';
 import {
   lectureGenerationTokenBudget,
@@ -146,13 +150,12 @@ export class ShardedObjectiveGenerator {
     totalCount: number,
     purpose: 'lecture' | 'questions'
   ): CompiledPrompt {
-    return this.promptCompiler.compile(
-      promptBundle.promptCode,
+    return this.promptCompiler.compileBundle(
+      promptBundle,
       generationPromptVariables(aggregate, shard.count),
       purpose === 'lecture'
         ? generationLecturePromptPayload(aggregate, referencePack, totalCount)
-        : generationShardPromptPayload(aggregate, referencePack, shard, totalCount),
-      promptBundle.version
+        : generationShardPromptPayload(aggregate, referencePack, shard, totalCount)
     );
   }
 
@@ -306,20 +309,12 @@ export class ShardedObjectiveGenerator {
   ): Promise<JsonObject> {
     const shard = invocation.shard!;
     try {
-      const root = namespaceAuthorRoot(parseAuthorRoot(invocation.text), shard.index);
-      if (!Array.isArray(root.questions) || root.questions.length !== shard.count) {
-        throw new GeneratedContentParseError('generation.question_shard_invalid', [{
-          code: 'generation.question_shard_invalid',
-          path: '$.questions',
-          message: `Question shard must contain exactly ${shard.count} questions`
-        }]);
-      }
-      this.parseAndValidateObject({
-        lecture,
-        materialGroups: Array.isArray(root.materialGroups) ? root.materialGroups : [],
-        questions: root.questions
-      }, shard.count, capability);
-      return root;
+      return this.parseQuestionShard(
+        parseAuthorRoot(invocation.text),
+        shard,
+        capability,
+        lecture
+      );
     } catch (error) {
       if (!(error instanceof GeneratedContentParseError)) throw error;
       await this.invoker.markInvalid(invocation.invocationId, error.code);
@@ -342,15 +337,65 @@ export class ShardedObjectiveGenerator {
         input.signal,
         1
       );
-      const root = namespaceAuthorRoot(parseAuthorRoot(repaired.response.text), shard.index);
+      try {
+        return this.parseQuestionShard(
+          parseAuthorRoot(repaired.response.text),
+          shard,
+          capability,
+          lecture
+        );
+      } catch (repairError) {
+        if (repairError instanceof GeneratedContentParseError) {
+          await this.invoker.markInvalid(repaired.invocationId, repairError.code);
+        }
+        throw repairError;
+      }
+    }
+  }
+
+  private parseQuestionShard(
+    authorRoot: JsonObject,
+    shard: PracticeGenerationShard,
+    capability: string,
+    lecture: JsonValue
+  ): JsonObject {
+    const root = namespaceAuthorRoot(authorRoot, shard.index);
+    const questions = Array.isArray(root.questions) ? root.questions : [];
+    if (questions.length !== shard.count) {
+      if (!canAcceptGraphicalQuestionSubset(questions.length, shard.count, capability)) {
+        throw questionShardError(shard.count, questions.length);
+      }
+    }
+    try {
       this.parseAndValidateObject({
         lecture,
         materialGroups: Array.isArray(root.materialGroups) ? root.materialGroups : [],
-        questions: Array.isArray(root.questions) ? root.questions : []
+        questions
       }, shard.count, capability);
       return root;
+    } catch (error) {
+      if (!(error instanceof GeneratedContentParseError)) throw error;
+      const recovered = recoverGraphicalQuestionSubset(root, error, shard.count, capability);
+      if (!recovered) throw error;
+      this.parseAndValidateObject({
+        lecture,
+        materialGroups: Array.isArray(recovered.materialGroups) ? recovered.materialGroups : [],
+        questions: recovered.questions
+      }, shard.count, capability);
+      return recovered;
     }
   }
+}
+
+function questionShardError(
+  expectedCount: number,
+  actualCount: number
+): GeneratedContentParseError {
+  return new GeneratedContentParseError('generation.question_shard_invalid', [{
+    code: 'generation.question_shard_invalid',
+    path: '$.questions',
+    message: `Question shard must contain exactly ${expectedCount} questions, got ${actualCount}`
+  }]);
 }
 
 type SettledResult<T> =

@@ -1328,6 +1328,155 @@ try {
     path.join(root, 'src/modules/agent/adapters/IndexedDbAgentRunRepository.ts'),
     'utf8'
   );
+  // --- durable prompt pinning ------------------------------------------------
+  // A half-finished run must replay the wording it started with. The pin is
+  // written before any prompt is compiled, because several executors compile and
+  // call the model in the same breath.
+  const pinning = await server.ssrLoadModule('/src/composition-root/agent/DurablePromptPinning.ts');
+
+  function promptBundle(version, wording) {
+    return {
+      examType: 'shared',
+      definitionId: 'prompt-definition:pin-test',
+      versionId: `prompt-version:pin-test:${version}`,
+      promptCode: 'pin.test',
+      taskType: 'pin_test',
+      description: 'pinning fixture',
+      version,
+      contentHash: `sha256:pin-${version}`,
+      createdAt: 1,
+      requiredVariables: [],
+      compatibleSchemaVersions: [],
+      responseSchema: { type: 'object', additionalProperties: true },
+      sections: [{ code: 'role', title: '角色', order: 10, template: wording }]
+    };
+  }
+
+  const pinRegistry = new ai.PromptRegistry();
+  pinRegistry.register(promptBundle('1.0.0', '旧版措辞'));
+  const pinCompiler = new ai.PromptCompiler(pinRegistry);
+
+  let pinnedRun = {
+    run: {
+      id: 'agent-run:pin', rootAgentRunId: 'agent-run:pin', runType: 'content_generation',
+      workPool: 'foreground', executionClass: 'interactive',
+      // Claimed runs arrive already running; a progress write on any other
+      // status is rejected, so this is what makes the ordering testable.
+      status: 'running',
+      targetResourceType: 'business_operation', inputSnapshot: {}, checkpoint: {},
+      attemptCount: 1, leaseEpoch: 1, leaseOwner: 'worker', idempotencyKey: 'pin', createdAt: 1,
+      updatedAt: 1, version: 1
+    },
+    events: []
+  };
+  const pinRepository = {
+    async findById(id) { return id === pinnedRun.run.id ? pinnedRun : undefined; },
+    async replace(run) { pinnedRun = { run, events: [] }; }
+  };
+  let pinIdSeed = 0;
+  const pinDependencies = {
+    promptCompiler: pinCompiler,
+    promptRegistry: pinRegistry,
+    updateAgentRunProgress: new agent.UpdateAgentRunProgress(
+      { run: async (work) => work({}) },
+      pinRepository,
+      { append: async () => {} },
+      { now: () => 42 },
+      { next: (namespace) => `${namespace}:${(pinIdSeed += 1)}` }
+    )
+  };
+
+  const firstPins = await pinning.pinPromptResolution(pinnedRun, pinDependencies);
+  assert.equal(firstPins.examType, 'shared');
+  assert.deepEqual(
+    firstPins.prompts['pin.test'],
+    { examType: 'shared', version: '1.0.0', contentHash: 'sha256:pin-1.0.0' },
+    'a pin records which pack the wording came from, not just its version'
+  );
+  assert.deepEqual(
+    pinnedRun.run.checkpoint.promptPins,
+    firstPins,
+    'the pin must reach the checkpoint before any prompt is compiled'
+  );
+  assert.match(
+    pinning.compilePinned(firstPins, pinDependencies, 'pin.test', {}).system,
+    /旧版措辞/
+  );
+
+  // A deploy ships newer wording. The run is already pinned, so it must not move.
+  pinRegistry.register(promptBundle('1.1.0', '新版措辞'));
+  assert.match(pinCompiler.compile('pin.test', {}, {}).system, /新版措辞/, 'unpinned callers follow the latest');
+  const resumedPins = await pinning.pinPromptResolution(pinnedRun, pinDependencies);
+  assert.deepEqual(resumedPins, firstPins, 'a resumed run must reuse its stored pin, not re-snapshot');
+  assert.match(
+    pinning.compilePinned(resumedPins, pinDependencies, 'pin.test', {}).system,
+    /旧版措辞/,
+    'a resumed run must replay the wording it started with'
+  );
+
+  // A pack that later ships its own wording under the pinned version must not
+  // take over a running task: the pin names the pack it resolved from.
+  pinRegistry.register({
+    ...promptBundle('1.0.0', '考试包覆盖措辞'),
+    examType: 'pack_a',
+    contentHash: 'sha256:pack-a-pin-1.0.0'
+  });
+  pinRegistry.activateExamType('pack_a');
+  assert.match(
+    pinning.compilePinned(resumedPins, pinDependencies, 'pin.test', {}).system,
+    /旧版措辞/,
+    'a pin on the shared catalog is not satisfied by a pack override'
+  );
+  pinRegistry.activateExamType('shared');
+
+  // Checkpoints written before per-prompt ownership existed stored only the
+  // active pack at the top level. A later pack override must not steal a prompt
+  // that originally resolved from shared; hash matching restores its owner.
+  const currentPinnedRun = pinnedRun;
+  pinnedRun = {
+    ...currentPinnedRun,
+    run: {
+      ...currentPinnedRun.run,
+      checkpoint: {
+        promptPins: {
+          examType: 'pack_a',
+          prompts: {
+            'pin.test': { version: '1.0.0', contentHash: 'sha256:pin-1.0.0' }
+          }
+        }
+      }
+    }
+  };
+  const migratedPins = await pinning.pinPromptResolution(pinnedRun, pinDependencies);
+  assert.deepEqual(
+    migratedPins.prompts['pin.test'],
+    { examType: 'shared', version: '1.0.0', contentHash: 'sha256:pin-1.0.0' },
+    'legacy pins recover the owner that supplied the pinned content'
+  );
+  assert.deepEqual(
+    pinnedRun.run.checkpoint.promptPins,
+    migratedPins,
+    'legacy pins are normalized before the run continues'
+  );
+  pinnedRun = currentPinnedRun;
+
+  // Drift is refused rather than silently re-resolved: a replay that quietly
+  // swaps wording produces work nobody can explain afterwards.
+  assert.throws(
+    () => pinning.compilePinned(
+      { examType: 'shared', prompts: { 'pin.test': { examType: 'shared', version: '9.9.9', contentHash: 'sha256:gone' } } },
+      pinDependencies, 'pin.test', {}
+    ),
+    /no longer available/
+  );
+  assert.throws(
+    () => pinning.compilePinned(
+      { examType: 'shared', prompts: { 'pin.test': { examType: 'shared', version: '1.0.0', contentHash: 'sha256:different' } } },
+      pinDependencies, 'pin.test', {}
+    ),
+    /changed content since this run pinned it/
+  );
+
   assert.match(indexedDbSource, /AgentRunIdempotency:\s*'agent_run_idempotency'/);
   assert.match(indexedRunSource, /type:\s*'add',\s*store:\s*TutorIndexedDbStore\.AgentRunIdempotency/);
   assert.match(indexedRunSource, /mutateStore<StoredRun,readonly AgentRunAggregate\[\]>/);

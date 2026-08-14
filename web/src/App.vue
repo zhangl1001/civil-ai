@@ -3,8 +3,10 @@
     <AppBackground :key="backgroundRenderKey" />
     <main :class="['main-content', { 'with-bottom-nav': showBottomNav }]">
       <router-view v-slot="{ Component }">
-        <ViewErrorBoundary :key="route.fullPath">
-          <component :is="Component" />
+        <ViewErrorBoundary>
+          <KeepAlive :include="CACHED_TAB_ROOTS">
+            <component :is="Component" />
+          </KeepAlive>
         </ViewErrorBoundary>
       </router-view>
     </main>
@@ -46,6 +48,22 @@ import AppBackground from '@/components/layout/AppBackground.vue';
 import PageGuideFab from '@/components/layout/PageGuideFab.vue';
 import TaskToast from '@/components/TaskToast.vue';
 import ViewErrorBoundary from '@/components/layout/ViewErrorBoundary.vue';
+
+/**
+ * Tab roots stay mounted so returning to one is instant, instead of replaying
+ * header, skeleton, spinner and content on every switch of the bottom nav.
+ * Second-level pages are absent on purpose and keep being rebuilt per visit.
+ *
+ * The practice centre is also absent for now: it reads its entry mode from the
+ * route query at setup time and owns a poll timer cleared on unmount, so it
+ * needs activation-aware handling of its own before it can be cached.
+ */
+const CACHED_TAB_ROOTS = [
+  'HomeView',
+  'LearningCenterView',
+  'TutorWrongBookView',
+  'ProfileView'
+];
 
 const route = useRoute();
 const showBottomNav = computed(() => route.meta.tabRoot === true);

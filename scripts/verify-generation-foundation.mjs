@@ -24,9 +24,29 @@ try {
   ]);
   assert.match(
     corePolicy.practiceCoreSystem('base', 'aptitude.data_analysis.growth'),
-    /materialGroups/,
+    /materialGroups\.table/,
     'data analysis must receive its shared-material structural contract'
   );
+  const materialGroupSchema = ai.structuredObjectivePromptV2.responseSchema
+    .properties.materialGroups.items.properties;
+  assert.equal(materialGroupSchema.table.type, 'object');
+  assert.equal(materialGroupSchema.chart.type, 'object');
+  assert.equal(materialGroupSchema.visual.type, 'object');
+  const dataAnalysisSchema = corePolicy.practiceCoreResponseSchema(
+    ai.structuredObjectivePromptV2.responseSchema,
+    2,
+    'aptitude.data_analysis.growth'
+  );
+  const ordinarySchema = corePolicy.practiceCoreResponseSchema(
+    ai.structuredObjectivePromptV2.responseSchema,
+    2,
+    'aptitude.judgment.argument_structure'
+  );
+  assert.equal(dataAnalysisSchema.properties.materialGroups.items.properties.table.type, 'object');
+  assert.equal(dataAnalysisSchema.properties.materialGroups.items.properties.chart.type, 'object');
+  assert.equal(ordinarySchema.properties.materialGroups.items.properties.table, undefined);
+  assert.equal(ordinarySchema.properties.materialGroups.items.properties.chart, undefined);
+  assert.equal(ordinarySchema.properties.materialGroups.items.properties.visual, undefined);
   assert.match(
     corePolicy.practiceCoreSystem('base', 'aptitude.judgment.graphical.position'),
     /viewBox/,
@@ -37,6 +57,24 @@ try {
       > corePolicy.coreGenerationTokenBudget(2, 'aptitude.judgment.argument_structure'),
     'complex render structures must receive a bounded type-specific token allowance'
   );
+  assert.deepEqual(
+    corePolicy.createPracticeGenerationPlan(5, 'aptitude.judgment.weaken').shards.map((item) => item.count),
+    [5],
+    'ordinary five-question drills must retain their stable one-call path'
+  );
+  assert.deepEqual(
+    corePolicy.createPracticeGenerationPlan(10, 'aptitude.data_analysis.growth').shards.map((item) => item.count),
+    [4, 4, 2],
+    'data analysis must retain its existing complex-content shard policy'
+  );
+  assert.deepEqual(
+    corePolicy.createPracticeGenerationPlan(5, 'aptitude.judgment.graphical.position').shards.map((item) => item.count),
+    [3, 2],
+    'five graphical questions must avoid one SVG-heavy provider response'
+  );
+  assert.equal(corePolicy.practiceQuestionAcceptanceRatio('aptitude.judgment.weaken'), 0.8);
+  assert.equal(corePolicy.practiceQuestionAcceptanceRatio('aptitude.data_analysis.growth'), 0.8);
+  assert.equal(corePolicy.practiceQuestionAcceptanceRatio('aptitude.judgment.graphical.position'), 0.6);
   const clock = new TestClock();
   const ids = new TestIds();
   const curriculumBundle = curriculum.createBundledNationalCurriculum();
@@ -513,6 +551,19 @@ try {
     'semantic option duplication must be observed without rejecting a structurally answerable question'
   );
 
+  const missingGraphicSource = validGeneratedContent();
+  missingGraphicSource.questions[0].capabilityCode = 'aptitude.judgment.graphical.position';
+  const missingGraphicReport = new content.StructuredObjectiveContentQualityValidator().validate(
+    missingGraphicSource,
+    1,
+    'aptitude.judgment.graphical.position'
+  );
+  assert.equal(missingGraphicReport.valid, false);
+  assert(
+    missingGraphicReport.blockingIssues.some((issue) => issue.code === 'quality.expected_graphic_missing'),
+    'a graphical question without a renderable graphic must remain individually unpublishable'
+  );
+
   const structuralRepair = await createWorkflow.execute(generationCommand('generation:test:structural-repair'));
   const structuralSource = authorGeneratedContentWithSingletonMaterial();
   const structuralQuestion = structuredClone(structuralSource.questions[0]);
@@ -651,6 +702,69 @@ try {
     'question shards must not repeat workflow metadata that does not affect teaching content'
   );
   assert.equal(contentRepository.bundles.at(-1).questions.length, 10);
+
+  const graphicalBatch = await createWorkflow.execute(
+    generationCommand(
+      'generation:test:graphical-partial-5',
+      5,
+      'capability:aptitude:judgment:graphical-position'
+    )
+  );
+  const graphicalGateway = new GraphicalShardGateway(ai.ProviderCode.Anthropic, 0);
+  const graphicalResult = await runWorkflow.execute(graphicalBatch.workflow.id, graphicalGateway);
+  assert.equal(graphicalResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    graphicalGateway.callCount,
+    3,
+    'one invalid graphical question must be dropped without repairing or restarting its shard'
+  );
+  assert.deepEqual(
+    graphicalGateway.questionShardSizes,
+    [3, 2],
+    'graphical generation must use the dedicated three-question shard ceiling'
+  );
+  assert.equal(
+    contentRepository.bundles.at(-1).questions.length,
+    4,
+    'the valid graphical subset must publish while the missing question remains compensatable'
+  );
+
+  const partialGraphicalBatch = await createWorkflow.execute(
+    generationCommand(
+      'generation:test:graphical-rejected-shard-5',
+      5,
+      'capability:aptitude:judgment:graphical-position'
+    )
+  );
+  const partialGraphicalGateway = new GraphicalShardGateway(
+    ai.ProviderCode.Anthropic,
+    undefined,
+    1
+  );
+  const partialGraphicalResult = await runWorkflow.execute(
+    partialGraphicalBatch.workflow.id,
+    partialGraphicalGateway
+  );
+  assert.equal(partialGraphicalResult.workflow.status, content.GenerationWorkflowStatus.Committed);
+  assert.equal(
+    contentRepository.bundles.at(-1).questions.length,
+    3,
+    'one irreparable graphical shard must not discard the other answerable shard'
+  );
+  assert.equal(
+    partialGraphicalGateway.callCount,
+    4,
+    'only the failed graphical shard may receive one bounded repair attempt'
+  );
+  const rejectedGraphicalInvocations = invocationRepository.items.filter(
+    (item) => item.workflowId === partialGraphicalBatch.workflow.id
+      && item.validationStatus === ai.InvocationValidationStatus.Invalid
+  );
+  assert.equal(
+    rejectedGraphicalInvocations.length,
+    2,
+    'the original and repaired invalid shard invocations must remain invalid after partial commit'
+  );
 
   const largeBatch = await createWorkflow.execute(
     generationCommand('generation:test:parallel-25', 25)
@@ -984,13 +1098,61 @@ class ParallelShardGateway {
   }
 }
 
-function generationCommand(idempotencyKey, requestedCount = 1) {
+class GraphicalShardGateway {
+  model = 'test-model';
+  callCount = 0;
+  requests = [];
+  questionShardSizes = [];
+  repairAttempts = new Map();
+  constructor(provider, invalidShardIndex, rejectedShardIndex) {
+    this.provider = provider;
+    this.invalidShardIndex = invalidShardIndex;
+    this.rejectedShardIndex = rejectedShardIndex;
+  }
+  async complete(request) {
+    this.requests.push(request);
+    this.callCount += 1;
+    const includesLecture = Boolean(request.responseSchema.properties.lecture);
+    const count = request.responseSchema.properties.questions?.minItems ?? 1;
+    if (includesLecture) {
+      return gatewayResponse(JSON.stringify({ lecture: validGeneratedContent().lecture }), this.callCount);
+    }
+    this.questionShardSizes.push(count);
+    const user = String(request.messages[0].content);
+    const shardIndex = Number(user.match(/"shardIndex":(\d+)/)?.[1] ?? 0);
+    if (shardIndex === this.rejectedShardIndex) {
+      this.repairAttempts.set(shardIndex, (this.repairAttempts.get(shardIndex) ?? 0) + 1);
+      return gatewayResponse(JSON.stringify({ questions: [] }), this.callCount);
+    }
+    const source = graphicalGeneratedContent(count);
+    if (shardIndex === this.invalidShardIndex) {
+      source.questions.at(-1).prompt.blocks = source.questions.at(-1).prompt.blocks
+        .filter((block) => block.type !== 'svg_diagram');
+    }
+    return gatewayResponse(JSON.stringify({ questions: source.questions }), this.callCount);
+  }
+}
+
+function gatewayResponse(text, sequence) {
+  return {
+    text,
+    providerRequestId: `provider-graphical:${sequence}`,
+    finishReason: 'end_turn',
+    usage: { inputTokens: 1200, outputTokens: 900 }
+  };
+}
+
+function generationCommand(
+  idempotencyKey,
+  requestedCount = 1,
+  capabilityNodeId = 'capability:aptitude:judgment:weaken'
+) {
   return {
     idempotencyKey,
     examCycleId: 'exam-cycle:test',
     learningThreadId: 'learning-thread:test',
     teachingBlueprintId: 'teaching-blueprint:test',
-    capabilityNodeId: 'capability:aptitude:judgment:weaken',
+    capabilityNodeId,
     assessmentRole: 'practice',
     requestedCount,
     difficultyMin: 0.35,
@@ -1093,6 +1255,21 @@ function validGeneratedContent(questionCount = 1) {
       explanation: explanationDocument()
     }))
   };
+}
+
+function graphicalGeneratedContent(questionCount = 1) {
+  const generated = validGeneratedContent(questionCount);
+  generated.questions.forEach((question, index) => {
+    question.capabilityCode = 'aptitude.judgment.graphical.position';
+    question.prompt.blocks.push({
+      id: `question:${index + 1}:visual`,
+      type: 'svg_diagram',
+      markup: `<svg viewBox="0 0 100 100"><circle cx="${20 + index * 5}" cy="50" r="12" /></svg>`,
+      alt: `第 ${index + 1} 题图形序列`,
+      viewBox: '0 0 100 100'
+    });
+  });
+  return generated;
 }
 
 function advisoryGeneratedContent() {

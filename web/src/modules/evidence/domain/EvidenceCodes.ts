@@ -24,6 +24,18 @@ export const AttemptResult = {
 } as const;
 export type AttemptResult = typeof AttemptResult[keyof typeof AttemptResult];
 
+/**
+ * The learner answered and got it wrong, wholly or in part. This is the review
+ * loop's entry condition: the wrong book, AI error diagnosis, tutor conclusions
+ * and the post-submit page all key off it.
+ *
+ * Kept as one predicate because adding `partial` to the result set silently
+ * dropped those attempts out of every one of those consumers.
+ */
+export function isMistakenAttempt(result: string): boolean {
+  return result === AttemptResult.Incorrect || result === AttemptResult.Partial;
+}
+
 export const GradingMethod = {
   Deterministic: 'deterministic',
   AiAssisted: 'ai_assisted',

@@ -1,8 +1,8 @@
 import { agentWorkerCoordinator } from '@/composition-root/agent/AgentWorkerCoordinator';
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import { AssessmentRole, type JsonObject } from '@/kernel/public';
-import { LearningAssetKind } from '@/modules/content/public';
-import type { WrongBookEntry } from '@/modules/evidence/public';
+import { correctAnswerLabel, LearningAssetKind } from '@/modules/content/public';
+import { submittedAnswerLabel, type WrongBookEntry } from '@/modules/evidence/public';
 
 let cachedEntries: readonly WrongBookEntry[] | undefined;
 let pendingList: Promise<readonly WrongBookEntry[]> | undefined;
@@ -70,8 +70,8 @@ export class WrongBookFeature {
             prompt: entry.question.content.prompt,
             options: entry.question.content.options
           },
-          standardAnswer: entry.question.content.correctOptionId,
-          userAnswer: typeof entry.attempt.answer.optionId === 'string' ? entry.attempt.answer.optionId : null,
+          standardAnswer: correctAnswerLabel(entry.question.content),
+          userAnswer: submittedAnswerLabel(entry.attempt.answer) || null,
           deterministicResult: entry.grading.result,
           observations: {
             elapsedMs: entry.attempt.elapsedMs ?? null,

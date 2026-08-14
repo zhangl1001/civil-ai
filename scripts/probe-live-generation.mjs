@@ -119,7 +119,7 @@ try {
     ai.structuredObjectivePromptV2.version
   );
   const coreSystem = corePolicy.practiceCoreSystem(coreCompiled.system, capability.code);
-  const coreSchema = corePolicy.practiceCoreResponseSchema(coreCompiled.responseSchema);
+  const coreSchema = corePolicy.practiceCoreResponseSchema(coreCompiled.responseSchema, undefined, capability.code);
   const coreRequestSystem = structuredMode === 'prompt'
     ? appendStructuredOutputContract(coreSystem, coreSchema)
     : coreSystem;

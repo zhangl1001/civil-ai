@@ -10,7 +10,16 @@ export class PromptCompiler {
     userPayload: unknown,
     version?: string
   ): CompiledPrompt {
-    const bundle = this.registry.resolve(promptCode, version);
+    return this.compileBundle(this.registry.resolve(promptCode, version), variables, userPayload);
+  }
+
+  /**
+   * Compiles a prompt the caller already resolved. Durable work pins a prompt
+   * version when it is created and must keep using exactly that wording — going
+   * back through the registry would re-resolve against whatever pack is active
+   * now, and against in-memory content that may differ from what was stored.
+   */
+  compileBundle(bundle: PromptBundle, variables: PromptVariables, userPayload: unknown): CompiledPrompt {
     assertVariables(bundle, variables);
     const system = bundle.sections
       .slice()

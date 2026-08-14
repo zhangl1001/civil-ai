@@ -7,7 +7,13 @@ import {
 } from '@/kernel/public';
 import type { CandidateRepository, ScoreMeasurement } from '@/modules/candidate/public';
 import { ScoreMeasurementType } from '@/modules/candidate/public';
-import type { CapabilityNode, CurriculumRepository } from '@/modules/curriculum/public';
+import {
+  ExamDeliveryKind,
+  projectExamSubjects,
+  type CapabilityNode,
+  type CurriculumBundle,
+  type CurriculumRepository
+} from '@/modules/curriculum/public';
 import type { LearningEvidenceRecord, LearningEvidenceRepository, ObjectiveEvidenceOriginCode } from '@/modules/evidence/public';
 import {
   AssessmentRole,
@@ -78,9 +84,13 @@ export class BuildAbilityCalibration {
     const existing = await this.repository.findByFingerprint(fingerprint);
     if (existing) return existing;
 
-    const trainable = curriculum.capabilityNodes.filter(isTrainableAptitude);
+    // Calibration models accuracy per capability, which only means anything for
+    // subjects answered with questions. Which subjects those are belongs to the
+    // exam package, not to this use case.
+    const objectiveSubjects = objectiveSubjectsOf(curriculum);
+    const trainable = curriculum.capabilityNodes.filter((node) => isTrainableObjective(node, objectiveSubjects));
     const moduleNodes = curriculum.capabilityNodes.filter((node) => (
-      node.status === 'active' && node.subject === 'aptitude' && node.nodeType === 'module'
+      node.status === 'active' && objectiveSubjects.has(node.subject) && node.nodeType === 'module'
     ));
     const trackByCapability = new Map(tracks.map((track) => [track.capabilityNodeId, track]));
     const capabilities = trainable.map((node) => capabilityProjection(
@@ -102,6 +112,7 @@ export class BuildAbilityCalibration {
       baseline,
       evidence,
       subjectByCapability,
+      objectiveSubjects,
       now
     );
     const changes = buildChanges(previous?.modules ?? [], modules);
@@ -251,11 +262,14 @@ function buildScoreForecasts(
   baseline: BaselineCoverageProjection,
   evidence: readonly LearningEvidenceRecord[],
   subjectByCapability: ReadonlyMap<string, string>,
+  objectiveSubjects: ReadonlySet<string>,
   now: number
 ): ScoreForecastProjection[] {
   return targets.filter((target) => target.status === 'active').map((target) => {
     const measurement = latestMeasurement(measurements, target.subject);
-    if (target.subject !== 'aptitude') {
+    // A subject answered in writing is forecast from rubric evidence; module
+    // accuracy has nothing to say about it.
+    if (!objectiveSubjects.has(target.subject)) {
       const subjectiveEvidence = evidence.filter((item) => (
         subjectByCapability.get(item.capabilityNodeId) === target.subject
         && item.metadata.evidenceKind === 'subjective_rubric'
@@ -477,9 +491,18 @@ function forecastExplanation(
   return '区间主要由最近测量支撑，随着模块锚定和真题复测会逐步收窄。';
 }
 
-function isTrainableAptitude(node: CapabilityNode) {
+/** Subject codes this package answers with questions. */
+function objectiveSubjectsOf(curriculum: CurriculumBundle): ReadonlySet<string> {
+  return new Set(
+    projectExamSubjects(curriculum)
+      .filter((subject) => subject.deliveryKind === ExamDeliveryKind.Objective)
+      .map((subject) => subject.code as string)
+  );
+}
+
+function isTrainableObjective(node: CapabilityNode, objectiveSubjects: ReadonlySet<string>) {
   return node.status === 'active'
-    && node.subject === 'aptitude'
+    && objectiveSubjects.has(node.subject)
     && (node.nodeType === 'knowledge_point' || node.nodeType === 'sub_point');
 }
 

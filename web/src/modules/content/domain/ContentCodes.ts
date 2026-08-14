@@ -1,6 +1,7 @@
 export const ContentBlockType = {
   Text: 'text',
   DataTable: 'data_table',
+  StatisticalChart: 'statistical_chart',
   SvgDiagram: 'svg_diagram',
   Image: 'image',
   Formula: 'formula',
@@ -38,10 +39,24 @@ export const ContentAlignment = {
 export type ContentAlignment = typeof ContentAlignment[keyof typeof ContentAlignment];
 
 export const QuestionTemplateCode = {
-  SingleChoice: 'single_choice'
+  SingleChoice: 'single_choice',
+  /** Two or more correct options, stated up front. */
+  MultipleChoice: 'multiple_choice',
+  /** Number of correct options is not disclosed; one correct option is valid. */
+  IndeterminateChoice: 'indeterminate_choice'
 } as const;
 
 export type QuestionTemplateCode = typeof QuestionTemplateCode[keyof typeof QuestionTemplateCode];
+
+const QUESTION_TEMPLATE_CODES: readonly string[] = Object.values(QuestionTemplateCode);
+
+export function isQuestionTemplateCode(value: unknown): value is QuestionTemplateCode {
+  return typeof value === 'string' && QUESTION_TEMPLATE_CODES.includes(value);
+}
+
+export function parseQuestionTemplateCode(value: unknown): QuestionTemplateCode | undefined {
+  return isQuestionTemplateCode(value) ? value : undefined;
+}
 
 export const QuestionPresentationCode = {
   StandardChoice: 'standard_choice',
@@ -182,8 +197,43 @@ export type GenerationWorkflowStep = typeof GenerationWorkflowStep[keyof typeof 
 
 export const ContentSchemaCode = {
   Document: 'content.document',
-  SingleChoiceQuestion: 'question.single_choice'
+  SingleChoiceQuestion: 'question.single_choice',
+  MultipleChoiceQuestion: 'question.multiple_choice',
+  IndeterminateChoiceQuestion: 'question.indeterminate_choice'
 } as const;
+
+/**
+ * Content schema a template's questions are validated and stored against.
+ * Committing content under another template's schema would make the stored
+ * answer key disagree with its declared version metadata, so callers resolve
+ * the pair here instead of assuming single choice.
+ */
+const QUESTION_SCHEMA_BY_TEMPLATE: Readonly<Record<QuestionTemplateCode, string>> = {
+  [QuestionTemplateCode.SingleChoice]: ContentSchemaCode.SingleChoiceQuestion,
+  [QuestionTemplateCode.MultipleChoice]: ContentSchemaCode.MultipleChoiceQuestion,
+  [QuestionTemplateCode.IndeterminateChoice]: ContentSchemaCode.IndeterminateChoiceQuestion
+};
+
+export function questionSchemaCodeFor(templateCode: QuestionTemplateCode): string {
+  return QUESTION_SCHEMA_BY_TEMPLATE[templateCode];
+}
+
+/**
+ * Schema version stamped onto authored question content. Listed rather than
+ * derived from the schema code so one template can be revised without silently
+ * moving the others onto a version their metadata never published.
+ */
+const QUESTION_SCHEMA_VERSION_BY_TEMPLATE: Readonly<Record<QuestionTemplateCode, string>> = {
+  [QuestionTemplateCode.SingleChoice]: 'question.single_choice.v2',
+  [QuestionTemplateCode.MultipleChoice]: 'question.multiple_choice.v2',
+  [QuestionTemplateCode.IndeterminateChoice]: 'question.indeterminate_choice.v2'
+};
+
+export function questionSchemaVersionFor(templateCode: QuestionTemplateCode): string {
+  return QUESTION_SCHEMA_VERSION_BY_TEMPLATE[templateCode];
+}
+
+export const QUESTION_SCHEMA_VERSIONS: readonly string[] = Object.values(QUESTION_SCHEMA_VERSION_BY_TEMPLATE);
 
 export const ContentCommandType = {
   CreateGeneration: 'content.create_generation'

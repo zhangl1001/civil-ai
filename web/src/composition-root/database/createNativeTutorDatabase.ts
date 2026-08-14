@@ -1,3 +1,5 @@
+import { choiceGradingRuleForCapabilityNode, gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
+import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { Capacitor } from '@capacitor/core';
 import { CapacitorSqliteDatabase } from '@/capabilities/database/adapters/sqlite/CapacitorSqliteDatabase';
 import { SqliteTutorDataMaintenance } from '@/capabilities/database/adapters/sqlite/SqliteTutorDataMaintenance';
@@ -18,24 +20,17 @@ import {
   UpdateScoreTargets
 } from '@/modules/candidate/public';
 import { SqliteCurriculumRepository } from '@/modules/curriculum/adapters/SqliteCurriculumRepository';
-import {
-  createBundledNationalCurriculum,
-  EnsureCurriculumBundle
-} from '@/modules/curriculum/public';
+import { createBundledCurriculumPacks, EnsureCurriculumBundle } from '@/modules/curriculum/public';
+import { InstallExamPacks } from '../curriculum/InstallExamPacks';
 import { SqliteOutboxRepository } from '@/modules/task/adapters/SqliteOutboxRepository';
 import { SqliteCommandReceiptRepository } from '@/modules/task/adapters/SqliteCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
 import { SqlitePromptRepository } from '@/capabilities/ai-runtime/adapters/SqlitePromptRepository';
 import { SqliteAIInvocationRepository } from '@/capabilities/ai-runtime/adapters/SqliteAIInvocationRepository';
 import {
-  businessTutorPromptCatalog,
   EnsurePromptBundle,
-  errorDiagnosisBatchPromptV1,
-  errorDiagnosisPromptV1,
   PromptCompiler,
   PromptRegistry,
-  questionImportPolicyV1,
-  questionSetEnrichmentPromptV1,
   structuredObjectivePromptV2
 } from '@/capabilities/ai-runtime/public';
 import { SqliteContentRepository } from '@/modules/content/adapters/SqliteContentRepository';
@@ -57,6 +52,7 @@ import {
   ImportQuestionSource,
   LearningAssetStore,
   PublishQuestionImportDraft,
+  RetireQuestionSet,
   RunStructuredObjectiveGenerationWorkflow,
   ScanQuestionImportDraft
 } from '@/modules/content/public';
@@ -178,7 +174,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     contentRepository,
     questionSourceRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    gradingPolicyForCapabilityNode
   );
   const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new SqlitePromptRepository(database, transactionScope);
@@ -202,17 +199,13 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const outboxRepository = new SqliteOutboxRepository(database, transactionScope);
   const commandReceiptRepository = new SqliteCommandReceiptRepository(database, transactionScope);
   const ensureCurriculum = new EnsureCurriculumBundle(unitOfWork, curriculumRepository);
-  const bundledCurriculum = createBundledNationalCurriculum();
+  const curriculumPacks = createBundledCurriculumPacks();
+  let examPacks: InstallExamPacks;
   const ensureContentMetadata = new EnsureContentMetadata(unitOfWork, contentRepository);
   const bundledContentMetadata = createBundledContentMetadata();
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
   const promptRegistry = new PromptRegistry();
-  promptRegistry.register(structuredObjectivePromptV2);
-  promptRegistry.register(questionSetEnrichmentPromptV1);
-  promptRegistry.register(questionImportPolicyV1);
-  promptRegistry.register(errorDiagnosisPromptV1);
-  promptRegistry.register(errorDiagnosisBatchPromptV1);
-  businessTutorPromptCatalog.forEach((bundle) => promptRegistry.register(bundle));
+
   const promptCompiler = new PromptCompiler(promptRegistry);
   const generationContextCompiler = new GenerationContextCompiler(
     candidateRepository,
@@ -248,9 +241,11 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     questionSourceRepository,
     promptCompiler,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    gradingPolicyForCapabilityNode
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
+  const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
   const getGenerationStatus = new GetGenerationStatus(generationRepository, contentRepository);
   const createLearningThread = new CreateLearningThread(
     unitOfWork,
@@ -279,7 +274,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     learningEvidenceRepository,
     outboxRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    choiceGradingRuleForCapabilityNode
   );
   const correctLearningEvidence = new CorrectLearningEvidence(
     unitOfWork,
@@ -376,6 +372,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
       diagnoses: errorDiagnosisRepository,
       runErrorDiagnosis: runAiErrorDiagnosis,
       promptCompiler,
+      promptRegistry,
       transitionAgentRun,
       updateAgentRunProgress,
       invokeAgentModel,
@@ -484,6 +481,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     clock,
     new UuidV7IdGenerator(clock)
   );
+  examPacks = new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry);
+
   return {
     unitOfWork,
     dataMaintenance,
@@ -537,6 +536,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
     applyQuestionSetEnrichment,
+    retireQuestionSet,
     ensureQuestionSetEnrichment,
     getGenerationStatus,
     createLearningThread,
@@ -573,20 +573,16 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     getCandidateHome,
     updateLearningPreferences,
     updateScoreTargets,
-    defaultCurriculumVersionId: bundledCurriculum.curriculum.id,
+    curriculumPacks,
+    /** Re-points the running app at the candidate's track after their cycle changes. */
+    activateExamPack: () => examPacks.activate(),
     initialize: async () => {
       await migrationRunner.migrate(clock.now());
-      await ensureCurriculum.execute(bundledCurriculum);
-      await alignCandidateCurriculum.execute(bundledCurriculum);
+      await examPacks.execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
-      await ensurePromptBundle.execute(structuredObjectivePromptV2);
-      await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
-      await ensurePromptBundle.execute(questionImportPolicyV1);
-      await ensurePromptBundle.execute(errorDiagnosisPromptV1);
-      await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);
-      for (const bundle of businessTutorPromptCatalog) {
-        await ensurePromptBundle.execute(bundle);
-      }
+      // Registered only once the database has accepted them, so the runtime
+      // never holds wording storage rejected.
+      await installPromptBundles(ensurePromptBundle, promptRegistry, sharedPromptBundles);
       await recoverExpiredAgentRuns.execute();
       await database.healthCheck();
     },

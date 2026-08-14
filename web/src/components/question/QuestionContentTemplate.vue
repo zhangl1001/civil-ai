@@ -2,7 +2,7 @@
   <article :class="['question-content-template', `question-template-${definition.code}`, `question-layout-${layout}`]">
     <template v-for="region in orderedRegions" :key="region">
       <section v-if="region === QuestionRegionCode.Material && question.material" class="question-region question-region-material">
-        <ContentDocumentRenderer :document="question.material" text-variant="compact" />
+        <ContentDocumentRenderer :document="question.material" :text-variant="materialTextVariant" />
       </section>
 
       <section v-else-if="region === QuestionRegionCode.Prompt" class="question-region question-region-prompt">
@@ -10,11 +10,13 @@
       </section>
 
       <section v-else-if="region === QuestionRegionCode.Options" class="question-region question-region-options">
+        <p v-if="multiSelect" class="question-multi-answer-hint">{{ multiAnswerHint }}</p>
         <QuestionOptionList
           :options="question.options"
           :presentation="definition.code"
-          :selected-option-id="selectedOptionId"
-          :correct-option-id="question.correctOptionId"
+          :selected-option-ids="selectedOptionIds"
+          :correct-option-ids="correctOptionIds"
+          :multi-select="multiSelect"
           :reveal-result="revealResult"
           :readonly-mode="readonlyMode"
           :disabled="disabled"
@@ -24,7 +26,7 @@
       </section>
 
       <section v-else-if="region === QuestionRegionCode.Explanation && showExplanation" class="question-region question-region-explanation">
-        <QuestionExplanationView :document="question.explanation" :correct-option-id="question.correctOptionId">
+        <QuestionExplanationView :document="question.explanation" :correct-answer="correctAnswer">
           <template v-if="layout !== QuestionRegionLayoutCode.Flashcard && $slots.diagnosis" #after-answer>
             <slot name="diagnosis" />
           </template>
@@ -40,43 +42,59 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { multiAnswerGradingHint } from '@/domain/choiceGradingRules';
+import type { ChoiceGradingRule } from '@/modules/evidence/public';
 import ContentDocumentRenderer from '@/components/content/ContentDocumentRenderer.vue';
 import QuestionExplanationView from '@/components/question/QuestionExplanationView.vue';
 import QuestionOptionList from '@/components/question/QuestionOptionList.vue';
 import {
   QuestionRegionCode,
   QuestionRegionLayoutCode,
+  QuestionPresentationCode,
+  correctAnswerLabel,
+  correctOptionIdsOf,
+  isMultiAnswerChoice,
   questionPresentationDefinition,
   questionRegionOrder,
   resolveQuestionPresentation,
+  type QuestionContent,
   type QuestionPresentationCodeValue,
-  type QuestionRegionLayoutCodeValue,
-  type SingleChoiceQuestionContent
+  type QuestionRegionLayoutCodeValue
 } from '@/modules/content/public';
 
 const props = withDefaults(defineProps<{
-  readonly question: SingleChoiceQuestionContent;
+  readonly question: QuestionContent;
   readonly presentation?: QuestionPresentationCodeValue;
   readonly layout?: QuestionRegionLayoutCodeValue;
-  readonly selectedOptionId?: string;
+  readonly selectedOptionIds?: readonly string[];
   readonly revealResult?: boolean;
   readonly readonlyMode?: boolean;
   readonly disabled?: boolean;
   readonly compact?: boolean;
   readonly showExplanation?: boolean;
+  /** Rule the owning question set was published under; omit to use the active package. */
+  readonly gradingRule?: ChoiceGradingRule;
 }>(), {
   presentation: undefined,
   layout: QuestionRegionLayoutCode.Practice,
-  selectedOptionId: '',
+  selectedOptionIds: () => [],
   revealResult: false,
   readonlyMode: false,
   disabled: false,
   compact: false,
-  showExplanation: false
+  showExplanation: false,
+  gradingRule: undefined
 });
 
 const definition = computed(() => questionPresentationDefinition(
   props.presentation || resolveQuestionPresentation(props.question)
+));
+const multiSelect = computed(() => isMultiAnswerChoice(props.question));
+const correctOptionIds = computed(() => correctOptionIdsOf(props.question));
+const correctAnswer = computed(() => correctAnswerLabel(props.question));
+const multiAnswerHint = computed(() => multiAnswerGradingHint(props.question.templateCode, props.gradingRule));
+const materialTextVariant = computed(() => (
+  definition.value.code === QuestionPresentationCode.DataMaterialChoice ? 'data' : 'compact'
 ));
 const orderedRegions = computed(() => questionRegionOrder(props.layout)
   .filter((region) => definition.value.regions.includes(region)));
@@ -114,5 +132,11 @@ function select(optionId: string): void {
 
 .question-template-graphic_choice .question-region-options {
   padding-top: 2px;
+}
+
+.question-multi-answer-hint {
+  margin: 0 0 8px;
+  color: var(--text-secondary-color);
+  font-size: var(--type-size-caption);
 }
 </style>

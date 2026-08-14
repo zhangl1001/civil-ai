@@ -222,6 +222,7 @@
 </template>
 
 <script setup lang="ts">
+import { isLongFormTopic } from '@/domain/writtenFormats';
 import { onMounted, onUnmounted, computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ChevronDownIcon, Clock3Icon, FileClockIcon, HistoryIcon, LoaderCircleIcon, NotebookPenIcon, Trash2Icon } from 'lucide-vue-next';
@@ -348,7 +349,7 @@ const gradingStatusText = computed(() => {
   return '';
 });
 const pageAlert = computed(() => gradingFailure.value || (store.question ? store.error || '' : ''));
-const isLongEssay = computed(() => store.context?.type === 'long' || activeTopic.value === '申发论述');
+const isLongEssay = computed(() => store.context?.type === 'long' || isLongFormTopic(activeTopic.value));
 const activeLecture = computed(() => store.question?.lecture);
 const lectureSections = computed(() => {
   const lecture = activeLecture.value;

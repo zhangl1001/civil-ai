@@ -11,3 +11,5 @@ export { default as PullToRefresh } from './components/PullToRefresh.vue';
 export { default as SurfaceCard } from './components/SurfaceCard.vue';
 export { default as SegmentedControl } from './components/SegmentedControl.vue';
 export { default as StickyActionBar } from './components/StickyActionBar.vue';
+export { default as SwipeActionRow } from './components/SwipeActionRow.vue';
+export type { SwipeActionRowAction } from './components/SwipeActionRow.types';

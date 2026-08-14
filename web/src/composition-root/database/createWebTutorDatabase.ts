@@ -1,3 +1,5 @@
+import { choiceGradingRuleForCapabilityNode, gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
+import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { IndexedDbTransactionScope, IndexedDbUnitOfWork } from '@/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork';
 import { TutorIndexedDb } from '@/capabilities/database/adapters/indexeddb/TutorIndexedDb';
 import { IndexedDbTutorDataMaintenance } from '@/capabilities/database/adapters/indexeddb/IndexedDbTutorDataMaintenance';
@@ -14,10 +16,8 @@ import {
   UpdateScoreTargets
 } from '@/modules/candidate/public';
 import { IndexedDbCurriculumRepository } from '@/modules/curriculum/adapters/IndexedDbCurriculumRepository';
-import {
-  createBundledNationalCurriculum,
-  EnsureCurriculumBundle
-} from '@/modules/curriculum/public';
+import { createBundledCurriculumPacks, EnsureCurriculumBundle } from '@/modules/curriculum/public';
+import { InstallExamPacks } from '../curriculum/InstallExamPacks';
 import { IndexedDbOutboxRepository } from '@/modules/task/adapters/IndexedDbOutboxRepository';
 import { IndexedDbCommandReceiptRepository } from '@/modules/task/adapters/IndexedDbCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -25,14 +25,9 @@ import type { Clock } from '@/kernel/public';
 import { IndexedDbPromptRepository } from '@/capabilities/ai-runtime/adapters/IndexedDbPromptRepository';
 import { IndexedDbAIInvocationRepository } from '@/capabilities/ai-runtime/adapters/IndexedDbAIInvocationRepository';
 import {
-  businessTutorPromptCatalog,
   EnsurePromptBundle,
-  errorDiagnosisBatchPromptV1,
-  errorDiagnosisPromptV1,
   PromptCompiler,
   PromptRegistry,
-  questionImportPolicyV1,
-  questionSetEnrichmentPromptV1,
   structuredObjectivePromptV2
 } from '@/capabilities/ai-runtime/public';
 import { IndexedDbContentRepository } from '@/modules/content/adapters/IndexedDbContentRepository';
@@ -54,6 +49,7 @@ import {
   ImportQuestionSource,
   LearningAssetStore,
   PublishQuestionImportDraft,
+  RetireQuestionSet,
   RunStructuredObjectiveGenerationWorkflow,
   ScanQuestionImportDraft
 } from '@/modules/content/public';
@@ -177,7 +173,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     contentRepository,
     questionSourceRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    gradingPolicyForCapabilityNode
   );
   const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new IndexedDbPromptRepository(database, transactionScope);
@@ -203,17 +200,13 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const outboxRepository = new IndexedDbOutboxRepository(database, transactionScope);
   const commandReceiptRepository = new IndexedDbCommandReceiptRepository(database, transactionScope);
   const ensureCurriculum = new EnsureCurriculumBundle(unitOfWork, curriculumRepository);
-  const bundledCurriculum = createBundledNationalCurriculum();
+  const curriculumPacks = createBundledCurriculumPacks();
+  let examPacks: InstallExamPacks;
   const ensureContentMetadata = new EnsureContentMetadata(unitOfWork, contentRepository);
   const bundledContentMetadata = createBundledContentMetadata();
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
   const promptRegistry = new PromptRegistry();
-  promptRegistry.register(structuredObjectivePromptV2);
-  promptRegistry.register(questionSetEnrichmentPromptV1);
-  promptRegistry.register(questionImportPolicyV1);
-  promptRegistry.register(errorDiagnosisPromptV1);
-  promptRegistry.register(errorDiagnosisBatchPromptV1);
-  businessTutorPromptCatalog.forEach((bundle) => promptRegistry.register(bundle));
+
   const promptCompiler = new PromptCompiler(promptRegistry);
   const generationContextCompiler = new GenerationContextCompiler(
     candidateRepository,
@@ -249,9 +242,11 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     questionSourceRepository,
     promptCompiler,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    gradingPolicyForCapabilityNode
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
+  const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
   const getGenerationStatus = new GetGenerationStatus(generationRepository, contentRepository);
   const createLearningThread = new CreateLearningThread(
     unitOfWork,
@@ -280,7 +275,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     learningEvidenceRepository,
     outboxRepository,
     clock,
-    new UuidV7IdGenerator(clock)
+    new UuidV7IdGenerator(clock),
+    choiceGradingRuleForCapabilityNode
   );
   const correctLearningEvidence = new CorrectLearningEvidence(
     unitOfWork,
@@ -377,6 +373,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
       diagnoses: errorDiagnosisRepository,
       runErrorDiagnosis: runAiErrorDiagnosis,
       promptCompiler,
+      promptRegistry,
       transitionAgentRun,
       updateAgentRunProgress,
       invokeAgentModel,
@@ -485,6 +482,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     clock,
     new UuidV7IdGenerator(clock)
   );
+  examPacks = new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry);
+
   return {
     unitOfWork,
     dataMaintenance,
@@ -538,6 +537,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     createGenerationWorkflow,
     runStructuredObjectiveGenerationWorkflow,
     applyQuestionSetEnrichment,
+    retireQuestionSet,
     ensureQuestionSetEnrichment,
     getGenerationStatus,
     createLearningThread,
@@ -574,20 +574,16 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     getCandidateHome,
     updateLearningPreferences,
     updateScoreTargets,
-    defaultCurriculumVersionId: bundledCurriculum.curriculum.id,
+    curriculumPacks,
+    /** Re-points the running app at the candidate's track after their cycle changes. */
+    activateExamPack: () => examPacks.activate(),
     initialize: async () => {
       await database.open();
-      await ensureCurriculum.execute(bundledCurriculum);
-      await alignCandidateCurriculum.execute(bundledCurriculum);
+      await examPacks.execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
-      await ensurePromptBundle.execute(structuredObjectivePromptV2);
-      await ensurePromptBundle.execute(questionSetEnrichmentPromptV1);
-      await ensurePromptBundle.execute(questionImportPolicyV1);
-      await ensurePromptBundle.execute(errorDiagnosisPromptV1);
-      await ensurePromptBundle.execute(errorDiagnosisBatchPromptV1);
-      for (const bundle of businessTutorPromptCatalog) {
-        await ensurePromptBundle.execute(bundle);
-      }
+      // Registered only once the database has accepted them, so the runtime
+      // never holds wording storage rejected.
+      await installPromptBundles(ensurePromptBundle, promptRegistry, sharedPromptBundles);
       await recoverExpiredAgentRuns.execute();
     },
     close: async () => database.close(),

@@ -1,10 +1,15 @@
 <template>
-  <div :class="['question-option-list', `question-option-list-${presentation}`, { compact }]">
+  <div
+    :class="['question-option-list', `question-option-list-${presentation}`, { compact, 'multi-select': multiSelect }]"
+    :role="multiSelect ? 'group' : 'radiogroup'"
+  >
     <button
       v-for="option in options"
       :key="option.id"
       :class="optionClass(option.id)"
       type="button"
+      :role="multiSelect ? 'checkbox' : 'radio'"
+      :aria-checked="selectedOptionIds.includes(option.id)"
       :disabled="disabled || readonlyMode"
       @click="select(option.id)"
     >
@@ -25,15 +30,18 @@ import {
 const props = withDefaults(defineProps<{
   readonly options: readonly SingleChoiceOption[];
   readonly presentation?: QuestionPresentationCodeValue;
-  readonly selectedOptionId?: string;
-  readonly correctOptionId?: string;
+  readonly selectedOptionIds?: readonly string[];
+  readonly correctOptionIds?: readonly string[];
+  /** Renders square markers and checkbox semantics for multi-answer templates. */
+  readonly multiSelect?: boolean;
   readonly revealResult?: boolean;
   readonly disabled?: boolean;
   readonly readonlyMode?: boolean;
   readonly compact?: boolean;
 }>(), {
-  selectedOptionId: '',
-  correctOptionId: '',
+  selectedOptionIds: () => [],
+  correctOptionIds: () => [],
+  multiSelect: false,
   revealResult: false,
   disabled: false,
   readonlyMode: false,
@@ -46,11 +54,13 @@ const emit = defineEmits<{
 }>();
 
 function optionClass(optionId: string) {
-  const selected = props.selectedOptionId === optionId;
+  const selected = props.selectedOptionIds.includes(optionId);
+  const isCorrect = props.correctOptionIds.includes(optionId);
   return {
     selected,
-    correct: props.revealResult && props.correctOptionId === optionId,
-    wrong: props.revealResult && selected && props.correctOptionId !== optionId
+    // A missed correct option is highlighted too, so under-selection is visible.
+    correct: props.revealResult && isCorrect,
+    wrong: props.revealResult && selected && !isCorrect
   };
 }
 
@@ -114,6 +124,11 @@ function select(optionId: string) {
   font-weight: 600;
   line-height: 1;
   text-align: center;
+}
+
+/* Square markers signal that more than one option may be selected. */
+.question-option-list.multi-select b {
+  border-radius: 6px;
 }
 
 .option-content {

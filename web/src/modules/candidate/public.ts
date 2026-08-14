@@ -19,6 +19,7 @@ export {
 export {
   ExplanationDepth,
   ProactiveLevel,
+  parseProactiveLevel,
   type ExplanationDepth as ExplanationDepthCode,
   type ProactiveLevel as ProactiveLevelCode
 } from './domain/LearningPreferenceCodes';
@@ -30,6 +31,8 @@ export {
   CompanionTone,
   StudyMode,
   TeachingOrder,
+  parseStudyMode,
+  parseTeachingOrder,
   type BaselineStatus as BaselineStatusCode,
   type CompanionTone as CompanionToneCode,
   type StudyMode as StudyModeCode,

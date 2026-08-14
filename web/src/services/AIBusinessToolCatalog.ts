@@ -51,16 +51,15 @@ export interface AIBusinessToolExecuteMeta {
 export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
   {
     name: 'generate_practice',
-    description: '生成行测专项练习题，适用于用户要求按模块、考点、题量刷题或出题。',
+    description: '生成当前考试包的客观题专项练习，适用于用户要求按模块、考点、题量刷题或出题。',
     impact: generationImpact({ argument: 'questionCount', value: 25 }),
     parameters: {
       type: 'object',
-      required: ['module'],
+      required: [],
       properties: {
         module: {
           type: 'string',
-          description: '行测模块 code。只从工具 schema 的枚举中选择；不要自行拼接模块名称。',
-          enum: APTITUDE_PRACTICE_MODULE_OPTIONS.map((item) => item.code)
+          description: '当前考试大纲的模块 code。不要自行拼接名称；填错会被拒绝并返回可用取值。'
         },
         knowledgePoint: { type: 'string', description: '用户明确指定的细分知识点；未指定时省略，由学习档案选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 120 },
@@ -70,7 +69,7 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
   },
   {
     name: 'generate_mock',
-    description: '生成行测模考试卷，适用于用户要求模考、套卷、模拟考试。',
+    description: '生成当前考试包的客观题模考试卷，适用于用户要求模考、套卷、模拟考试。',
     impact: highGenerationImpact(),
     parameters: {
       type: 'object',
@@ -88,7 +87,7 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
       type: 'object',
       required: [],
       properties: {
-        essayTopic: { type: 'string', description: '申论题型或主题', enum: ['归纳概括', '综合分析', '提出对策', '贯彻执行', '申发论述'], default: '申论小题' },
+        essayTopic: { type: 'string', description: '主观题题型。省略时使用考试包声明的默认短答题型。' },
         essayType: { type: 'string', description: '题型长度', enum: ['short', 'long'], default: 'short' },
         questionCount: { type: 'number', description: '小问数量', default: 1, minimum: 1, maximum: 3 }
       }
@@ -104,8 +103,7 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
       properties: {
         module: {
           type: 'string',
-          description: '错题模块 code。只从工具 schema 的枚举中选择；不要自行拼接模块名称。',
-          enum: APTITUDE_PRACTICE_MODULE_OPTIONS.map((item) => item.code)
+          description: '当前考试大纲的错题模块 code。不要自行拼接名称；填错会被拒绝并返回可用取值。'
         },
         knowledgePoint: { type: 'string', description: '用户明确指定的错题知识点；未指定时根据能力轨迹选择' },
         questionCount: { type: 'number', description: '题量', default: 10, minimum: 1, maximum: 60 }
@@ -160,7 +158,6 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
     parameters: { type: 'object', required: [], properties: {} }
   }
 ];
-import { APTITUDE_PRACTICE_MODULE_OPTIONS } from '@/domain/labels';
 
 function lowGenerationImpact(): AgentToolImpact {
   return { cost: 'low', network: 'none', persistence: 'reversible' };

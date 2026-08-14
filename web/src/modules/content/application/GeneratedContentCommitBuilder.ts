@@ -18,6 +18,8 @@ import {
   QuestionSetPurpose,
   QuestionSetStatus
 } from '../domain/ContentCodes';
+import { correctAnswerRecord } from '../domain/ChoiceQuestionAnswer';
+import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import {
   QuestionCalibrationRole,
   QuestionDerivationType,
@@ -33,7 +35,13 @@ export interface GeneratedContentCommit {
 export class GeneratedContentCommitBuilder {
   constructor(
     private readonly clock: Clock,
-    private readonly ids: IdGenerator
+    private readonly ids: IdGenerator,
+    /**
+     * Grading rule the set's own subject is scored by, frozen at publish time.
+     * Resolved per capability node because a package may score one objective
+     * subject differently from another.
+     */
+    private readonly gradingPolicy: (capabilityNodeId: string) => QuestionSetGradingPolicy | undefined = () => undefined
   ) {}
 
   async build(
@@ -86,7 +94,7 @@ export class GeneratedContentCommitBuilder {
             : QuestionCalibrationRole.None,
         isOfficial: false,
         content: question,
-        correctAnswer: { optionId: question.correctOptionId },
+        correctAnswer: correctAnswerRecord(question),
         qualityStatus: QuestionQualityStatus.Published,
         contentHash: questionHashes[index],
         contentSchemaVersionId: spec.contentSchemaVersionId,
@@ -156,6 +164,7 @@ export class GeneratedContentCommitBuilder {
         purpose: purposeForRole(spec.assessmentRole),
         assessmentRole: spec.assessmentRole,
         module: capability.module,
+        gradingPolicy: this.gradingPolicy(spec.capabilityNodeId),
         originType: calibratedAsVariants
           ? QuestionOriginType.AiVariant
           : QuestionOriginType.AiGenerated,

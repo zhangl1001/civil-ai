@@ -419,17 +419,6 @@ function localDate(): string {
 
 .digest-body {
   color: var(--text-secondary-color);
-  font-size: var(--type-size-secondary);
-}
-
-.digest-body :deep(h3),
-.digest-body :deep(h4) {
-  margin-top: 13px;
-  color: var(--text-color);
-}
-
-.digest-body :deep(strong) {
-  color: var(--text-color);
 }
 
 .digest-history-list {

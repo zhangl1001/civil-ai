@@ -5,8 +5,8 @@
     <PullToRefresh class="exam-content" :on-refresh="loadDashboard">
       <section class="exam-hero app-card">
         <div>
-          <span>{{ subject }}模考</span>
-          <strong>{{ subject === '行测' ? '生成套卷，按考试节奏完成训练' : '生成申论材料，进入限时作答' }}</strong>
+          <span>{{ subject ? subjectDisplayName(subject) : '' }}模考</span>
+          <strong>{{ subject ? mockHeadline(subject) : '' }}</strong>
           <em>模考用于阶段校准，结果会回流到练习记录、错题本和能力画像。</em>
         </div>
         <MonitorIcon />
@@ -31,7 +31,7 @@
         <div class="section-heading">
           <div>
             <span>当前配置</span>
-            <strong>{{ subject === '行测' ? `${questionCount} 题 · ${durationMinutes} 分钟` : essayType === 'short' ? '申论小题' : '申发论述' }}</strong>
+            <strong>{{ configTitle }}</strong>
             <em>{{ currentConfigText }}</em>
           </div>
           <SlidersHorizontalIcon />
@@ -54,10 +54,10 @@
         <SectionHeading title="我的模考记录" :meta="stats.total ? `共 ${stats.total} 条` : '暂无记录'" />
 
         <AppStateView v-if="isLoading" compact state="loading" title="加载模考记录" />
-        <AppStateView v-else-if="!history.length" compact :title="`还没有${subject}模考记录`" description="完成一次模考后，成绩会自动回流到这里。">
+        <AppStateView v-else-if="!history.length" compact :title="subject ? emptyHistoryTitle(subject) : '还没有模考记录'" description="完成一次模考后，成绩会自动回流到这里。">
           <template #icon><BookOpenIcon /></template>
         </AppStateView>
-        <InfiniteScrollPagination v-else :has-more="historyVisibleCount < history.length || (subject === '申论' && history.length < stats.total)" :has-items="Boolean(history.length)" :on-load-more="loadMoreHistory">
+        <InfiniteScrollPagination v-else :has-more="historyVisibleCount < history.length || (!isObjective && history.length < stats.total)" :has-items="Boolean(history.length)" :on-load-more="loadMoreHistory">
         <div class="history-groups">
           <div v-for="group in groupedHistory" :key="group.month" class="history-group">
             <div class="month-label">
@@ -89,12 +89,12 @@
         <div class="subject-toggle" role="tablist" aria-label="模考科目">
           <button
             v-for="item in subjects"
-            :key="item"
+            :key="item.code"
             type="button"
-            :class="{ active: subject === item }"
+            :class="{ active: subject?.code === item.code }"
             @click="switchSubject(item)"
           >
-            {{ item }}
+            {{ subjectDisplayName(item) }}
           </button>
         </div>
 
@@ -110,17 +110,17 @@
           />
         </div>
 
-        <template v-if="subject === '行测'">
+        <template v-if="isObjective">
           <div class="scheme-grid">
             <button
-              v-for="scheme in dashboard?.schemes || []"
-              :key="scheme.count"
+              v-for="scheme in mockSchemes"
+              :key="scheme.code"
               type="button"
-              :class="{ active: questionCount === scheme.count }"
-              @click="selectScheme(scheme.count, scheme.durationMinutes)"
+              :class="{ active: questionCount === scheme.questionCount }"
+              @click="selectScheme(scheme.questionCount, scheme.durationMinutes)"
             >
-              <strong>{{ scheme.label }}</strong>
-              <span>{{ scheme.count }} 题 · {{ scheme.durationMinutes }} 分钟</span>
+              <strong>{{ scheme.name }}</strong>
+              <span>{{ scheme.questionCount }} 题 · {{ scheme.durationMinutes }} 分钟</span>
             </button>
           </div>
 
@@ -128,7 +128,7 @@
             <label>侧重方向</label>
             <div>
               <button
-                v-for="tag in dashboard?.focusTags || []"
+                v-for="tag in focusTags"
                 :key="tag"
                 type="button"
                 :class="{ active: selectedTags.includes(tag) }"
@@ -142,8 +142,8 @@
 
         <template v-else>
           <div class="essay-type">
-            <button type="button" :class="{ active: essayType === 'short' }" @click="essayType = 'short'">小题</button>
-            <button type="button" :class="{ active: essayType === 'long' }" @click="essayType = 'long'">大作文</button>
+            <button type="button" :class="{ active: essayType === 'short' }" @click="essayType = 'short'">{{ essayTypeLabel('short') }}</button>
+            <button type="button" :class="{ active: essayType === 'long' }" @click="essayType = 'long'">{{ essayTypeLabel('long') }}</button>
           </div>
         </template>
       </div>
@@ -161,85 +161,117 @@ import {
   RocketIcon,
   SlidersHorizontalIcon
 } from 'lucide-vue-next';
-import {
-  examFlowService,
-  type EssayMockType,
-  type ExamDashboard,
-  type ExamHistoryItem,
-  type ExamSubject
-} from '@/services/ExamFlowService';
+import { examFlowService, type ExamDashboard, type ExamHistoryItem } from '@/services/ExamFlowService';
+import type { EssayMockType, ExamStartContext } from '@/domain/examMock';
+import { ExamDeliveryKind, type ExamSubjectView } from '@/modules/curriculum/public';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import { AppStateView, InfiniteScrollPagination, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
 import { practiceDetailLocation } from '@/features/practice/PracticeNavigation';
 import { essayHistoryLocation } from '@/features/practice/EssayNavigation';
 import { durationText, groupHistoryByMonth } from '@/features/exam/ExamHistoryPresentation';
+import {
+  emptyHistoryTitle,
+  essayTypeLabel,
+  subjectDisplayName,
+  mockConfigSummary,
+  mockConfigTitle,
+  mockHeadline,
+  mockStartLabel
+} from '@/features/exam/ExamSubjectPresentation';
 const router = useRouter();
-const subjects: ExamSubject[] = ['行测', '申论'];
-const initial = examFlowService.readContext();
-const subject = ref<ExamSubject>(initial.subject);
-const date = ref(initial.date);
-const questionCount = ref(initial.questionCount);
-const durationMinutes = ref(initial.durationMinutes);
-const selectedTags = ref<string[]>(initial.tags);
-const essayType = ref<EssayMockType>(initial.essayType);
+const date = ref('');
+const questionCount = ref(0);
+const durationMinutes = ref(0);
+const selectedTags = ref<string[]>([]);
+const essayType = ref<EssayMockType>('short');
 const dashboard = ref<ExamDashboard | null>(null);
 const isLoading = ref(false);
 const isStarting = ref(false);
 const notice = ref('');
 const showSettingsSheet = ref(false); const historyVisibleCount = ref(30);
+const subjects = computed(() => dashboard.value?.subjects || []);
+const subject = computed(() => dashboard.value?.subject);
+const isObjective = computed(() => subject.value?.deliveryKind === ExamDeliveryKind.Objective);
+const mockSchemes = computed(() => subject.value?.mockExam?.schemes || []);
+const focusTags = computed(() => subject.value?.mockExam?.focusTags || []);
 const history = computed(() => dashboard.value?.history || []);
 const stats = computed(() => dashboard.value?.stats || { total: 0, averageAccuracy: 0, bestAccuracy: 0 });
 const groupedHistory = computed(() => groupHistoryByMonth(history.value.slice(0, historyVisibleCount.value)));
-const startButtonText = computed(() => {
-  if (isStarting.value) return '任务派发中...';
-  return subject.value === '行测' ? '生成并进入行测模考' : '生成并进入申论模考';
+const currentContext = computed<ExamStartContext | undefined>(() => {
+  const active = subject.value;
+  if (!active) return undefined;
+  return {
+    subjectCode: active.code,
+    date: date.value,
+    questionCount: isObjective.value ? questionCount.value : (active.mockExam?.defaultQuestionCount ?? 1),
+    durationMinutes: isObjective.value ? durationMinutes.value : (active.mockExam?.defaultDurationMinutes ?? 120),
+    tags: selectedTags.value,
+    essayType: essayType.value
+  };
+});
+const configTitle = computed(() => {
+  const active = subject.value;
+  const context = currentContext.value;
+  return active && context ? mockConfigTitle(active, context) : '';
 });
 const currentConfigText = computed(() => {
-  if (subject.value === '申论') return `${date.value} · ${essayType.value === 'short' ? '小题' : '大作文'}`;
-  const tags = selectedTags.value.length ? ` · ${selectedTags.value.slice(0, 2).join('、')}` : '';
-  return `${date.value} · ${questionCount.value}题 · ${durationMinutes.value}分钟${tags}`;
+  const active = subject.value;
+  const context = currentContext.value;
+  return active && context ? mockConfigSummary(active, context) : '';
 });
-onMounted(async () => {
-  await loadDashboard();
-  applyDefaultScheme();
+const startButtonText = computed(() => {
+  if (isStarting.value) return '任务派发中...';
+  return subject.value ? mockStartLabel(subject.value) : '生成模考';
 });
-async function loadDashboard() {
+onMounted(loadDashboard);
+async function loadDashboard(subjectCode?: ExamSubjectView['code']) {
   isLoading.value = true;
   notice.value = '';
   try {
-    dashboard.value = await examFlowService.dashboard(subject.value); historyVisibleCount.value = 30;
+    const next = await examFlowService.dashboard(subjectCode);
+    dashboard.value = next;
+    historyVisibleCount.value = 30;
+    applyContext(examFlowService.readContext(next.subject));
+    applyDefaultScheme();
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '模考数据加载失败';
   } finally {
     isLoading.value = false;
   }
 }
+function applyContext(context: ExamStartContext) {
+  date.value = context.date;
+  questionCount.value = context.questionCount;
+  durationMinutes.value = context.durationMinutes;
+  selectedTags.value = [...context.tags];
+  essayType.value = context.essayType;
+}
 async function loadMoreHistory() {
   if (historyVisibleCount.value < history.value.length) {
     historyVisibleCount.value = Math.min(history.value.length, historyVisibleCount.value + 30);
     return;
   }
-  if (subject.value !== '申论' || !dashboard.value || history.value.length >= stats.value.total) return;
-  const next = await examFlowService.listEssayMockHistory(history.value.length, 30);
+  const active = subject.value;
+  if (isObjective.value || !active || !dashboard.value || history.value.length >= stats.value.total) return;
+  const next = await examFlowService.listEssayMockHistory(active.code, history.value.length, 30);
   dashboard.value = { ...dashboard.value, history: [...dashboard.value.history, ...next] };
   historyVisibleCount.value = dashboard.value.history.length;
 }
-async function switchSubject(next: ExamSubject) {
-  if (subject.value === next) return;
-  subject.value = next;
-  examFlowService.writeContext({ subject: next });
-  await loadDashboard();
-  applyDefaultScheme();
+async function switchSubject(next: ExamSubjectView) {
+  if (subject.value?.code === next.code) return;
+  await loadDashboard(next.code);
+  const context = currentContext.value;
+  if (context) examFlowService.writeContext(context);
 }
 function applyDefaultScheme() {
-  if (subject.value !== '行测') return;
-  const defaultCount = dashboard.value?.defaultQuestionCount || 120;
-  const scheme = dashboard.value?.schemes.find((item) => item.count === defaultCount)
-    || dashboard.value?.schemes.find((item) => item.count === 120)
-    || dashboard.value?.schemes[0];
+  const spec = subject.value?.mockExam;
+  if (!isObjective.value || !spec) return;
+  const scheme = spec.schemes.find((item) => item.questionCount === questionCount.value)
+    || spec.schemes.find((item) => item.questionCount === spec.defaultQuestionCount)
+    || spec.schemes[0];
   if (!scheme) return;
-  questionCount.value = scheme.count;
+  questionCount.value = scheme.questionCount;
   durationMinutes.value = scheme.durationMinutes;
 }
 function selectScheme(count: number, minutes: number) {
@@ -260,17 +292,12 @@ function formatExamDateInput(event: Event) {
 }
 
 async function startExam() {
+  const context = currentContext.value;
+  if (!context) return;
   isStarting.value = true;
   notice.value = '';
   try {
-    const result = await examFlowService.startMock({
-      subject: subject.value,
-      date: date.value,
-      questionCount: subject.value === '行测' ? questionCount.value : 1,
-      durationMinutes: subject.value === '行测' ? durationMinutes.value : 180,
-      tags: selectedTags.value,
-      essayType: essayType.value
-    });
+    const result = await examFlowService.startMock(context);
     notice.value = result.reused ? '已有相同模考任务在执行，可在任务栏查看进度。' : '模考任务已加入执行队列。';
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '模考任务派发失败';
@@ -280,7 +307,7 @@ async function startExam() {
 }
 
 function openHistory(item: ExamHistoryItem) {
-  if (subject.value === '申论') {
+  if (!isObjective.value) {
     router.push(essayHistoryLocation(item));
     return;
   }

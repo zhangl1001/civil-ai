@@ -1,5 +1,8 @@
 import type { RouteLocationRaw } from 'vue-router';
 import type { SubjectCode } from '@/kernel/public';
+import { ExamDeliveryKind } from '@/modules/curriculum/public';
+import { subjectDeliveryKind } from '@/domain/subjectDelivery';
+import { PracticeSubject } from '@/features/practice/PracticeSubject';
 import { DailyPlanDigestType, DailyPlanItemType, type DailyPlanItemRecord } from '@/modules/planning/public';
 
 const PRACTICE_ITEM_TYPES = new Set<DailyPlanItemRecord['itemType']>([
@@ -19,7 +22,11 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord, subject?: Subje
   };
 
   if (PRACTICE_ITEM_TYPES.has(item.itemType)) {
-    if (subject === 'interview') {
+    // Which flow answers this item is decided by how its subject is answered.
+    // Reading the subject code here sends every package that does not name its
+    // subjects the civil-service way to the objective practice page.
+    const delivery = subjectDeliveryKind(subject);
+    if (delivery === ExamDeliveryKind.Interview) {
       return {
         path: '/vue/interview',
         query: context
@@ -27,7 +34,12 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord, subject?: Subje
     }
     return {
       path: '/vue/practice',
-      query: { ...context, ...(subject === 'essay' ? { subject: 'essay' } : {}), mode: 'tutor', start: '1' }
+      query: {
+        ...context,
+        subject: delivery === ExamDeliveryKind.Subjective ? PracticeSubject.Essay : PracticeSubject.Aptitude,
+        mode: 'tutor',
+        start: '1'
+      }
     };
   }
   if (item.itemType === DailyPlanItemType.Lecture) {
@@ -44,7 +56,7 @@ export function dailyPlanItemLocation(item: DailyPlanItemRecord, subject?: Subje
     return { path: '/vue/exam', query: context };
   }
   if (item.itemType === DailyPlanItemType.Essay) {
-    return { path: '/vue/practice', query: { ...context, subject: 'essay', mode: 'tutor' } };
+    return { path: '/vue/practice', query: { ...context, subject: PracticeSubject.Essay, mode: 'tutor' } };
   }
   return {
     path: '/vue/digest',

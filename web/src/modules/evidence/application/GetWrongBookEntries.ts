@@ -8,7 +8,7 @@ import type {
   GradingResultRecord,
   LearningSessionRecord
 } from '../contracts/LearningFacts';
-import { AttemptResult, type ErrorCauseCode } from '../domain/EvidenceCodes';
+import { isMistakenAttempt, type ErrorCauseCode } from '../domain/EvidenceCodes';
 import type { ContentRepository } from '@/modules/content/public';
 
 /**
@@ -62,7 +62,7 @@ export class GetWrongBookEntries {
       sessionOffset
     );
     const relevantSessions = sessions.filter((facts) => (
-      facts.attempts.some((attempt) => attempt.result === AttemptResult.Incorrect)
+      facts.attempts.some((attempt) => isMistakenAttempt(attempt.result))
     ));
     const questionSetIds = [...new Set(relevantSessions.map((facts) => facts.session.questionSetId))];
     const [bundles, diagnoses] = await Promise.all([
@@ -83,15 +83,15 @@ export class GetWrongBookEntries {
 
     for (const facts of sessions) {
       consumedSessions += 1;
-      const incorrectAttempts = facts.attempts.filter((attempt) => attempt.result === AttemptResult.Incorrect);
-      if (!incorrectAttempts.length) continue;
+      const mistakenAttempts = facts.attempts.filter((attempt) => isMistakenAttempt(attempt.result));
+      if (!mistakenAttempts.length) continue;
       const bundle = bundlesById.get(facts.session.questionSetId);
       if (!bundle) continue;
       const questions = new Map(bundle.questions.map((question) => [question.id, question]));
       const gradings = new Map(facts.gradings.map((grading) => [grading.attemptId, grading]));
       const diagnosesByAttempt = groupByAttempt(diagnosesBySession.get(facts.session.id) ?? []);
 
-      for (const attempt of incorrectAttempts) {
+      for (const attempt of mistakenAttempts) {
         const question = questions.get(attempt.questionId);
         const grading = gradings.get(attempt.id);
         if (!question || !grading) continue;

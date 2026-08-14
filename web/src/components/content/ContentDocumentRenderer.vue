@@ -3,11 +3,20 @@
     <template v-for="block in document.blocks" :key="block.id">
       <TextContent v-if="block.type === 'text'" :content="block.source" :variant="textVariant" />
 
-      <figure v-else-if="block.type === 'data_table'" class="content-table">
+      <figure
+        v-else-if="block.type === 'data_table'"
+        class="content-table"
+        :class="{ 'content-table-dense': block.columns.length >= 5, 'content-table-very-dense': block.columns.length >= 7 }"
+      >
         <figcaption v-if="block.caption || block.unit">{{ block.caption }}<small v-if="block.unit">{{ block.unit }}</small></figcaption>
         <div class="content-table-scroll"><table><thead><tr><th v-for="column in block.columns" :key="column.key" :style="{ textAlign: column.alignment }">{{ column.label }}</th></tr></thead><tbody><tr v-for="(row, index) in block.rows" :key="index"><td v-for="column in block.columns" :key="column.key" :style="{ textAlign: column.alignment }">{{ row[column.key] ?? '-' }}</td></tr></tbody></table></div>
         <p v-if="block.sourceNote" class="content-source-note">{{ block.sourceNote }}</p>
       </figure>
+
+      <StatisticalChart
+        v-else-if="block.type === 'statistical_chart'"
+        :block="block"
+      />
 
       <figure v-else-if="block.type === 'svg_diagram'" class="content-diagram"><div class="content-svg" role="img" :aria-label="block.alt" v-html="sanitizeSvg(block.markup)"></div><figcaption>{{ block.alt }}</figcaption></figure>
 
@@ -36,6 +45,7 @@ import { HtmlPolicy, ImageSourceKind, resolveImageSource } from '@/capabilities/
 import type { ContentDocument } from '@/modules/content/public';
 import TextContent from '@/components/content/TextContent.vue';
 import MathFormula from '@/components/content/MathFormula.vue';
+import StatisticalChart from '@/components/content/StatisticalChart.vue';
 
 defineOptions({ name: 'ContentDocumentRenderer' });
 withDefaults(defineProps<{
@@ -61,7 +71,7 @@ function remoteImage(value: string): string | undefined {
 </script>
 
 <style scoped>
-.content-document-renderer { display:flex; flex-direction:column; gap:10px; min-width:0; }.content-table,.content-diagram,.content-image { margin:0; }.content-table figcaption,.content-diagram figcaption,.content-image figcaption { margin-bottom:6px; color:var(--text-secondary-color); font-size:var(--type-size-caption); }.content-table figcaption small { margin-left:6px; font-size:inherit; }.content-table-scroll { overflow-x:auto; border-radius:8px; background:rgba(var(--color-ink-rgb),.035); -webkit-overflow-scrolling:touch; }.content-table table { width:100%; min-width:400px; border-collapse:collapse; font-size:var(--type-size-caption); }.content-table th,.content-table td { padding:8px 9px; border-bottom:1px solid rgba(var(--color-ink-rgb),.07); white-space:nowrap; }.content-table th { color:var(--text-color); background:rgba(var(--color-ink-rgb),.045); font-weight:var(--type-weight-semibold); }.content-source-note { margin:5px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-micro); }.content-svg { width:100%; max-height:260px; overflow:hidden; display:grid; place-items:center; border-radius:8px; background:rgba(var(--color-ink-rgb),.025); }.content-svg :deep(svg) { display:block; width:100%; height:auto; max-height:260px; }.content-diagram figcaption { margin-top:5px; text-align:center; }.content-image img { display:block; width:100%; max-height:340px; object-fit:contain; border-radius:8px; }.content-image-unavailable { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.content-callout { padding:10px 11px; border-left:3px solid var(--primary-color); border-radius:0 8px 8px 0; background:rgba(var(--color-brand-rgb),.06); }.content-callout>strong { display:block; margin-bottom:5px; font-size:var(--type-size-secondary); }.content-callout-trap,.content-callout-wrong_cause { border-left-color:var(--orange-color); background:rgba(255,149,0,.08); }.content-callout-conclusion { border-left-color:var(--green-color); background:rgba(52,199,89,.08); }
+.content-document-renderer { display:flex; flex-direction:column; gap:10px; min-width:0; }.content-table,.content-diagram,.content-image { max-width:100%; margin:0; }.content-table figcaption,.content-diagram figcaption,.content-image figcaption { margin-bottom:6px; color:var(--text-secondary-color); font-size:var(--type-size-caption); }.content-table figcaption small { margin-left:6px; font-size:inherit; }.content-table-scroll { width:100%; max-width:100%; min-width:0; overflow-x:hidden; border-radius:8px; background:rgba(var(--color-ink-rgb),.035); }.content-table table { width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; font-size:var(--type-size-caption); font-variant-numeric:tabular-nums; }.content-table th,.content-table td { padding:8px 7px; border-right:1px solid rgba(var(--color-ink-rgb),.05); border-bottom:1px solid rgba(var(--color-ink-rgb),.07); white-space:normal; overflow-wrap:anywhere; word-break:break-word; }.content-table th { color:var(--text-color); background:rgba(var(--color-ink-rgb),.045); font-weight:var(--type-weight-semibold); }.content-table-dense th,.content-table-dense td { padding:7px 4px; font-size:var(--type-size-micro); }.content-table-very-dense th,.content-table-very-dense td { padding:6px 2px; line-height:1.35; }.content-source-note { margin:5px 0 0; color:var(--text-secondary-color); font-size:var(--type-size-micro); }.content-svg { width:100%; max-height:260px; overflow:hidden; display:grid; place-items:center; border-radius:8px; background:rgba(var(--color-ink-rgb),.025); }.content-svg :deep(svg) { display:block; width:100%; height:auto; max-height:260px; }.content-diagram figcaption { margin-top:5px; text-align:center; }.content-image img { display:block; width:100%; max-height:340px; object-fit:contain; border-radius:8px; }.content-image-unavailable { color:var(--text-secondary-color); font-size:var(--type-size-caption); }.content-callout { padding:10px 11px; border-left:3px solid var(--primary-color); border-radius:0 8px 8px 0; background:rgba(var(--color-brand-rgb),.06); }.content-callout>strong { display:block; margin-bottom:5px; font-size:var(--type-size-secondary); }.content-callout-trap,.content-callout-wrong_cause { border-left-color:var(--orange-color); background:rgba(255,149,0,.08); }.content-callout-conclusion { border-left-color:var(--green-color); background:rgba(52,199,89,.08); }
 .content-document-renderer-lecture { gap:0; }
 .content-document-renderer-lecture>.content-callout { position:relative; margin-top:15px; padding:16px 0 2px; border:0; border-top:1px solid rgba(var(--color-ink-rgb),.075); border-radius:0; background:transparent; }
 .content-document-renderer-lecture>.content-callout>strong { display:flex; align-items:center; gap:8px; margin-bottom:9px; color:var(--text-color); font-size:var(--type-size-body); line-height:1.4; }

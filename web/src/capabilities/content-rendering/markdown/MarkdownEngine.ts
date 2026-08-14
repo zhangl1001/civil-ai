@@ -60,10 +60,14 @@ export class MarkdownEngine {
 
 function createMarkedRenderer(): Marked {
   const renderer = new Renderer();
-  const renderTable = renderer.table.bind(renderer);
-  renderer.table = (token: Tokens.Table): string => (
-    `<div class="markdown-table-scroll">${renderTable(token)}</div>`
-  );
+  const renderTable = renderer.table;
+  renderer.table = function table(token: Tokens.Table): string {
+    // Marked injects its parser onto the renderer used for the active parse.
+    // Calling a function bound while the renderer is being constructed loses
+    // that runtime parser and makes every Markdown table throw. Keep `this`
+    // from the active render and only decorate the resulting table markup.
+    return `<div class="markdown-table-scroll">${renderTable.call(this, token)}</div>`;
+  };
   renderer.link = function link(token: Tokens.Link): string {
     const label = this.parser.parseInline(token.tokens);
     const resolved = resolveLink(token.href);
@@ -107,11 +111,13 @@ function restoreSafeImageSources(html: string): string {
  * fenced code blocks remain untouched.
  */
 export function normalizeMarkdownSource(source: string): string {
-  const document = normalizeMathSyntax(
-    unwrapMarkdownDocumentFence(
-      decodeMarkdownTransportEscapes(unwrapSerializedMarkdown(source).replace(/\r\n?/g, '\n'))
+  const document = promoteEnumeratedSectionHeadings(normalizeMathSyntax(
+    stripInvisibleCharacters(
+      unwrapMarkdownDocumentFence(
+        decodeMarkdownTransportEscapes(unwrapSerializedMarkdown(source).replace(/\r\n?/g, '\n'))
+      )
     )
-  );
+  ));
   const lines = document.split('\n');
   const normalized: string[] = [];
   let inFence = false;
@@ -144,6 +150,106 @@ export function normalizeMarkdownSource(source: string): string {
     }
   }
   return normalizeTolerantPipeTables(normalized).join('\n');
+}
+
+const ZERO_WIDTH_CHARACTERS = /[\u200B\u200C\u200D\u2060\uFEFF]/g;
+const NON_ASCII_SPACE_CLASS = '\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000';
+const NON_ASCII_SPACES = new RegExp(`[${NON_ASCII_SPACE_CLASS}]`, 'g');
+const HAS_NON_ASCII_SPACE = new RegExp(`[${NON_ASCII_SPACE_CLASS}]`);
+const LEADING_WHITESPACE = new RegExp(`^[ \\t${NON_ASCII_SPACE_CLASS}]*`);
+
+/**
+ * Removes invisible characters that silently switch Markdown off.
+ *
+ * CommonMark accepts only ASCII space and tab as leading whitespace, so a
+ * single non-breaking or ideographic space in front of a line stops `##`, `>`,
+ * `-` and every other block construct from being recognised — the document
+ * collapses into one paragraph and renders exactly as if it had never been
+ * parsed. Chinese model output carries these constantly and the damage is
+ * invisible on inspection, which makes it worth normalizing before parsing
+ * rather than chasing per-document.
+ *
+ * A leading run that contained one of them is dropped rather than converted:
+ * full-width indentation is decorative here, and turning it into four ASCII
+ * spaces would swap one silent failure for another by forming a code block.
+ * Fenced code keeps its bytes, where invisible characters may be the subject.
+ */
+function stripInvisibleCharacters(source: string): string {
+  let inFence = false;
+  return source.split('\n').map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+    if (inFence) return line;
+    const cleaned = line.replace(ZERO_WIDTH_CHARACTERS, '');
+    const leading = LEADING_WHITESPACE.exec(cleaned)?.[0] ?? '';
+    const body = cleaned.slice(leading.length).replace(NON_ASCII_SPACES, ' ');
+    const indent = HAS_NON_ASCII_SPACE.test(leading) ? '' : leading;
+    return `${indent}${body}`;
+  }).join('\n');
+}
+
+/** `一、`, `（一）`, `【…】` — section markers Markdown renders as ordinary prose. */
+const IDEOGRAPHIC_SECTION = /^\s*([一二三四五六七八九十百]+)\s*[、.．]\s*(\S.*)$/;
+const PARENTHESIZED_SECTION = /^\s*[（(]\s*([一二三四五六七八九十百]+)\s*[）)]\s*(\S.*)$/;
+const BRACKETED_SECTION = /^\s*【\s*([^】]{1,24})\s*】\s*$/;
+const SECTION_TITLE_MAX = 30;
+const MIN_PROMOTED_SECTIONS = 2;
+
+/**
+ * Rewrites Chinese section numbering into real Markdown headings.
+ *
+ * Models writing long-form Chinese habitually structure documents with `一、`
+ * and `（一）` instead of `##`. Markdown has no meaning for either, so the whole
+ * document renders as one flat run of paragraphs and reads as though it were
+ * never rendered at all.
+ *
+ * The rewrite is deliberately narrow. It only runs on documents that carry no
+ * Markdown heading of their own — an author who used `#` already expressed the
+ * structure, and their numbered lines are content. It only touches markers
+ * Markdown itself ignores, so `1.` and `1)` keep being ordered lists rather
+ * than turning a shopping list into a table of contents. And it needs at least
+ * two of them, so one numbered sentence in a paragraph is left alone.
+ */
+function promoteEnumeratedSectionHeadings(source: string): string {
+  if (/^\s{0,3}#{1,6}\s/m.test(source)) return source;
+  const lines = source.split('\n');
+  const promoted: Array<{ readonly index: number; readonly text: string }> = [];
+  let inFence = false;
+  lines.forEach((line, index) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      return;
+    }
+    if (inFence) return;
+    const heading = sectionHeading(line);
+    if (heading) promoted.push({ index, text: heading });
+  });
+  if (promoted.length < MIN_PROMOTED_SECTIONS) return source;
+  promoted.forEach(({ index, text }) => {
+    lines[index] = text;
+  });
+  return lines.join('\n');
+}
+
+function sectionHeading(line: string): string | undefined {
+  const bracketed = BRACKETED_SECTION.exec(line);
+  if (bracketed) return `## ${bracketed[1]!.trim()}`;
+  const ideographic = IDEOGRAPHIC_SECTION.exec(line);
+  if (ideographic && isSectionTitle(ideographic[2]!)) return `## ${ideographic[2]!.trim()}`;
+  const parenthesized = PARENTHESIZED_SECTION.exec(line);
+  if (parenthesized && isSectionTitle(parenthesized[2]!)) return `### ${parenthesized[2]!.trim()}`;
+  return undefined;
+}
+
+/** A heading is a short label; a numbered sentence ends like a sentence. */
+function isSectionTitle(text: string): boolean {
+  const title = text.trim();
+  return title.length > 0
+    && title.length <= SECTION_TITLE_MAX
+    && !/[。！？；;]$/.test(title)
+    && !/[。！？]/.test(title);
 }
 
 function mathExtension() {
@@ -309,10 +415,12 @@ function stripDecorativeEmoji(value: string): string {
   } catch {
     // Older iOS JavaScript runtimes may not recognize this Unicode property.
   }
-  return normalized
-    .replace(/[\uFE0F\u200D\u20E3]/g, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trimEnd();
+  const withoutJoiners = normalized.replace(/[\uFE0F\u200D\u20E3]/g, '');
+  // Runs left behind by a removed emoji are collapsed, but the leading run is
+  // structure rather than spacing: Markdown reads it as list nesting depth, so
+  // squeezing it flattens nested lists and dissolves indented code blocks.
+  const indent = /^[ \t]*/.exec(withoutJoiners)?.[0] ?? '';
+  return `${indent}${withoutJoiners.slice(indent.length).replace(/[ \t]{2,}/g, ' ')}`.trimEnd();
 }
 
 function escapeAttribute(value: string): string {

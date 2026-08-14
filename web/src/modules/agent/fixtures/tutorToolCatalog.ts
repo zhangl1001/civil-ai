@@ -2,10 +2,6 @@ import { AgentExecutionBudgetTier } from '../domain/AgentExecutionBudget';
 import type { AgentSkillManifest } from '../domain/AgentSkillRegistry';
 import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import type { JsonObject } from '@/kernel/public';
-import { APTITUDE_PRACTICE_MODULE_OPTIONS } from '@/domain/labels';
-
-const aptitudeModuleCodes = APTITUDE_PRACTICE_MODULE_OPTIONS.map((item) => item.code);
-
 const emptyObjectSchema = {
   type: 'object',
   additionalProperties: false,
@@ -50,7 +46,19 @@ const questionImportCandidateSchema: JsonObject = {
         }
       }
     },
-    correctOptionId: { type: ['string', 'null'], minLength: 1, maxLength: 8, description: '来源明确给出时填写对应选项 ID；未提供答案时为 null，禁止猜测。' },
+    templateCode: {
+      type: ['string', 'null'],
+      enum: ['single_choice', 'multiple_choice', 'indeterminate_choice', null],
+      description: '题型。来源标注“多选”填 multiple_choice，标注“不定项”填 indeterminate_choice，其余或来源未标注时留空按单选处理。'
+    },
+    correctOptionId: { type: ['string', 'null'], minLength: 1, maxLength: 8, description: '单选题的正确选项 ID。来源明确给出时填写；未提供答案时为 null，禁止猜测。' },
+    correctOptionIds: {
+      type: ['array', 'null'],
+      minItems: 1,
+      maxItems: 8,
+      items: { type: 'string', minLength: 1, maxLength: 8 },
+      description: '多选或不定项题的全部正确选项 ID，单选题不要填写。来源未给出完整答案时为 null，禁止猜测或只填一部分。'
+    },
     difficulty: { type: 'number', minimum: 0, maximum: 1 },
     explanation: {
       type: 'object',
@@ -338,10 +346,10 @@ export const tutorToolCatalog: readonly AgentToolDefinition[] = [
     requiresConfirmation: true,
     enabledFor: ['tutor_turn']
   },
-  { name: 'teaching.request_practice', description: '为当前能力主线创建结构化练习生成任务。module 使用统一行测模块 code。', inputSchema: { type:'object', additionalProperties:false, required:['module'], properties:{ module:{type:'string',enum: aptitudeModuleCodes}, knowledgePoint:{type:'string'}, questionCount:{type:'number',minimum:1,maximum:25}, difficulty:{type:'string',enum:['基础','标准','进阶']} } }, risk: 'write', requiresConfirmation: false, enabledFor: ['tutor_turn', 'teaching_plan'] },
+  { name: 'teaching.request_practice', description: '为当前能力主线创建结构化练习生成任务。module 使用当前考试大纲的模块 code；填错会被拒绝并返回可用取值。', inputSchema: { type:'object', additionalProperties:false, required:['module'], properties:{ module:{type:'string',maxLength:40}, knowledgePoint:{type:'string'}, questionCount:{type:'number',minimum:1,maximum:25}, difficulty:{type:'string',enum:['基础','标准','进阶']} } }, risk: 'write', requiresConfirmation: false, enabledFor: ['tutor_turn', 'teaching_plan'] },
   { name: 'learning.review_session', description: '读取已完成练习的判分、错因候选和下一步建议。', inputSchema: { type:'object', additionalProperties:false, required:['sessionId'], properties:{sessionId:{type:'string'}} }, risk: 'read', requiresConfirmation: false, enabledFor: ['tutor_turn', 'review'] },
   { name: 'planning.propose_daily_plan', description: '根据到期复习、能力轨迹和可用时间生成本地计划提案。', inputSchema: emptyObjectSchema, risk: 'read', requiresConfirmation: false, enabledFor: ['tutor_turn', 'teaching_plan'] },
-  { name: 'candidate.change_target', description: '修改目标分数。执行前必须由用户明确确认。', inputSchema: { type:'object', additionalProperties:false, required:['subject','targetScore'], properties:{subject:{type:'string',enum:['aptitude','essay','interview']},targetScore:{type:'number',minimum:0,maximum:100}} }, risk: 'write', requiresConfirmation: true, enabledFor: ['tutor_turn'] }
+  { name: 'candidate.change_target', description: '修改目标分数。subject 使用当前考试大纲的科目 code。执行前必须由用户明确确认。', inputSchema: { type:'object', additionalProperties:false, required:['subject','targetScore'], properties:{subject:{type:'string',maxLength:40},targetScore:{type:'number',minimum:0,maximum:100}} }, risk: 'write', requiresConfirmation: true, enabledFor: ['tutor_turn'] }
 ];
 
 const factualValidator = {

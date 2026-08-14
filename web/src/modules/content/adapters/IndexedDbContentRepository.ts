@@ -152,13 +152,27 @@ export class IndexedDbContentRepository implements ContentRepository {
 
   async listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]> {
     assertQuestionSetQueryLimit(limit);
-    return (await this.listAllQuestionSets(examCycleId)).slice(0, limit);
+    const stored = await this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles);
+    return stored
+      .filter((item) => (
+        item.examCycleId === examCycleId
+        && item.bundle.questionSet.status === QuestionSetStatus.Ready
+      ))
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, limit)
+      .map((item) => normalizedBundle(item.bundle));
   }
 
   async listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]> {
     const stored = await this.database.getAll<StoredQuestionSetBundle>(TutorIndexedDbStore.ContentQuestionSetBundles);
     return stored
-      .filter((item) => item.examCycleId === examCycleId && item.bundle.questionSet.status === QuestionSetStatus.Ready)
+      .filter((item) => (
+        item.examCycleId === examCycleId
+        && (
+          item.bundle.questionSet.status === QuestionSetStatus.Ready
+          || item.bundle.questionSet.status === QuestionSetStatus.Retired
+        )
+      ))
       .sort((left, right) => right.createdAt - left.createdAt)
       .map((item) => normalizedBundle(item.bundle));
   }
@@ -192,6 +206,27 @@ export class IndexedDbContentRepository implements ContentRepository {
     });
   }
 
+  async retireQuestionSet(questionSetId: QuestionSetId, context: TransactionContext): Promise<void> {
+    const stored = await this.database.get<StoredQuestionSetBundle>(
+      TutorIndexedDbStore.ContentQuestionSetBundles,
+      questionSetId
+    );
+    if (!stored) return;
+    const bundle = normalizedBundle(stored.bundle);
+    if (bundle.questionSet.status !== QuestionSetStatus.Ready) return;
+    this.transactionScope.stage(context, {
+      type: 'put',
+      store: TutorIndexedDbStore.ContentQuestionSetBundles,
+      value: {
+        ...stored,
+        bundle: {
+          ...bundle,
+          questionSet: { ...bundle.questionSet, status: QuestionSetStatus.Retired }
+        }
+      } satisfies StoredQuestionSetBundle
+    });
+  }
+
   async applyQuestionSetEnrichment(
     patch: QuestionSetEnrichmentPatch,
     context: TransactionContext
@@ -202,7 +237,10 @@ export class IndexedDbContentRepository implements ContentRepository {
     );
     if (!stored) return false;
     const current = normalizedBundle(stored.bundle);
-    if (current.questionSet.contentVersion !== patch.expectedContentVersion) return false;
+    if (
+      current.questionSet.status !== QuestionSetStatus.Ready
+      || current.questionSet.contentVersion !== patch.expectedContentVersion
+    ) return false;
 
     const questionPatches = new Map(patch.questions.map((question) => [question.id, question]));
     const documentPatches = patch.lecture

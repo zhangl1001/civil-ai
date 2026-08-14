@@ -1,4 +1,5 @@
 import type { InstantMs, JsonObject, PromptVersionId } from '@/kernel/public';
+import { SHARED_PROMPT_EXAM_TYPE } from '../prompt/PromptContracts';
 import type { PromptBundle } from '../prompt/PromptContracts';
 import { PromptSectionCode } from '../prompt/PromptContracts';
 import { GENERATION_AUTONOMY_LIMITS } from '../prompt/GenerationBoundaryPolicy';
@@ -42,7 +43,108 @@ const responseSchema: JsonObject = {
         required: ['id', 'markdown'],
         properties: {
           id: { type: 'string', minLength: 1 },
-          markdown: { type: 'string', minLength: 1 }
+          markdown: { type: 'string', minLength: 1 },
+          table: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['columns', 'rows'],
+            properties: {
+              caption: { type: 'string', minLength: 1 },
+              unit: { type: 'string', minLength: 1 },
+              columns: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 12,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['label'],
+                  properties: {
+                    label: { type: 'string', minLength: 1 },
+                    alignment: { type: 'string', enum: ['left', 'center', 'right'] },
+                    valueType: { type: 'string', enum: ['text', 'number', 'percent'] }
+                  }
+                }
+              },
+              rows: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 80,
+                items: {
+                  type: 'array',
+                  minItems: 2,
+                  maxItems: 12,
+                  items: { type: ['string', 'number', 'null'] }
+                }
+              },
+              sourceNote: { type: 'string', minLength: 1 }
+            }
+          },
+          chart: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['type', 'categories', 'series'],
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['bar', 'horizontal_bar', 'line', 'pie', 'doughnut', 'stacked_bar', 'combo', 'scatter']
+              },
+              title: { type: 'string', minLength: 1 },
+              unit: { type: 'string', minLength: 1 },
+              categories: {
+                type: 'array',
+                minItems: 0,
+                maxItems: 40,
+                items: { type: 'string', minLength: 1 }
+              },
+              series: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 8,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['label'],
+                  properties: {
+                    label: { type: 'string', minLength: 1 },
+                    values: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 40,
+                      items: { type: ['number', 'null'] }
+                    },
+                    points: {
+                      type: 'array',
+                      minItems: 1,
+                      maxItems: 80,
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        required: ['x', 'y'],
+                        properties: {
+                          x: { type: 'number' },
+                          y: { type: 'number' },
+                          label: { type: 'string', minLength: 1 }
+                        }
+                      }
+                    },
+                    renderAs: { type: 'string', enum: ['bar', 'line'] }
+                  }
+                }
+              },
+              sourceNote: { type: 'string', minLength: 1 }
+            }
+          },
+          visual: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['svg', 'alt'],
+            properties: {
+              svg: { type: 'string', minLength: 1 },
+              alt: { type: 'string', minLength: 1 },
+              viewBox: { type: 'string', minLength: 1 }
+            }
+          }
         }
       }
     },
@@ -142,13 +244,14 @@ const responseSchema: JsonObject = {
 };
 
 export const structuredObjectivePromptV2: PromptBundle = {
+  examType: SHARED_PROMPT_EXAM_TYPE,
   definitionId: 'prompt-definition:content-generate-structured-objective',
-  versionId: 'prompt-version:content-generate-structured-objective:v15' as PromptVersionId,
+  versionId: 'prompt-version:content-generate-structured-objective:v17' as PromptVersionId,
   promptCode: 'content.generate.aptitude.structured_objective',
   taskType: 'lecture_with_questions',
   description: '围绕指定能力节点生成结构化讲义与单选训练题',
-  version: '2.4.2',
-  contentHash: 'sha256:39d5f77ee1bb641d439e55e1b6c369c24723d507424442e273067c38194030ca',
+  version: '2.6.0',
+  contentHash: 'sha256:ed5c65ba89ebaa26aebc8aec8b8f8734554ca850d7571c1acaea634e02e2d308',
   createdAt: 1784016000000 as InstantMs,
   requiredVariables: ['QUESTION_COUNT', 'ASSESSMENT_ROLE', 'DIFFICULTY_MIN', 'DIFFICULTY_MAX'],
   compatibleSchemaVersions: ['content.v1', 'question.single_choice.v2'],
@@ -174,7 +277,7 @@ export const structuredObjectivePromptV2: PromptBundle = {
         '讲义应根据目标能力、学生证据和本次教学目的，自主选择最有帮助的章节、例子、方法和提醒，不为凑固定数量重复内容。',
         '每道题都必须评估当前目标能力节点。允许通过材料、难度和干扰项做前置能力或相邻迁移变化，但不得改变本题的目标能力归属。',
         '题目必须使用单选合同，但题干和选项可使用 GFM Markdown、表格或 visual 字段承载安全的 SVG。',
-        '资料分析优先把完整数据表保存到 materialGroups；数量关系解析必须给出关键算式；图形推理必须提供单个有 viewBox 的 SVG 画布并保持图形比例。',
+        '资料分析优先把完整数据表保存到 materialGroups.table，把柱状图、折线图、饼图、堆叠图、组合图或散点图保存到 materialGroups.chart；只有无法用统计数据表达的特殊示意图才使用 visual。',
         '长材料多问必须使用 materialGroups；普通单题不得为了排版而伪造公共材料组。'
       ].join('\n')
     },
@@ -208,6 +311,9 @@ export const structuredObjectivePromptV2: PromptBundle = {
         '论证、文段、实验、调查、案例和数据等作答依据必须完整放入 material，prompt 只写设问。prompt 如果指代“上述、以上、前述、题干、材料中、文中、该论证”等内容，对应 material 不得为 null。',
         '只有 prompt 自身已经包含全部事实、条件和关系、无需读取任何前文时，独立题的 material 才能为 null；禁止输出缺少前置材料的空设问。',
         '只有一个完整公共材料对应至少两道小题时才使用 materialGroups：公共材料只保存一次，每道小题用相同 materialGroupId 引用，且 material 必须为 null。',
+        'materialGroups.markdown 保存资料说明和必要文字；规则数据优先写入 table，统计图写入 chart，特殊示意图才写入 visual。不要在 markdown 中重复结构化块已承载的完整数据。',
+        'table.columns 按展示顺序描述列，table.rows 使用同顺序的单元格数组；行内单元格数量必须与列数一致。visual 必须是含 viewBox 的完整 SVG，并保持坐标和比例。',
+        'chart.categories 是横轴分类，chart.series.values 必须与分类数量一致；组合图用 renderAs 指定 bar 或 line，散点图使用 points 的 x/y 数值。图表颜色和移动端布局由应用统一决定，不要生成颜色或坐标像素。',
         '多段文字仍是一个完整材料，不得按段落拆成多个 materialGroups；小题问法只写入 prompt，不得混进公共材料。',
         'options 按 A、B、C……顺序输出 2 至 8 项；标准行测通常使用 A、B、C、D，option.id 可以省略并由应用确定性注入；correctOptionId 必须引用实际存在的选项。',
         '数学公式仅在有助于理解或作答时使用 KaTeX 兼容 LaTeX：行内公式使用 $...$，独立公式使用 $$...$$，百分号写成 \\%。由于公式位于 JSON 字符串内，LaTeX 反斜杠必须按 JSON 规则转义，例如源内容 \\frac 在 JSON 中写成 \\\\frac；不得用代码块或反引号包裹公式。',

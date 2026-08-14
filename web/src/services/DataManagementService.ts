@@ -9,6 +9,7 @@ import type {
   LearningEvidenceRecord,
   ObjectiveSessionFacts
 } from '@/modules/evidence/public';
+import { isMistakenAttempt } from '@/modules/evidence/public';
 import type { MasteryTrack, ReviewQueueItem } from '@/modules/mastery/public';
 import type { DailyPlanAggregate } from '@/modules/planning/public';
 import type { LearningThreadAggregate } from '@/modules/teaching/public';
@@ -136,7 +137,7 @@ export class DataManagementService {
     const backup = await this.exportActiveProject();
     const questions = backup.learning.questionSets.reduce((sum, bundle) => sum + bundle.questions.length, 0);
     const wrongItems = backup.learning.sessions.reduce((sum, facts) => (
-      sum + facts.attempts.filter((attempt) => attempt.result === 'incorrect').length
+      sum + facts.attempts.filter((attempt) => isMistakenAttempt(attempt.result)).length
     ), 0);
     return {
       projectName: backup.project.name,

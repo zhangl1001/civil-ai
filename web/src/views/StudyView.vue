@@ -1,6 +1,6 @@
 <template>
   <div class="study-page app-page">
-    <PageHeader :title="lectureTitle || '考点精讲'" :meta="lectureTitle ? 'AI 私教讲义' : activeModule || '按大纲学习和补弱'">
+    <PageHeader :title="lectureTitle || '考点精讲'" :meta="lectureTitle ? 'AI 私教讲义' : activeModuleLabel || '按大纲学习和补弱'">
       <template #actions>
         <HeaderMoreMenu title="精讲设置" subtitle="筛选模块">
           <div class="menu-field">
@@ -14,7 +14,7 @@
                 :class="{ active: activeModule === module.name }"
                 @click="activeModule = module.name"
               >
-                {{ module.name }}
+                {{ practiceModuleLabel(module.name) }}
               </button>
             </div>
           </div>
@@ -35,16 +35,27 @@
       />
       <template v-else-if="lectureContent">
         <LectureContent :markdown="lectureContent" surface />
-        <button
-          v-if="!lectureCompleted"
-          type="button"
-          class="complete-learning-button"
-          :disabled="isCompleting"
-          @click="completeLecture"
-        >
-          <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成本节' }}
-        </button>
-        <p v-else class="completion-notice"><CheckCircle2Icon />本节已完成，下一步请用练习验证掌握</p>
+        <div class="lecture-action-row">
+          <button
+            v-if="!lectureCompleted"
+            type="button"
+            class="complete-learning-button"
+            :disabled="isCompleting"
+            @click="completeLecture"
+          >
+            <CheckCircle2Icon />{{ isCompleting ? '正在更新计划' : '完成讲义' }}
+          </button>
+          <p v-else class="completion-notice"><CheckCircle2Icon />本节已完成</p>
+          <button
+            v-if="loadedTopic"
+            type="button"
+            class="regenerate-lecture-button"
+            :disabled="isDispatching"
+            @click="regenerateLecture"
+          >
+            <RefreshCwIcon />{{ isDispatching ? '正在重新生成' : '换一版讲义' }}
+          </button>
+        </div>
       </template>
       <template v-else-if="dashboard">
         <section class="study-hero app-card">
@@ -72,7 +83,7 @@
               <i><BookOpenIcon /></i>
               <span>
                 <strong>{{ lecture.title }}</strong>
-                <em>{{ lecture.module }} · {{ formatLectureTime(lecture.updatedAt) }}</em>
+                <em>{{ practiceModuleLabel(lecture.module) }} · {{ formatLectureTime(lecture.updatedAt) }}</em>
               </span>
               <ChevronRightIcon />
             </button>
@@ -84,7 +95,7 @@
           <div v-if="!dashboard.weakPoints.length" class="inline-empty">完成练习后自动显示薄弱考点</div>
           <button v-for="(point, index) in dashboard.weakPoints" :key="`${point.module}-${point.name}`" type="button" class="weak-card" @click="learn(point)">
             <i :class="index === 0 ? 'danger' : index < 3 ? 'warn' : 'info'">{{ index + 1 }}</i>
-            <div><strong>{{ point.name }}</strong><span>{{ point.module }} · {{ point.reason }}</span></div>
+            <div><strong>{{ point.name }}</strong><span>{{ practiceModuleLabel(point.module) }} · {{ point.reason }}</span></div>
             <em>{{ point.evidenceScore }}%</em>
           </button>
         </section>
@@ -93,7 +104,7 @@
           <SectionHeading title="知识体系" :meta="`${visibleModules.length} 个模块`" />
           <article v-for="module in visibleModules" :key="module.name" class="tree-module">
             <button type="button" class="tree-head" @click="toggle(module.name)">
-              <BookOpenIcon /><strong>{{ module.name }}</strong><span>{{ module.total }} 个考点</span>
+              <BookOpenIcon /><strong>{{ practiceModuleLabel(module.name) }}</strong><span>{{ module.total }} 个考点</span>
             </button>
             <div v-show="opened.has(module.name)" class="tree-body">
               <div v-for="group in module.groups" :key="group.name" class="tree-group">
@@ -115,9 +126,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { BookOpenIcon, CheckCircle2Icon, ChevronRightIcon, SearchIcon } from 'lucide-vue-next';
+import { BookOpenIcon, CheckCircle2Icon, ChevronRightIcon, RefreshCwIcon, SearchIcon } from 'lucide-vue-next';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { studyService, type StudyDashboard, type StudyLectureSummary, type StudyPoint } from '@/services/StudyService';
+import {
+  studyLectureDisplayTitle,
+  studyService,
+  type StudyDashboard,
+  type StudyLectureEntry,
+  type StudyLectureSummary,
+  type StudyPoint
+} from '@/services/StudyService';
+import { practiceModuleLabel } from '@/domain/labels';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import HeaderMoreMenu from '@/components/layout/HeaderMoreMenu.vue';
 import { AppStateView, PullToRefresh, SectionHeading } from '@/capabilities/design-system/public';
@@ -143,9 +162,14 @@ const isDispatching = ref(false);
 const isCompleting = ref(false);
 const lectureCompleted = ref(false);
 const loadedCapabilityNodeId = ref('');
+// Identity of the lecture on screen, so "换一版讲义" can re-request the same
+// knowledge point without routing back through the dashboard.
+const loadedModule = ref('');
+const loadedTopic = ref('');
 
 const dailyPlanItemId = computed(() => typeof route.query.dailyPlanItemId === 'string' ? route.query.dailyPlanItemId : '');
 const capabilityNodeId = computed(() => typeof route.query.capabilityNodeId === 'string' ? route.query.capabilityNodeId : '');
+const activeModuleLabel = computed(() => activeModule.value ? practiceModuleLabel(activeModule.value) : '');
 const visibleTask = computed(() => {
   const task = taskCenter.runs.find((candidate) => candidate.id === trackedTaskId.value)
     || (taskSnapshot.value?.id === trackedTaskId.value ? taskSnapshot.value : undefined);
@@ -199,16 +223,28 @@ async function load() {
     lectureTitle.value = '';
     lectureCompleted.value = false;
     loadedCapabilityNodeId.value = '';
+    loadedModule.value = '';
+    loadedTopic.value = '';
     const assetId = typeof route.query.assetId === 'string' ? route.query.assetId : '';
     if (assetId) {
       const runtime = await initializeTutorRuntime();
       const asset = await runtime.learningAssetStore.find(assetId);
       lectureContent.value = typeof asset?.payload.content === 'string' ? asset.payload.content : '';
-      lectureTitle.value = asset?.title || '';
+      const sourceModule = typeof asset?.payload.moduleCode === 'string'
+        ? asset.payload.moduleCode
+        : typeof asset?.payload.module === 'string' ? asset.payload.module : '';
+      const moduleLabel = typeof asset?.payload.moduleLabel === 'string'
+        ? asset.payload.moduleLabel
+        : practiceModuleLabel(sourceModule);
+      lectureTitle.value = asset?.title
+        ? studyLectureDisplayTitle(asset.title, sourceModule, moduleLabel)
+        : '';
       const assetCapabilityNodeId = typeof asset?.payload.capabilityNodeId === 'string'
         ? asset.payload.capabilityNodeId
         : capabilityNodeId.value || undefined;
       loadedCapabilityNodeId.value = assetCapabilityNodeId || '';
+      loadedModule.value = sourceModule;
+      loadedTopic.value = typeof asset?.payload.topic === 'string' ? asset.payload.topic : '';
       if (lectureContent.value) {
         const progress = await studyService.markLectureStarted({
           assetId,
@@ -235,17 +271,52 @@ async function load() {
   }
 }
 
+/**
+ * Routes the outcome of a lecture request. An already written lecture is
+ * opened straight away; only a genuinely new one falls through to the task UI.
+ */
+async function presentLectureEntry(entry: StudyLectureEntry, replace = false): Promise<void> {
+  if (entry.kind === 'ready') {
+    await openLecture(entry.assetId, entry.capabilityNodeId, { replace });
+    return;
+  }
+  trackedTaskId.value = entry.task.id;
+  taskSnapshot.value = entry.task;
+  await taskCenter.refresh();
+}
+
 async function startPlanLecture() {
   if (isDispatching.value || visibleTask.value?.isActive || !dailyPlanItemId.value) return;
   isDispatching.value = true;
   try {
-    const result = await studyService.startDailyPlanLecture({
+    await presentLectureEntry(await studyService.startDailyPlanLecture({
       dailyPlanItemId: dailyPlanItemId.value,
       capabilityNodeId: capabilityNodeId.value || undefined
-    });
-    trackedTaskId.value = result.task.id;
-    taskSnapshot.value = result.task;
-    await taskCenter.refresh();
+    }), true);
+  } finally {
+    isDispatching.value = false;
+  }
+}
+
+/** Deliberate opt-in to spending a generation on a point that already has one. */
+async function regenerateLecture() {
+  if (isDispatching.value || !loadedTopic.value) return;
+  isDispatching.value = true;
+  try {
+    await presentLectureEntry(await studyService.startLearning(
+      {
+        module: loadedModule.value || undefined,
+        name: loadedTopic.value,
+        capabilityNodeId: loadedCapabilityNodeId.value || undefined
+      },
+      dailyPlanItemId.value
+        ? {
+            dailyPlanItemId: dailyPlanItemId.value,
+            capabilityNodeId: loadedCapabilityNodeId.value || undefined
+          }
+        : undefined,
+      { regenerate: true }
+    ), true);
   } finally {
     isDispatching.value = false;
   }
@@ -277,11 +348,22 @@ async function completeLecture() {
   }
 }
 
-async function openLecture(assetId: string, capabilityNodeId?: string) {
-  await router.push({
+/** Single way into a stored lecture, so plan linkage is never dropped en route. */
+async function openLecture(
+  assetId: string,
+  capabilityNode?: string,
+  options: { readonly replace?: boolean } = {}
+) {
+  const target = {
     path: '/vue/study/lecture',
-    query: { assetId, ...(capabilityNodeId ? { capabilityNodeId } : {}) }
-  });
+    query: {
+      assetId,
+      ...(dailyPlanItemId.value ? { dailyPlanItemId: dailyPlanItemId.value } : {}),
+      ...(capabilityNode ? { capabilityNodeId: capabilityNode } : {}),
+      ...(typeof route.query.source === 'string' ? { source: route.query.source } : {})
+    }
+  };
+  await (options.replace ? router.replace(target) : router.push(target));
 }
 
 function formatLectureTime(value: number): string {
@@ -299,19 +381,16 @@ function toggle(moduleName: string) {
 }
 
 async function learn(point: StudyPoint) {
-  const result = await studyService.startLearning(point);
-  trackedTaskId.value = result.task.id;
-  taskSnapshot.value = result.task;
   query.value = point.name;
-  await taskCenter.refresh();
+  await presentLectureEntry(await studyService.startLearning(point));
 }
 
 async function learnQuery() {
   if (!query.value) return;
-  const result = await studyService.startLearning({ module: activeModule.value || undefined, name: query.value });
-  trackedTaskId.value = result.task.id;
-  taskSnapshot.value = result.task;
-  await taskCenter.refresh();
+  await presentLectureEntry(await studyService.startLearning({
+    module: activeModule.value || undefined,
+    name: query.value
+  }));
 }
 
 </script>
@@ -366,7 +445,11 @@ async function learnQuery() {
 .tree-group div { display:flex; flex-wrap:wrap; gap:7px; }
 .tree-group button { max-width:100%; min-height:31px; padding:0 10px; border:0; border-radius:9px; background:rgba(var(--color-ink-rgb), .06); color:var(--text-color); font-size: var(--type-size-caption); font-weight: var(--type-weight-semibold); font-family: inherit; }
 .tree-group span { display:inline-flex; align-items:center; justify-content:center; min-width:15px; height:15px; margin-left:4px; padding:0 4px; border-radius:8px; background:#dc2626; color:#fff; font-size: var(--type-size-micro); }
-.complete-learning-button { align-self:center; min-height:40px; border:0; border-radius:20px; padding:0 18px; display:inline-flex; align-items:center; gap:7px; background:rgba(var(--color-brand-rgb),.13); color:var(--primary-color); font:inherit; font-size:var(--type-size-secondary); font-weight:var(--type-weight-semibold); }
-.complete-learning-button svg,.completion-notice svg { width:16px; height:16px; }
-.completion-notice { margin:0; display:flex; align-items:center; justify-content:center; gap:7px; color:var(--primary-color); font-size:var(--type-size-caption); }
+.lecture-action-row { display:flex; align-items:center; justify-content:center; gap:8px; padding:2px 6px 6px; }
+.complete-learning-button { min-width:0; min-height:40px; border:0; border-radius:20px; padding:0 18px; display:inline-flex; align-items:center; justify-content:center; gap:7px; background:rgba(var(--color-brand-rgb),.12); color:var(--primary-color); font:inherit; font-size:var(--type-size-secondary); font-weight:var(--type-weight-semibold); }
+.complete-learning-button svg,.completion-notice svg,.regenerate-lecture-button svg { width:16px; height:16px; }
+/* Regeneration remains available without competing with the completion action. */
+.regenerate-lecture-button { min-height:36px; border:0; border-radius:18px; padding:0 12px; display:inline-flex; align-items:center; justify-content:center; gap:5px; background:rgba(var(--color-ink-rgb),.035); color:rgba(var(--color-ink-rgb),.52); font:inherit; font-size:var(--type-size-caption); font-weight:var(--type-weight-medium); }
+.regenerate-lecture-button:disabled { opacity:.55; }
+.completion-notice { min-height:40px; margin:0; padding:0 10px; display:flex; align-items:center; justify-content:center; gap:6px; color:var(--primary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 </style>

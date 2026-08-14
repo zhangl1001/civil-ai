@@ -1,6 +1,7 @@
 import { agentWorkerCoordinator } from '@/composition-root/agent/AgentWorkerCoordinator';
 import { initializeTutorRuntime, type TutorDatabaseRuntime } from '@/composition-root/public';
 import type { JsonObject, JsonValue } from '@/kernel/public';
+import { ExamDeliveryKind } from '@/modules/curriculum/public';
 import {
   AgentRunType,
   TaskTargetType,
@@ -142,7 +143,9 @@ function routeForInput(input: GenerationTaskInput): string {
   if (intent === 'practice' || intent === 'redo') return '/vue/practice/session';
   if (intent === 'essayGrade') return '/vue/essay';
   if (intent === 'interviewReview' || intent === 'interviewQuestions') return '/vue/interview';
-  if (intent === 'mock') return input.payload?.subject === '申论' ? '/vue/essay' : '/vue/exam';
+  if (intent === 'mock') {
+    return input.payload?.deliveryKind === ExamDeliveryKind.Subjective ? '/vue/essay' : '/vue/exam';
+  }
   if (intent === 'monthlyDigest') return '/vue/monthly-digest';
   if (intent === 'trueQuestionResearch') return '/vue/practice';
   if (intent === 'daily' || intent === 'digest') return '/vue/digest';

@@ -1,4 +1,5 @@
 import type { TransactionContext } from '@/capabilities/database/public';
+import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import type {
   AgentRunId,
   CapabilityNodeId,
@@ -160,6 +161,11 @@ export interface QuestionSetRecord {
   readonly questionCount: number;
   readonly contentHash?: string;
   readonly contentVersion: number;
+  /**
+   * Grading rule frozen at publish time. Absent for sets published before
+   * snapshots existed, which grade against the active package rule.
+   */
+  readonly gradingPolicy?: QuestionSetGradingPolicy;
   readonly createdAt: InstantMs;
 }
 
@@ -288,12 +294,14 @@ export interface ContentRepository {
   ): Promise<readonly QuestionSetLibraryEntry[]>;
   queryQuestionSetLibrary(query: QuestionSetLibraryQuery): Promise<readonly QuestionSetLibraryEntry[]>;
   listQuestionSets(examCycleId: ExamCycleId, limit: number): Promise<readonly CommittedQuestionSetBundle[]>;
+  /** Includes ready and retired sets so backups retain content referenced by completed learning facts. */
   listAllQuestionSets(examCycleId: ExamCycleId): Promise<readonly CommittedQuestionSetBundle[]>;
   updateQuestionSetPracticeStatus(
     questionSetId: QuestionSetId,
     status: QuestionSetPracticeStatus,
     context: TransactionContext
   ): Promise<void>;
+  retireQuestionSet(questionSetId: QuestionSetId, context: TransactionContext): Promise<void>;
   applyQuestionSetEnrichment(
     patch: QuestionSetEnrichmentPatch,
     context: TransactionContext

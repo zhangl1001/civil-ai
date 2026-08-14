@@ -1,12 +1,14 @@
 import { digestService } from '@/services/DigestService';
+import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import { essayFlowService, type EssayGenerationContext } from '@/services/EssayFlowService';
 import { examFlowService } from '@/services/ExamFlowService';
 import { monthlyDigestService } from '@/services/MonthlyDigestService';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import { practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
+import { curriculumModuleOptions, practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
+import { defaultShortFormTopic, isLongFormTopic } from '@/domain/writtenFormats';
 import { AssessmentRole } from '@/kernel/public';
 import { QuestionSetEntryMode } from '@/modules/content/public';
-import type { CapabilityNode } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, type CapabilityNode } from '@/modules/curriculum/public';
 import type { MasteryTrack } from '@/modules/mastery/public';
 import { StructuredPracticeTaskCenter } from '@/features/practice/StructuredPracticeTaskCenter';
 import { selectPriorityOrCoverageCapability } from '@/features/practice/CapabilitySelection';
@@ -70,8 +72,11 @@ export class AIBusinessTools {
         knowledgePoint,
         tracks
       );
-      const moduleLabel = capability?.module ? practiceModuleLabel(capability.module) : requestedModule || '行测';
-      if (!capability) throw new Error(`当前大纲还没有可训练的“${requestedModule}”细分能力，请换一个已开放模块。`);
+      // Tool schemas cannot enumerate modules, because the installed exam pack
+      // decides them. An unusable value is rejected with the valid set so the
+      // model can correct itself on the next call.
+      if (!capability) throw new Error(unusableModuleMessage(requestedModule, curriculum.capabilityNodes));
+      const moduleLabel = practiceModuleLabel(capability.module);
       const count = Math.min(20, Math.max(1, Math.round(asNumber(args.questionCount, review ? 6 : 8))));
       const scopeKey = `practice:${review ? 'review' : 'chat'}:${capability.id}`;
       const task = await new StructuredPracticeTaskCenter(runtime).start({
@@ -99,20 +104,22 @@ export class AIBusinessTools {
     }
 
     if (call.name === 'generate_mock') {
+      const subject = await examFlowService.findMockSubject(ExamDeliveryKind.Objective);
+      const mockExam = subject.mockExam;
       const result = await examFlowService.startMock({
-        subject: '行测',
+        subjectCode: subject.code,
         date: today(),
-        questionCount: asNumber(args.questionCount, 120),
-        durationMinutes: 120,
+        questionCount: asNumber(args.questionCount, mockExam?.defaultQuestionCount ?? 120),
+        durationMinutes: mockExam?.defaultDurationMinutes ?? 120,
         tags: [],
         essayType: 'short'
       }, meta.idempotencyKey);
-      return { taskId: result.task.id, reply: taskReply(result, '行测模考') };
+      return { taskId: result.task.id, reply: taskReply(result, `${subject.name}模考`) };
     }
 
     if (call.name === 'generate_essay') {
-      const essayTopic = asString(args.essayTopic) || '申论小题';
-      const essayType = args.essayType === 'long' || essayTopic === '申发论述' ? 'long' : 'short';
+      const essayTopic = asString(args.essayTopic) || defaultShortFormTopic() || '';
+      const essayType = args.essayType === 'long' || isLongFormTopic(essayTopic) ? 'long' : 'short';
       const context: EssayGenerationContext = {
         date: today(),
         topic: essayTopic,
@@ -169,6 +176,18 @@ export class AIBusinessTools {
   }
 }
 
+function unusableModuleMessage(requestedModule: string, nodes: readonly CapabilityNode[]): string {
+  const objectiveModules = new Set(nodes
+    .filter((node) => node.status === 'active' && objectiveSubjectCodes().has(node.subject))
+    .map((node) => node.module));
+  const available = curriculumModuleOptions().filter((item) => objectiveModules.has(item.code));
+  const offered = available.map((item) => `${item.code}（${item.name}）`).join('、');
+  const wanted = requestedModule ? `“${requestedModule}”` : '默认模块';
+  return offered
+    ? `当前大纲没有可训练的${wanted}。可用模块：${offered}。`
+    : `当前大纲还没有可训练的${wanted}。`;
+}
+
 function resolvePracticeCapability(
   nodes: readonly CapabilityNode[],
   requestedModule: string,
@@ -176,10 +195,11 @@ function resolvePracticeCapability(
   tracks: readonly MasteryTrack[]
 ): CapabilityNode | undefined {
   const moduleCode = practiceModuleCode(requestedModule);
+  const objective = objectiveSubjectCodes();
   const trainable = nodes
     .filter((node) => (
       node.status === 'active'
-      && node.subject === 'aptitude'
+      && objective.has(node.subject)
       && (!moduleCode || node.module === moduleCode)
       && (node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point')
     ))

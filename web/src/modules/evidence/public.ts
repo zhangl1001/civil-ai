@@ -8,6 +8,7 @@ export {
   LearningSessionType,
   LearningSessionStatus,
   AttemptResult,
+  isMistakenAttempt,
   GradingMethod,
   ConfirmationStatus,
   ErrorCauseCode,
@@ -22,6 +23,19 @@ export {
   QuestionExposureType
 } from './domain/EvidenceCodes';
 export { errorCauseLabel } from './domain/ErrorCausePresentation';
+export {
+  choiceAttemptAnswer,
+  submittedAnswerLabel,
+  submittedOptionIds
+} from './domain/ChoiceAttemptAnswer';
+export {
+  CHOICE_GRADER_VERSION,
+  choiceGraderVersion,
+  DEFAULT_CHOICE_GRADING_RULE,
+  gradeChoiceAnswer,
+  type ChoiceAnswerGrade,
+  type ChoiceGradingRule
+} from './domain/ChoiceGradingPolicy';
 export type {
   AttemptRecord,
   DecisionObservationRecord,

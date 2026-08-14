@@ -1,4 +1,5 @@
 import type { InstantMs, JsonObject, PromptVersionId } from '@/kernel/public';
+import { SHARED_PROMPT_EXAM_TYPE } from '../prompt/PromptContracts';
 import type { PromptBundle } from '../prompt/PromptContracts';
 import { PromptSectionCode } from '../prompt/PromptContracts';
 
@@ -80,13 +81,14 @@ const responseSchema: JsonObject = {
 };
 
 export const questionSetEnrichmentPromptV1: PromptBundle = {
+  examType: SHARED_PROMPT_EXAM_TYPE,
   definitionId: 'prompt-definition:content-enrich-question-set',
   versionId: 'prompt-version:content-enrich-question-set:v1' as PromptVersionId,
   promptCode: 'content.enrich.question_set',
   taskType: 'content_enrichment',
   description: '在题组可作答后，仅补全缺失的讲义和逐题解析，不改动题干、选项、答案或材料',
   version: '1.0.0',
-  contentHash: 'sha256:1427b71337ea777e0beb2f44848527e9fcdc69c684b3b9ef7876491003728b44',
+  contentHash: 'sha256:5a36f462335cebea7c99a2d64c59e189c9d137e04e340c12ae7c19311621c67f',
   createdAt: 1785283200000 as InstantMs,
   requiredVariables: [],
   compatibleSchemaVersions: ['content.v1', 'question.single_choice.v2'],
