@@ -1,4 +1,4 @@
-import { gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
+import { choiceGradingRuleForCapabilityNode, gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
 import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { IndexedDbTransactionScope, IndexedDbUnitOfWork } from '@/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork';
 import { TutorIndexedDb } from '@/capabilities/database/adapters/indexeddb/TutorIndexedDb';
@@ -18,7 +18,6 @@ import {
 import { IndexedDbCurriculumRepository } from '@/modules/curriculum/adapters/IndexedDbCurriculumRepository';
 import { createBundledCurriculumPacks, EnsureCurriculumBundle } from '@/modules/curriculum/public';
 import { InstallExamPacks } from '../curriculum/InstallExamPacks';
-import { choiceGradingRule } from '@/domain/choiceGradingRules';
 import { IndexedDbOutboxRepository } from '@/modules/task/adapters/IndexedDbOutboxRepository';
 import { IndexedDbCommandReceiptRepository } from '@/modules/task/adapters/IndexedDbCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -277,7 +276,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     outboxRepository,
     clock,
     new UuidV7IdGenerator(clock),
-    choiceGradingRule
+    choiceGradingRuleForCapabilityNode
   );
   const correctLearningEvidence = new CorrectLearningEvidence(
     unitOfWork,

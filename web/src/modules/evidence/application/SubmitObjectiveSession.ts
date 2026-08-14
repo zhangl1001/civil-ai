@@ -102,7 +102,7 @@ export class SubmitObjectiveSession {
      * app state inside the grader, so this use case stays testable and the
      * domain policy stays pure.
      */
-    private readonly choiceGradingRule: () => ChoiceGradingRule = () => DEFAULT_CHOICE_GRADING_RULE
+    private readonly choiceGradingRule: (capabilityNodeId: CapabilityNodeId) => ChoiceGradingRule = () => DEFAULT_CHOICE_GRADING_RULE
   ) {}
 
   async execute(command: SubmitObjectiveSessionCommand): Promise<ObjectiveSessionSubmissionResult> {
@@ -140,7 +140,8 @@ export class SubmitObjectiveSession {
       selectedQuestions,
       command.assessmentRole ?? questionSet.questionSet.assessmentRole,
       targetQuestionMs(questionSet.generationSpec?.constraints, selectedQuestions.length),
-      questionSet.questionSet.gradingPolicy
+      questionSet.questionSet.gradingPolicy,
+      questionSet.questionSet.capabilityNodeId
     );
     try {
       await this.unitOfWork.run(async (context) => {
@@ -203,11 +204,12 @@ export class SubmitObjectiveSession {
     /**
      * Rule frozen onto the question set when it was published. Absent only for
      * sets published before snapshots existed, which fall back to the active
-     * package rule — the behaviour they were always graded under.
+     * package rule for their own capability subject.
      */
-    gradingPolicy?: QuestionSetGradingPolicy
+    gradingPolicy: QuestionSetGradingPolicy | undefined,
+    capabilityNodeId: CapabilityNodeId
   ): ObjectiveSubmissionBundle {
-    const gradingRule = gradingPolicy ?? this.choiceGradingRule();
+    const gradingRule = gradingPolicy ?? this.choiceGradingRule(capabilityNodeId);
     const answerByQuestionId = new Map(command.answers.map((item) => [item.questionId, item]));
     if (answerByQuestionId.size !== command.answers.length) throw new Error('Each question can be submitted once per session');
     const expected = new Set(questions.map((item) => item.id));

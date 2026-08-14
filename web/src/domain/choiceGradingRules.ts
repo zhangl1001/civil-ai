@@ -39,6 +39,11 @@ export function choiceGradingRule(subject?: string): ChoiceGradingRule {
   };
 }
 
+/** Resolves the active package rule when a legacy question set has no frozen policy. */
+export function choiceGradingRuleForCapabilityNode(capabilityNodeId: string | undefined): ChoiceGradingRule {
+  return choiceGradingRule(subjectOfCapabilityNode(capabilityNodeId));
+}
+
 /**
  * The snapshot a question set published now should freeze, for the subject the
  * given capability node belongs to.

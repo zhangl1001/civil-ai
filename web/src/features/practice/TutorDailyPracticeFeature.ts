@@ -69,13 +69,21 @@ export class TutorDailyPracticeFeature {
     const executableItems = plan?.items.filter((item) => (
       item.status === 'pending' || item.status === 'in_progress'
     )) ?? [];
-    const planItem = (
-      preference.planItemId
-        ? executableItems.find((item) => item.id === preference.planItemId)
-        : undefined
-    ) ?? executableItems[0];
     const objective = objectiveSubjectCodes();
     const nodes = curriculum.capabilityNodes.filter((node) => node.status === 'active' && objective.has(node.subject));
+    const objectiveCapabilityIds = new Set(nodes.map((node) => node.id));
+    const objectiveItems = executableItems.filter((item) => objectiveCapabilityIds.has(item.capabilityNodeId));
+    const requestedPlanItem = preference.planItemId
+      ? executableItems.find((item) => item.id === preference.planItemId)
+      : undefined;
+    if (requestedPlanItem && !objectiveCapabilityIds.has(requestedPlanItem.capabilityNodeId)) {
+      throw new Error('所选每日计划项不是客观题练习，请从对应科目入口继续。');
+    }
+    const planItem = (
+      preference.planItemId
+        ? objectiveItems.find((item) => item.id === preference.planItemId)
+        : undefined
+    ) ?? objectiveItems[0];
     const explicitlyRequested = nodes.find((node) => node.id === preference.capabilityNodeId)
       ?? nodes.find((node) => preference.module && node.module === preference.module);
     const effectivePlanItem = explicitlyRequested && planItem?.capabilityNodeId !== explicitlyRequested.id
@@ -170,8 +178,15 @@ export class TutorDailyPracticeFeature {
   private async resolveFallbackCapability(
     nodes: readonly CapabilityNode[]
   ): Promise<CapabilityNode | undefined> {
-    const snapshot = await this.runtime.buildLearnerPrioritySnapshot.execute({ subject: 'aptitude' as SubjectCode });
-    const selected = snapshot?.priorities.find((item) => nodes.some((node) => node.id === item.capabilityNodeId));
+    const subjects = [...new Set(nodes.map((node) => node.subject))];
+    const snapshots = await Promise.all(subjects.map((subject) => (
+      this.runtime.buildLearnerPrioritySnapshot.execute({ subject: subject as SubjectCode })
+    )));
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const selected = snapshots
+      .flatMap((snapshot) => snapshot?.priorities ?? [])
+      .filter((item) => nodeIds.has(item.capabilityNodeId))
+      .sort((left, right) => right.priority - left.priority)[0];
     return selected ? nodes.find((node) => node.id === selected.capabilityNodeId) : nodes[0];
   }
 }

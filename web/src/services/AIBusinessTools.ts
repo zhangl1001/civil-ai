@@ -1,13 +1,14 @@
 import { digestService } from '@/services/DigestService';
+import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import { essayFlowService, type EssayGenerationContext } from '@/services/EssayFlowService';
 import { examFlowService } from '@/services/ExamFlowService';
 import { monthlyDigestService } from '@/services/MonthlyDigestService';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { curriculumModuleOptions, practiceModuleCode, practiceModuleLabel } from '@/domain/labels';
 import { defaultShortFormTopic, isLongFormTopic } from '@/domain/writtenFormats';
-import { AssessmentRole, type SubjectCode } from '@/kernel/public';
+import { AssessmentRole } from '@/kernel/public';
 import { QuestionSetEntryMode } from '@/modules/content/public';
-import { ExamDeliveryKind, projectExamSubjects, type CapabilityNode } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, type CapabilityNode } from '@/modules/curriculum/public';
 import type { MasteryTrack } from '@/modules/mastery/public';
 import { StructuredPracticeTaskCenter } from '@/features/practice/StructuredPracticeTaskCenter';
 import { selectPriorityOrCoverageCapability } from '@/features/practice/CapabilitySelection';
@@ -65,11 +66,8 @@ export class AIBusinessTools {
       const requestedModule = asString(args.module);
       const knowledgePoint = asString(args.knowledgePoint);
       const tracks = await runtime.masteryRepository.listPriorityTracks(cycle.examCycle.id, 100);
-      const objectiveSubject = projectExamSubjects(curriculum)
-        .find((subject) => subject.deliveryKind === ExamDeliveryKind.Objective);
-      const capability = objectiveSubject && resolvePracticeCapability(
+      const capability = resolvePracticeCapability(
         curriculum.capabilityNodes,
-        objectiveSubject.code,
         requestedModule,
         knowledgePoint,
         tracks
@@ -77,7 +75,7 @@ export class AIBusinessTools {
       // Tool schemas cannot enumerate modules, because the installed exam pack
       // decides them. An unusable value is rejected with the valid set so the
       // model can correct itself on the next call.
-      if (!capability) throw new Error(unusableModuleMessage(requestedModule));
+      if (!capability) throw new Error(unusableModuleMessage(requestedModule, curriculum.capabilityNodes));
       const moduleLabel = practiceModuleLabel(capability.module);
       const count = Math.min(20, Math.max(1, Math.round(asNumber(args.questionCount, review ? 6 : 8))));
       const scopeKey = `practice:${review ? 'review' : 'chat'}:${capability.id}`;
@@ -178,8 +176,11 @@ export class AIBusinessTools {
   }
 }
 
-function unusableModuleMessage(requestedModule: string): string {
-  const available = curriculumModuleOptions();
+function unusableModuleMessage(requestedModule: string, nodes: readonly CapabilityNode[]): string {
+  const objectiveModules = new Set(nodes
+    .filter((node) => node.status === 'active' && objectiveSubjectCodes().has(node.subject))
+    .map((node) => node.module));
+  const available = curriculumModuleOptions().filter((item) => objectiveModules.has(item.code));
   const offered = available.map((item) => `${item.code}（${item.name}）`).join('、');
   const wanted = requestedModule ? `“${requestedModule}”` : '默认模块';
   return offered
@@ -189,16 +190,16 @@ function unusableModuleMessage(requestedModule: string): string {
 
 function resolvePracticeCapability(
   nodes: readonly CapabilityNode[],
-  subject: SubjectCode,
   requestedModule: string,
   knowledgePoint: string,
   tracks: readonly MasteryTrack[]
 ): CapabilityNode | undefined {
   const moduleCode = practiceModuleCode(requestedModule);
+  const objective = objectiveSubjectCodes();
   const trainable = nodes
     .filter((node) => (
       node.status === 'active'
-      && node.subject === subject
+      && objective.has(node.subject)
       && (!moduleCode || node.module === moduleCode)
       && (node.nodeType === 'sub_point' || node.nodeType === 'knowledge_point')
     ))

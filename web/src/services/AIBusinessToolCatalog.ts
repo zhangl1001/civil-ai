@@ -51,11 +51,11 @@ export interface AIBusinessToolExecuteMeta {
 export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
   {
     name: 'generate_practice',
-    description: '生成行测专项练习题，适用于用户要求按模块、考点、题量刷题或出题。',
+    description: '生成当前考试包的客观题专项练习，适用于用户要求按模块、考点、题量刷题或出题。',
     impact: generationImpact({ argument: 'questionCount', value: 25 }),
     parameters: {
       type: 'object',
-      required: ['module'],
+      required: [],
       properties: {
         module: {
           type: 'string',
@@ -69,7 +69,7 @@ export const AI_BUSINESS_TOOLS: readonly AIBusinessToolDefinition[] = [
   },
   {
     name: 'generate_mock',
-    description: '生成行测模考试卷，适用于用户要求模考、套卷、模拟考试。',
+    description: '生成当前考试包的客观题模考试卷，适用于用户要求模考、套卷、模拟考试。',
     impact: highGenerationImpact(),
     parameters: {
       type: 'object',

@@ -1,4 +1,4 @@
-import { gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
+import { choiceGradingRuleForCapabilityNode, gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
 import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { Capacitor } from '@capacitor/core';
 import { CapacitorSqliteDatabase } from '@/capabilities/database/adapters/sqlite/CapacitorSqliteDatabase';
@@ -22,7 +22,6 @@ import {
 import { SqliteCurriculumRepository } from '@/modules/curriculum/adapters/SqliteCurriculumRepository';
 import { createBundledCurriculumPacks, EnsureCurriculumBundle } from '@/modules/curriculum/public';
 import { InstallExamPacks } from '../curriculum/InstallExamPacks';
-import { choiceGradingRule } from '@/domain/choiceGradingRules';
 import { SqliteOutboxRepository } from '@/modules/task/adapters/SqliteOutboxRepository';
 import { SqliteCommandReceiptRepository } from '@/modules/task/adapters/SqliteCommandReceiptRepository';
 import { UuidV7IdGenerator } from '@/capabilities/platform/public';
@@ -276,7 +275,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     outboxRepository,
     clock,
     new UuidV7IdGenerator(clock),
-    choiceGradingRule
+    choiceGradingRuleForCapabilityNode
   );
   const correctLearningEvidence = new CorrectLearningEvidence(
     unitOfWork,

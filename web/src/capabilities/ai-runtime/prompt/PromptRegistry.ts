@@ -90,6 +90,25 @@ export class PromptRegistry {
     return this.bundles.get(promptKey(pin.examType, promptCode, pin.version));
   }
 
+  /**
+   * Resolves checkpoints written before each prompt stored its actual owner.
+   * The old top-level exam type described the active pack, so the original
+   * resolution was its own wording first and the shared catalog second.
+   */
+  findLegacyPinned(
+    activeExamType: string,
+    promptCode: string,
+    version: string,
+    contentHash: string
+  ): PromptBundle | undefined {
+    const owned = this.resolveWithin(activeExamType, promptCode, version);
+    if (owned?.contentHash === contentHash) return owned;
+    const shared = activeExamType === SHARED_PROMPT_EXAM_TYPE
+      ? undefined
+      : this.resolveWithin(SHARED_PROMPT_EXAM_TYPE, promptCode, version);
+    return shared?.contentHash === contentHash ? shared : undefined;
+  }
+
   private resolveWithin(examType: string, promptCode: string, version?: string): PromptBundle | undefined {
     if (version) return this.bundles.get(promptKey(examType, promptCode, version));
     return [...this.bundles.values()]

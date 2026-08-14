@@ -32,20 +32,50 @@ export async function pinPromptResolution(
   dependencies: PromptPinningDependencies
 ): Promise<PromptResolutionPins> {
   const stored = object(run.run.checkpoint.promptPins);
+  const storedExamType = typeof stored.examType === 'string' ? stored.examType : undefined;
+  const storedPromptEntries = Object.entries(object(stored.prompts));
+  let migratedLegacyRef = false;
   const prompts = Object.fromEntries(
-    Object.entries(object(stored.prompts)).flatMap(([promptCode, value]) => {
+    storedPromptEntries.flatMap(([promptCode, value]) => {
       const ref = object(value);
-      return typeof ref.examType === 'string'
-        && typeof ref.version === 'string'
-        && typeof ref.contentHash === 'string'
-        ? [[promptCode, { examType: ref.examType, version: ref.version, contentHash: ref.contentHash }] as const]
-        : [];
+      if (typeof ref.version !== 'string' || typeof ref.contentHash !== 'string') return [];
+      if (typeof ref.examType === 'string') {
+        return [[promptCode, { examType: ref.examType, version: ref.version, contentHash: ref.contentHash }] as const];
+      }
+      if (!storedExamType) return [];
+      const bundle = dependencies.promptRegistry.findLegacyPinned(
+        storedExamType,
+        promptCode,
+        ref.version,
+        ref.contentHash
+      );
+      if (!bundle) return [];
+      migratedLegacyRef = true;
+      return [[promptCode, {
+        examType: bundle.examType,
+        version: ref.version,
+        contentHash: ref.contentHash
+      }] as const];
     })
   );
-  if (typeof stored.examType === 'string' && Object.keys(prompts).length) {
-    return { examType: stored.examType, prompts };
+  if (storedPromptEntries.length) {
+    if (!storedExamType || Object.keys(prompts).length !== storedPromptEntries.length) {
+      throw new Error('Stored prompt resolution cannot be restored by this build');
+    }
+    const restored = { examType: storedExamType, prompts };
+    if (migratedLegacyRef) await persistPins(run, dependencies, restored);
+    return restored;
   }
   const pins = dependencies.promptRegistry.snapshot();
+  await persistPins(run, dependencies, pins);
+  return pins;
+}
+
+async function persistPins(
+  run: AgentRunAggregate,
+  dependencies: PromptPinningDependencies,
+  pins: PromptResolutionPins
+): Promise<void> {
   await dependencies.updateAgentRunProgress.execute({
     agentRunId: run.run.id,
     step: TaskCenterStep.ResolvingPlan,
@@ -54,7 +84,6 @@ export async function pinPromptResolution(
     data: { promptPins: pins as unknown as JsonObject },
     leaseToken: leaseTokenOf(run.run)
   });
-  return pins;
 }
 
 /**

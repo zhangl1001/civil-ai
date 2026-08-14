@@ -20,13 +20,14 @@ const server = await createServer({
 });
 
 try {
-  const [curriculum, evidence, labels, gradingRules, writtenFormats, capabilitySelection] = await Promise.all([
+  const [curriculum, evidence, labels, gradingRules, writtenFormats, capabilitySelection, dailyCapabilitySelection] = await Promise.all([
     server.ssrLoadModule('/src/modules/curriculum/public.ts'),
     server.ssrLoadModule('/src/modules/evidence/public.ts'),
     server.ssrLoadModule('/src/domain/labels.ts'),
     server.ssrLoadModule('/src/domain/choiceGradingRules.ts'),
     server.ssrLoadModule('/src/domain/writtenFormats.ts'),
-    server.ssrLoadModule('/src/composition-root/agent/selectPracticeCapability.ts')
+    server.ssrLoadModule('/src/composition-root/agent/selectPracticeCapability.ts'),
+    server.ssrLoadModule('/src/features/practice/CapabilitySelection.ts')
   ]);
 
   const packs = curriculum.createBundledCurriculumPacks();
@@ -96,6 +97,16 @@ try {
     undefined,
     'a written subject freezes no choice-grading rule'
   );
+  assert.deepEqual(
+    gradingRules.choiceGradingRuleForCapabilityNode('capability:edu-theory:pedagogy:principles'),
+    { underSelectionCreditWeight: 0 },
+    'legacy sets without a frozen policy must use their own capability subject'
+  );
+  assert.deepEqual(
+    gradingRules.choiceGradingRuleForCapabilityNode('capability:subject-knowledge:fundamentals:core'),
+    { underSelectionCreditWeight: 0.5 },
+    'legacy scoring must not borrow the first objective subject rule'
+  );
 
   // --- labels and answer formats follow the package ----------------------------
   labels.installCurriculumLabels(teacher.bundle.capabilityNodes);
@@ -145,6 +156,11 @@ try {
   assert.ok(
     capabilitySelection.selectPracticeCapability(generationNodes, { module: '心理学基础' }),
     'the generation path must resolve a capability on this package'
+  );
+  assert.deepEqual(
+    new Set(dailyCapabilitySelection.trainableObjectiveNodes(nodes).map((node) => node.subject)),
+    new Set(['education_theory', 'subject_knowledge']),
+    'diagnosis and daily practice must keep every objective subject declared by the package'
   );
 
   // The assertions above run the package through the projection; this one pins

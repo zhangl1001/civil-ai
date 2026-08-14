@@ -1416,7 +1416,11 @@ try {
 
   // A pack that later ships its own wording under the pinned version must not
   // take over a running task: the pin names the pack it resolved from.
-  pinRegistry.register({ ...promptBundle('1.0.0', '考试包覆盖措辞'), examType: 'pack_a' });
+  pinRegistry.register({
+    ...promptBundle('1.0.0', '考试包覆盖措辞'),
+    examType: 'pack_a',
+    contentHash: 'sha256:pack-a-pin-1.0.0'
+  });
   pinRegistry.activateExamType('pack_a');
   assert.match(
     pinning.compilePinned(resumedPins, pinDependencies, 'pin.test', {}).system,
@@ -1424,6 +1428,37 @@ try {
     'a pin on the shared catalog is not satisfied by a pack override'
   );
   pinRegistry.activateExamType('shared');
+
+  // Checkpoints written before per-prompt ownership existed stored only the
+  // active pack at the top level. A later pack override must not steal a prompt
+  // that originally resolved from shared; hash matching restores its owner.
+  const currentPinnedRun = pinnedRun;
+  pinnedRun = {
+    ...currentPinnedRun,
+    run: {
+      ...currentPinnedRun.run,
+      checkpoint: {
+        promptPins: {
+          examType: 'pack_a',
+          prompts: {
+            'pin.test': { version: '1.0.0', contentHash: 'sha256:pin-1.0.0' }
+          }
+        }
+      }
+    }
+  };
+  const migratedPins = await pinning.pinPromptResolution(pinnedRun, pinDependencies);
+  assert.deepEqual(
+    migratedPins.prompts['pin.test'],
+    { examType: 'shared', version: '1.0.0', contentHash: 'sha256:pin-1.0.0' },
+    'legacy pins recover the owner that supplied the pinned content'
+  );
+  assert.deepEqual(
+    pinnedRun.run.checkpoint.promptPins,
+    migratedPins,
+    'legacy pins are normalized before the run continues'
+  );
+  pinnedRun = currentPinnedRun;
 
   // Drift is refused rather than silently re-resolved: a replay that quietly
   // swaps wording produces work nobody can explain afterwards.
