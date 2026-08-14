@@ -1,0 +1,320 @@
+{
+  "manifest": {
+    "id": "metadata:curriculum:teacher-recruitment:v1",
+    "packageType": "curriculum",
+    "examType": "teacher_recruitment",
+    "regionScope": "national",
+    "version": "1.0.0",
+    "status": "published",
+    "source": "bundled",
+    "contentHash": "sha256:41908e07865bd5911626530add0fd6640bf09bc3a50507a6afc6dfe5d99ce28b",
+    "schemaVersion": "1",
+    "releaseNotes": "教师招聘考试薄包，用于验证考试包机制",
+    "publishedAt": 1784016000000,
+    "installedAt": 1784016000000
+  },
+  "payload": {
+    "curriculum": {
+      "id": "curriculum:teacher-recruitment:v1",
+      "metadataPackageId": "metadata:curriculum:teacher-recruitment:v1",
+      "examType": "teacher_recruitment",
+      "regionScope": "national",
+      "version": "1.0.0",
+      "status": "published",
+      "createdAt": 1784016000000
+    },
+    "capabilityNodes": [
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:edu-theory",
+        "code": "edu_theory",
+        "name": "教育综合知识",
+        "shortName": "教综",
+        "nodeType": "subject",
+        "subject": "education_theory",
+        "module": "education_theory",
+        "sequence": 10,
+        "scoreWeight": 1
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:edu-theory:pedagogy",
+        "parentId": "capability:edu-theory",
+        "code": "edu_theory.pedagogy",
+        "name": "教育学基础",
+        "nodeType": "module",
+        "subject": "education_theory",
+        "module": "pedagogy",
+        "sequence": 20,
+        "scoreWeight": 0.6
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:edu-theory:pedagogy:principles",
+        "parentId": "capability:edu-theory:pedagogy",
+        "code": "edu_theory.pedagogy.principles",
+        "name": "教学原则与教学方法",
+        "nodeType": "knowledge_point",
+        "subject": "education_theory",
+        "module": "pedagogy",
+        "sequence": 30,
+        "scoreWeight": 0.3,
+        "defaultTargetAccuracy": 0.8,
+        "defaultTargetSeconds": 60
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:edu-theory:pedagogy:curriculum",
+        "parentId": "capability:edu-theory:pedagogy",
+        "code": "edu_theory.pedagogy.curriculum",
+        "name": "课程与课程改革",
+        "nodeType": "knowledge_point",
+        "subject": "education_theory",
+        "module": "pedagogy",
+        "sequence": 40,
+        "scoreWeight": 0.3,
+        "defaultTargetAccuracy": 0.78,
+        "defaultTargetSeconds": 65
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:edu-theory:psychology",
+        "parentId": "capability:edu-theory",
+        "code": "edu_theory.psychology",
+        "name": "心理学基础",
+        "nodeType": "module",
+        "subject": "education_theory",
+        "module": "psychology",
+        "sequence": 50,
+        "scoreWeight": 0.4
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:edu-theory:psychology:learning",
+        "parentId": "capability:edu-theory:psychology",
+        "code": "edu_theory.psychology.learning",
+        "name": "学习理论与学习动机",
+        "nodeType": "knowledge_point",
+        "subject": "education_theory",
+        "module": "psychology",
+        "sequence": 60,
+        "scoreWeight": 0.4,
+        "defaultTargetAccuracy": 0.75,
+        "defaultTargetSeconds": 70
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:subject-knowledge",
+        "code": "subject_knowledge",
+        "name": "学科专业知识",
+        "shortName": "学科",
+        "nodeType": "subject",
+        "subject": "subject_knowledge",
+        "module": "subject_knowledge",
+        "sequence": 70,
+        "scoreWeight": 1
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:subject-knowledge:fundamentals",
+        "parentId": "capability:subject-knowledge",
+        "code": "subject_knowledge.fundamentals",
+        "name": "学科基础知识",
+        "nodeType": "module",
+        "subject": "subject_knowledge",
+        "module": "fundamentals",
+        "sequence": 80,
+        "scoreWeight": 1
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:subject-knowledge:fundamentals:core",
+        "parentId": "capability:subject-knowledge:fundamentals",
+        "code": "subject_knowledge.fundamentals.core",
+        "name": "学科核心概念",
+        "nodeType": "knowledge_point",
+        "subject": "subject_knowledge",
+        "module": "fundamentals",
+        "sequence": 90,
+        "scoreWeight": 0.5,
+        "defaultTargetAccuracy": 0.8,
+        "defaultTargetSeconds": 60
+      },
+      {
+        "masteryPolicy": {
+          "policyCode": "teacher_default",
+          "policyVersion": "1.0.0"
+        },
+        "status": "active",
+        "id": "capability:subject-knowledge:fundamentals:teaching",
+        "parentId": "capability:subject-knowledge:fundamentals",
+        "code": "subject_knowledge.fundamentals.teaching",
+        "name": "学科教学设计",
+        "nodeType": "knowledge_point",
+        "subject": "subject_knowledge",
+        "module": "fundamentals",
+        "sequence": 100,
+        "scoreWeight": 0.5,
+        "defaultTargetAccuracy": 0.75,
+        "defaultTargetSeconds": 80
+      }
+    ],
+    "capabilityEdges": [
+      {
+        "fromNodeId": "capability:edu-theory:pedagogy:principles",
+        "toNodeId": "capability:subject-knowledge:fundamentals:teaching",
+        "relationType": "prerequisite",
+        "weight": 0.5
+      }
+    ],
+    "assessmentPolicies": [
+      {
+        "id": "policy:education_theory:mastery:v1",
+        "subject": "education_theory",
+        "policyType": "mastery",
+        "version": "1.0.0",
+        "config": {
+          "minimumIndependentAttempts": 5,
+          "minimumRetentionAttempts": 2,
+          "minimumTransferAttempts": 1,
+          "targetAccuracy": 0.8,
+          "minimumConfidence": 0.7,
+          "minimumEvidenceQuality": 0.6
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:subject_knowledge:mastery:v1",
+        "subject": "subject_knowledge",
+        "policyType": "mastery",
+        "version": "1.0.0",
+        "config": {
+          "minimumIndependentAttempts": 5,
+          "minimumRetentionAttempts": 2,
+          "minimumTransferAttempts": 1,
+          "targetAccuracy": 0.8,
+          "minimumConfidence": 0.7,
+          "minimumEvidenceQuality": 0.6
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:education_theory:exam_delivery:v1",
+        "subject": "education_theory",
+        "policyType": "exam_delivery",
+        "version": "1.0.0",
+        "config": {
+          "deliveryKind": "objective",
+          "score": {
+            "maxScore": 150,
+            "defaultCurrent": 75,
+            "defaultTarget": 120
+          },
+          "choiceGrading": {
+            "underSelectionCreditWeight": 0
+          },
+          "writtenFormats": [],
+          "mockExam": {
+            "defaultQuestionCount": 80,
+            "defaultDurationMinutes": 90,
+            "schemes": [
+              {
+                "code": "standard",
+                "name": "标准卷",
+                "questionCount": 80,
+                "durationMinutes": 90
+              },
+              {
+                "code": "compact",
+                "name": "精简卷",
+                "questionCount": 40,
+                "durationMinutes": 45
+              }
+            ],
+            "focusTags": [
+              "高频考点",
+              "教育法规",
+              "案例分析"
+            ]
+          }
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      },
+      {
+        "id": "policy:subject_knowledge:exam_delivery:v1",
+        "subject": "subject_knowledge",
+        "policyType": "exam_delivery",
+        "version": "1.0.0",
+        "config": {
+          "deliveryKind": "objective",
+          "score": {
+            "maxScore": 100,
+            "defaultCurrent": 60,
+            "defaultTarget": 85
+          },
+          "choiceGrading": {
+            "underSelectionCreditWeight": 0.5
+          },
+          "writtenFormats": [],
+          "mockExam": {
+            "defaultQuestionCount": 60,
+            "defaultDurationMinutes": 60,
+            "schemes": [
+              {
+                "code": "standard",
+                "name": "标准卷",
+                "questionCount": 60,
+                "durationMinutes": 60
+              }
+            ],
+            "focusTags": [
+              "学科基础",
+              "教学设计"
+            ]
+          }
+        },
+        "status": "published",
+        "createdAt": 1784016000000
+      }
+    ]
+  }
+}

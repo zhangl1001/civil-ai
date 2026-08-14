@@ -1,6 +1,7 @@
 import { createBusinessTutorPromptCatalog, type PromptBundle } from '@/capabilities/ai-runtime/public';
 import type { CurriculumBundle } from '../contracts/CurriculumRepository';
 import { createBundledNationalCurriculum } from './bundledNationalCurriculum';
+import { createBundledTeacherRecruitmentCurriculum } from './bundledTeacherRecruitmentCurriculum';
 
 /**
  * One exam track the app ships with. The pack owns everything that differs
@@ -33,6 +34,16 @@ export function createBundledCurriculumPacks(): readonly BundledCurriculumPack[]
       regionScoped: true,
       bundle: createBundledNationalCurriculum(),
       promptBundles: createBusinessTutorPromptCatalog('civil_service')
+    },
+    {
+      examType: 'teacher_recruitment',
+      examName: '教师招聘考试',
+      summary: '教育综合知识与学科专业知识',
+      // Sat the same way everywhere, so the profile form hides scope and province.
+      regionScoped: false,
+      bundle: createBundledTeacherRecruitmentCurriculum(),
+      // Ships no wording of its own: every prompt falls back to the shared catalog.
+      promptBundles: []
     }
   ];
 }

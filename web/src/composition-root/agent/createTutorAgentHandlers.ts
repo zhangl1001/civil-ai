@@ -27,7 +27,7 @@ import {
   type RunStructuredObjectiveGenerationWorkflow,
   type ScanQuestionImportDraft
 } from '@/modules/content/public';
-import { ExamDeliveryKind, type CurriculumRepository } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, projectExamSubjects, type CurriculumRepository } from '@/modules/curriculum/public';
 import type {
   ErrorDiagnosisRepository,
   RecordSubjectiveAssessment,
@@ -303,10 +303,18 @@ async function executeBusinessOperation(
       const cycle = await dependencies.candidates.findCurrentCycle();
       if (!cycle) throw new Error('请先完成备考档案。');
       const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
+      // Objective practice targets whichever subjects this package answers with
+      // questions, rather than the civil-service subject code: a track whose
+      // subjects are named differently still generates.
+      const objectiveSubjects = new Set(
+        (curriculum ? projectExamSubjects(curriculum) : [])
+          .filter((subject) => subject.deliveryKind === ExamDeliveryKind.Objective)
+          .map((subject) => subject.code as string)
+      );
       const nodes = curriculum?.capabilityNodes
-        .filter((node) => node.status === 'active' && node.subject === 'aptitude') ?? [];
+        .filter((node) => node.status === 'active' && objectiveSubjects.has(node.subject)) ?? [];
       const capability = selectPracticeCapability(nodes, input);
-      if (!capability) throw new Error('当前大纲没有可用的行测能力节点。');
+      if (!capability) throw new Error('当前大纲没有可用的客观题能力节点。');
       await context.update(42, '调用 AI 生成结构化讲义和题目');
       const aggregate = await dependencies.requestStructuredPractice.execute({
         idempotencyKey: `agent-run:${run.run.id}:structured-practice`,
