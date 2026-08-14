@@ -91,7 +91,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     /** Grading rule frozen onto every set this workflow commits. */
-    gradingPolicy: () => QuestionSetGradingPolicy | undefined = () => undefined
+    gradingPolicy: (capabilityNodeId: string) => QuestionSetGradingPolicy | undefined = () => undefined
   ) {
     this.commitBuilder = new GeneratedContentCommitBuilder(clock, ids, gradingPolicy);
     this.modelInvoker = new GenerationModelInvoker(

@@ -1,4 +1,4 @@
-import { activeGradingPolicy } from '@/domain/choiceGradingRules';
+import { gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
 import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { IndexedDbTransactionScope, IndexedDbUnitOfWork } from '@/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork';
 import { TutorIndexedDb } from '@/capabilities/database/adapters/indexeddb/TutorIndexedDb';
@@ -175,7 +175,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     questionSourceRepository,
     clock,
     new UuidV7IdGenerator(clock),
-    activeGradingPolicy
+    gradingPolicyForCapabilityNode
   );
   const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new IndexedDbPromptRepository(database, transactionScope);
@@ -202,6 +202,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
   const commandReceiptRepository = new IndexedDbCommandReceiptRepository(database, transactionScope);
   const ensureCurriculum = new EnsureCurriculumBundle(unitOfWork, curriculumRepository);
   const curriculumPacks = createBundledCurriculumPacks();
+  let examPacks: InstallExamPacks;
   const ensureContentMetadata = new EnsureContentMetadata(unitOfWork, contentRepository);
   const bundledContentMetadata = createBundledContentMetadata();
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
@@ -243,7 +244,7 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     promptCompiler,
     clock,
     new UuidV7IdGenerator(clock),
-    activeGradingPolicy
+    gradingPolicyForCapabilityNode
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
   const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
@@ -482,6 +483,8 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     clock,
     new UuidV7IdGenerator(clock)
   );
+  examPacks = new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry);
+
   return {
     unitOfWork,
     dataMaintenance,
@@ -573,9 +576,11 @@ export function createWebTutorDatabase(clock: Clock): WebTutorDatabaseRuntime {
     updateLearningPreferences,
     updateScoreTargets,
     curriculumPacks,
+    /** Re-points the running app at the candidate's track after their cycle changes. */
+    activateExamPack: () => examPacks.activate(),
     initialize: async () => {
       await database.open();
-      await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry).execute();
+      await examPacks.execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
       // Registered only once the database has accepted them, so the runtime
       // never holds wording storage rejected.

@@ -258,6 +258,7 @@ import AiTaskPendingState from '@/components/AiTaskPendingState.vue';
 import { AppStateView, InitialRefreshState, PullToRefresh } from '@/capabilities/design-system/public';
 import { initializeTutorRuntime } from '@/composition-root/public';
 import { curriculumModuleOptions, practiceModuleLabel } from '@/domain/labels';
+import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import { AssessmentRole } from '@/kernel/public';
 import type { AgentRunView } from '@/modules/agent/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
@@ -371,7 +372,7 @@ const availableModules = computed(() => {
 });
 const availableQuestionTypes = computed(() => curriculumNodes.value.filter((item) => (
   item.status === 'active'
-  && item.subject === 'aptitude'
+  && objectiveSubjectCodes().has(item.subject)
   && item.module === customModule.value
   && item.nodeType === CapabilityNodeType.QuestionType
 )));

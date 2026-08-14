@@ -1388,7 +1388,11 @@ try {
 
   const firstPins = await pinning.pinPromptResolution(pinnedRun, pinDependencies);
   assert.equal(firstPins.examType, 'shared');
-  assert.deepEqual(firstPins.prompts['pin.test'], { version: '1.0.0', contentHash: 'sha256:pin-1.0.0' });
+  assert.deepEqual(
+    firstPins.prompts['pin.test'],
+    { examType: 'shared', version: '1.0.0', contentHash: 'sha256:pin-1.0.0' },
+    'a pin records which pack the wording came from, not just its version'
+  );
   assert.deepEqual(
     pinnedRun.run.checkpoint.promptPins,
     firstPins,
@@ -1410,12 +1414,32 @@ try {
     'a resumed run must replay the wording it started with'
   );
 
-  // A pin the build no longer ships falls back rather than failing the task.
-  const strandedPins = { examType: 'shared', prompts: { 'pin.test': { version: '9.9.9', contentHash: 'sha256:gone' } } };
+  // A pack that later ships its own wording under the pinned version must not
+  // take over a running task: the pin names the pack it resolved from.
+  pinRegistry.register({ ...promptBundle('1.0.0', '考试包覆盖措辞'), examType: 'pack_a' });
+  pinRegistry.activateExamType('pack_a');
   assert.match(
-    pinning.compilePinned(strandedPins, pinDependencies, 'pin.test', {}).system,
-    /新版措辞/,
-    'a stranded pin re-resolves instead of throwing'
+    pinning.compilePinned(resumedPins, pinDependencies, 'pin.test', {}).system,
+    /旧版措辞/,
+    'a pin on the shared catalog is not satisfied by a pack override'
+  );
+  pinRegistry.activateExamType('shared');
+
+  // Drift is refused rather than silently re-resolved: a replay that quietly
+  // swaps wording produces work nobody can explain afterwards.
+  assert.throws(
+    () => pinning.compilePinned(
+      { examType: 'shared', prompts: { 'pin.test': { examType: 'shared', version: '9.9.9', contentHash: 'sha256:gone' } } },
+      pinDependencies, 'pin.test', {}
+    ),
+    /no longer available/
+  );
+  assert.throws(
+    () => pinning.compilePinned(
+      { examType: 'shared', prompts: { 'pin.test': { examType: 'shared', version: '1.0.0', contentHash: 'sha256:different' } } },
+      pinDependencies, 'pin.test', {}
+    ),
+    /changed content since this run pinned it/
   );
 
   assert.match(indexedDbSource, /AgentRunIdempotency:\s*'agent_run_idempotency'/);

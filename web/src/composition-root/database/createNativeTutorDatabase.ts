@@ -1,4 +1,4 @@
-import { activeGradingPolicy } from '@/domain/choiceGradingRules';
+import { gradingPolicyForCapabilityNode } from '@/domain/choiceGradingRules';
 import { installPromptBundles, sharedPromptBundles } from '@/capabilities/ai-runtime/public';
 import { Capacitor } from '@capacitor/core';
 import { CapacitorSqliteDatabase } from '@/capabilities/database/adapters/sqlite/CapacitorSqliteDatabase';
@@ -176,7 +176,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     questionSourceRepository,
     clock,
     new UuidV7IdGenerator(clock),
-    activeGradingPolicy
+    gradingPolicyForCapabilityNode
   );
   const learningAssetStore = new LearningAssetStore(unitOfWork, learningAssetRepository, clock, new UuidV7IdGenerator(clock));
   const promptRepository = new SqlitePromptRepository(database, transactionScope);
@@ -201,6 +201,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
   const commandReceiptRepository = new SqliteCommandReceiptRepository(database, transactionScope);
   const ensureCurriculum = new EnsureCurriculumBundle(unitOfWork, curriculumRepository);
   const curriculumPacks = createBundledCurriculumPacks();
+  let examPacks: InstallExamPacks;
   const ensureContentMetadata = new EnsureContentMetadata(unitOfWork, contentRepository);
   const bundledContentMetadata = createBundledContentMetadata();
   const ensurePromptBundle = new EnsurePromptBundle(unitOfWork, promptRepository);
@@ -242,7 +243,7 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     promptCompiler,
     clock,
     new UuidV7IdGenerator(clock),
-    activeGradingPolicy
+    gradingPolicyForCapabilityNode
   );
   const applyQuestionSetEnrichment = new ApplyQuestionSetEnrichment(unitOfWork, contentRepository);
   const retireQuestionSet = new RetireQuestionSet(unitOfWork, contentRepository);
@@ -481,6 +482,8 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     clock,
     new UuidV7IdGenerator(clock)
   );
+  examPacks = new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry);
+
   return {
     unitOfWork,
     dataMaintenance,
@@ -572,9 +575,11 @@ export function createNativeTutorDatabase(clock: Clock): NativeTutorDatabaseRunt
     updateLearningPreferences,
     updateScoreTargets,
     curriculumPacks,
+    /** Re-points the running app at the candidate's track after their cycle changes. */
+    activateExamPack: () => examPacks.activate(),
     initialize: async () => {
       await migrationRunner.migrate(clock.now());
-      await new InstallExamPacks(curriculumPacks, ensureCurriculum, alignCandidateCurriculum, candidateRepository, ensurePromptBundle, promptRegistry).execute();
+      await examPacks.execute();
       await ensureContentMetadata.execute(bundledContentMetadata);
       // Registered only once the database has accepted them, so the runtime
       // never holds wording storage rejected.

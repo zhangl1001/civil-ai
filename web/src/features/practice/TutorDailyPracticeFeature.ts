@@ -1,3 +1,4 @@
+import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import type { ProviderGateway } from '@/capabilities/ai-runtime/public';
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import {
@@ -73,7 +74,8 @@ export class TutorDailyPracticeFeature {
         ? executableItems.find((item) => item.id === preference.planItemId)
         : undefined
     ) ?? executableItems[0];
-    const nodes = curriculum.capabilityNodes.filter((node) => node.status === 'active' && node.subject === 'aptitude');
+    const objective = objectiveSubjectCodes();
+    const nodes = curriculum.capabilityNodes.filter((node) => node.status === 'active' && objective.has(node.subject));
     const explicitlyRequested = nodes.find((node) => node.id === preference.capabilityNodeId)
       ?? nodes.find((node) => preference.module && node.module === preference.module);
     const effectivePlanItem = explicitlyRequested && planItem?.capabilityNodeId !== explicitlyRequested.id

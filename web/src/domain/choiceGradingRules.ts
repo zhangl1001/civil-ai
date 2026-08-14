@@ -1,44 +1,61 @@
 import { DEFAULT_CHOICE_GRADING_RULE, type ChoiceGradingRule } from '@/modules/evidence/public';
 import { QuestionTemplateCode, type QuestionSetGradingPolicy } from '@/modules/content/public';
-import type { ExamChoiceGradingRule, ExamDeliveryKind, ExamSubjectView } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, type ExamChoiceGradingRule, type ExamSubjectView } from '@/modules/curriculum/public';
+import { subjectOfCapabilityNode } from './subjectDelivery';
 
 /**
- * Objective-question scoring rule of the active exam package.
+ * Objective-question scoring rules of the active exam package, per subject.
  *
  * Held here rather than in the grader so the rule travels with the package:
- * exams disagree on whether an incomplete-but-correct selection scores at all.
- * Question sets freeze this rule when they are published, so the active rule is
- * only consulted for sets that carry no snapshot of their own.
+ * exams disagree on whether an incomplete-but-correct selection scores at all,
+ * and a package may disagree with itself — one subject can award partial credit
+ * for 少选 while another awards none. Question sets freeze their subject's rule
+ * when published, so the active rule is only consulted for sets that carry no
+ * snapshot of their own.
  */
-const OBJECTIVE_DELIVERY_KIND: ExamDeliveryKind = 'objective';
-
-let activePolicy: ExamChoiceGradingRule | undefined;
+let policyBySubject: ReadonlyMap<string, ExamChoiceGradingRule> = new Map();
 
 export function installChoiceGradingRule(subjects: readonly ExamSubjectView[]): void {
-  activePolicy = subjects
-    .find((subject) => subject.deliveryKind === OBJECTIVE_DELIVERY_KIND && subject.choiceGrading)
-    ?.choiceGrading;
+  policyBySubject = new Map(
+    subjects
+      .filter((subject) => subject.deliveryKind === ExamDeliveryKind.Objective && subject.choiceGrading)
+      .map((subject) => [subject.code as string, subject.choiceGrading!])
+  );
+}
+
+function policyFor(subject: string | undefined): ExamChoiceGradingRule | undefined {
+  if (subject !== undefined) return policyBySubject.get(subject);
+  // No subject in hand: only a package that scores every objective subject the
+  // same way has an unambiguous answer. Guessing one of several would mark a
+  // paper by another subject's rule.
+  const [only] = [...policyBySubject.values()];
+  return policyBySubject.size === 1 ? only : undefined;
 }
 
 /** Narrowed to what the grader takes: the policy identity is not a grading input. */
-export function choiceGradingRule(): ChoiceGradingRule {
+export function choiceGradingRule(subject?: string): ChoiceGradingRule {
   return {
-    underSelectionCreditWeight: (activePolicy ?? DEFAULT_CHOICE_GRADING_RULE).underSelectionCreditWeight
+    underSelectionCreditWeight: (policyFor(subject) ?? DEFAULT_CHOICE_GRADING_RULE).underSelectionCreditWeight
   };
 }
 
 /**
- * The snapshot a question set published now should freeze. Undefined when the
- * active package declares no rule, or declares one without the identity that
- * makes a frozen score explainable — in either case the set records nothing and
- * grades against whatever rule is active when it is answered.
+ * The snapshot a question set published now should freeze, for the subject the
+ * given capability node belongs to.
+ *
+ * Undefined when that subject declares no rule, or declares one without the
+ * identity that makes a frozen score explainable — in either case the set
+ * records nothing and grades against whatever rule is active when answered.
  */
-export function activeGradingPolicy(): QuestionSetGradingPolicy | undefined {
-  if (!activePolicy?.policyVersion || !activePolicy.policyHash) return undefined;
+export function gradingPolicyForCapabilityNode(
+  capabilityNodeId: string | undefined
+): QuestionSetGradingPolicy | undefined {
+  const policy = policyFor(subjectOfCapabilityNode(capabilityNodeId));
+  if (!policy?.policyVersion || !policy.policyHash) return undefined;
   return {
-    underSelectionCreditWeight: activePolicy.underSelectionCreditWeight,
-    policyVersion: activePolicy.policyVersion,
-    policyHash: activePolicy.policyHash
+    underSelectionCreditWeight: policy.underSelectionCreditWeight,
+    policyVersion: policy.policyVersion,
+    policyHash: policy.policyHash
   };
 }
 

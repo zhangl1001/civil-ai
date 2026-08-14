@@ -75,10 +75,11 @@ export class PublishQuestionImportDraft {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     /**
-     * Grading rule of the package in force when this set is published. Frozen
-     * onto the set so a later package upgrade cannot re-mark it.
+     * Grading rule the set's own subject is scored by, frozen at publish time.
+     * Resolved per capability node because a package may score one objective
+     * subject differently from another.
      */
-    private readonly gradingPolicy: () => QuestionSetGradingPolicy | undefined = () => undefined
+    private readonly gradingPolicy: (capabilityNodeId: string) => QuestionSetGradingPolicy | undefined = () => undefined
   ) {}
 
   /**
@@ -248,7 +249,7 @@ export class PublishQuestionImportDraft {
         purpose: QuestionSetPurpose.Anchor,
         assessmentRole: 'anchor',
         module: aggregate.draft.module,
-        gradingPolicy: this.gradingPolicy(),
+        gradingPolicy: this.gradingPolicy(aggregate.draft.capabilityNodeId),
         originType: aggregate.draft.sourceType,
         sourceId,
         calibrationRole: QuestionCalibrationRole.Anchor,

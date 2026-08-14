@@ -35,8 +35,10 @@ export async function pinPromptResolution(
   const prompts = Object.fromEntries(
     Object.entries(object(stored.prompts)).flatMap(([promptCode, value]) => {
       const ref = object(value);
-      return typeof ref.version === 'string' && typeof ref.contentHash === 'string'
-        ? [[promptCode, { version: ref.version, contentHash: ref.contentHash }] as const]
+      return typeof ref.examType === 'string'
+        && typeof ref.version === 'string'
+        && typeof ref.contentHash === 'string'
+        ? [[promptCode, { examType: ref.examType, version: ref.version, contentHash: ref.contentHash }] as const]
         : [];
     })
   );
@@ -56,11 +58,12 @@ export async function pinPromptResolution(
 }
 
 /**
- * Compiles against the pinned bundle when it is still shipped.
+ * Compiles the exact wording this run was pinned to.
  *
- * A pin that no longer resolves means the build dropped that version; the run
- * falls back to normal resolution and says so, which is better than failing a
- * task outright over wording.
+ * A pin that no longer resolves, or whose content moved under the same version,
+ * is refused rather than quietly re-resolved: a durable task replays by version,
+ * so silently swapping wording produces work nobody can explain afterwards. The
+ * run fails and can be retried once the build agrees with what was pinned.
  */
 export function compilePinned(
   pins: PromptResolutionPins,
@@ -69,18 +72,17 @@ export function compilePinned(
   payload: Record<string, unknown>
 ) {
   const pin = pins.prompts[promptCode];
-  const bundle = pin ? dependencies.promptRegistry.findPinned(pins.examType, promptCode, pin.version) : undefined;
-  if (pin && !bundle) {
-    console.warn('[TutorAgent] pinned prompt version is no longer available; re-resolving', {
-      promptCode, examType: pins.examType, version: pin.version
-    });
+  if (!pin) return dependencies.promptCompiler.compile(promptCode, {}, payload);
+  const bundle = dependencies.promptRegistry.findPinned(pin, promptCode);
+  if (!bundle) {
+    throw new Error(
+      `Prompt ${promptCode}@${pin.version} from ${pin.examType} is no longer available for this run`
+    );
   }
-  if (bundle && pin && bundle.contentHash !== pin.contentHash) {
-    console.warn('[TutorAgent] pinned prompt content changed under its version', {
-      promptCode, version: pin.version, pinned: pin.contentHash, available: bundle.contentHash
-    });
+  if (bundle.contentHash !== pin.contentHash) {
+    throw new Error(
+      `Prompt ${promptCode}@${pin.version} changed content since this run pinned it`
+    );
   }
-  return bundle
-    ? dependencies.promptCompiler.compileBundle(bundle, {}, payload)
-    : dependencies.promptCompiler.compile(promptCode, {}, payload);
+  return dependencies.promptCompiler.compileBundle(bundle, {}, payload);
 }

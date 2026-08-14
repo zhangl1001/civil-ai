@@ -54,23 +54,48 @@ try {
     ['pedagogy', 'psychology']
   );
 
-  // --- the package decides how 少选 scores -------------------------------------
+  // --- 少选 is scored per subject, not per package ------------------------------
+  // This track scores its two objective subjects differently on purpose: a
+  // package is not required to agree with itself, and the earlier version of
+  // this check only looked at the first subject, so it passed while every
+  // 学科专业知识 set was being frozen with 教综's rule.
+  const deliveryForGrading = await server.ssrLoadModule('/src/domain/subjectDelivery.ts');
+  deliveryForGrading.installSubjectDelivery(subjects, teacher.bundle.capabilityNodes);
   gradingRules.installChoiceGradingRule(subjects);
+  assert.equal(gradingRules.choiceGradingRule('education_theory').underSelectionCreditWeight, 0);
+  assert.equal(gradingRules.choiceGradingRule('subject_knowledge').underSelectionCreditWeight, 0.5);
   assert.equal(
     gradingRules.choiceGradingRule().underSelectionCreditWeight,
+    0.5,
+    'with no subject in hand and no single answer, the grader falls back to the default rather than guessing one'
+  );
+  assert.equal(
+    evidence.gradeChoiceAnswer('multiple_choice', ['A', 'B'], ['A'], gradingRules.choiceGradingRule('education_theory')).score,
     0,
-    'this package gives no credit for an under-selected answer'
+    'an under-selected answer earns nothing in 教综'
   );
-  const graded = evidence.gradeChoiceAnswer(
-    'multiple_choice', ['A', 'B'], ['A'], gradingRules.choiceGradingRule()
+  assert.equal(
+    evidence.gradeChoiceAnswer('multiple_choice', ['A', 'B'], ['A'], gradingRules.choiceGradingRule('subject_knowledge')).score,
+    0.25,
+    'the same answer earns partial credit in 学科专业知识'
   );
-  assert.equal(graded.score, 0, 'grading follows the package rule');
   assert.match(
-    gradingRules.multiAnswerGradingHint('multiple_choice'),
+    gradingRules.multiAnswerGradingHint('multiple_choice', gradingRules.choiceGradingRule('education_theory')),
     /少选不得分/,
-    'the page promises what this package actually does'
+    'the page promises what this subject actually does'
   );
-  assert.ok(gradingRules.activeGradingPolicy(), 'a question set published now can freeze this rule');
+
+  // A set freezes its own subject's rule, resolved from the capability node.
+  const frozenTheory = gradingRules.gradingPolicyForCapabilityNode('capability:edu-theory:pedagogy:principles');
+  const frozenSubject = gradingRules.gradingPolicyForCapabilityNode('capability:subject-knowledge:fundamentals:core');
+  assert.equal(frozenTheory.underSelectionCreditWeight, 0);
+  assert.equal(frozenSubject.underSelectionCreditWeight, 0.5);
+  assert.notEqual(frozenTheory.policyHash, undefined);
+  assert.equal(
+    gradingRules.gradingPolicyForCapabilityNode('capability:teaching-design:writing:argument'),
+    undefined,
+    'a written subject freezes no choice-grading rule'
+  );
 
   // --- labels and answer formats follow the package ----------------------------
   labels.installCurriculumLabels(teacher.bundle.capabilityNodes);

@@ -29,6 +29,18 @@ export class InstallExamPacks {
       await this.ensureCurriculum.execute(pack.bundle);
       await installPromptBundles(this.ensurePromptBundle, this.promptRegistry, pack.promptBundles);
     }
+    await this.activate();
+  }
+
+  /**
+   * Points the running app at the candidate's own track.
+   *
+   * Separate from installation because the runtime is a singleton created before
+   * a candidate exists: onboarding starts with the seed pack active, so the app
+   * would keep the wrong labels, prompts and scoring rules until a restart
+   * unless creating a cycle re-activates.
+   */
+  async activate(): Promise<void> {
     const active = await this.resolveActivePack();
     if (!active) return;
     await this.alignCandidateCurriculum.execute(active.bundle);
@@ -39,7 +51,7 @@ export class InstallExamPacks {
     installCurriculumLabels(active.bundle.capabilityNodes);
     installWrittenFormats(subjects);
     installChoiceGradingRule(subjects);
-    installSubjectDelivery(subjects);
+    installSubjectDelivery(subjects, active.bundle.capabilityNodes);
   }
 
   /**

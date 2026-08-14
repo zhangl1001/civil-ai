@@ -403,6 +403,10 @@ async function submit() {
       ...studyRhythmInput(form)
     });
     localStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
+    // The runtime was built before this candidate existed, so it is still on the
+    // seed track. Point it at theirs before leaving, or every page after this
+    // one reads another exam's labels, prompts and scoring rules.
+    await runtime.activateExamPack();
     await router.replace('/vue/diagnosis');
   } catch (error) {
     submitMessage.value = resolveOnboardingError(error);

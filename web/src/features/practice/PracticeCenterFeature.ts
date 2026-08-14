@@ -1,5 +1,6 @@
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import { TaskTargetType } from '@/modules/agent/public';
+import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import { CapabilityNodeType } from '@/modules/curriculum/public';
 import {
   QuestionOriginType,
@@ -57,8 +58,10 @@ export class PracticeCenterFeature {
       examName: cycle.examCycle.examName || cycle.examCycle.examType,
       province: cycle.examCycle.province || '',
       curriculumNodes,
+      // Trainable nodes are the ones this package answers with questions, which
+      // is not the same as a subject called 行测.
       capabilities: curriculumNodes.filter((node) => (
-        node.subject === 'aptitude'
+        objectiveSubjectCodes().has(node.subject)
         && (node.nodeType === CapabilityNodeType.KnowledgePoint || node.nodeType === CapabilityNodeType.SubPoint)
       )),
       prescription,

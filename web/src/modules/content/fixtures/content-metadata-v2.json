@@ -1,7 +1,7 @@
 {
   "manifest": {
-    "id": "content-metadata:core:v2",
-    "version": "2.0.0",
+    "id": "content-metadata:core:v3",
+    "version": "3.0.0",
     "status": "published",
     "contentHash": "sha256:bbd0f3e57edb46ef9e1da43fac48981047b2a47082ef855f8d04a8f7470c9490",
     "createdAt": 1784016000000

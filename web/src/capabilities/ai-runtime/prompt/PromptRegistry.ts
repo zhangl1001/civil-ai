@@ -1,6 +1,12 @@
 import { SHARED_PROMPT_EXAM_TYPE, type PromptBundle } from './PromptContracts';
 
 export interface PinnedPromptRef {
+  /**
+   * The pack the prompt actually resolved from — the active track, or 'shared'
+   * when it fell back. Pinned per prompt because a pack that later ships its own
+   * wording for the same version would otherwise take over a running task.
+   */
+  readonly examType: string;
   readonly version: string;
   readonly contentHash: string;
 }
@@ -62,19 +68,26 @@ export class PromptRegistry {
     for (const promptCode of new Set([...this.bundles.values()].map((bundle) => bundle.promptCode))) {
       const resolved = this.resolveWithin(this.activeExamType, promptCode)
         ?? this.resolveWithin(SHARED_PROMPT_EXAM_TYPE, promptCode);
-      if (resolved) prompts[promptCode] = { version: resolved.version, contentHash: resolved.contentHash };
+      if (resolved) {
+        prompts[promptCode] = {
+          examType: resolved.examType,
+          version: resolved.version,
+          contentHash: resolved.contentHash
+        };
+      }
     }
     return { examType: this.activeExamType, prompts };
   }
 
   /**
-   * The exact bundle a pin names, ignoring whichever pack is active now.
-   * Undefined when that version is no longer shipped, which leaves the caller
-   * to decide between failing and re-resolving.
+   * The exact bundle a pin names — same pack, same version, no fallback.
+   *
+   * Falling back to the shared catalog here would defeat the pin: a task that
+   * resolved a shared prompt would start using a pack override the moment one
+   * shipped under the same version.
    */
-  findPinned(examType: string, promptCode: string, version: string): PromptBundle | undefined {
-    return this.bundles.get(promptKey(examType, promptCode, version))
-      ?? this.bundles.get(promptKey(SHARED_PROMPT_EXAM_TYPE, promptCode, version));
+  findPinned(pin: PinnedPromptRef, promptCode: string): PromptBundle | undefined {
+    return this.bundles.get(promptKey(pin.examType, promptCode, pin.version));
   }
 
   private resolveWithin(examType: string, promptCode: string, version?: string): PromptBundle | undefined {

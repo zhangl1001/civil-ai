@@ -207,6 +207,14 @@ export interface TutorDatabaseRuntime {
   readonly updateScoreTargets: UpdateScoreTargets;
   /** Exam tracks bundled with the app, in the order they are offered. */
   readonly curriculumPacks: readonly BundledCurriculumPack[];
+  /**
+   * Re-points the running app at the candidate's own track.
+   *
+   * The runtime is a singleton built before a candidate exists, so onboarding
+   * runs with the seed pack active; creating a cycle has to say so or the app
+   * keeps the wrong labels, prompts and scoring rules until a restart.
+   */
+  readonly activateExamPack: () => Promise<void>;
   initialize(): Promise<void>;
   close(): Promise<void>;
   resetForDevelopment(): Promise<void>;
