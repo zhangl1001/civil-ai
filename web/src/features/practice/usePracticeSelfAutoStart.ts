@@ -14,7 +14,13 @@ interface PracticeSelfAutoStartOptions {
   readonly route: RouteLocationNormalizedLoaded;
   readonly router: Router;
   readonly loading: Readonly<Ref<boolean>>;
-  readonly start: (request: PracticeSelfAutoStartRequest) => Promise<void>;
+  /**
+   * Resolves to whether the task was accepted. The page reports its own failure
+   * to the user, so a rejected start is an ordinary outcome here rather than a
+   * thrown error — but it has to be distinguishable from success, or a failed
+   * request would be consumed as handled and could never be retried.
+   */
+  readonly start: (request: PracticeSelfAutoStartRequest) => Promise<boolean>;
 }
 
 /** Consumes an explicit one-shot route request through the regular practice task flow. */
@@ -35,9 +41,9 @@ export function usePracticeSelfAutoStart(options: PracticeSelfAutoStartOptions) 
     const count = SUPPORTED_COUNTS.has(requestedCount) ? requestedCount : 10;
     const requestKey = `${capabilityNodeId}:${count}`;
     if (handledKey === requestKey) return;
-    // Marked only after the task is accepted: a failed start must stay
-    // retryable on this page rather than being swallowed as already handled.
-    await options.start({ capabilityNodeId, count });
+    // Marked only after the task is accepted: a failed start keeps start=1 in
+    // the URL so the page can retry it rather than swallowing the request.
+    if (!await options.start({ capabilityNodeId, count })) return;
     handledKey = requestKey;
 
     const nextQuery = { ...options.route.query };

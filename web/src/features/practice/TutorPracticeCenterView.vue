@@ -426,7 +426,7 @@ const { tryStart: autoStartRequestedSelfPractice } = usePracticeSelfAutoStart({
     activeMode.value = QuestionSetEntryMode.Self;
     customCount.value = count;
     initializeCustomSelection();
-    await generateCustom();
+    return generateCustom();
   }
 });
 onMounted(async () => {
@@ -559,9 +559,10 @@ function queryText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-async function generateCustom() {
+/** Reports whether a task was created; the failure itself is shown via error.value. */
+async function generateCustom(): Promise<boolean> {
   const target = selectedCustomCapability.value;
-  if (!target || launching.value || selfTask.value?.isActive) return;
+  if (!target || launching.value || selfTask.value?.isActive) return false;
   showCustomSheet.value = false;
   launching.value = true;
   error.value = '';
@@ -587,8 +588,10 @@ async function generateCustom() {
       goal: `自主练习${target.name}`
     });
     trackTask(task, QuestionSetEntryMode.Self);
+    return true;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '创建自主练习失败';
+    return false;
   } finally {
     launching.value = false;
   }
