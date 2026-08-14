@@ -17,6 +17,21 @@ The included Chinese civil-service examination application is the current end-to
 
 Civil AI is not affiliated with an examination authority, question setter, or training provider. The repository contains only original demonstration material and does not bundle or license third-party question banks. Review [`LEGAL_AND_CONTENT_POLICY.md`](LEGAL_AND_CONTENT_POLICY.md) before importing, retrieving, storing, or sharing external content.
 
+## Verified, not asserted
+
+Every claim below is enforced by the build gate on each push and reproducible locally with `npm test`, before you read a line of prose.
+
+| | Enforced state |
+| --- | --- |
+| **Build gate** | 39 repository checks, then `vue-tsc`, then the production bundle — any failure blocks the build |
+| **Executable checks** | 32 of those 39 boot the real modules through Vite's SSR loader and assert on observed behaviour, not on mocks |
+| **Portability** | 2 bundled examination packages; the second is installed headlessly and driven end to end, so curricula, subjects, grading, routing, and prompts are data rather than code |
+| **Schema integrity** | 42 numbered migrations, each checksummed and re-verified against the applied history on startup |
+| **Type discipline** | explicit `any`, `@ts-ignore`, and `@ts-nocheck` rejected outright across 609 TypeScript and Vue source files |
+| **Size discipline** | every source file carries a line budget — 600 by default, 16 recorded legacy allowances — so an oversized file must be decomposed, never annotated |
+
+Full detail in [what the gate enforces](#what-the-gate-enforces).
+
 ## Who this repository is for
 
 This repository is intended for maintainers and builders who need to:
@@ -38,6 +53,8 @@ The application is designed around three principles:
 - **Local-first ownership:** structured learning data stays on the device by default.
 - **Evidence before autonomy:** the agent can make teaching decisions, while deterministic services own scores, state transitions, validation, and persistence.
 - **Provider neutrality:** model providers are adapters, not business dependencies.
+
+**Where this is going.** The target is a foundation where adding a learning domain is a data exercise rather than an engineering project: a new curriculum, capability graph, rubric, and teaching policy, with no reusable module edited. The second examination package was the first real test of that boundary, and it held — subjects, modules, score bands, partial-credit rules, routing, and prompt resolution all moved as data, and the one place that had hardcoded a civil-service assumption failed the build instead of shipping. Examinations are the proving ground, not the ceiling: the loop underneath them — observe, project mastery, plan, teach, re-observe — is what any serious adaptive tutor needs. Some contracts still carry exam-domain identifiers and are being extracted. The direction is not in doubt; what makes it credible is that each step of it is enforced by a check rather than announced in a document.
 
 ## Foundation and reference application
 
@@ -154,7 +171,7 @@ The CI workflow installs locked dependencies, audits production dependencies, an
 
 ### What the gate enforces
 
-The application build chain is the real gate: **39 repository checks**, then `vue-tsc` type checking, then the production bundle. Thirty-four of those checks load the actual modules through Vite's SSR loader and assert on observed behaviour rather than on mocks, so each one is an executable claim about the system and a regression fails the build instead of reaching a release.
+The application build chain is the real gate: **39 repository checks**, then `vue-tsc` type checking, then the production bundle. Thirty-two of those checks load the actual modules through Vite's SSR loader and assert on observed behaviour rather than on mocks, so each one is an executable claim about the system and a regression fails the build instead of reaching a release.
 
 - **Portability across examination domains.** A second, unrelated examination package — teacher recruitment, with different subjects, modules, score bands, a different partial-credit rule, and a subjective written subject — is installed headlessly and driven through curriculum activation, grading, planning, capability routing, and prompt resolution. This check found a real regression: content generation had hardcoded the civil-service subject code. It demonstrates portability across examinations; portability across learning domains remains unvalidated.
 - **Schema integrity.** 42 numbered SQL migrations, each recorded with a checksum in `schema_migrations` and re-verified against the applied history on startup. An edited migration is rejected rather than silently reapplied.
