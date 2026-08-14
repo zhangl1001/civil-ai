@@ -49,6 +49,7 @@
       </p>
       <QuestionContentTemplate :key="`${question.id}:${question.contentVersion}`"
         :question="question.content"
+        :grading-rule="bundle?.questionSet.gradingPolicy"
         :presentation="questionPresentation"
         :selected-option-ids="answers[question.id]"
         :reveal-result="submitted"

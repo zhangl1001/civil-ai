@@ -1,4 +1,5 @@
 import type { TransactionContext } from '@/capabilities/database/public';
+import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import type {
   AgentRunId,
   CapabilityNodeId,
@@ -160,6 +161,11 @@ export interface QuestionSetRecord {
   readonly questionCount: number;
   readonly contentHash?: string;
   readonly contentVersion: number;
+  /**
+   * Grading rule frozen at publish time. Absent for sets published before
+   * snapshots existed, which grade against the active package rule.
+   */
+  readonly gradingPolicy?: QuestionSetGradingPolicy;
   readonly createdAt: InstantMs;
 }
 

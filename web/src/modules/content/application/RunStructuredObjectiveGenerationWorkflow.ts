@@ -40,6 +40,7 @@ import {
 } from '../domain/ContentCodes';
 import { GenerationWorkflowMachine } from '../domain/GenerationWorkflowMachine';
 import { GeneratedContentCommitBuilder } from './GeneratedContentCommitBuilder';
+import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import { GeneratedContentParseError, GeneratedContentParser, type GeneratedLectureQuestionSet } from './GeneratedContentParser';
 import { GenerationModelInvoker } from './GenerationModelInvoker';
 import {
@@ -88,9 +89,11 @@ export class RunStructuredObjectiveGenerationWorkflow {
     private readonly questionSourceRepository: QuestionSourceRepository,
     private readonly promptCompiler: PromptCompiler,
     private readonly clock: Clock,
-    private readonly ids: IdGenerator
+    private readonly ids: IdGenerator,
+    /** Grading rule frozen onto every set this workflow commits. */
+    gradingPolicy: () => QuestionSetGradingPolicy | undefined = () => undefined
   ) {
-    this.commitBuilder = new GeneratedContentCommitBuilder(clock, ids);
+    this.commitBuilder = new GeneratedContentCommitBuilder(clock, ids, gradingPolicy);
     this.modelInvoker = new GenerationModelInvoker(
       unitOfWork,
       invocationRepository,

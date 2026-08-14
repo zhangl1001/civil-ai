@@ -6,11 +6,12 @@ import {
   correctOptionIdsOf,
   QuestionSetPracticeStatus,
   type ContentRepository,
-  type QuestionRecord
+  type QuestionRecord,
+  type QuestionSetGradingPolicy
 } from '@/modules/content/public';
 import { choiceAttemptAnswer } from '../domain/ChoiceAttemptAnswer';
 import {
-  CHOICE_GRADER_VERSION,
+  choiceGraderVersion,
   DEFAULT_CHOICE_GRADING_RULE,
   gradeChoiceAnswer,
   type ChoiceGradingRule
@@ -138,7 +139,8 @@ export class SubmitObjectiveSession {
       thread.thread,
       selectedQuestions,
       command.assessmentRole ?? questionSet.questionSet.assessmentRole,
-      targetQuestionMs(questionSet.generationSpec?.constraints, selectedQuestions.length)
+      targetQuestionMs(questionSet.generationSpec?.constraints, selectedQuestions.length),
+      questionSet.questionSet.gradingPolicy
     );
     try {
       await this.unitOfWork.run(async (context) => {
@@ -197,8 +199,15 @@ export class SubmitObjectiveSession {
     thread: LearningThreadRecord,
     questions: readonly QuestionRecord[],
     assessmentRole: AssessmentRole,
-    speedTargetMs: number
+    speedTargetMs: number,
+    /**
+     * Rule frozen onto the question set when it was published. Absent only for
+     * sets published before snapshots existed, which fall back to the active
+     * package rule — the behaviour they were always graded under.
+     */
+    gradingPolicy?: QuestionSetGradingPolicy
   ): ObjectiveSubmissionBundle {
+    const gradingRule = gradingPolicy ?? this.choiceGradingRule();
     const answerByQuestionId = new Map(command.answers.map((item) => [item.questionId, item]));
     if (answerByQuestionId.size !== command.answers.length) throw new Error('Each question can be submitted once per session');
     const expected = new Set(questions.map((item) => item.id));
@@ -216,7 +225,7 @@ export class SubmitObjectiveSession {
         question.content.templateCode,
         correctOptionIds,
         selectedOptionIds,
-        this.choiceGradingRule()
+        gradingRule
       );
       const result = grade.result;
       const attemptId = this.ids.next('AttemptId');
@@ -283,7 +292,7 @@ export class SubmitObjectiveSession {
       id: this.ids.next('GradingResultId'),
       attemptId: item.attempt.id,
       gradingMethod: GradingMethod.Deterministic,
-      graderVersion: CHOICE_GRADER_VERSION,
+      graderVersion: choiceGraderVersion(gradingPolicy?.policyHash),
       result: item.result,
       score: item.attempt.score,
       normalizedFeedback: {

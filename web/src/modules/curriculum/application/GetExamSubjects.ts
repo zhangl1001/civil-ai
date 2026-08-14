@@ -47,6 +47,13 @@ export interface ExamWrittenFormat {
 export interface ExamChoiceGradingRule {
   /** Fraction of the proportional score kept for an under-selected answer. */
   readonly underSelectionCreditWeight: number;
+  /**
+   * Identity of the package policy this rule came from. Carried so a question
+   * set can freeze which rule marked it and a stored score stays explainable
+   * once the package moves on.
+   */
+  readonly policyVersion: string;
+  readonly policyHash: string;
 }
 
 /** Mock paper defaults for one subject. Absent when the subject has no mock exam. */
@@ -116,7 +123,7 @@ export function projectExamSubjects(bundle: CurriculumBundle): readonly ExamSubj
       if (!deliveryKind) return [];
       const mockExam = readMockPaperSpec(readValue(policy.config, 'mockExam'));
       const score = readSubjectScore(readValue(policy.config, 'score'));
-      const choiceGrading = readChoiceGradingRule(readValue(policy.config, 'choiceGrading'));
+      const choiceGrading = readChoiceGradingRule(policy);
       return [{
         code: node.subject,
         name: node.name,
@@ -174,13 +181,17 @@ function readWrittenFormats(value: unknown): readonly ExamWrittenFormat[] {
   });
 }
 
-function readChoiceGradingRule(value: unknown): ExamChoiceGradingRule | undefined {
-  const record = asRecord(value);
+function readChoiceGradingRule(policy: AssessmentPolicyVersion): ExamChoiceGradingRule | undefined {
+  const record = asRecord(readValue(policy.config, 'choiceGrading'));
   const weight = record?.underSelectionCreditWeight;
   // A weight outside 0..1 would push an attempt score past the stored range,
   // so an unusable rule is rejected rather than clamped.
   if (typeof weight !== 'number' || !Number.isFinite(weight) || weight < 0 || weight > 1) return undefined;
-  return { underSelectionCreditWeight: weight };
+  return {
+    underSelectionCreditWeight: weight,
+    policyVersion: policy.version,
+    policyHash: policy.contentHash
+  };
 }
 
 function readSubjectScore(value: unknown): ExamSubjectScore | undefined {

@@ -6,8 +6,20 @@ export interface ChoiceAnswerGrade {
   readonly score: number;
 }
 
-/** Recorded on every grading result so past scores stay explainable after a rule change. */
+/** Algorithm version. Bump when the marking logic itself changes. */
 export const CHOICE_GRADER_VERSION = 'objective-choice:v1';
+
+/**
+ * Grader identity recorded on a stored score: the algorithm version plus the
+ * rule that parameterised it.
+ *
+ * The algorithm version alone is not enough to explain a score — two attempts
+ * marked under different 少选 weights would be indistinguishable after the fact,
+ * which is exactly what happens once an exam package is upgraded.
+ */
+export function choiceGraderVersion(policyHash?: string): string {
+  return policyHash ? `${CHOICE_GRADER_VERSION}/${policyHash.slice(-12)}` : CHOICE_GRADER_VERSION;
+}
 
 /**
  * How an incomplete but correct selection scores. Exams differ on 少选, so the

@@ -52,6 +52,10 @@ export {
   maxSelectableOptions
 } from './domain/ChoiceQuestionAnswer';
 export {
+  parseQuestionSetGradingPolicy,
+  type QuestionSetGradingPolicy
+} from './domain/QuestionSetGradingPolicy';
+export {
   GeneratedContentBlockCode,
   GeneratedContentValidationTier,
   generatedContentBlockPolicy,

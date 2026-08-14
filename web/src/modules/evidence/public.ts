@@ -30,6 +30,7 @@ export {
 } from './domain/ChoiceAttemptAnswer';
 export {
   CHOICE_GRADER_VERSION,
+  choiceGraderVersion,
   DEFAULT_CHOICE_GRADING_RULE,
   gradeChoiceAnswer,
   type ChoiceAnswerGrade,

@@ -42,6 +42,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { multiAnswerGradingHint } from '@/domain/choiceGradingRules';
+import type { ChoiceGradingRule } from '@/modules/evidence/public';
 import ContentDocumentRenderer from '@/components/content/ContentDocumentRenderer.vue';
 import QuestionExplanationView from '@/components/question/QuestionExplanationView.vue';
 import QuestionOptionList from '@/components/question/QuestionOptionList.vue';
@@ -49,7 +51,6 @@ import {
   QuestionRegionCode,
   QuestionRegionLayoutCode,
   QuestionPresentationCode,
-  QuestionTemplateCode,
   correctAnswerLabel,
   correctOptionIdsOf,
   isMultiAnswerChoice,
@@ -71,6 +72,8 @@ const props = withDefaults(defineProps<{
   readonly disabled?: boolean;
   readonly compact?: boolean;
   readonly showExplanation?: boolean;
+  /** Rule the owning question set was published under; omit to use the active package. */
+  readonly gradingRule?: ChoiceGradingRule;
 }>(), {
   presentation: undefined,
   layout: QuestionRegionLayoutCode.Practice,
@@ -79,7 +82,8 @@ const props = withDefaults(defineProps<{
   readonlyMode: false,
   disabled: false,
   compact: false,
-  showExplanation: false
+  showExplanation: false,
+  gradingRule: undefined
 });
 
 const definition = computed(() => questionPresentationDefinition(
@@ -88,9 +92,7 @@ const definition = computed(() => questionPresentationDefinition(
 const multiSelect = computed(() => isMultiAnswerChoice(props.question));
 const correctOptionIds = computed(() => correctOptionIdsOf(props.question));
 const correctAnswer = computed(() => correctAnswerLabel(props.question));
-const multiAnswerHint = computed(() => props.question.templateCode === QuestionTemplateCode.MultipleChoice
-  ? '多选题 · 至少两个正确选项，少选得部分分，错选不得分'
-  : '不定项选择 · 正确选项数量未知，少选得部分分，错选不得分');
+const multiAnswerHint = computed(() => multiAnswerGradingHint(props.question.templateCode, props.gradingRule));
 const materialTextVariant = computed(() => (
   definition.value.code === QuestionPresentationCode.DataMaterialChoice ? 'data' : 'compact'
 ));
