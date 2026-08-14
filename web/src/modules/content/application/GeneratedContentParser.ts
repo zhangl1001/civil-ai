@@ -2,7 +2,12 @@ import { parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import type { JsonObject } from '@/kernel/public';
 import type { ContentDocument } from '../contracts/ContentDocument';
 import type { QuestionContent } from '../contracts/QuestionContent';
-import { isQuestionTemplateCode, QuestionTemplateCode } from '../domain/ContentCodes';
+import {
+  isQuestionTemplateCode,
+  parseQuestionTemplateCode,
+  questionSchemaVersionFor,
+  QuestionTemplateCode
+} from '../domain/ContentCodes';
 import { ContentSchemaValidator, type ContentValidationIssue } from './ContentSchemaValidator';
 import {
   asOptionalRecord,
@@ -193,8 +198,10 @@ function authoringQuestion(
   issues: ContentValidationIssue[]
 ): Record<string, unknown> | undefined {
   const question = asOptionalRecord(input);
-  // Already-shaped content (import and repair paths) passes through untouched.
-  if (isQuestionTemplateCode(question?.templateCode)) {
+  // Already-parsed content (repair paths) passes through untouched. An authored
+  // payload may name its template too, so the stamped schemaVersion — which only
+  // content that has already been through here carries — is what tells them apart.
+  if (isQuestionTemplateCode(question?.templateCode) && typeof question?.schemaVersion === 'string') {
     const { referenceQuestionId: _referenceQuestionId, ...contentQuestion } = question;
     return expectedCapabilityCode
       ? { ...contentQuestion, capabilityCode: expectedCapabilityCode }
@@ -210,7 +217,8 @@ function authoringQuestion(
     ?? requiredAuthorText(question.capabilityCode, `${path}.capabilityCode`, issues);
   const prompt = requiredAuthorText(question.prompt, `${path}.prompt`, issues);
   const promptVisual = authoringVisual(question.visual);
-  const correctOptionId = normalizedOptionId(question.correctOptionId, `${path}.correctOptionId`, issues);
+  const templateCode = parseQuestionTemplateCode(question.templateCode) ?? QuestionTemplateCode.SingleChoice;
+  const correctOptionIds = authoredAnswerKey(templateCode, question, path, issues);
   if (!Array.isArray(question.options)) {
     issues.push({ code: 'generation.options_invalid', path: `${path}.options`, message: 'Options must be an array' });
     return undefined;
@@ -234,10 +242,10 @@ function authoringQuestion(
       : undefined;
   });
   const optionIds = options.flatMap((option) => option ? [option.id] : []);
-  const explanation = id && correctOptionId
-    ? authoringExplanation(question.explanation, id, [correctOptionId], optionIds)
+  const explanation = id && correctOptionIds
+    ? authoringExplanation(question.explanation, id, correctOptionIds, optionIds)
     : undefined;
-  if (!id || !capabilityCode || !prompt || !explanation || !correctOptionId || options.some((option) => !option)) return undefined;
+  if (!id || !capabilityCode || !prompt || !explanation || !correctOptionIds || options.some((option) => !option)) return undefined;
   const requestedMaterialGroupId = optionalAuthorTextValue(question.materialGroupId);
   const groupedMaterial = requestedMaterialGroupId ? materialGroups.get(requestedMaterialGroupId) : undefined;
   // A one-question "shared" group is semantically just independent material.
@@ -256,16 +264,60 @@ function authoringQuestion(
       ? authorDocument(`${materialGroupId || id}:material`, materialSource)
       : materialSource;
   return {
-    templateCode: QuestionTemplateCode.SingleChoice,
-    schemaVersion: 'question.single_choice.v2',
+    templateCode,
+    schemaVersion: questionSchemaVersionFor(templateCode),
     capabilityCode,
     ...(materialGroupId ? { materialGroupId } : {}),
     material,
     prompt: authorDocumentWithVisual(`${id}:prompt`, prompt, promptVisual),
     options,
-    correctOptionId,
+    ...(templateCode === QuestionTemplateCode.SingleChoice
+      ? { correctOptionId: correctOptionIds[0] }
+      : { correctOptionIds }),
     explanation
   };
+}
+
+/**
+ * Answer letters an authored payload declares, normalised to option ids.
+ *
+ * Single choice keeps its scalar field; the multi-answer templates read an
+ * array, which is what lets an imported paper carry a real 多选题 rather than
+ * being flattened to one answer per question.
+ */
+function authoredAnswerKey(
+  templateCode: QuestionTemplateCode,
+  question: Record<string, unknown>,
+  path: string,
+  issues: ContentValidationIssue[]
+): readonly string[] | undefined {
+  if (templateCode === QuestionTemplateCode.SingleChoice) {
+    const correctOptionId = normalizedOptionId(question.correctOptionId, `${path}.correctOptionId`, issues);
+    return correctOptionId ? [correctOptionId] : undefined;
+  }
+  const declared = question.correctOptionIds;
+  if (!Array.isArray(declared) || declared.length === 0) {
+    issues.push({
+      code: 'generation.answer_invalid',
+      path: `${path}.correctOptionIds`,
+      message: 'Multi answer question requires a non-empty correctOptionIds array'
+    });
+    return undefined;
+  }
+  const ids = declared.map((item, position) => (
+    normalizedOptionId(item, `${path}.correctOptionIds[${position}]`, issues)
+  ));
+  if (ids.some((id) => !id)) return undefined;
+  const unique = [...new Set(ids as readonly string[])];
+  if (unique.length !== ids.length) {
+    issues.push({
+      code: 'generation.answer_invalid',
+      path: `${path}.correctOptionIds`,
+      message: 'Correct option ids must be unique'
+    });
+    return undefined;
+  }
+  return unique;
 }
 
 function injectCapabilityCode(

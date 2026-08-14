@@ -3,7 +3,7 @@
     "id": "content-metadata:core:v2",
     "version": "2.0.0",
     "status": "published",
-    "contentHash": "sha256:0e0e760a9309af469679010176081f09bf886cd89c954d36298361130d32dff9",
+    "contentHash": "sha256:bbd0f3e57edb46ef9e1da43fac48981047b2a47082ef855f8d04a8f7470c9490",
     "createdAt": 1784016000000
   },
   "payload": {
@@ -18,11 +18,19 @@
         "schema": {
           "$id": "content.document.v1",
           "type": "object",
-          "required": ["schemaVersion", "blocks"],
+          "required": [
+            "schemaVersion",
+            "blocks"
+          ],
           "additionalProperties": false,
           "properties": {
-            "schemaVersion": { "const": "content.v1" },
-            "blocks": { "type": "array", "minItems": 1 }
+            "schemaVersion": {
+              "const": "content.v1"
+            },
+            "blocks": {
+              "type": "array",
+              "minItems": 1
+            }
           }
         }
       },
@@ -36,18 +44,166 @@
         "schema": {
           "$id": "question.single_choice.v2",
           "type": "object",
-          "required": ["templateCode", "schemaVersion", "capabilityCode", "prompt", "options", "correctOptionId", "explanation"],
+          "required": [
+            "templateCode",
+            "schemaVersion",
+            "capabilityCode",
+            "prompt",
+            "options",
+            "correctOptionId",
+            "explanation"
+          ],
           "additionalProperties": false,
           "properties": {
-            "templateCode": { "const": "single_choice" },
-            "schemaVersion": { "const": "question.single_choice.v2" },
-            "capabilityCode": { "type": "string", "minLength": 1 },
-            "materialGroupId": { "type": "string", "minLength": 1 },
-            "material": { "$ref": "content.document.v1" },
-            "prompt": { "$ref": "content.document.v1" },
-            "options": { "type": "array", "minItems": 2 },
-            "correctOptionId": { "type": "string", "minLength": 1 },
-            "explanation": { "$ref": "content.document.v1" }
+            "templateCode": {
+              "const": "single_choice"
+            },
+            "schemaVersion": {
+              "const": "question.single_choice.v2"
+            },
+            "capabilityCode": {
+              "type": "string",
+              "minLength": 1
+            },
+            "materialGroupId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "material": {
+              "$ref": "content.document.v1"
+            },
+            "prompt": {
+              "$ref": "content.document.v1"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 2
+            },
+            "correctOptionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "explanation": {
+              "$ref": "content.document.v1"
+            }
+          }
+        }
+      },
+      {
+        "id": "content-schema:question-multiple-choice:v2",
+        "schemaCode": "question.multiple_choice",
+        "documentType": "question",
+        "version": "2.0.0",
+        "status": "published",
+        "createdAt": 1784016000000,
+        "schema": {
+          "$id": "question.multiple_choice.v2",
+          "type": "object",
+          "required": [
+            "templateCode",
+            "schemaVersion",
+            "capabilityCode",
+            "prompt",
+            "options",
+            "correctOptionIds",
+            "explanation"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "templateCode": {
+              "const": "multiple_choice"
+            },
+            "schemaVersion": {
+              "const": "question.multiple_choice.v2"
+            },
+            "capabilityCode": {
+              "type": "string",
+              "minLength": 1
+            },
+            "materialGroupId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "material": {
+              "$ref": "content.document.v1"
+            },
+            "prompt": {
+              "$ref": "content.document.v1"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 2
+            },
+            "explanation": {
+              "$ref": "content.document.v1"
+            },
+            "correctOptionIds": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "content-schema:question-indeterminate-choice:v2",
+        "schemaCode": "question.indeterminate_choice",
+        "documentType": "question",
+        "version": "2.0.0",
+        "status": "published",
+        "createdAt": 1784016000000,
+        "schema": {
+          "$id": "question.indeterminate_choice.v2",
+          "type": "object",
+          "required": [
+            "templateCode",
+            "schemaVersion",
+            "capabilityCode",
+            "prompt",
+            "options",
+            "correctOptionIds",
+            "explanation"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "templateCode": {
+              "const": "indeterminate_choice"
+            },
+            "schemaVersion": {
+              "const": "question.indeterminate_choice.v2"
+            },
+            "capabilityCode": {
+              "type": "string",
+              "minLength": 1
+            },
+            "materialGroupId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "material": {
+              "$ref": "content.document.v1"
+            },
+            "prompt": {
+              "$ref": "content.document.v1"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 2
+            },
+            "explanation": {
+              "$ref": "content.document.v1"
+            },
+            "correctOptionIds": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
           }
         }
       }
@@ -65,7 +221,54 @@
           "answerMode": "single",
           "minOptions": 2,
           "maxOptions": 8,
-          "regions": ["material", "prompt", "options", "explanation"],
+          "regions": [
+            "material",
+            "prompt",
+            "options",
+            "explanation"
+          ],
+          "groupingField": "materialGroupId"
+        }
+      },
+      {
+        "id": "question-template:multiple-choice:v2",
+        "templateCode": "multiple_choice",
+        "version": "2.0.0",
+        "rendererCode": "multiple_choice",
+        "contentSchemaVersionId": "content-schema:question-multiple-choice:v2",
+        "status": "published",
+        "createdAt": 1784016000000,
+        "config": {
+          "answerMode": "multiple",
+          "minOptions": 2,
+          "maxOptions": 8,
+          "regions": [
+            "material",
+            "prompt",
+            "options",
+            "explanation"
+          ],
+          "groupingField": "materialGroupId"
+        }
+      },
+      {
+        "id": "question-template:indeterminate-choice:v2",
+        "templateCode": "indeterminate_choice",
+        "version": "2.0.0",
+        "rendererCode": "indeterminate_choice",
+        "contentSchemaVersionId": "content-schema:question-indeterminate-choice:v2",
+        "status": "published",
+        "createdAt": 1784016000000,
+        "config": {
+          "answerMode": "indeterminate",
+          "minOptions": 2,
+          "maxOptions": 8,
+          "regions": [
+            "material",
+            "prompt",
+            "options",
+            "explanation"
+          ],
           "groupingField": "materialGroupId"
         }
       }

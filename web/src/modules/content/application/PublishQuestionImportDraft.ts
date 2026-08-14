@@ -10,6 +10,8 @@ import {
 import type {
   CommittedQuestionSetBundle,
   ContentRepository,
+  ContentSchemaVersion,
+  QuestionTemplateVersion,
   GenerationSpecRecord,
   GenerationWorkflowRecord,
   QuestionRecord
@@ -36,6 +38,7 @@ import {
   type QuestionTemplateCode
 } from '../domain/ContentCodes';
 import { correctAnswerRecord } from '../domain/ChoiceQuestionAnswer';
+import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import {
   QuestionImportCandidateStatus,
   QuestionImportDraftStatus
@@ -70,8 +73,34 @@ export class PublishQuestionImportDraft {
     private readonly contentRepository: ContentRepository,
     private readonly sourceRepository: QuestionSourceRepository,
     private readonly clock: Clock,
-    private readonly ids: IdGenerator
+    private readonly ids: IdGenerator,
+    /**
+     * Grading rule of the package in force when this set is published. Frozen
+     * onto the set so a later package upgrade cannot re-mark it.
+     */
+    private readonly gradingPolicy: () => QuestionSetGradingPolicy | undefined = () => undefined
   ) {}
+
+  /**
+   * Published template and schema for every template the paper uses. Resolved
+   * together so a paper is rejected before anything is written when one of its
+   * question types has no published metadata.
+   */
+  private async resolveTemplateMetadata(
+    templateCodes: readonly QuestionTemplateCode[]
+  ): Promise<ReadonlyMap<QuestionTemplateCode, { schema: ContentSchemaVersion; template: QuestionTemplateVersion }>> {
+    const resolved = await Promise.all(templateCodes.map(async (templateCode) => {
+      const [schema, template] = await Promise.all([
+        this.contentRepository.findPublishedSchema(questionSchemaCodeFor(templateCode)),
+        this.contentRepository.findPublishedQuestionTemplate(templateCode)
+      ]);
+      if (!schema || !template || template.contentSchemaVersionId !== schema.id) {
+        throw new Error(`Published content metadata for ${templateCode} is unavailable or incompatible`);
+      }
+      return [templateCode, { schema, template }] as const;
+    }));
+    return new Map(resolved);
+  }
 
   async execute(command: PublishQuestionImportDraftCommand): Promise<PublishQuestionImportDraftResult> {
     const idempotencyKey = command.idempotencyKey.trim();
@@ -104,27 +133,23 @@ export class PublishQuestionImportDraft {
       sourceHash: aggregate.draft.rawPayloadHash,
       questionHashes
     }));
-    // A draft publishes as one question set under one template version, so the
-    // candidates must agree on a template and that template's own metadata is
-    // what gets bound — binding single choice to a multi-answer question would
-    // make the stored answer key disagree with its declared schema.
-    const templateCode = singleTemplateCodeOf(candidates);
-    const [sameIdentity, sameContent, schema, template] = await Promise.all([
+    // Each question binds its own template and schema, so one paper can mix
+    // 单选 and 多选 the way a real 试卷 does. The set-level spec still names one
+    // template — the one most of the paper uses — because a generation spec
+    // describes a single request, not the shape of every question in it.
+    const [sameIdentity, sameContent, metadataByTemplate] = await Promise.all([
       this.sourceRepository.findSourceByIdentityHash(await buildQuestionSourceIdentityHash({
         sourceType: aggregate.draft.sourceType,
         ...aggregate.draft.sourceMetadata,
         contentHash: aggregate.draft.rawPayloadHash
       })),
       this.sourceRepository.findSourceByContentHash(aggregate.draft.rawPayloadHash),
-      this.contentRepository.findPublishedSchema(questionSchemaCodeFor(templateCode)),
-      this.contentRepository.findPublishedQuestionTemplate(templateCode)
+      this.resolveTemplateMetadata([...new Set(candidates.map((candidate) => candidate.content!.templateCode))])
     ]);
     if (sameIdentity || sameContent) {
       throw new Error('Question source was already published; use its existing question set instead of importing it again');
     }
-    if (!schema || !template || template.contentSchemaVersionId !== schema.id) {
-      throw new Error(`Published content metadata for ${templateCode} is unavailable or incompatible`);
-    }
+    const { schema, template } = metadataByTemplate.get(dominantTemplateCodeOf(candidates))!;
 
     const now = this.clock.now();
     const sourceId = this.ids.next('QuestionSourceId');
@@ -189,7 +214,7 @@ export class PublishQuestionImportDraft {
       questionSetId,
       examCycleId: aggregate.draft.examCycleId,
       capabilityNodeId: aggregate.draft.capabilityNodeId,
-      questionTemplateVersionId: template.id,
+      questionTemplateVersionId: metadataByTemplate.get(candidate.content!.templateCode)!.template.id,
       sequence: index + 1,
       difficulty: candidate.difficulty,
       cognitiveLevel: 'application',
@@ -205,7 +230,7 @@ export class PublishQuestionImportDraft {
       correctAnswer: correctAnswerRecord(candidate.content!),
       qualityStatus: QuestionQualityStatus.Published,
       contentHash: candidate.contentHash!,
-      contentSchemaVersionId: schema.id,
+      contentSchemaVersionId: metadataByTemplate.get(candidate.content!.templateCode)!.schema.id,
       contentVersion: 1,
       generatorWorkflowId: workflowId,
       createdAt: now
@@ -223,6 +248,7 @@ export class PublishQuestionImportDraft {
         purpose: QuestionSetPurpose.Anchor,
         assessmentRole: 'anchor',
         module: aggregate.draft.module,
+        gradingPolicy: this.gradingPolicy(),
         originType: aggregate.draft.sourceType,
         sourceId,
         calibrationRole: QuestionCalibrationRole.Anchor,
@@ -326,15 +352,19 @@ export class PublishQuestionImportDraft {
   }
 }
 
-/** Every candidate must share a template: a question set binds exactly one template version. */
-function singleTemplateCodeOf(
+/**
+ * The template most of the paper uses. Names the set-level generation spec,
+ * which describes one request rather than every question's own shape.
+ */
+function dominantTemplateCodeOf(
   candidates: readonly { readonly content?: QuestionContent }[]
 ): QuestionTemplateCode {
-  const codes = [...new Set(candidates.map((candidate) => candidate.content!.templateCode))];
-  if (codes.length !== 1 || !codes[0]) {
-    throw new Error(`Question import draft mixes question templates: ${codes.join(', ')}`);
+  const counts = new Map<QuestionTemplateCode, number>();
+  for (const candidate of candidates) {
+    const code = candidate.content!.templateCode;
+    counts.set(code, (counts.get(code) ?? 0) + 1);
   }
-  return codes[0];
+  return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]![0];
 }
 
 function resultFromReceipt(

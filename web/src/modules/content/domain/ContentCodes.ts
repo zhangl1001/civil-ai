@@ -218,6 +218,23 @@ export function questionSchemaCodeFor(templateCode: QuestionTemplateCode): strin
   return QUESTION_SCHEMA_BY_TEMPLATE[templateCode];
 }
 
+/**
+ * Schema version stamped onto authored question content. Listed rather than
+ * derived from the schema code so one template can be revised without silently
+ * moving the others onto a version their metadata never published.
+ */
+const QUESTION_SCHEMA_VERSION_BY_TEMPLATE: Readonly<Record<QuestionTemplateCode, string>> = {
+  [QuestionTemplateCode.SingleChoice]: 'question.single_choice.v2',
+  [QuestionTemplateCode.MultipleChoice]: 'question.multiple_choice.v2',
+  [QuestionTemplateCode.IndeterminateChoice]: 'question.indeterminate_choice.v2'
+};
+
+export function questionSchemaVersionFor(templateCode: QuestionTemplateCode): string {
+  return QUESTION_SCHEMA_VERSION_BY_TEMPLATE[templateCode];
+}
+
+export const QUESTION_SCHEMA_VERSIONS: readonly string[] = Object.values(QUESTION_SCHEMA_VERSION_BY_TEMPLATE);
+
 export const ContentCommandType = {
   CreateGeneration: 'content.create_generation'
 } as const;

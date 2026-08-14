@@ -46,7 +46,19 @@ const questionImportCandidateSchema: JsonObject = {
         }
       }
     },
-    correctOptionId: { type: ['string', 'null'], minLength: 1, maxLength: 8, description: '来源明确给出时填写对应选项 ID；未提供答案时为 null，禁止猜测。' },
+    templateCode: {
+      type: ['string', 'null'],
+      enum: ['single_choice', 'multiple_choice', 'indeterminate_choice', null],
+      description: '题型。来源标注“多选”填 multiple_choice，标注“不定项”填 indeterminate_choice，其余或来源未标注时留空按单选处理。'
+    },
+    correctOptionId: { type: ['string', 'null'], minLength: 1, maxLength: 8, description: '单选题的正确选项 ID。来源明确给出时填写；未提供答案时为 null，禁止猜测。' },
+    correctOptionIds: {
+      type: ['array', 'null'],
+      minItems: 1,
+      maxItems: 8,
+      items: { type: 'string', minLength: 1, maxLength: 8 },
+      description: '多选或不定项题的全部正确选项 ID，单选题不要填写。来源未给出完整答案时为 null，禁止猜测或只填一部分。'
+    },
     difficulty: { type: 'number', minimum: 0, maximum: 1 },
     explanation: {
       type: 'object',
