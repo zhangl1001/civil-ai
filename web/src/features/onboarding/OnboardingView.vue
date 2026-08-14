@@ -165,13 +165,17 @@ import { OnboardingMessage, resolveOnboardingError } from './onboardingMessages'
 import { OnboardingDraftFeature } from './OnboardingDraftFeature';
 import { ExamPackSelectionFeature, type ExamPackOption } from './ExamPackSelectionFeature';
 import {
+  DEFAULT_STUDY_RHYTHM,
+  ExamScope,
   applyScoreDefaults,
   examNameFor,
+  parseExamScope,
   restoreScoreEntries,
   scoreValidationError,
   studyRhythmInput,
   subjectScoreInputs
 } from './ExamProfileScores';
+import { restoreFormFields } from './OnboardingDraftRestore';
 
 const OnboardingStep = {
   Goal: 1,
@@ -191,20 +195,20 @@ let draftFeaturePromise: Promise<OnboardingDraftFeature> | undefined;
 const form = reactive({
   projectName: '',
   examType: '',
-  examScope: 'national',
+  examScope: DEFAULT_STUDY_RHYTHM.examScope as string,
   examDate: '',
   province: '',
   position: '',
   /** Keyed by subject code: the exam package decides which subjects are scored. */
   currentScores: {} as Record<string, string>,
   targetScores: {} as Record<string, string>,
-  studyMode: StudyMode.PartTime as string,
+  studyMode: DEFAULT_STUDY_RHYTHM.studyMode as string,
   weeklyStudyDays: 6,
   weekdayMinutes: 120,
   weekendMinutes: 240,
   maxFocusMinutes: 50,
-  teachingOrder: TeachingOrder.DiagnoseThenExplain as string,
-  proactiveLevel: ProactiveLevel.Balanced as string
+  teachingOrder: DEFAULT_STUDY_RHYTHM.teachingOrder as string,
+  proactiveLevel: DEFAULT_STUDY_RHYTHM.proactiveLevel as string
 });
 
 const fieldErrors = reactive({ projectName: '', examDate: '', scores: '', study: '' });
@@ -214,8 +218,8 @@ const stepItems = [
   { step: OnboardingStep.Rhythm, label: '节奏' }
 ] as const;
 const examScopeOptions = [
-  { value: 'national', label: '国考' },
-  { value: 'provincial', label: '省考' }
+  { value: ExamScope.National, label: '国考' },
+  { value: ExamScope.Provincial, label: '省考' }
 ] as const;
 const studyModeOptions = [
   { value: StudyMode.PartTime, label: '在职' },
@@ -240,13 +244,13 @@ const examPackOptions = computed(() => examPacks.value.map((pack) => ({ value: p
 const isRegionScoped = computed(() => activePack.value?.regionScoped ?? false);
 const provincialProvinceOptions = PROVINCE_OPTIONS.map((name) => ({ value: name, label: name }));
 const provinceOptions = computed(() => (
-  form.examScope === 'national'
+  form.examScope === ExamScope.National
     ? [{ value: '全国', label: '全国' }]
     : provincialProvinceOptions
 ));
 
 watch(() => form.examScope, (scope) => {
-  if (scope === 'national') {
+  if (scope === ExamScope.National) {
     form.province = '全国';
     return;
   }
@@ -295,15 +299,7 @@ async function restoreDraft() {
     if (!saved) return;
     draftCreatedAt.value = saved.createdAt;
     const data = saved.data;
-    for (const key of Object.keys(form) as Array<keyof typeof form>) {
-      const value = data[key];
-      // Score maps are restored separately: a draft may name subjects the
-      // installed package no longer has.
-      if (key === 'currentScores' || key === 'targetScores') continue;
-      if (typeof value === typeof form[key]) {
-        (form[key] as string | number) = value as string | number;
-      }
-    }
+    restoreFormFields(form, data);
     // A draft can outlive the package it was written against, so the track and
     // every restored score is re-checked instead of trusted.
     if (!examPacks.value.some((pack) => pack.examType === form.examType)) {
@@ -397,7 +393,7 @@ async function submit() {
       projectName: form.projectName,
       timeZone: timeZone as TimeZoneId,
       examType: pack.examType,
-      examName: examNameFor(pack, form.examScope, form.province),
+      examName: examNameFor(pack, parseExamScope(form.examScope) ?? ExamScope.National, form.province),
       province: form.province,
       position: form.position,
       examDate: form.examDate as LocalDate,
