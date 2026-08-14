@@ -1,21 +1,37 @@
 # Civil AI
 
+> A local-first adaptive education Agent foundation, validated through an end-to-end tutoring reference application.
+
 [![CI](https://github.com/zhangl1001/civil-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/zhangl1001/civil-ai/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](web/package.json)
 [![iOS](https://img.shields.io/badge/iOS-Capacitor-lightgrey.svg)](ios/App/App.xcodeproj)
 
-Civil AI is a local-first AI tutor for China's civil-service examinations and a reusable reference implementation for on-device agent workflows.
+Civil AI is a reusable, local-first foundation for building adaptive education Agents on iOS and Web. It separates provider-neutral Agent execution, learner evidence, mastery projection, planning, structured content, persistence, and safety boundaries from domain-specific curricula and teaching policies.
 
-中文定位：面向个人完整备考周期的本地优先 AI 公考私教。系统围绕建档、计划、学习、练习、批改、错因诊断、间隔复习和能力变化建立持续闭环，而不是只提供聊天或批量生题。
+The included Chinese civil-service examination application is the current end-to-end reference adapter. It validates the foundation through a real learning loop, but it does not define the scope of the foundation.
+
+中文定位：Civil AI 是面向 iOS 与 Web 的本地优先自适应教育 Agent 基础实现。Agent 运行、学习证据、掌握度、计划、结构化内容、持久化和安全边界属于可复用基础层；中国公考应用是当前完整跑通的领域适配与参考实现，不是基础层的能力边界。
 
 > Civil AI is under active development. Questions, model output, predictions, and learning advice are educational aids, not official examination guidance.
 
 Civil AI is not affiliated with an examination authority, question setter, or training provider. The repository contains only original demonstration material and does not bundle or license third-party question banks. Review [`LEGAL_AND_CONTENT_POLICY.md`](LEGAL_AND_CONTENT_POLICY.md) before importing, retrieving, storing, or sharing external content.
 
+## Who this repository is for
+
+This repository is intended for maintainers and builders who need to:
+
+- build an education Agent that acts on durable learning evidence instead of chat history alone;
+- keep model providers replaceable while preserving deterministic validation and persistence;
+- run recoverable Agent and content workflows on mobile or local-first clients;
+- add a learning domain through explicit curricula, capability graphs, rubrics, and teaching policies;
+- study a production-shaped reference application rather than an abstraction-only framework.
+
+Users interested only in the civil-service exam product can use the reference application. Contributors extending the foundation should work through its public ports, registries, schemas, and composition roots instead of importing exam-specific policies into reusable modules.
+
 ## Why this project exists
 
-Most study products optimize for question volume. Civil AI explores a different model: use deterministic learning evidence and an AI tutor together to decide what a candidate should learn, practise, review, or revisit next.
+Many learning products optimize content delivery or question volume without maintaining a reliable model of what the learner understands, forgets, or can transfer. Civil AI explores a different model: deterministic learning evidence and an adaptive tutoring Agent jointly decide what a learner should study, practise, review, or revisit next.
 
 The application is designed around three principles:
 
@@ -23,32 +39,51 @@ The application is designed around three principles:
 - **Evidence before autonomy:** the agent can make teaching decisions, while deterministic services own scores, state transitions, validation, and persistence.
 - **Provider neutrality:** model providers are adapters, not business dependencies.
 
-## Current capabilities
+## Foundation and reference application
 
-- Vue 3 and TypeScript mobile UI with a Capacitor iOS shell.
-- SQLite on iOS and IndexedDB as the browser development adapter.
-- Anthropic and OpenAI-compatible provider gateway with bounded retries and cancellation.
-- Agent runtime with tools, skills, checkpoints, task state, recovery, and controlled concurrency.
-- Candidate profile, target score, daily plan, practice, grading, error diagnosis, wrong-book review, essay and interview workflows.
-- Structured content generation with Markdown rendering and asynchronous enrichment.
-- Local data export, import, and deletion controls.
+The repository deliberately separates reusable education-Agent mechanisms from domain-specific teaching content. It is not an abstraction-only framework: the civil-service exam adapter exercises the contracts through a complete learning loop and exposes where runtime, evidence, planning, content, and recovery boundaries must work in practice.
+
+| Layer | Includes | Current maturity |
+| --- | --- | --- |
+| Portable Agent runtime | Agent loop, provider gateway, Tool/Skill registries, context assembly, cancellation, recovery, rendering, and Web research | Reused through explicit application ports and covered by focused conformance checks |
+| Adaptive tutoring foundation | Learner evidence, mastery projection, planning, structured educational content, review scheduling, and local persistence | Implemented end to end; selected contracts still carry exam-domain identifiers and require further extraction |
+| Learning-domain adapter | Capability graph, curriculum, content policies, assessment roles, rubrics, and teaching strategies | Explicit versioned contracts loaded through registries, fixtures, and composition roots |
+| Civil-service reference application | Aptitude, essay, interview, exam-cycle, candidate, and mobile workflows | Current production-shaped validation domain for the layers above |
+
+The architecture is designed for reuse, but the repository does not claim that every module is already a standalone domain-neutral package. A second learning-domain adapter is still required to validate portability beyond the current reference application.
+
+## Foundation capabilities
+
+- Provider-neutral Agent runtime with tools, skills, checkpoints, leases, cancellation, recovery, and controlled concurrency.
+- Evidence-oriented learner state, mastery projection, review priority, and adaptive planning contracts.
+- Structured educational-content generation, block validation, safe Markdown rendering, and asynchronous enrichment.
+- Versioned prompts, schemas, curricula, grading policies, and learning-domain registries.
+- SQLite and IndexedDB repository adapters with migration, recovery, export, import, and deletion boundaries.
+- Web research, document input, and native capabilities behind explicit policy-controlled ports.
+- Vue 3 and TypeScript mobile UI with a Capacitor iOS reference shell.
+
+## Reference application capabilities
+
+The civil-service adapter currently demonstrates candidate profiles, target scores, daily plans, objective and subjective practice, grading, error diagnosis, wrong-answer review, spaced review, essay workflows, interview training, and capability reporting. These workflows validate the foundation; their exam-specific policies remain isolated in the reference domain.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     UI["Vue mobile UI"] --> APP["Application use cases"]
-    APP --> DOM["Tutor domain modules"]
+    APP --> FOUNDATION["Adaptive tutoring foundation"]
+    APP --> ADAPTER["Learning-domain adapter"]
     APP --> AGENT["Agent runtime"]
     AGENT --> TOOLS["Tool and skill registries"]
     AGENT --> PROVIDERS["Provider gateway"]
-    DOM --> PORTS["Repository ports"]
+    FOUNDATION --> PORTS["Repository ports"]
+    ADAPTER --> FOUNDATION
     PORTS --> SQLITE["SQLite on iOS"]
     PORTS --> IDB["IndexedDB on Web"]
-    AGENT --> DOM
+    AGENT --> FOUNDATION
 ```
 
-The repository separates business modules from reusable capabilities:
+The repository separates reusable capabilities from learning-domain policies and reference-application workflows:
 
 | Area | Purpose | Reusable boundary |
 | --- | --- | --- |

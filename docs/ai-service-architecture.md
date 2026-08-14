@@ -1,7 +1,7 @@
 # AI 私教服务架构设计
 
 > 文档性质：公开架构参考
-> 上位约束：[Zhangl Agent 架构宪法](./architecture-constitution.md)  
+> 上位约束：[Civil AI 教育 Agent 架构宪法](./architecture-constitution.md)
 > 业务边界：[核心业务模块架构](./core-business-architecture.md)
 > 部署方式：本地 TypeScript 服务层直接访问用户配置的模型供应商，不依赖自建云服务。
 > Agent Runtime 边界决策：[ADR-001：供应商无关的本地 Tutor Agent Runtime](./adr-001-provider-neutral-agent-runtime.md)

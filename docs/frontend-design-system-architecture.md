@@ -1,7 +1,7 @@
 # 前端设计系统与业务模板架构
 
 > 文档性质：公开架构参考
-> 上位约束：[Zhangl Agent 架构宪法](./architecture-constitution.md)  
+> 上位约束：[Civil AI 教育 Agent 架构宪法](./architecture-constitution.md)
 > 目标：统一字体、主题、布局、弹层、表单、状态和业务模板，同时保持不同业务语义的扩展能力。
 
 > 内容渲染：Markdown、表格、SVG、图片、结构化内容块和题目 Renderer 按 [内容与 Markdown 渲染架构](./content-rendering-architecture.md) 实施。
