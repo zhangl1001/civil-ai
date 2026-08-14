@@ -50,7 +50,7 @@ The repository deliberately separates reusable education-Agent mechanisms from d
 | Learning-domain adapter | Capability graph, curriculum, content policies, assessment roles, rubrics, and teaching strategies | Explicit versioned contracts loaded through registries, fixtures, and composition roots |
 | Civil-service reference application | Aptitude, essay, interview, exam-cycle, candidate, and mobile workflows | Current production-shaped validation domain for the layers above |
 
-The architecture is designed for reuse, but the repository does not claim that every module is already a standalone domain-neutral package. A second learning-domain adapter is still required to validate portability beyond the current reference application.
+The architecture is designed for reuse, but the repository does not claim that every module is already a standalone domain-neutral package. A second examination package (teacher recruitment) is bundled and exercised in CI, which validates that curricula, subjects, grading rules, answer formats, routing, and prompts are genuinely data rather than code. Both packages are still question-driven study against a scored threshold, so portability across learning domains remains unvalidated.
 
 ## Foundation capabilities
 
@@ -151,6 +151,15 @@ npm run check:web-research
 ```
 
 The CI workflow installs locked dependencies, audits production dependencies, and runs the same verification gate on pull requests to `main`.
+
+### What the gate enforces
+
+The application build chain is the real gate: **39 repository checks**, then `vue-tsc` type checking, then the production bundle. Thirty-four of those checks load the actual modules through Vite's SSR loader and assert on observed behaviour rather than on mocks, so each one is an executable claim about the system and a regression fails the build instead of reaching a release.
+
+- **Portability across examination domains.** A second, unrelated examination package — teacher recruitment, with different subjects, modules, score bands, a different partial-credit rule, and a subjective written subject — is installed headlessly and driven through curriculum activation, grading, planning, capability routing, and prompt resolution. This check found a real regression: content generation had hardcoded the civil-service subject code. It demonstrates portability across examinations; portability across learning domains remains unvalidated.
+- **Schema integrity.** 42 numbered SQL migrations, each recorded with a checksum in `schema_migrations` and re-verified against the applied history on startup. An edited migration is rejected rather than silently reapplied.
+- **Structural budgets.** Explicit `any`, `@ts-ignore`, and `@ts-nocheck` are rejected outright. Every source file carries a line budget — 600 by default, with 16 files holding a recorded legacy allowance — so an oversized file must be decomposed instead of annotated. The 609 TypeScript and Vue source files are all covered.
+- **Boundary enforcement.** Module public surfaces, layering direction, prompt and schema and curriculum versioning, agent-run recovery, and the provider gateway each have a dedicated check, so crossing an architectural boundary is a build failure rather than a review comment.
 
 ## iOS build and installation
 

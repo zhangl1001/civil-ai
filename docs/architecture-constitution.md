@@ -8,7 +8,7 @@
 
 ## English scope summary
 
-This constitution separates reusable adaptive-education mechanisms from the current civil-service reference domain. Agent execution, evidence, mastery, planning, structured content, rendering, and persistence belong to the foundation; exam curricula, question types, rubrics, and candidate workflows enter through versioned adapters. The repository describes these as reusable boundaries, not as universally validated abstractions, until a second learning domain exercises them end to end.
+This constitution separates reusable adaptive-education mechanisms from the current civil-service reference domain. Agent execution, evidence, mastery, planning, structured content, rendering, and persistence belong to the foundation; exam curricula, question types, rubrics, and candidate workflows enter through versioned adapters. The repository describes these as reusable boundaries, not as universally validated abstractions, until a second learning domain exercises them end to end. A second exam package (teacher recruitment) now exercises the curriculum, subject, grading, routing and prompt boundaries in CI. That is evidence of portability across exams, not across learning domains: both packages are still question-driven study with a scored deadline.
 
 ## 1. 宪法效力
 
@@ -35,6 +35,7 @@ This constitution separates reusable adaptive-education mechanisms from the curr
 - 考试周期、公考能力图谱、行测/申论/面试题型、评分规则和考生页面属于当前参考领域。
 - 基础层不得依赖公考术语、固定题型或特定考试政策；领域能力通过版本化合同、Registry、Fixture 和 Composition Root 装配。
 - 不得为了宣称“通用”而隐藏真实领域约束。尚未经第二教育领域验证的能力，应表述为可复用边界或参考实现，而不是已验证的通用结论。
+- 已由第二个考试包验证的边界（科目、模块、评分规则、答题方式、路由、Prompt）可以陈述为“跨考试可移植”，但不得据此宣称跨学习领域可移植：两个包仍然都是“做题驱动 + 有分数线”的同构结构。
 
 ### 第一条：能力结果优先于使用量
 
