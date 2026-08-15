@@ -259,10 +259,18 @@ watch(() => form.examScope, (scope) => {
   }
 }, { immediate: true });
 
+// Registered during setup so the watcher belongs to the component scope and
+// stops on unmount. Bootstrap writes to the form itself, so saving stays armed
+// only once the installed packages and any stored draft have been applied.
+let draftSaveArmed = false;
+watch(form, () => {
+  if (draftSaveArmed) scheduleDraftSave();
+}, { deep: true });
+
 onMounted(async () => {
   await loadExamPacks();
   await restoreDraft();
-  watch(form, scheduleDraftSave, { deep: true });
+  draftSaveArmed = true;
 });
 
 /** Offered tracks and their scored subjects come from the installed packages. */
