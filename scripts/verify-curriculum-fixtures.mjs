@@ -34,7 +34,7 @@ if (errors.length > 0) {
 console.log(`Curriculum fixture verification passed (${fixturePaths.length} packages, ${totalNodes} nodes, ${totalEdges} edges, ${totalDeliveryPolicies} exam_delivery policies).`);
 
 function verifyFixture(fixture, label) {
-  const push = (message) => push(`${label}: ${message}`);
+  const push = (message) => errors.push(`${label}: ${message}`);
 
 const contentHash = `sha256:${crypto.createHash('sha256').update(JSON.stringify(fixture.payload)).digest('hex')}`;
 if (fixture.manifest.contentHash !== contentHash) push(`content hash mismatch; expected ${contentHash}`);
