@@ -1,0 +1,12 @@
+-- Repair native SQLite schemas that recorded 040/042 without applying them.
+--
+-- capacitor-community/sqlite on iOS strips every newline from execute() SQL
+-- that contains a DELETE statement. A leading line comment then covers the rest
+-- of the file, sqlite3_exec reports success, and schema_migrations still
+-- advances. Startup then queries definition.exam_type and fails to read the
+-- archive.
+--
+-- 040 and 042 bytes stay unchanged: devices already stored those checksums.
+-- MigrationRunner reapplies their bodies when the live tables still have the
+-- old shape. This statement keeps the file valid SQL for the schema verifier.
+SELECT 1 WHERE 0;

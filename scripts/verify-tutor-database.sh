@@ -391,6 +391,9 @@ expect_count "SELECT COUNT(*) FROM prompt_definitions WHERE prompt_code='questio
 expect_count "SELECT exam_type FROM prompt_definitions WHERE id='prompt-question';" "shared" "pre-existing prompts migrate to the shared scope"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='work_pool';" "1" "agent work pool column"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('tutor_agent_runs') WHERE name='lease_epoch';" "1" "agent lease epoch column"
+expect_count "SELECT COUNT(*) FROM pragma_table_info('prompt_definitions') WHERE name = 'exam_type';" "1" "prompt definition exam scope column"
+expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='daily_plan_blocks' AND sql LIKE '%CHECK(length(subject) > 0)%';" "1" "daily plan block subject is pack-owned"
+expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='daily_plan_blocks' AND sql LIKE '%CHECK(subject IN%';" "0" "daily plan block subject is not a closed code list"
 expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='daily_plan_blocks';" "1" "daily plan block table"
 expect_count "SELECT COUNT(*) FROM pragma_table_info('daily_plan_items') WHERE name IN ('daily_plan_block_id','item_category','priority','required','dependency_ids_json');" "5" "adaptive daily plan item columns"
 expect_count "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='data_maintenance_context';" "1" "data maintenance context table"
@@ -499,3 +502,4 @@ expect_count "SELECT COUNT(*) FROM data_maintenance_context;" "0" "maintenance c
 expect_count "SELECT COUNT(*) FROM pragma_foreign_key_check;" "0" "foreign-key integrity after learning-data cleanup"
 
 printf 'Tutor database schema verification passed.\n'
+node "$project_root/scripts/verify-swallowed-native-migrations.mjs"
