@@ -53,11 +53,11 @@
   "author": "zhangl1001",
   "license": "MIT",
   "dependencies": {
-    "@capacitor-community/sqlite": "^8.1.0",
-    "@capacitor/cli": "^8.4.1",
-    "@capacitor/core": "^8.4.1",
-    "@capacitor/ios": "^8.4.1",
-    "@capacitor/status-bar": "^8.0.2"
+    "@capacitor-community/sqlite": "^8.1.1",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/status-bar": "^8.0.3"
   },
   "description": "A local-first adaptive education Agent foundation with an end-to-end tutoring reference application.",
   "repository": {
