@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "ports": {
+    "preview": 3000,
+    "additional": {}
+  },
+  "scripts": {
+    "setup": {
+      "enabled": true,
+      "command": "npm ci --no-audit --no-fund && cd web && npm ci --no-audit --no-fund"
+    },
+    "run": {
+      "enabled": true,
+      "command": "cd web && npm run dev"
+    },
+    "archive": {
+      "enabled": true,
+      "command": null
+    },
+    "check": {
+      "enabled": true,
+      "command": "cd web && npm run check:code-quality && npm run typecheck"
+    }
+  },
+  "mcpServers": []
+}
