@@ -5,9 +5,9 @@
     <PullToRefresh class="calendar-content" :on-refresh="store.loadMonth">
       <section class="month-card app-card">
         <div class="month-nav">
-          <button class="icon-button" type="button" @click="store.changeMonth(-1)"><ChevronLeftIcon /></button>
+          <button class="icon-button" type="button" aria-label="上个月" @click="store.changeMonth(-1)"><ChevronLeftIcon /></button>
           <strong>{{ store.year }}年{{ store.month }}月</strong>
-          <button class="icon-button" type="button" @click="store.changeMonth(1)"><ChevronRightIcon /></button>
+          <button class="icon-button" type="button" aria-label="下个月" @click="store.changeMonth(1)"><ChevronRightIcon /></button>
         </div>
         <div class="weekdays">
           <span v-for="day in weekdays" :key="day">{{ day }}</span>

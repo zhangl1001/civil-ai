@@ -3,7 +3,7 @@
     <div v-if="hasHeaderRow" class="page-header-row">
       <div v-if="showBack || $slots.leading" class="page-header-leading">
         <slot name="leading"></slot>
-        <button v-if="showBack && !$slots.leading" class="icon-button" type="button" @click="goBack">
+        <button v-if="showBack && !$slots.leading" class="icon-button" type="button" aria-label="返回" @click="goBack">
           <ChevronLeftIcon />
         </button>
       </div>
