@@ -2,7 +2,7 @@
   <div class="knowledge-page app-page">
     <header class="app-page-header">
       <div class="title-row">
-        <button class="icon-button" type="button" @click="goBack"><ArrowLeftIcon /></button>
+        <button class="icon-button" type="button" aria-label="返回" @click="goBack"><ArrowLeftIcon /></button>
         <div><h3>知识地图</h3><span>按大纲定位薄弱考点</span></div>
         <span class="header-spacer" aria-hidden="true"></span>
       </div>
