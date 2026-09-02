@@ -7,7 +7,7 @@
   "scripts": {
     "setup": {
       "enabled": true,
-      "command": "npm ci --no-audit --no-fund && cd web && npm ci --no-audit --no-fund"
+      "command": "command -v git-lfs >/dev/null 2>&1 || (apt-get install -y git-lfs >/dev/null 2>&1 || true) && npm ci --no-audit --no-fund && cd web && npm ci --no-audit --no-fund"
     },
     "run": {
       "enabled": true,
