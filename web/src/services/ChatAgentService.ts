@@ -331,6 +331,7 @@ export class ChatAgentService {
       else await this.recordFailure(runtime, active, error);
     } finally {
       deadline.dispose();
+      writer.dispose();
     }
   }
 
@@ -368,11 +369,8 @@ export class ChatAgentService {
     }
     const latest = await runtime.agentRunRepository.findById(runId);
     if (latest?.run.status === 'cancelled') return;
-    const visibleStreamedText = writer.visibleText;
-    const finalText = visibleAssistantText(result.text);
-    const finalContent = finalText && !visibleStreamedText.endsWith(finalText)
-      ? [visibleStreamedText, finalText].filter(Boolean).join('\n\n')
-      : visibleStreamedText || finalText;
+    // The answer is the final turn only; preambles of tool-calling turns were provisional.
+    const finalContent = visibleAssistantText(result.text) || writer.visibleText;
     controller.signal.throwIfAborted();
     await writer.complete(finalContent);
     await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);

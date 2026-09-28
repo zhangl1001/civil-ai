@@ -434,6 +434,63 @@ async function verifyChatAgentService() {
     assert.equal(retriedRows.at(-1).content, '今天先做一组判断推理。');
     assert.equal(retriedRows.at(-1).status, undefined);
 
+    // Streaming: the first turn is shown as it arrives, a tool-calling turn's
+    // preamble becomes provisional, and only the final turn is persisted.
+    const { ChatAgentTurnWriter } = await serviceServer.ssrLoadModule('/src/services/ChatAgentTurnWriter.ts');
+    const coalesced = [];
+    const coalescingWriter = new ChatAgentTurnWriter({
+      sessionId: 'session:coalesce',
+      streamMessageId: 'stream:coalesce',
+      repository: { async addMessage() { throw new Error('not persisted in this check'); }, async updateMessageMeta() {} },
+      publish: (update) => { coalesced.push(update.content); },
+      publishIntervalMs: 40
+    });
+    for (let index = 0; index < 50; index += 1) coalescingWriter.appendDelta(`字${index}`);
+    assert.equal(coalesced.length, 1, 'the first delta is shown at once and the burst behind it is coalesced');
+    await delay(70);
+    assert.equal(coalesced.length, 2, 'the coalesced burst is published once after the interval');
+    assert.equal(coalesced.at(-1), Array.from({ length: 50 }, (_, index) => `字${index}`).join(''));
+    coalescingWriter.dispose();
+
+    const streamed = [];
+    let loopReturned = false;
+    harness.loop = async ({ command, observer }) => {
+      const emit = (event) => observer.onEvent({ agentRunId: command.agentRunId, ...event });
+      await emit({ type: 'run_started' });
+      await emit({ type: 'model_turn_started', turn: 1 });
+      await emit({ type: 'text_delta', text: '我先查一下你的练习记录。' });
+      await delay(100);
+      const call = { id: 'call:read', name: 'practice.read_library', arguments: {} };
+      await emit({ type: 'tool_call_requested', call });
+      await emit({ type: 'tool_call_succeeded', call });
+      await delay(100);
+      await emit({ type: 'model_turn_started', turn: 2 });
+      await emit({ type: 'text_delta', text: '## 今日建议' });
+      await delay(100);
+      await emit({ type: 'text_delta', text: '\n先做判断推理。' });
+      await delay(100);
+      loopReturned = true;
+      return { status: 'completed', text: '## 今日建议\n先做判断推理。', checkpoint: { agentRunId: command.agentRunId, messages: [] } };
+    };
+    const streaming = await harness.session('流式');
+    await service.handle('今天怎么安排', streaming, {
+      thinkingEnabled: false,
+      onAssistantStream: (update) => { streamed.push({ ...update, beforeLoopReturned: !loopReturned }); }
+    });
+    const streamId = streamed[0].messageId;
+    assert.equal(streamed[0].content, '我先查一下你的练习记录。', 'the first turn streams before the loop finishes');
+    assert.equal(streamed[0].beforeLoopReturned, true);
+    assert(
+      streamed.some((update) => update.provisional && update.content === '我先查一下你的练习记录。'),
+      'a preamble followed by tool calls is marked provisional instead of being glued to the answer'
+    );
+    const answerUpdates = streamed.filter((update) => update.messageId === streamId && !update.provisional && update.content.startsWith('## 今日建议'));
+    assert(answerUpdates.length >= 2 && answerUpdates.every((update) => update.beforeLoopReturned), 'the final turn streams progressively too');
+    const persistedUpdate = streamed.at(-1);
+    assert.equal(persistedUpdate.replaceMessageId, streamId, 'the persisted answer replaces the streaming bubble');
+    const streamingRows = await harness.messages(streaming.id);
+    assert.equal(streamingRows.at(-1).content, '## 今日建议\n先做判断推理。', 'only the final turn is persisted as the answer');
+
     const failures = [
       [new ai.ProviderGatewayError('Incorrect API key provided', ai.ProviderErrorKind.Authentication, 401), 'provider.authentication', /API Key/],
       [new ai.ProviderGatewayError('Insufficient Balance', ai.ProviderErrorKind.QuotaExceeded, 402), 'provider.quota_exceeded', /余额不足/],
@@ -590,3 +647,6 @@ function createChatServiceRuntime(conversation, agent, harness) {
   };
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

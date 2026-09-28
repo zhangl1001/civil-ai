@@ -1404,6 +1404,60 @@ try {
   });
   assert.equal(subAgents.get('tutor.aptitude_specialist').maxTurns, 4);
 
+  const stableStreamEvents = [];
+  let stableDeltasObservedDuringTurn = 0;
+  const stableStreamingLoop = new agent.RunAgentLoop(
+    {
+      async invoke(invocation) {
+        if (stableStreamEvents.filter((event) => event.type === 'model_turn_started').length === 1) {
+          assert(invocation.tools.length > 0, 'the first chat turn offers tools');
+          for (const piece of ['我先看看', '你的档案。']) {
+            await invocation.onDelta?.(piece);
+            if (stableStreamEvents.some((event) => event.type === 'text_delta' && event.text === piece)) {
+              stableDeltasObservedDuringTurn += 1;
+            }
+          }
+          return {
+            text: '我先看看你的档案。',
+            toolCalls: [{ id: 'stable-read', name: 'student_read_profile', arguments: {} }],
+            usage: {}
+          };
+        }
+        await invocation.onDelta?.('## 今日建议');
+        await invocation.onDelta?.('\n先做判断推理。');
+        return { text: '## 今日建议\n先做判断推理。', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { return { content: '{"targetScore":80}', madeProgress: true }; } },
+    { async save() {} },
+    { onEvent(event) { stableStreamEvents.push(event); } }
+  );
+  const stableStreamResult = await stableStreamingLoop.execute({
+    agentRunId: 'agent-run-stable-streaming',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天怎么安排' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-stable-streaming' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'test-model' });
+  assert.equal(stableDeltasObservedDuringTurn, 2, 'the stable loop streams the first turn while the model is writing');
+  assert.equal(stableStreamResult.text, '## 今日建议\n先做判断推理。', 'the stable loop result is the final turn only');
+  assert.deepEqual(
+    stableStreamEvents
+      .filter((event) => ['model_turn_started', 'text_delta', 'tool_call_requested'].includes(event.type))
+      .map((event) => event.type === 'text_delta' ? `text:${event.text}` : event.type),
+    [
+      'model_turn_started',
+      'text:我先看看',
+      'text:你的档案。',
+      'tool_call_requested',
+      'model_turn_started',
+      'text:## 今日建议',
+      'text:\n先做判断推理。'
+    ],
+    'both loops expose the same turn boundaries to the chat'
+  );
+
   console.log('Agent loop verification passed.');
 } finally {
   await server.close();

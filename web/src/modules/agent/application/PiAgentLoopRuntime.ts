@@ -44,7 +44,7 @@ import {
   skillContinuationInstruction,
   validateAgentLoopLimits
 } from './AgentLoopSupport';
-import { assistantText, assistantToolCalls, toModelMessages, toPiMessages } from './pi/PiAgentMessageAdapter';
+import { assistantText, toModelMessages, toPiMessages } from './pi/PiAgentMessageAdapter';
 import { createPiProviderModel, createPiProviderStream } from './pi/PiAgentProviderStream';
 import {
   AsyncSemaphore,
@@ -175,8 +175,10 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
       onError: (error) => { providerFailure = error; }
     });
 
-    let bufferedTurnText = '';
-    let streamedTurnText = false;
+    // Text streams as it arrives, including a first turn that may still call
+    // tools; observers learn from turn/tool events that such text was
+    // provisional. A forced-tool turn only narrates, so it is never shown.
+    let turnForcesTool = false;
     const emittedMessages = await runAgentLoopContinue(latestContext, {
       model: createPiProviderModel(gateway, limits.maxContextTokens),
       convertToLlm: (messages) => messages.filter(isPiMessage),
@@ -263,30 +265,17 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
       if (event.type === 'turn_start') {
         turnCount += 1;
         turnToolCallCount = 0;
-        bufferedTurnText = '';
-        streamedTurnText = false;
+        turnForcesTool = !finalizationOnly && forceRequiredTool && Boolean(requiredTool);
         if (skillWorkflowState === 'selected') skillWorkflowState = 'executing';
         await this.emit({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: turnCount });
       }
-      if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-        bufferedTurnText += event.assistantMessageEvent.delta;
-        if (toolCallCount > 0 || finalizationOnly || !latestContext.tools?.length) {
-          streamedTurnText = true;
-          await this.emit({
-            type: 'text_delta',
-            agentRunId: command.agentRunId,
-            text: event.assistantMessageEvent.delta
-          });
-        }
-      }
       if (
-        event.type === 'message_end'
-        && event.message.role === 'assistant'
-        && !assistantToolCalls(event.message).length
-        && bufferedTurnText
-        && !streamedTurnText
+        event.type === 'message_update'
+        && event.assistantMessageEvent.type === 'text_delta'
+        && event.assistantMessageEvent.delta
+        && !turnForcesTool
       ) {
-        await this.emit({ type: 'text_delta', agentRunId: command.agentRunId, text: bufferedTurnText });
+        await this.emit({ type: 'text_delta', agentRunId: command.agentRunId, text: event.assistantMessageEvent.delta });
       }
       if (event.type === 'tool_execution_start') {
         turnToolCallCount += 1;

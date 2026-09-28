@@ -21,6 +21,8 @@ export interface AIChatState {
   isLoading: boolean;
   isSending: boolean;
   streamingMessageId: string;
+  /** Streaming bubble whose text came from a turn that went on to call tools. */
+  provisionalMessageId: string;
   pendingAssistantMessageId: string;
   initialized: boolean;
   session: AISession | null;
@@ -40,6 +42,7 @@ export const useAIChatStore = defineStore('aiChat', {
     isLoading: false,
     isSending: false,
     streamingMessageId: '',
+    provisionalMessageId: '',
     pendingAssistantMessageId: '',
     initialized: false,
     session: null,
@@ -275,6 +278,7 @@ export const useAIChatStore = defineStore('aiChat', {
         const pendingAssistantMessageId = this.pendingAssistantMessageId;
         this.isSending = false;
         this.streamingMessageId = '';
+        this.provisionalMessageId = '';
         this.pendingAssistantMessageId = '';
         this.activeSessionId = '';
         this.activeRequestText = '';
@@ -325,6 +329,7 @@ export const useAIChatStore = defineStore('aiChat', {
       if (replacementIndex >= 0 && replaceMessageId === this.pendingAssistantMessageId) {
         this.pendingAssistantMessageId = '';
       }
+      this.provisionalMessageId = update.provisional ? update.messageId : '';
       this.streamingMessageId = update.messageId;
     },
 

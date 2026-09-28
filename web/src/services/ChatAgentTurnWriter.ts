@@ -8,6 +8,8 @@ export interface ChatAssistantStreamUpdate extends ConversationMessageOutcome {
   readonly messageId: string;
   readonly content: string;
   readonly replaceMessageId?: string;
+  /** Text of a model turn that went on to call tools; the answer is still coming. */
+  readonly provisional?: boolean;
 }
 
 export type ChatTurnRepository = Pick<AIChatRepository, 'addMessage' | 'updateMessageMeta'>;
@@ -18,22 +20,40 @@ export interface ChatAgentTurnWriterOptions {
   readonly streamMessageId: string;
   readonly repository: ChatTurnRepository;
   readonly publish?: (update: ChatAssistantStreamUpdate) => void | Promise<void>;
+  /** Streamed text reaches the UI at most once per interval (the first delta at once). */
+  readonly publishIntervalMs?: number;
+  readonly now?: () => number;
 }
 
 /**
  * Owns the assistant side of one chat turn: what is shown while the model
  * streams, and the single row that is persisted when the turn ends — the
  * answer, or the partial text together with why the turn did not finish.
+ *
+ * Only the latest model turn is on screen. Text of a turn that went on to call
+ * tools stays visible as provisional until the next turn starts writing, so
+ * successive turns are never glued into one Markdown document.
  */
 export class ChatAgentTurnWriter {
-  private streamedText = '';
+  private turnText = '';
+  private provisional = false;
+  private replaceOnNextDelta = false;
   private streamPublished = false;
+  private dirty = false;
+  private settled = false;
+  private lastPublishedAt = Number.NEGATIVE_INFINITY;
+  private flushTimer?: ReturnType<typeof setTimeout>;
   private persistedMessageId = '';
   private persistedContent = '';
   private completed = false;
   private runId?: string;
+  private readonly intervalMs: number;
+  private readonly now: () => number;
 
-  constructor(private readonly options: ChatAgentTurnWriterOptions) {}
+  constructor(private readonly options: ChatAgentTurnWriterOptions) {
+    this.intervalMs = options.publishIntervalMs ?? 80;
+    this.now = options.now ?? (() => Date.now());
+  }
 
   /** Links the persisted answer to its Agent run. */
   bindRun(runId: string): void {
@@ -45,18 +65,33 @@ export class ChatAgentTurnWriter {
     return this.completed;
   }
 
+  /** The text currently on screen, provisional or not. */
   get visibleText(): string {
-    const visible = visibleAssistantText(this.streamedText);
+    const visible = visibleAssistantText(this.turnText);
     return hasVisibleAssistantContent(visible) ? visible : '';
   }
 
-  async appendDelta(delta: string): Promise<void> {
-    if (!delta) return;
-    this.streamedText += delta;
-    const visible = this.visibleText;
-    if (!visible) return;
-    this.streamPublished = true;
-    await this.publish(this.options.streamMessageId, visible);
+  /** A new model turn begins; whatever is on screen belongs to an earlier turn. */
+  startTurn(): void {
+    if (!this.turnText) return;
+    this.replaceOnNextDelta = true;
+    this.markProvisional();
+  }
+
+  /** The current turn asked for tools, so its text was a preamble, not the answer. */
+  markToolCall(): void {
+    if (this.turnText) this.markProvisional();
+  }
+
+  appendDelta(delta: string): void {
+    if (!delta || this.settled) return;
+    if (this.replaceOnNextDelta) {
+      this.turnText = '';
+      this.replaceOnNextDelta = false;
+      this.provisional = false;
+    }
+    this.turnText += delta;
+    this.schedule(false);
   }
 
   /** Keeps text the user saw before the run paused (confirmation or budget). */
@@ -81,7 +116,53 @@ export class ChatAgentTurnWriter {
     });
   }
 
+  /** Stops streaming updates; a late timer must not resurrect the stream bubble. */
+  dispose(): void {
+    this.settled = true;
+    this.cancelFlush();
+  }
+
+  private markProvisional(): void {
+    if (this.provisional) return;
+    this.provisional = true;
+    this.schedule(true);
+  }
+
+  private schedule(immediate: boolean): void {
+    if (this.settled) return;
+    this.dirty = true;
+    if (this.flushTimer && !immediate) return;
+    this.cancelFlush();
+    const wait = immediate ? 0 : this.lastPublishedAt + this.intervalMs - this.now();
+    if (wait <= 0) {
+      this.flush();
+      return;
+    }
+    this.flushTimer = globalThis.setTimeout(() => {
+      this.flushTimer = undefined;
+      this.flush();
+    }, wait);
+  }
+
+  private flush(): void {
+    if (!this.dirty || this.settled) return;
+    this.dirty = false;
+    const visible = this.visibleText;
+    if (!visible && !this.streamPublished) return;
+    this.streamPublished = true;
+    this.lastPublishedAt = this.now();
+    void Promise.resolve(this.publish(this.options.streamMessageId, visible, undefined, {}, this.provisional))
+      .catch((error: unknown) => console.warn('[ChatAgent] stream update was not shown', error));
+  }
+
+  private cancelFlush(): void {
+    if (!this.flushTimer) return;
+    globalThis.clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
+  }
+
   private async write(content: string, outcome: ConversationMessageOutcome): Promise<AIChatMessage | undefined> {
+    this.dispose();
     if (this.persistedMessageId) {
       if (content === this.persistedContent && !outcome.status) return undefined;
       const message = await this.options.repository.updateMessageMeta(
@@ -115,13 +196,15 @@ export class ChatAgentTurnWriter {
     messageId: string,
     content: string,
     replaceMessageId?: string,
-    outcome: ConversationMessageOutcome = {}
+    outcome: ConversationMessageOutcome = {},
+    provisional = false
   ): Promise<void> {
     await this.options.publish?.({
       sessionId: this.options.sessionId,
       messageId,
       content,
       ...(replaceMessageId ? { replaceMessageId } : {}),
+      ...(provisional ? { provisional } : {}),
       ...(outcome.status ? { status: outcome.status } : {}),
       ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
       ...(outcome.errorMessage ? { errorMessage: outcome.errorMessage } : {})

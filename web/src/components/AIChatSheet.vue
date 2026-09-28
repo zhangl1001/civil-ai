@@ -81,7 +81,7 @@
               </Transition>
             </div>
 
-            <main ref="messageListRef" class="ai-messages" @scroll.passive="loadOlderAtTop">
+            <main ref="messageListRef" class="ai-messages" @scroll.passive="onMessagesScroll">
               <div v-if="chat.isLoading" class="empty-state">加载对话中...</div>
               <div v-else-if="!displayMessages.length" class="empty-state">
                 <span :class="['empty-cat', { active: hasRunning }]" aria-hidden="true"><CatIcon /></span>
@@ -92,6 +92,7 @@
                 :key="message.id"
                 :message="message"
                 :streaming="isStreamingAssistant(message)"
+                :provisional="message.id === chat.provisionalMessageId"
                 :actionable="!chat.isSending && message.id === latestAssistantId"
                 @retry="retryMessage(message.id)"
                 @configure="openModelSettings"
@@ -284,7 +285,7 @@ const fabDragging = ref(false);
 const fabMoved = ref(false);
 const fabStart = ref({ x: 0, y: 0, left: 0, top: 0 });
 let guidancePreviewTimer: ReturnType<typeof setTimeout> | undefined;
-const { loadOlderAtTop, scrollToLatest } = useChatMessageScroll(messageListRef, () => chat.loadOlderMessages());
+const { followLatest, onMessagesScroll, scrollToLatest } = useChatMessageScroll(messageListRef, () => chat.loadOlderMessages());
 type ProcessStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
 type ProcessType = 'generate' | 'grade' | 'essay' | 'digest' | 'study' | 'mock' | 'redo' | 'read';
 interface ProcessItem {
@@ -556,6 +557,14 @@ watch(hasRunning, async () => {
   await nextTick();
   scrollToLatest();
 });
+
+watch(
+  () => chat.messages.find((message) => message.id === chat.streamingMessageId)?.content.length ?? 0,
+  async () => {
+    await nextTick();
+    followLatest();
+  }
+);
 
 function isStreamingAssistant(message: AIChatMessage): boolean {
   return message.role === 'assistant' && message.id === chat.streamingMessageId;

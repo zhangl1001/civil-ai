@@ -253,6 +253,8 @@ export class RunAgentLoop implements AgentLoopRuntime {
         outputReserveTokens: 4_096
       });
       messages = [...turnContext.messages];
+      // Stream every turn; a forced-tool turn only narrates, so it stays hidden.
+      const turnForcesTool = !finalizationOnly && forceRequiredTool && Boolean(requiredTool);
       const response = await this.modelInvoker.invoke({
         agentRunId: command.agentRunId, leaseToken: command.executionContext.leaseToken,
         modelRole: 'agent.tutor_turn', system: turnContext.system,
@@ -266,9 +268,7 @@ export class RunAgentLoop implements AgentLoopRuntime {
         toolSchemaVersion: 'tutor-tools@2',
         preferStream: command.preferStream !== false,
         onDelta: async (text) => {
-          if (text && (toolSet.providerTools.length === 0 || toolCallCount > 0 || finalizationOnly)) {
-            await this.emit({ type: 'text_delta', agentRunId: command.agentRunId, text });
-          }
+          if (text && !turnForcesTool) await this.emit({ type: 'text_delta', agentRunId: command.agentRunId, text });
         }
       }, gateway, signal);
       const calls = response.toolCalls ?? [];

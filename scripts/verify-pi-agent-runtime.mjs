@@ -25,6 +25,8 @@ try {
   await verifiesProviderFailureIdentity(agent, pi, ai);
   await verifiesNullFinalTextRecovery(agent, pi, ai);
   await verifiesSideEffectFreeStableFallback(agent, ai, server);
+  await verifiesFirstTurnStreaming(agent, pi, ai);
+  await verifiesToolTurnTextIsProvisional(agent, pi, ai);
   console.log('Pi Agent runtime verification passed.');
 } finally {
   await server.close();
@@ -261,6 +263,103 @@ async function verifiesSideEffectFreeStableFallback(agent, ai, server) {
   assert.equal(result.status, 'completed');
   assert.equal(result.text, '稳定循环已接管。');
   assert.equal(invocations.length, 2, 'fallback must reuse the request exactly once');
+}
+
+async function verifiesFirstTurnStreaming(agent, pi, ai) {
+  const events = [];
+  let deltasSeenBeforeModelFinished = 0;
+  const runtime = new pi.PiAgentLoopRuntime(
+    {
+      async invoke(invocation) {
+        assert(invocation.tools.length > 0, 'chat turns always offer tools');
+        for (const piece of ['今天先', '做一组', '判断推理。']) {
+          await invocation.onDelta?.(piece);
+          await waitFor(() => events.some((event) => event.type === 'text_delta' && event.text === piece));
+          deltasSeenBeforeModelFinished += 1;
+        }
+        return { text: '今天先做一组判断推理。', usage: {} };
+      }
+    },
+    allowPolicy(),
+    { async execute() { return { content: '' }; } },
+    { async save() {} },
+    { onEvent(event) { events.push(event); } }
+  );
+  const result = await runtime.execute(command({ tools: [readTool('practice.read')] }), gateway(ai));
+  assert.equal(result.text, '今天先做一组判断推理。');
+  assert.equal(deltasSeenBeforeModelFinished, 3, 'first-turn text reaches observers delta by delta while the model is still writing');
+  assert.deepEqual(
+    events.filter((event) => event.type === 'text_delta').map((event) => event.text),
+    ['今天先', '做一组', '判断推理。']
+  );
+  assert(
+    events.findIndex((event) => event.type === 'text_delta') < events.findIndex((event) => event.type === 'run_completed'),
+    'streamed text precedes completion'
+  );
+}
+
+async function verifiesToolTurnTextIsProvisional(agent, pi, ai) {
+  const events = [];
+  const runtime = new pi.PiAgentLoopRuntime(
+    sequenceInvoker([
+      {
+        text: '我先查一下你的练习记录。',
+        toolCalls: [{ id: 'call:read', name: 'practice_read', arguments: {} }],
+        usage: {}
+      },
+      { text: '## 今日建议\n先做判断推理。', usage: {} }
+    ]),
+    allowPolicy(),
+    { async execute() { return { content: '{"count":1}', madeProgress: true }; } },
+    { async save() {} },
+    { onEvent(event) { events.push(event); } }
+  );
+  const result = await runtime.execute(command({ tools: [readTool('practice.read')] }), gateway(ai));
+  assert.equal(result.text, '## 今日建议\n先做判断推理。', 'the loop result is the final turn only');
+  const order = events
+    .filter((event) => ['model_turn_started', 'text_delta', 'tool_call_requested'].includes(event.type))
+    .map((event) => event.type === 'text_delta' ? `text:${event.text}` : event.type);
+  assert.deepEqual(order, [
+    'model_turn_started',
+    'text:我先查一下你的练习记录。',
+    'tool_call_requested',
+    'model_turn_started',
+    'text:## 今日建议\n先做判断推理。'
+  ], 'observers see each turn boundary, so a preamble can be retired before the answer streams');
+
+  const forcedEvents = [];
+  const forced = new pi.PiAgentLoopRuntime(
+    sequenceInvoker([
+      {
+        text: '我现在调用导入工具。',
+        toolCalls: [{ id: 'call:scan', name: 'practice_read', arguments: {} }],
+        usage: {}
+      },
+      { text: '已完成扫描。', usage: {} }
+    ]),
+    allowPolicy(),
+    { async execute() { return { content: '{"ok":true}', madeProgress: true }; } },
+    { async save() {} },
+    { onEvent(event) { forcedEvents.push(event); } }
+  );
+  await forced.execute(command({
+    tools: [readTool('practice.read')],
+    requiredToolName: 'practice.read',
+    forceRequiredToolOnFirstTurn: true
+  }), gateway(ai));
+  assert.deepEqual(
+    forcedEvents.filter((event) => event.type === 'text_delta').map((event) => event.text),
+    ['已完成扫描。'],
+    'narration of a forced tool turn is never streamed'
+  );
+}
+
+async function waitFor(predicate, timeoutMs = 1_000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('Timed out waiting for streamed text');
+    await delay(1);
+  }
 }
 
 function command(overrides = {}) {

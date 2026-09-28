@@ -3,11 +3,16 @@
     <span v-if="message.role !== 'user'" :class="['message-cat', { active: streaming }]" aria-hidden="true"><CatIcon /></span>
     <p v-if="message.role === 'user'">{{ message.content }}</p>
     <template v-else>
-      <p v-if="streaming && !message.content" class="streaming-placeholder">
+      <MarkdownContent
+        v-if="message.content && !outcome?.replacesContent"
+        :class="['md-message', { provisional: streaming && provisional }]"
+        :content="message.content"
+        variant="chat"
+      />
+      <p v-if="streaming && (!message.content || provisional)" class="streaming-placeholder">
         <span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>思考中</span>
+        <span>{{ message.content ? '处理中' : '思考中' }}</span>
       </p>
-      <MarkdownContent v-else-if="message.content && !outcome?.replacesContent" class="md-message" :content="message.content" variant="chat" />
       <div v-if="outcome" class="message-outcome" :role="outcome.status === 'failed' ? 'alert' : 'status'">
         <p>
           <TriangleAlertIcon v-if="outcome.status === 'failed'" aria-hidden="true" />
@@ -37,6 +42,8 @@ import { chatMessageOutcome } from './AIChatPresentation';
 const props = defineProps<{
   message: AIChatMessage;
   streaming: boolean;
+  /** Streamed text of a turn that went on to call tools; the answer follows. */
+  provisional?: boolean;
   /** Only the latest turn offers retry/configure, so old failures stay quiet. */
   actionable: boolean;
 }>();
@@ -107,6 +114,14 @@ const outcome = computed(() => props.message.role === 'assistant' ? chatMessageO
 
 .message-cat.active {
   animation: catThinking 1.05s ease-in-out infinite;
+}
+
+.md-message.provisional {
+  color: var(--text-secondary-color);
+}
+
+.md-message.provisional + .streaming-placeholder {
+  margin-top: 6px;
 }
 
 .streaming-placeholder {

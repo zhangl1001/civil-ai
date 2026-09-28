@@ -21,9 +21,14 @@ export function createChatRunObserver(
   return {
     onEvent: async (event: AgentRuntimeEvent) => {
       if (event.type === 'text_delta') {
-        await writer.appendDelta(event.text);
+        writer.appendDelta(event.text);
         return;
       }
+      if (event.type === 'model_turn_started') {
+        writer.startTurn();
+        return;
+      }
+      if (event.type === 'tool_call_requested') writer.markToolCall();
       if (!isToolActivityEvent(event)) return;
       const status = eventStatus(event);
       if (!status) return;
