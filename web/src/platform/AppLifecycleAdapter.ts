@@ -50,8 +50,10 @@ export class AppLifecycleAdapter {
 
     const appPlugin = capacitorRuntime()?.Plugins?.App;
     try {
+      // On iOS appStateChange mirrors didBecomeActive/willResignActive, so an
+      // inactive app is not necessarily in the background.
       void appPlugin?.addListener?.('appStateChange', (state) => {
-        this.emit(state.isActive ? 'active' : 'background', 'capacitor-app-state');
+        this.emit(state.isActive ? 'active' : 'inactive', 'capacitor-app-state');
       });
     } catch (error) {
       console.warn('[AppLifecycleAdapter] Capacitor App listener unavailable', error);

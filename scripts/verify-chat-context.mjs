@@ -491,6 +491,90 @@ async function verifyChatAgentService() {
     const streamingRows = await harness.messages(streaming.id);
     assert.equal(streamingRows.at(-1).content, '## 今日建议\n先做判断推理。', 'only the final turn is persisted as the answer');
 
+    // Stop keeps what was on screen, marked as stopped, and is not logged as a failure.
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => { warnings.push(args); };
+    try {
+      const stopping = await harness.session('中断');
+      let stopSeen = false;
+      harness.loop = async ({ command, observer, signal }) => {
+        await observer.onEvent({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: 1 });
+        await observer.onEvent({ type: 'text_delta', agentRunId: command.agentRunId, text: '先说结论：今天练' });
+        await new Promise((resolve, reject) => {
+          signal.addEventListener('abort', () => { stopSeen = true; reject(signal.reason); }, { once: true });
+          setTimeout(resolve, 2_000);
+        });
+        return { status: 'completed', text: '不应到达', checkpoint: {} };
+      };
+      const stopUpdates = [];
+      const stopped = service.handle('今天练什么', stopping, {
+        thinkingEnabled: false,
+        onAssistantStream: (update) => { stopUpdates.push(update); }
+      });
+      await waitUntil(() => stopUpdates.some((update) => update.content === '先说结论：今天练'));
+      service.cancel(stopping.id);
+      await stopped;
+      assert.equal(stopSeen, true, 'pressing stop aborts the in-flight model request');
+      const stoppedRows = await harness.messages(stopping.id);
+      assert.equal(stoppedRows.at(-1).content, '先说结论：今天练', 'the partial answer survives a reload');
+      assert.equal(stoppedRows.at(-1).status, 'stopped');
+      assert.equal(stoppedRows.at(-1).errorCode, 'chat.stopped');
+      assert.equal(stopUpdates.at(-1).status, 'stopped', 'the open sheet swaps the stream bubble for the stopped row');
+      assert.equal(presentation.chatMessageOutcome(stoppedRows.at(-1)).status, 'stopped');
+      const stopCancel = harness.transitions.filter((item) => item.action === agent.AgentRunAction.Cancel).at(-1);
+      assert.equal(stopCancel.cancellationReason, 'user_cancelled_chat_agent');
+
+      const backgrounded = await harness.session('后台');
+      harness.loop = async ({ command, observer, signal }) => {
+        await observer.onEvent({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: 1 });
+        await new Promise((resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          setTimeout(resolve, 2_000);
+        });
+        return { status: 'completed', text: '不应到达', checkpoint: {} };
+      };
+      const runsBefore = harness.createdRuns.length;
+      const interrupted = service.handle('继续讲', backgrounded, { thinkingEnabled: false });
+      await waitUntil(() => harness.transitions.some((item) => (
+        item.action === agent.AgentRunAction.Start && item.agentRunId === `AgentRunId:chat-${runsBefore + 1}`
+      )));
+      service.cancel(undefined, 'lifecycle');
+      await interrupted;
+      const interruptedRows = await harness.messages(backgrounded.id);
+      assert.equal(interruptedRows.at(-1).status, 'stopped', 'a stop without any text still leaves a marker');
+      assert.equal(interruptedRows.at(-1).errorCode, 'chat.interrupted');
+      assert.match(interruptedRows.at(-1).errorMessage, /后台/);
+      const lifecycleCancel = harness.transitions.filter((item) => item.action === agent.AgentRunAction.Cancel).at(-1);
+      assert.equal(lifecycleCancel.cancellationReason, 'app_lifecycle_interrupted_chat_agent');
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(
+      warnings.some((args) => String(args[0]).includes('execution failed')),
+      false,
+      'user and lifecycle stops are not logged as failures'
+    );
+
+    // Only a real background transition interrupts a foreground chat.
+    const lifecyclePolicy = await serviceServer.ssrLoadModule('/src/services/ChatAgentLifecyclePolicy.ts');
+    const { AppLifecycleAdapter } = await serviceServer.ssrLoadModule('/src/platform/AppLifecycleAdapter.ts');
+    const lifecycle = new AppLifecycleAdapter();
+    lifecycle.init();
+    const lifecycleCancels = [];
+    lifecyclePolicy.installForegroundChatInterruption(lifecycle, {
+      cancel: (sessionId, reason) => { lifecycleCancels.push(reason); }
+    });
+    for (const eventName of ['app-will-resign-active', 'app-did-become-active']) window.dispatchEvent(new Event(eventName));
+    document.hidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    assert.deepEqual(lifecycleCancels, [], 'Control Center, banners, prompts and hidden web tabs keep the chat running');
+    assert.equal(lifecyclePolicy.interruptsForegroundChat({ state: 'inactive', reason: 'capacitor-app-state' }), false);
+    window.dispatchEvent(new Event('app-did-enter-background'));
+    assert.deepEqual(lifecycleCancels, ['lifecycle'], 'entering the iOS background interrupts the chat');
+
     const failures = [
       [new ai.ProviderGatewayError('Incorrect API key provided', ai.ProviderErrorKind.Authentication, 401), 'provider.authentication', /API Key/],
       [new ai.ProviderGatewayError('Insufficient Balance', ai.ProviderErrorKind.QuotaExceeded, 402), 'provider.quota_exceeded', /余额不足/],
@@ -530,10 +614,12 @@ function installChatServiceHarness() {
     appendChild() {},
     classList: { add() {}, remove() {}, toggle() {} }
   });
+  const windowEvents = new EventTarget();
+  const documentEvents = new EventTarget();
   globalThis.window = globalThis;
-  globalThis.addEventListener ??= () => {};
-  globalThis.removeEventListener ??= () => {};
-  globalThis.dispatchEvent ??= () => true;
+  globalThis.addEventListener = windowEvents.addEventListener.bind(windowEvents);
+  globalThis.removeEventListener = windowEvents.removeEventListener.bind(windowEvents);
+  globalThis.dispatchEvent = windowEvents.dispatchEvent.bind(windowEvents);
   globalThis.CustomEvent ??= class extends Event {
     constructor(type, init) {
       super(type);
@@ -542,8 +628,9 @@ function installChatServiceHarness() {
   };
   globalThis.document ??= {
     hidden: false,
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener: documentEvents.addEventListener.bind(documentEvents),
+    removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
+    dispatchEvent: documentEvents.dispatchEvent.bind(documentEvents),
     createElement: element,
     createElementNS: element,
     createTextNode: element,
@@ -650,3 +737,12 @@ function createChatServiceRuntime(conversation, agent, harness) {
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+async function waitUntil(predicate, timeoutMs = 2_000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('Timed out waiting for the chat service');
+    await delay(2);
+  }
+}
+

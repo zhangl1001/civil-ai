@@ -46,6 +46,7 @@ export class ChatAgentTurnWriter {
   private persistedMessageId = '';
   private persistedContent = '';
   private completed = false;
+  private finished = false;
   private runId?: string;
   private readonly intervalMs: number;
   private readonly now: () => number;
@@ -63,6 +64,11 @@ export class ChatAgentTurnWriter {
   /** True once the final answer of the run has been saved. */
   get hasCompletedAnswer(): boolean {
     return this.completed;
+  }
+
+  /** True once the turn ended with an answer, a failure or a stop. */
+  get isFinished(): boolean {
+    return this.finished;
   }
 
   /** The text currently on screen, provisional or not. */
@@ -104,16 +110,34 @@ export class ChatAgentTurnWriter {
   async complete(content: string): Promise<AIChatMessage | undefined> {
     const message = await this.persist(content);
     this.completed = true;
+    this.finished = true;
     return message;
   }
 
   /** Records a turn that failed, keeping whatever answer text was already visible. */
   async fail(failure: ChatFailure): Promise<AIChatMessage | undefined> {
-    return this.write(this.visibleText, {
-      status: 'failed',
-      errorCode: failure.code,
-      errorMessage: failure.message
+    return this.finish('failed', failure);
+  }
+
+  /**
+   * Records a turn the user stopped (or the app interrupted): the text that
+   * was on screen stays, marked as stopped, and survives a reload.
+   */
+  async stop(reason: ChatFailure): Promise<AIChatMessage | undefined> {
+    return this.finish('stopped', reason);
+  }
+
+  private async finish(
+    status: 'failed' | 'stopped',
+    reason: ChatFailure
+  ): Promise<AIChatMessage | undefined> {
+    const message = await this.write(this.visibleText, {
+      status,
+      errorCode: reason.code,
+      errorMessage: reason.message
     });
+    this.finished = true;
+    return message;
   }
 
   /** Stops streaming updates; a late timer must not resurrect the stream bubble. */

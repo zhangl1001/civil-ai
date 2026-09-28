@@ -198,6 +198,7 @@ export class ChatAgentService {
         await this.recordFailure(runtime, active, error);
         return { handled: true };
       }
+      if (active.userMessagePersisted && !active.writer.isFinished) await this.recordStop(active);
       if (runtime && active.runId) {
         const current = await runtime.agentRunRepository.findById(active.runId);
         if (current?.run.status === 'running' || current?.run.status === 'waiting_user') {
@@ -391,6 +392,7 @@ export class ChatAgentService {
   }
 
   private async settleAbort(runtime: TutorDatabaseRuntime, runId: RunId, active: ActiveChatRun): Promise<void> {
+    await this.recordStop(active);
     const current = await runtime.agentRunRepository.findById(runId);
     if (current?.run.status !== 'running') return;
     const cancelled = await runtime.transitionAgentRun.execute({
@@ -403,6 +405,14 @@ export class ChatAgentService {
         : 'user_cancelled_chat_agent'
     });
     await publishChatTaskMessage(runtime, cancelled, 'cancelled');
+  }
+
+  /** A stop is the user's choice, not a failure: keep what was shown and mark it stopped. */
+  private async recordStop(active: ActiveChatRun): Promise<void> {
+    if (active.writer.hasCompletedAnswer) return;
+    await active.writer.stop(describeChatFailure(active.controller.signal.reason)).catch((error: unknown) => {
+      console.warn('[ChatAgent] stopped turn was not saved', error);
+    });
   }
 
   /** Shows why the turn failed and fails its run with the same stable code. */
