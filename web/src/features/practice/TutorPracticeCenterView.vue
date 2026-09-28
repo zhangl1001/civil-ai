@@ -120,6 +120,7 @@
         :daily-plan-item-id="queryText(route.query.dailyPlanItemId)"
         :capability-node-id="queryText(route.query.capabilityNodeId)"
         :auto-start="route.query.mode === 'tutor' && Boolean(route.query.start)"
+        @auto-start-handled="consumeAutoStartRequest"
       />
     </PullToRefresh>
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
@@ -260,7 +261,6 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { curriculumModuleOptions, practiceModuleLabel } from '@/domain/labels';
 import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import { AssessmentRole } from '@/kernel/public';
-import type { AgentRunView } from '@/modules/agent/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
 import {
   QuestionOriginType,
@@ -273,7 +273,7 @@ import {
 } from '@/modules/content/public';
 import type { TutorPracticePrescription } from './TutorDailyPracticeFeature';
 import { difficultyFor } from './TutorDailyPracticeFeature';
-import { actionQuery, StructuredPracticeTaskCenter } from './StructuredPracticeTaskCenter';
+import { StructuredPracticeTaskCenter } from './StructuredPracticeTaskCenter';
 import { PracticeCenterFeature } from './PracticeCenterFeature';
 import { TrueQuestionPracticeFeature } from './TrueQuestionPracticeFeature';
 import TrueQuestionLibraryActions from './TrueQuestionLibraryActions.vue';
@@ -287,6 +287,8 @@ import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteri
 import { usePracticeModeSwipe } from './PracticeModeSwipe';
 import { practiceModeCopy } from './PracticeModePresentation';
 import { usePracticeSelfAutoStart } from './usePracticeSelfAutoStart';
+import { usePracticeCenterTasks } from './usePracticeCenterTasks';
+import { PRACTICE_CENTER_PATH, withoutAutoStart } from './PracticeNavigation';
 import PracticeSubjectSwitcher from './PracticeSubjectSwitcher.vue';
 import PracticeSubjectMark from './PracticeSubjectMark.vue';
 import EssayPracticeCenterPanel from './EssayPracticeCenterPanel.vue';
@@ -315,11 +317,6 @@ const activeMode = ref<PracticeMode>(
 const activeSubject = ref<PracticeSubjectCode>(
   route.query.subject === PracticeSubject.Essay ? PracticeSubject.Essay : PracticeSubject.Aptitude
 );
-const tutorTask = ref<AgentRunView | null>(null);
-const selfTask = ref<AgentRunView | null>(null);
-const trueTask = ref<AgentRunView | null>(null);
-const foregroundTaskId = ref('');
-const navigatedTaskId = ref('');
 const showCustomSheet = ref(false);
 const showTrueFilterSheet = ref(false);
 const showTrueResearchSheet = ref(false);
@@ -345,6 +342,15 @@ const {
   module: trueModuleFilter,
   status: trueStatusFilter
 });
+let pageDisposed = false;
+const { tutorTask, selfTask, trueTask, restoreTasks, trackTask, cancelTask } = usePracticeCenterTasks({
+  router,
+  isPageActive,
+  beforeFollow: consumeAutoStartRequest,
+  reloadTrueQuestionSets,
+  reloadGeneratedQuestionSets,
+  reportError: (message) => { error.value = message; }
+});
 const {
   showResearchDraft,
   publishingResearchDraft,
@@ -363,7 +369,6 @@ const customModule = ref('');
 const customQuestionTypeId = ref('');
 const customCapabilityId = ref('');
 const customCount = ref(10);
-let pollTimer: number | undefined;
 let practiceCenterFeaturePromise: Promise<PracticeCenterFeature> | undefined;
 const moduleDefinitions = curriculumModuleOptions();
 const curriculumNodesById = computed(() => new Map(curriculumNodes.value.map((item) => [item.id, item])));
@@ -423,6 +428,7 @@ const { tryStart: autoStartRequestedSelfPractice } = usePracticeSelfAutoStart({
   route,
   router,
   loading,
+  isActive: isPageActive,
   start: async ({ count }) => {
     activeSubject.value = PracticeSubject.Aptitude;
     activeMode.value = QuestionSetEntryMode.Self;
@@ -431,35 +437,36 @@ const { tryStart: autoStartRequestedSelfPractice } = usePracticeSelfAutoStart({
     return generateCustom();
   }
 });
+// Every step re-checks the page: leaving during the initial load must not
+// start a (paid) generation task for a page that is already gone.
 onMounted(async () => {
   await load();
+  if (!isPageActive()) return;
   await loadResearchDraftFromRoute();
-  if (
-    activeSubject.value === PracticeSubject.Aptitude
-    && route.query.mode === 'tutor'
-    && route.query.start
-  ) await startTutorPractice();
+  if (!isPageActive()) return;
+  if (activeSubject.value === PracticeSubject.Aptitude && route.query.mode === 'tutor' && route.query.start) {
+    if (await startTutorPractice()) await consumeAutoStartRequest();
+    if (!isPageActive()) return;
+  }
   await autoStartRequestedSelfPractice();
-  pollTimer = window.setInterval(() => void refreshTasks(), 1200);
 });
+onBeforeUnmount(() => { pageDisposed = true; });
 
 watch(() => route.query.draftId, () => void loadResearchDraftFromRoute());
+// Switching mode or subject supersedes a pending one-shot start request.
 watch(activeMode, (mode) => {
-  void router.replace({ query: { ...route.query, subject: activeSubject.value, mode } });
+  void router.replace({ query: { ...withoutAutoStart(route.query), subject: activeSubject.value, mode } });
 });
 watch(activeSubject, (subject) => {
   if (subject === PracticeSubject.Essay) {
     showCustomSheet.value = false;
     showTrueFilterSheet.value = false;
   }
-  void router.replace({ query: { ...route.query, subject } });
+  void router.replace({ query: { ...withoutAutoStart(route.query), subject } });
 });
 watch([trueOriginFilter, trueYearFilter, trueProvinceFilter, trueModuleFilter, trueStatusFilter], () => {
   if (!loading.value) void reloadTrueQuestionSets();
 }, { flush: 'post' });
-onBeforeUnmount(() => {
-  if (pollTimer) window.clearInterval(pollTimer);
-});
 
 async function load() {
   loading.value = true;
@@ -503,29 +510,32 @@ function initializeCustomSelection() {
   if ([5, 10, 15, 20, 25].includes(requestedCount)) customCount.value = requestedCount;
 }
 
-function restoreTasks(activeRuns: readonly AgentRunView[]) {
-  tutorTask.value = activeRuns.find((item) => taskMode(item) === 'tutor') || null;
-  selfTask.value = activeRuns.find((item) => taskMode(item) === 'self') || null;
-  trueTask.value = activeRuns.find((item) => taskMode(item) === 'true') || null;
-  if (tutorTask.value || selfTask.value || trueTask.value) {
-    void initializeTutorRuntime().then((runtime) => new StructuredPracticeTaskCenter(runtime).resume());
-  }
+function isPageActive(): boolean {
+  return !pageDisposed && route.path === PRACTICE_CENTER_PATH;
+}
+
+/** Drops `start=1` from this page's entry once the request is satisfied; never touches another page. */
+async function consumeAutoStartRequest(): Promise<void> {
+  if (!isPageActive() || route.query.start === undefined) return;
+  await router.replace({ query: withoutAutoStart(route.query) });
 }
 async function startTrueQuestionResearch(criteria: TrueQuestionResearchCriteria) {
   const result = await researchTrueQuestions(criteria);
   if (!result) return;
   showTrueResearchSheet.value = false;
-  trueTask.value = result.task;
-  foregroundTaskId.value = result.task.id;
+  trackTask(result.task, 'true');
 }
 
-async function startTutorPractice() {
+/** Resolves true once a tutor task is running: created now, or already in flight when asked. */
+async function startTutorPractice(): Promise<boolean> {
   const prescription = tutorPrescription.value;
-  if (!prescription || launching.value || tutorTask.value?.isActive) return;
+  if (tutorTask.value?.isActive) return true;
+  if (!prescription || launching.value) return false;
   launching.value = true;
   error.value = '';
   try {
     const runtime = await initializeTutorRuntime();
+    if (!isPageActive()) return false;
     const scopeKey = tutorScope(prescription);
     const difficulty = difficultyFor(prescription.assessmentRole);
     const task = await new StructuredPracticeTaskCenter(runtime).start({
@@ -550,8 +560,10 @@ async function startTutorPractice() {
       reviewQueueItemId: prescription.planItem?.reviewQueueItemId
     });
     trackTask(task, QuestionSetEntryMode.Tutor);
+    return true;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '创建私教练习失败';
+    return false;
   } finally {
     launching.value = false;
   }
@@ -599,73 +611,13 @@ async function generateCustom(): Promise<boolean> {
   }
 }
 
-function trackTask(task: AgentRunView, mode: PracticeMode) {
-  if (mode === 'tutor') tutorTask.value = task;
-  else selfTask.value = task;
-  foregroundTaskId.value = task.id;
-}
-
-async function refreshTasks() {
-  const tracked = [tutorTask.value, selfTask.value, trueTask.value]
-    .filter((item): item is AgentRunView => Boolean(item?.id && item.isActive));
-  if (!tracked.length) return;
-  try {
-    const runtime = await initializeTutorRuntime();
-    const refreshed = (await Promise.all(tracked.map((item) => runtime.getAgentRunViews.findById(item.id))))
-      .filter((item): item is AgentRunView => Boolean(item));
-    for (const task of refreshed) {
-      if (taskMode(task) === 'tutor') tutorTask.value = task;
-      else if (taskMode(task) === 'self') selfTask.value = task;
-      else trueTask.value = task;
-      if (task.status === 'failed' && task.id === foregroundTaskId.value) error.value = task.detail || '生成练习失败';
-    }
-    const completedModes = [...new Set(refreshed.filter((task) => !task.isActive).map(taskMode))];
-    await Promise.all(completedModes.map((mode) => (
-      mode === 'true' ? reloadTrueQuestionSets() : reloadGeneratedQuestionSets(mode)
-    )));
-    const completed = refreshed.find((task) => (
-      task.id === foregroundTaskId.value
-      && task.status === 'completed'
-      && task.questionSetId
-      && task.learningThreadId
-      && navigatedTaskId.value !== task.id
-    ));
-    if (completed) {
-      navigatedTaskId.value = completed.id;
-      foregroundTaskId.value = '';
-      await router.push({ path: completed.actionRoute || '/vue/practice/objective-session', query: actionQuery(completed) });
-    }
-    const completedResearch = refreshed.find((task) => (
-      taskMode(task) === 'true'
-      && task.id === foregroundTaskId.value
-      && task.status === 'completed'
-      && typeof task.actionParams.draftId === 'string'
-      && navigatedTaskId.value !== task.id
-    ));
-    if (completedResearch) {
-      navigatedTaskId.value = completedResearch.id;
-      foregroundTaskId.value = '';
-      await router.push({ path: completedResearch.actionRoute || '/vue/practice', query: actionQuery(completedResearch) });
-    }
-  } catch {
-    // A later poll or pull-to-refresh restores durable task state.
-  }
-}
-
 function practiceCenterFeature(): Promise<PracticeCenterFeature> {
   practiceCenterFeaturePromise ??= initializeTutorRuntime().then((runtime) => new PracticeCenterFeature(runtime));
   return practiceCenterFeaturePromise;
 }
 
-async function cancelCurrentTask() {
-  const task = activeTask.value;
-  if (!task) return;
-  const runtime = await initializeTutorRuntime();
-  await new StructuredPracticeTaskCenter(runtime).cancel(task);
-  if (activeMode.value === QuestionSetEntryMode.Tutor) tutorTask.value = null;
-  else if (activeMode.value === QuestionSetEntryMode.Self) selfTask.value = null;
-  else trueTask.value = null;
-  if (foregroundTaskId.value === task.id) foregroundTaskId.value = '';
+function cancelCurrentTask() {
+  return cancelTask(activeMode.value);
 }
 
 function selectModule(module: string) {
@@ -763,15 +715,6 @@ const {
   handleTouchEnd: handleModeTouchEnd,
   resetTouch: resetModeTouch
 } = usePracticeModeSwipe(() => activeMode.value, selectMode);
-
-function taskMode(task: AgentRunView): PracticeMode {
-  if (task.scopeKey?.startsWith('trueQuestionResearch:')) return 'true';
-  if (task.actionParams.mode === QuestionSetEntryMode.Tutor) return QuestionSetEntryMode.Tutor;
-  if (task.actionParams.mode === QuestionSetEntryMode.Self) return QuestionSetEntryMode.Self;
-  return task.scopeKey?.startsWith('practice:tutor:')
-    ? QuestionSetEntryMode.Tutor
-    : QuestionSetEntryMode.Self;
-}
 
 function normalizeModule(value: string): string {
   if (/判断|图推|逻辑/.test(value)) return 'judgment';

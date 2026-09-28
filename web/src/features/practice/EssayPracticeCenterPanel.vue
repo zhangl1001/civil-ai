@@ -149,6 +149,7 @@ import {
 import { EssayPracticeCenterFeature, type EssayPracticeMode, type EssayPracticeSet } from './EssayPracticeCenterFeature';
 import { EssayTutorPlanFeature, type EssayTutorPlanPrescription } from './EssayTutorPlanFeature';
 import { essayQuestionSetLocation } from './EssayNavigation';
+import { PRACTICE_CENTER_PATH } from './PracticeNavigation';
 import { useTrueQuestionImport } from './useTrueQuestionImport';
 import { useTrueQuestionCapture } from './useTrueQuestionCapture';
 import { DOCUMENT_FILE_IMPORT_ACCEPT } from '@/platform/DocumentTextExtractionService';
@@ -160,7 +161,11 @@ const props = defineProps<{
   capabilityNodeId?: string;
   autoStart?: boolean;
 }>();
-defineEmits<{ 'update:modelValue': [value: Mode] }>();
+const emit = defineEmits<{
+  'update:modelValue': [value: Mode];
+  /** The page's one-shot `start` request is satisfied: a tutor task was created or is already running. */
+  autoStartHandled: [];
+}>();
 const router = useRouter();
 const feature = ref<EssayPracticeCenterFeature>();
 const coordinator = ref<EssayGenerationCoordinator>();
@@ -222,17 +227,25 @@ const emptyDescription = computed(() => props.modelValue === 'true' ? '点击上
 const activeModeIcon = computed(() => modes.find((item) => item.value === props.modelValue)?.icon || BookOpenCheckIcon);
 
 let taskPollId: number | null = null;
+let disposed = false;
+const isPageActive = () => !disposed && router.currentRoute.value.path === PRACTICE_CENTER_PATH;
 
+// The poll is armed before the first await so it can never be created after an
+// unmount; later steps re-check the page so a panel left during its initial
+// load neither starts generation nor navigates anywhere.
 onMounted(async () => {
-  await load();
-  if (props.modelValue === 'tutor') await loadTutorPlan();
-  await restoreActiveTask();
-  if (props.modelValue === 'tutor' && props.autoStart && !activeTask.value) {
-    await startTutorGeneration();
-  }
   taskPollId = window.setInterval(() => void refreshTask(), 1000);
+  await load();
+  if (!isPageActive()) return;
+  if (props.modelValue === 'tutor') await loadTutorPlan();
+  if (!isPageActive()) return;
+  await restoreActiveTask();
+  if (!isPageActive() || props.modelValue !== 'tutor' || !props.autoStart) return;
+  if (!activeTask.value) await startTutorGeneration();
+  if (activeTask.value && isPageActive()) emit('autoStartHandled');
 });
 onBeforeUnmount(() => {
+  disposed = true;
   if (taskPollId !== null) window.clearInterval(taskPollId);
 });
 watch(() => props.modelValue, async () => {
@@ -363,13 +376,13 @@ async function refreshTask() {
   const taskId = activeTask.value?.id;
   if (!taskId || !coordinator.value) return;
   const task = await coordinator.value.find(String(taskId));
-  if (!task) return;
+  if (!task || !isPageActive()) return;
   activeTask.value = task;
   if (task.status === 'completed') {
     await load();
     const context = pendingContext.value || contextFromTask(task);
     activeTask.value = undefined;
-    if (context) await openLatestSet(context);
+    if (context && isPageActive()) await openLatestSet(context);
   }
 }
 

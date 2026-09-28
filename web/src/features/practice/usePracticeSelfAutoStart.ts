@@ -1,6 +1,7 @@
 import { watch, type Ref } from 'vue';
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router';
 import { QuestionSetEntryMode } from '@/modules/content/public';
+import { withoutAutoStart } from './PracticeNavigation';
 import { PracticeSubject } from './PracticeSubject';
 
 const SUPPORTED_COUNTS = new Set([5, 10, 15, 20, 25]);
@@ -14,6 +15,12 @@ interface PracticeSelfAutoStartOptions {
   readonly route: RouteLocationNormalizedLoaded;
   readonly router: Router;
   readonly loading: Readonly<Ref<boolean>>;
+  /**
+   * Whether the page is still mounted and current. A request is neither started
+   * nor consumed for a page the user already left: `router.replace` without a
+   * path would otherwise rewrite whatever page they are on now.
+   */
+  readonly isActive: () => boolean;
   /**
    * Resolves to whether the task was accepted. The page reports its own failure
    * to the user, so a rejected start is an ordinary outcome here rather than a
@@ -31,6 +38,7 @@ export function usePracticeSelfAutoStart(options: PracticeSelfAutoStartOptions) 
     const capabilityNodeId = queryText(options.route.query.capabilityNodeId);
     if (
       options.loading.value
+      || !options.isActive()
       || options.route.query.subject !== PracticeSubject.Aptitude
       || options.route.query.mode !== QuestionSetEntryMode.Self
       || options.route.query.start !== '1'
@@ -45,10 +53,8 @@ export function usePracticeSelfAutoStart(options: PracticeSelfAutoStartOptions) 
     // the URL so the page can retry it rather than swallowing the request.
     if (!await options.start({ capabilityNodeId, count })) return;
     handledKey = requestKey;
-
-    const nextQuery = { ...options.route.query };
-    delete nextQuery.start;
-    await options.router.replace({ query: nextQuery });
+    if (!options.isActive()) return;
+    await options.router.replace({ query: withoutAutoStart(options.route.query) });
   }
 
   watch(
@@ -56,7 +62,8 @@ export function usePracticeSelfAutoStart(options: PracticeSelfAutoStartOptions) 
       options.route.query.start,
       options.route.query.mode,
       options.route.query.subject,
-      options.route.query.capabilityNodeId
+      options.route.query.capabilityNodeId,
+      options.route.query.count
     ] as const,
     () => {
       if (options.route.query.start !== '1') handledKey = '';
