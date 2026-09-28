@@ -30,7 +30,7 @@ export const objectiveMockExecutor: BusinessAgentExecutor = async (task, context
   // Batches finish out of order; the bar follows how many are done, not which.
   let completedBatches = 0;
   const sections = await mapWithAbortableConcurrency(batches, MOCK_BATCH_CONCURRENCY, context.signal, async (batch, batchIndex, signal) => {
-    const result = await retryTransiently(() => context.generatePractice({
+    const result = await retryBatch(() => context.generatePractice({
         module: batch.module,
         requestedCount: batch.count,
         difficultyMin: 0.38,
@@ -102,7 +102,14 @@ function buildMockBatches(modules: readonly string[], total: number): MockBatch[
   });
 }
 
-async function retryTransiently<Output>(
+/**
+ * One batch gets one more attempt when it failed transiently or when the model's
+ * output for it failed validation (a lecture that broke the schema, too few
+ * usable questions). The retry reuses the batch key, so the failed generation
+ * is retried in place while batches that already committed are untouched;
+ * without it, one bad batch discarded every question the mock had paid for.
+ */
+async function retryBatch<Output>(
   work: () => Promise<Output>,
   ordinal: number,
   signal: AbortSignal
@@ -111,11 +118,21 @@ async function retryTransiently<Output>(
     return await work();
   } catch (error) {
     signal.throwIfAborted();
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/429|rate|limit|限流|timeout|network|transient|暂时|网络/i.test(message)) throw error;
+    if (!isTransientFailure(error) && !isGeneratedContentFailure(error)) throw error;
     await abortableDelay(1200 + (ordinal % 3) * 700, signal);
     return work();
   }
+}
+
+function isTransientFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /429|rate|limit|限流|timeout|network|transient|暂时|网络/i.test(message);
+}
+
+/** Validation failures of the model's output (`generation.*`), which a fresh attempt can pass. */
+function isGeneratedContentFailure(error: unknown): boolean {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  return typeof code === 'string' && code.startsWith('generation.');
 }
 
 function asString(value: unknown): string {

@@ -960,6 +960,8 @@ try {
     ids
   });
 
+  await verifiesMockBatchRetry();
+
   const cancellable = await createWorkflow.execute(generationCommand('generation:test:cancel'));
   const cancelled = await runWorkflow.cancel(cancellable.workflow.id);
   assert.equal(cancelled.status, content.GenerationWorkflowStatus.Cancelled);
@@ -968,6 +970,73 @@ try {
 } finally {
   await server.close();
 }
+}
+
+/**
+ * One batch whose generated content fails validation is retried in place, so a
+ * single bad model output no longer discards every question the mock paid for;
+ * failures that are not about the model's output still fail at once.
+ */
+async function verifiesMockBatchRetry() {
+  const objectiveMock = await server.ssrLoadModule('/src/composition-root/agent/ObjectiveMockExecutor.ts');
+  const runMock = async (failures, attempts = new Map()) => {
+    const saved = [];
+    const unused = async () => { throw new Error('the objective mock does not use this port'); };
+    await objectiveMock.objectiveMockExecutor({
+      id: 'AgentRunId:mock-retry',
+      type: 'mock',
+      detail: '行测模考',
+      payload: { questionCount: 5, subjectName: '行测', date: '2026-09-28' }
+    }, {
+      signal: new AbortController().signal,
+      update: async () => undefined,
+      log: async () => undefined,
+      generatePractice: async (request) => {
+        const count = (attempts.get(request.module) ?? 0) + 1;
+        attempts.set(request.module, count);
+        const failure = failures[request.module];
+        if (failure && count <= failure.times) throw Object.assign(new Error(failure.message), { code: failure.code });
+        return { questionSetId: `QuestionSetId:${request.module}:${count}`, learningThreadId: 'LearningThreadId:mock' };
+      },
+      saveLearningAsset: async (asset) => {
+        saved.push(asset);
+        return { id: `asset:mock-retry:${saved.length}`, version: saved.length };
+      },
+      setResult: async () => undefined,
+      compilePrompt: unused,
+      complete: unused,
+      stream: unused,
+      findLatestLearningAsset: unused,
+      listLearningAssets: unused,
+      recordSubjectiveAssessment: unused
+    });
+    return { attempts, manifest: saved.at(-1) };
+  };
+
+  const recovered = await runMock({
+    判断推理: { times: 1, code: 'generation.quality_invalid', message: 'Generated content quality is invalid' }
+  });
+  assert.equal(recovered.attempts.get('判断推理'), 2, 'a batch whose output failed validation gets one more attempt');
+  assert.ok(
+    [...recovered.attempts].every(([module, count]) => module === '判断推理' || count === 1),
+    'only the failed batch is attempted again'
+  );
+  assert.equal(recovered.manifest.payload.sections.length, 5, 'the mock completes with every module');
+
+  await assert.rejects(
+    () => runMock({ 判断推理: { times: 2, code: 'generation.lecture_schema_invalid', message: 'lecture schema invalid' } }),
+    (error) => error.code === 'generation.lecture_schema_invalid',
+    'a batch that fails validation twice still fails the mock with its own code'
+  );
+  const conflictAttempts = new Map();
+  await assert.rejects(
+    () => runMock(
+      { 判断推理: { times: 1, code: 'content.generation_request_conflict', message: 'request conflict' } },
+      conflictAttempts
+    ),
+    (error) => error.code === 'content.generation_request_conflict'
+  );
+  assert.equal(conflictAttempts.get('判断推理'), 1, 'a failure that is not about the model output is never retried');
 }
 
 /**
