@@ -3,6 +3,7 @@ import { TransactionWorkload } from '../contracts/UnitOfWork';
 import type { TutorDatabaseConfig } from '../config/TutorDatabaseConfig';
 import type { Migration } from './Migration';
 import { MigrationError, MigrationErrorCode } from './MigrationError';
+import { guardedMigrationSql } from './migrationGuards';
 import { prepareMigrationSql } from './prepareMigrationSql';
 import { repairSwallowedNativeMigrations } from './repairSwallowedNativeMigrations';
 
@@ -73,7 +74,7 @@ export class MigrationRunner {
       }
 
       await this.database.transaction(async (transaction) => {
-        await transaction.execute(prepareMigrationSql(migration.sql));
+        await transaction.execute(prepareMigrationSql(guardedMigrationSql(migration.sql, migration.guard)));
         await transaction.run(
           'INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, ?)',
           [migration.version, migration.name, migration.checksum, nowEpochMs]
