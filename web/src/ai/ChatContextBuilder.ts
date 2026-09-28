@@ -48,6 +48,62 @@ export function isModelContextMessage(message: ChatContextMessage): boolean {
   return !message.status && !isLegacyFailurePlaceholder(message.content);
 }
 
+const INTERRUPTED_REPLY_NOTE = '（这条回复被用户中断，没有完成。除非用户再次要求，不要继续或重答这个问题。）';
+
+/**
+ * The exchanges the model may see, decided per question and its reply. A failed
+ * turn is dropped together with its question, so the model never picks it up
+ * again on its own (重试 resends it). A stopped turn keeps its question and the
+ * part of the answer that was on screen, marked as interrupted: follow-ups such
+ * as "换个角度" keep their context, but the model does not resume or re-answer
+ * a request the learner stopped.
+ */
+export function modelContextMessages(history: readonly ChatContextMessage[]): ChatContextMessage[] {
+  const exchanges: ChatContextMessage[] = [];
+  // The stopped reply that may follow, i.e. the direct reply of a question that was kept.
+  let pendingReply: ChatContextMessage | undefined;
+  history.forEach((message, index) => {
+    if (message.role === 'user') {
+      pendingReply = undefined;
+      if (!message.content.trim()) return;
+      const reply = replyTo(history, index);
+      if (reply && (replyOutcome(reply) === 'failed' || (replyOutcome(reply) === 'stopped' && !stoppedText(reply)))) return;
+      exchanges.push(message);
+      pendingReply = reply;
+      return;
+    }
+    if (message.role !== 'assistant') return;
+    const outcome = replyOutcome(message);
+    const answersKeptQuestion = message === pendingReply;
+    pendingReply = undefined;
+    if (outcome === 'completed') exchanges.push(message);
+    else if (outcome === 'stopped' && answersKeptQuestion) {
+      exchanges.push({ ...message, status: undefined, content: `${stoppedText(message)}\n\n${INTERRUPTED_REPLY_NOTE}` });
+    }
+  });
+  return exchanges;
+}
+
+/** The assistant row that answered the question at `index`, if any came before the next question. */
+function replyTo(history: readonly ChatContextMessage[], index: number): ChatContextMessage | undefined {
+  for (let next = index + 1; next < history.length; next += 1) {
+    const candidate = history[next];
+    if (candidate?.role === 'user') return undefined;
+    if (candidate?.role === 'assistant') return candidate;
+  }
+  return undefined;
+}
+
+function replyOutcome(message: ChatContextMessage): 'completed' | 'failed' | 'stopped' {
+  if (message.status === 'failed') return 'failed';
+  if (message.status === 'stopped' || message.content.includes('[[ZH_AI_STOPPED]]')) return 'stopped';
+  return isLegacyFailurePlaceholder(message.content) ? 'failed' : 'completed';
+}
+
+function stoppedText(message: ChatContextMessage): string {
+  return sanitizeContextMessage(message.content);
+}
+
 /** Drops summary lines that only recorded a failed assistant turn. */
 export function sanitizeConversationSummary(summary: string): string {
   return summary
@@ -72,7 +128,7 @@ export function buildChatContext(history: readonly ChatContextMessage[], options
   const selected: AITextMessage[] = [];
   let usedTokens = 0;
   const currentPrompt = options.currentPrompt.trim();
-  const conversational = history.filter(isModelContextMessage);
+  const conversational = modelContextMessages(history);
   if (conversational.at(-1)?.role === 'user' && conversational.at(-1)?.content.trim() === currentPrompt) {
     conversational.pop();
   }
@@ -181,8 +237,7 @@ export function estimateChatTokens(text: string): number {
 }
 
 function summarizeMessages(previousSummary: string, history: readonly ChatContextMessage[]): string {
-  const usable = history
-    .filter(isModelContextMessage)
+  const usable = modelContextMessages(history)
     .map((message) => ({ ...message, content: sanitizeContextMessage(message.content).replace(/\s+/g, ' ') }))
     .filter((message) => message.content);
   if (!usable.length) return clipSummary(previousSummary);

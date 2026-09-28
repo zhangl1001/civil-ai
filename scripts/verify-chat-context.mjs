@@ -68,9 +68,25 @@ try {
   const retriedContext = buildChatContext(failedTurns, { currentPrompt: '帮我规划今天', budget: 2_000, maxMessages: 14 });
   assert.deepEqual(
     retriedContext,
-    [],
-    'failed, stopped and legacy placeholder turns never reach the model, and a re-sent question is not repeated'
+    [
+      { role: 'user', content: '帮我规划今天' },
+      { role: 'assistant', content: '先看一下你的\n\n（这条回复被用户中断，没有完成。除非用户再次要求，不要继续或重答这个问题。）' }
+    ],
+    'failed and legacy placeholder turns never reach the model; a stopped turn keeps its question and visible text marked as interrupted; a stopped reply whose question was dropped does not appear'
   );
+  const stoppedThenNew = buildChatContext([
+    message('s1', 'user', '写一篇申论范文'),
+    { ...message('s2', 'assistant', '好的，先定题目'), status: 'stopped', errorCode: 'chat.stopped' },
+    message('s3', 'user', '出5道工程问题'),
+    { ...message('s4', 'assistant', ''), status: 'failed', errorCode: 'provider.rate_limited' },
+    message('s5', 'user', '讲讲主旨题')
+  ], { currentPrompt: '讲讲主旨题', budget: 2_000, maxMessages: 14 });
+  assert.deepEqual(
+    stoppedThenNew.map((item) => item.role),
+    ['user', 'assistant'],
+    'a failed question is dropped with its reply, so the model does not answer it again unasked'
+  );
+  assert.match(stoppedThenNew[1].content, /被用户中断/, 'the model is told the stopped answer was interrupted and must not be resumed unasked');
   const afterFailure = buildChatContext([
     message('a1', 'user', '第一问'),
     message('a2', 'assistant', '第一答'),
@@ -78,7 +94,11 @@ try {
     { ...message('a4', 'assistant', ''), status: 'failed', errorCode: 'provider.rate_limited' },
     message('a5', 'user', '第三问')
   ], { currentPrompt: '第三问', budget: 2_000, maxMessages: 14 });
-  assert.deepEqual(afterFailure.map((item) => item.content), ['第一问', '第一答', '第二问']);
+  assert.deepEqual(
+    afterFailure.map((item) => item.content),
+    ['第一问', '第一答'],
+    'the question of a failed turn leaves with it; 重试 resends it explicitly'
+  );
   const failedSummary = advanceConversationSummary([
     ...failedTurns,
     ...Array.from({ length: 16 }, (_, index) => message(`later-${index}`, index % 2 ? 'assistant' : 'user', `后续 ${index}`))

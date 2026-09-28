@@ -1,4 +1,4 @@
-import { isModelContextMessage } from '@/ai/ChatContextBuilder';
+import { modelContextMessages } from '@/ai/ChatContextBuilder';
 import { buildCompanionChatPrompt } from '@/ai/prompts';
 import { buildEssayRepairPrompt, validateEssayQuestion } from '@/ai/QuestionValidation';
 import { BusinessTutorPromptCode, parseStructuredJson } from '@/capabilities/ai-runtime/public';
@@ -172,8 +172,7 @@ function buildChatContext(history: Awaited<ReturnType<typeof aiChatRepository.li
   let used = 0;
   // Failed and stopped turns stay visible in the chat but are never replayed
   // to the model as something it said.
-  const usable = history
-    .filter(isModelContextMessage)
+  const usable = modelContextMessages(history)
     .filter((message, index, items) => !(index === items.length - 1 && message.role === 'user' && message.content.trim() === prompt.trim()))
     .slice(-24)
     .reverse();
