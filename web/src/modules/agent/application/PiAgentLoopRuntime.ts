@@ -24,7 +24,8 @@ import { AgentToolRisk, AgentToolRole, type AgentToolDefinition } from '../domai
 import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
 import { AgentCompletionTracker, completionResolutionInstruction } from './AgentCompletionTracker';
 import type { AgentLoopResult, AgentLoopRuntime, RunAgentLoopCommand } from './AgentLoopContracts';
-import { agentToolArgumentsHash, cloneAgentToolCall } from './AgentToolCallIdentity';
+import { buildAgentLoopCheckpoint, type AgentLoopCheckpointState } from './AgentLoopCheckpointing';
+import { agentToolArgumentsHash } from './AgentToolCallIdentity';
 import { AgentToolInvocationValidator } from './AgentToolInvocationValidator';
 import {
   blockedRepeatReason,
@@ -40,9 +41,9 @@ import {
   completionVerificationInstruction,
   composeActiveSkillSystem,
   consumeAgentGuidance,
-  sanitizeMessageForCheckpoint,
   skillContinuationInstruction,
-  validateAgentLoopLimits
+  validateAgentLoopLimits,
+  withOutputLimitNotice
 } from './AgentLoopSupport';
 import { assistantText, toModelMessages, toPiMessages } from './pi/PiAgentMessageAdapter';
 import { createPiProviderModel, createPiProviderStream } from './pi/PiAgentProviderStream';
@@ -304,7 +305,9 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
     if (latest?.stopReason === 'error' || latest?.stopReason === 'aborted') {
       throw providerFailure ?? new Error(latest.errorMessage || 'Agent 模型调用失败');
     }
-    const text = terminalText || (latest ? assistantText(latest) : '') || '操作已执行，但模型没有返回补充说明。';
+    const text = terminalText
+      || (latest ? withOutputLimitNotice(assistantText(latest), latest.stopReason === 'length') : '')
+      || '操作已执行，但模型没有返回补充说明。';
     const checkpoint = await this.save(command, finalMessages, turnCount, toolCallCount, signatures, toolAttempts, {
       pendingConfirmation,
       activeSkills: [...activeSkills.values()],
@@ -545,35 +548,17 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
     toolCallCount: number,
     signatures: Readonly<Record<string, number>>,
     toolAttempts: Readonly<Record<string, AgentToolAttemptState>>,
-    state: {
-      readonly pendingConfirmation?: ModelToolCall;
-      readonly activeSkills: readonly AgentSkillActivation[];
-      readonly activeToolNames: readonly string[];
-      readonly completedToolNames: readonly string[];
-      readonly skillWorkflowState: AgentSkillWorkflowState;
-      readonly awaitingCompletionVerification: boolean;
-      readonly pendingCompletionExpectations: AgentLoopCheckpoint['pendingCompletionExpectations'];
-    }
+    state: AgentLoopCheckpointState
   ): Promise<AgentLoopCheckpoint> {
-    const checkpoint: AgentLoopCheckpoint = {
+    const checkpoint = buildAgentLoopCheckpoint({
       agentRunId: command.agentRunId,
       turnCount,
       toolCallCount,
-      messages: toModelMessages(messages, { omitToolResultId: state.pendingConfirmation?.id })
-        .map(sanitizeMessageForCheckpoint),
-      toolSignatures: { ...signatures },
-      toolAttempts: { ...toolAttempts },
-      pendingConfirmation: state.pendingConfirmation ? cloneAgentToolCall(state.pendingConfirmation) : undefined,
-      pendingConfirmationArgumentsHash: state.pendingConfirmation
-        ? agentToolArgumentsHash(state.pendingConfirmation)
-        : undefined,
-      activeSkills: state.activeSkills,
-      activeToolNames: state.activeToolNames,
-      completedToolNames: state.completedToolNames,
-      skillWorkflowState: state.skillWorkflowState,
-      awaitingCompletionVerification: state.awaitingCompletionVerification,
-      pendingCompletionExpectations: state.pendingCompletionExpectations
-    };
+      messages: toModelMessages(messages, { omitToolResultId: state.pendingConfirmation?.id }),
+      signatures,
+      toolAttempts,
+      state
+    });
     await this.checkpoints.save(checkpoint, command.executionContext.leaseToken);
     await this.emit({ type: 'checkpoint_saved', agentRunId: command.agentRunId, turn: turnCount });
     return checkpoint;

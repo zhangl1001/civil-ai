@@ -295,12 +295,10 @@ function providerAttemptLimit(
     // those out of this inner loop prevents multiplicative retry storms.
     return 1;
   }
-  if (
-    kind === ProviderErrorKind.EmptyResponse
-    || kind === ProviderErrorKind.Transient
-    || kind === ProviderErrorKind.RateLimited
-  ) return 4;
-  if (kind === ProviderErrorKind.Protocol) return 2;
+  if (kind === ProviderErrorKind.Transient || kind === ProviderErrorKind.RateLimited) return 4;
+  // An empty answer is rarely fixed by asking again; one retry, not four. A
+  // thinking-only or truncated answer (OutputLimit) is never retried at all.
+  if (kind === ProviderErrorKind.EmptyResponse || kind === ProviderErrorKind.Protocol) return 2;
   return 1;
 }
 

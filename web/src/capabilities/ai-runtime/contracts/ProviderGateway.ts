@@ -68,6 +68,11 @@ export interface ProviderRequest {
   readonly structuredOutputMode?: 'auto' | 'prompt';
   readonly tools?: readonly ProviderToolDefinition[];
   readonly toolChoice?: 'auto' | 'none' | 'required' | { readonly name: string };
+  /**
+   * Asks endpoints that think by default to answer directly, e.g. for a
+   * connection test whose tiny budget would otherwise be spent on reasoning.
+   */
+  readonly thinking?: 'disabled';
   readonly requestId: string;
 }
 
@@ -118,6 +123,11 @@ export const ProviderErrorKind = {
   Transient: 'transient',
   InvalidRequest: 'invalid_request',
   EmptyResponse: 'empty_response',
+  /**
+   * No answer text: the output limit was hit, or the whole output went into
+   * reasoning. The same request would end the same way, so it is not retried.
+   */
+  OutputLimit: 'output_limit',
   Protocol: 'protocol'
 } as const;
 
@@ -134,6 +144,8 @@ export const ProviderFailureCode = {
   ContextTooLong: 'provider.context_too_long',
   UnsupportedMedia: 'provider.unsupported_media',
   HtmlResponse: 'provider.html_response',
+  ThinkingOnly: 'provider.thinking_only',
+  StreamInterrupted: 'provider.stream_interrupted',
   Overloaded: 'provider.overloaded',
   Timeout: 'provider.timeout',
   NetworkUnavailable: 'network.unavailable'

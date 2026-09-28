@@ -1,4 +1,8 @@
-import type { ProviderGateway, ProviderResponse } from '@/capabilities/ai-runtime/public';
+import {
+  isOutputLengthFinish,
+  type ProviderGateway,
+  type ProviderResponse
+} from '@/capabilities/ai-runtime/public';
 import type { AgentModelInvoker } from '../../contracts/AgentRuntimePorts';
 import type { RunAgentLoopCommand } from '../AgentLoopContracts';
 import { toProviderMessages } from './PiAgentMessageAdapter';
@@ -104,7 +108,11 @@ async function produceProviderEvents(
       ...partial,
       responseId: response.providerRequestId,
       usage: toPiUsage(response),
-      stopReason: response.toolCalls?.length ? 'toolUse' : response.finishReason === 'length' ? 'length' : 'stop',
+      // A truncated turn is `length` even when it carries tool calls, so Pi
+      // refuses to execute calls whose arguments may have been cut off.
+      stopReason: isOutputLengthFinish(response.finishReason)
+        ? 'length'
+        : response.toolCalls?.length ? 'toolUse' : 'stop',
       timestamp: Date.now()
     };
     stream.push({ type: 'done', reason: message.stopReason as 'stop' | 'length' | 'toolUse', message });

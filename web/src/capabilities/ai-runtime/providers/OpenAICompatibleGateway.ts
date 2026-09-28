@@ -12,10 +12,16 @@ import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTranspo
 import {
   assertNonEmptyProviderResult,
   assertProviderResponse,
+  interruptedProviderStream,
   isHtmlResponse,
+  isStreamPayloadError,
   unreadableProviderResponse
 } from './ProviderHttpSupport';
-import { OpenAIStreamAccumulator, parseOpenAIResponse } from './ProviderResponseParser';
+import {
+  OpenAIStreamAccumulator,
+  openAIResponseHasReasoning,
+  parseOpenAIResponse
+} from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
 import {
   hasRequiredStructuredRoot,
@@ -108,9 +114,14 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     if (!response.body) return this.complete(request, signal);
     if (isHtmlResponse(response)) throw unreadableProviderResponse(response, 'OpenAI 兼容');
     const accumulator = new OpenAIStreamAccumulator();
+    let events = 0;
     try {
       await readServerSentEvents(response.body, async (data) => {
-        if (data === '[DONE]') return;
+        events += 1;
+        if (data === '[DONE]') {
+          accumulator.markDone();
+          return;
+        }
         const delta = accumulator.append(JSON.parse(data) as unknown);
         if (!delta) return;
         await onEvent({ type: 'text_delta', text: delta });
@@ -118,9 +129,15 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
+      if (!isStreamPayloadError(error)) throw interruptedProviderStream(error instanceof Error ? error.message : undefined);
       throw new ProviderGatewayError('OpenAI 兼容接口的流式响应格式无法识别', ProviderErrorKind.Protocol);
     }
-    return assertNonEmptyProviderResult(accumulator.response());
+    // A body that ends before [DONE] or a finish_reason is a broken stream, not a short answer.
+    if (!accumulator.isComplete) {
+      if (!events) throw new ProviderGatewayError('OpenAI 兼容接口没有返回流式模型响应', ProviderErrorKind.Protocol);
+      throw interruptedProviderStream();
+    }
+    return assertNonEmptyProviderResult(accumulator.response(), accumulator.sawReasoning);
   }
 
   private async sendCompletion(
@@ -131,7 +148,8 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     const response = await this.transport.send(this.httpRequest(request, false, structuredMode, signal));
     await assertProviderResponse(response);
     try {
-      return assertNonEmptyProviderResult(parseOpenAIResponse(await response.json()));
+      const payload: unknown = await response.json();
+      return assertNonEmptyProviderResult(parseOpenAIResponse(payload), openAIResponseHasReasoning(payload));
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;

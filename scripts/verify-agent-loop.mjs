@@ -1458,6 +1458,119 @@ try {
     'both loops expose the same turn boundaries to the chat'
   );
 
+  // Thinking-only answers are billed once: no stream->complete fallback, no retries.
+  const invocationLedger = [];
+  const invokeModel = new agent.InvokeAgentModel(
+    {
+      async run(operation) { return operation({}); },
+      async runAutocommit(operation) { return operation({}); }
+    },
+    {
+      async findById(id) { return { run: { id, status: 'running' }, events: [] }; },
+      async hasActiveLease() { return true; },
+      async appendInvocation(invocation) { invocationLedger.push(invocation); },
+      async updateInvocationResult() {},
+      async updateInvocationValidation(id, status, code) { invocationLedger.push({ id, status, code }); }
+    },
+    { now() { return 3_000; }, monotonicNowMs() { return 3_000; } },
+    { next() { return `AiInvocationId:${invocationLedger.length + 1}`; } }
+  );
+  let thinkingOnlySends = 0;
+  const thinkingOnlyGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      thinkingOnlySends += 1;
+      if (JSON.parse(request.body).stream) {
+        return new Response([
+          { type: 'message_start', message: { id: 'thinking-stream' } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '……' } },
+          { type: 'message_delta', delta: { stop_reason: 'max_tokens' } },
+          { type: 'message_stop' }
+        ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' }
+        });
+      }
+      return new Response(JSON.stringify({ id: 't', content: [{ type: 'thinking', thinking: '……' }], stop_reason: 'max_tokens' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+  });
+  await assert.rejects(invokeModel.execute({
+    agentRunId: 'AgentRunId:thinking-only',
+    modelRole: 'agent.tutor_turn',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    preferStream: true,
+    onDelta() {}
+  }, thinkingOnlyGateway), (error) => {
+    assert.equal(error.kind, ai.ProviderErrorKind.OutputLimit);
+    assert.equal(error.code, 'provider.thinking_only');
+    return true;
+  });
+  assert.equal(thinkingOnlySends, 1, 'a thinking-only answer is one provider call, not a fallback plus retries');
+  assert.equal(invocationLedger.at(-1).code, 'provider.thinking_only', 'the invocation ledger keeps the precise code');
+
+  let emptySends = 0;
+  await assert.rejects(invokeModel.execute({
+    agentRunId: 'AgentRunId:empty',
+    modelRole: 'agent.tutor_turn',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    preferStream: true,
+    onDelta() {}
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete() {
+      emptySends += 1;
+      throw new ai.ProviderGatewayError('empty', ai.ProviderErrorKind.EmptyResponse);
+    },
+    async stream() {
+      emptySends += 1;
+      throw new ai.ProviderGatewayError('empty', ai.ProviderErrorKind.EmptyResponse);
+    }
+  }), (error) => error.kind === ai.ProviderErrorKind.EmptyResponse);
+  assert.equal(emptySends, 4, 'an empty answer gets one retry (stream + fallback twice), not four');
+
+  // The stable loop never executes tool calls cut off by the output limit, and marks truncated answers.
+  const truncatedExecutions = [];
+  let truncatedTurn = 0;
+  const truncatedLoop = new agent.RunAgentLoop(
+    {
+      async invoke() {
+        truncatedTurn += 1;
+        if (truncatedTurn === 1) {
+          return {
+            text: '',
+            toolCalls: [{ id: 'cut-call', name: 'student_read_profile', arguments: { scope: 'cur' } }],
+            finishReason: 'max_tokens',
+            usage: {}
+          };
+        }
+        return { text: '先练判断推理，再', finishReason: 'max_tokens', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute(definition) { truncatedExecutions.push(definition.name); return { content: '{}' }; } },
+    { async save() {} }
+  );
+  const truncatedResult = await truncatedLoop.execute({
+    agentRunId: 'agent-run-truncated',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天练什么' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-truncated' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'test-model' });
+  assert.deepEqual(truncatedExecutions, [], 'truncated tool arguments are never executed');
+  assert.match(truncatedResult.text, /^先练判断推理，再/);
+  assert.match(truncatedResult.text, /已达长度上限/, 'a truncated answer tells the user it was cut off');
+
   console.log('Agent loop verification passed.');
 } finally {
   await server.close();

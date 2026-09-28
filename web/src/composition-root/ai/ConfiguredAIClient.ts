@@ -5,6 +5,7 @@ import {
 } from '@/capabilities/ai-runtime/public';
 import type { JsonObject } from '@/kernel/public';
 import { aiConfigService } from '@/services/AIConfigService';
+import { ChatFailureCode, describeChatFailure } from '@/services/ChatAgentFailure';
 import { createConfiguredProviderGateway } from './createConfiguredProviderGateway';
 
 export interface AITextMessage {
@@ -16,7 +17,15 @@ export interface AITextRequestOptions {
   readonly temperature?: number;
   readonly maxOutputTokens?: number;
   readonly responseSchema?: JsonObject;
+  readonly thinking?: 'disabled';
 }
+
+/**
+ * Connection tests answer in a few words, but a thinking-by-default model
+ * (deepseek-v4-flash) spends a 64-token budget on reasoning and returns no
+ * text. Ask for a direct answer and leave headroom for models that think anyway.
+ */
+const CONNECTION_TEST_OPTIONS = { temperature: 0, maxOutputTokens: 1_024, thinking: 'disabled' } as const;
 
 /** Single application entry for chat and non-Agent model calls. */
 export class ConfiguredAIClient {
@@ -40,28 +49,41 @@ export class ConfiguredAIClient {
   }
 
   async testConnection(signal?: AbortSignal): Promise<string> {
-    return this.complete([
-      { role: 'system', content: '你是连接测试助手。只回复“连接正常”。' },
-      { role: 'user', content: '请测试当前配置是否可用。' }
-    ], signal, { temperature: 0, maxOutputTokens: 64 });
+    try {
+      return await this.complete([
+        { role: 'system', content: '你是连接测试助手。只回复“连接正常”。' },
+        { role: 'user', content: '请测试当前配置是否可用。' }
+      ], signal, CONNECTION_TEST_OPTIONS);
+    } catch (error) {
+      throw readableTestError(error, signal);
+    }
   }
 
   async testStructuredOutput(signal?: AbortSignal): Promise<void> {
-    const result = await this.complete([
-      { role: 'system', content: '使用指定结构提交结果。' },
-      { role: 'user', content: '提交 ok=true。' }
-    ], signal, {
-      temperature: 0,
-      maxOutputTokens: 128,
-      responseSchema: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['ok'],
-        properties: { ok: { type: 'boolean', const: true } }
-      }
-    });
-    const parsed = JSON.parse(result) as { ok?: unknown };
-    if (parsed.ok !== true) throw new Error('模型未通过结构化输出测试');
+    let result: string;
+    try {
+      result = await this.complete([
+        { role: 'system', content: '使用指定结构提交结果。' },
+        { role: 'user', content: '提交 ok=true。' }
+      ], signal, {
+        ...CONNECTION_TEST_OPTIONS,
+        responseSchema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['ok'],
+          properties: { ok: { type: 'boolean', const: true } }
+        }
+      });
+    } catch (error) {
+      throw readableTestError(error, signal);
+    }
+    let parsed: { ok?: unknown } | undefined;
+    try {
+      parsed = JSON.parse(result) as { ok?: unknown };
+    } catch {
+      throw new Error('模型未通过结构化输出测试：返回内容不是有效的 JSON。');
+    }
+    if (parsed?.ok !== true) throw new Error('模型未通过结构化输出测试');
   }
 
   private async execute(
@@ -81,6 +103,7 @@ export class ConfiguredAIClient {
       temperature: options.temperature ?? 0.4,
       maxOutputTokens: options.maxOutputTokens ?? 8_192,
       responseSchema: options.responseSchema,
+      ...(options.thinking ? { thinking: options.thinking } : {}),
       requestId: crypto.randomUUID()
     };
     if (
@@ -96,6 +119,18 @@ export class ConfiguredAIClient {
     if (onDelta) await onDelta(response.text);
     return response;
   }
+}
+
+/** The settings sheet shows `error.message` as is, so it must be readable Chinese. */
+function readableTestError(error: unknown, signal?: AbortSignal): unknown {
+  if (signal?.aborted) return error;
+  const failure = describeChatFailure(error);
+  if (failure.code !== ChatFailureCode.Unknown) return new Error(failure.message, { cause: error });
+  const own = error instanceof Error && /[\u4e00-\u9fff]/.test(error.message) ? error.message : '';
+  return new Error(
+    own ? `连接测试失败：${own}` : '连接测试失败，请检查接口地址、模型名称和 API Key 后重试。',
+    { cause: error }
+  );
 }
 
 function toModelMessage(message: AITextMessage): ModelMessage {

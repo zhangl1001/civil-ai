@@ -950,6 +950,8 @@ try {
   assert.equal('temperature' in adaptiveOpenAIBodies[1], false);
 
   await verifiesProviderFailureClassification(ai);
+  await verifiesDeepSeekThinkingAndStreamIntegrity(ai);
+  await verifiesConnectionTestForThinkingModels(server);
 
   assert.equal(ai.openAITextDelta({ choices: [{ delta: { content: '甲' } }] }), '甲');
   assert.equal(ai.anthropicTextDelta({
@@ -1036,6 +1038,267 @@ async function verifiesProviderFailureClassification(ai) {
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+}
+
+function sse(events, { done = false } = {}) {
+  const body = [
+    ...events.map((event) => `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\n\n`),
+    ...(done ? ['data: [DONE]\n\n'] : [])
+  ].join('');
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+async function verifiesDeepSeekThinkingAndStreamIntegrity(ai) {
+  const toolHistory = [
+    { role: ai.ModelMessageRole.User, content: '今天练什么' },
+    { role: ai.ModelMessageRole.Assistant, content: '', toolCalls: [{ id: 'read-1', name: 'student_read_profile', arguments: {} }] },
+    { role: ai.ModelMessageRole.Tool, toolCallId: 'read-1', content: '{"targetScore":80}' }
+  ];
+  const bodies = [];
+  const deepSeek = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      bodies.push(JSON.parse(request.body));
+      return new Response(JSON.stringify({
+        id: 'deepseek-final',
+        content: [{ type: 'text', text: '今天先练判断推理。' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  await deepSeek.complete({
+    system: 'system',
+    messages: toolHistory,
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    toolChoice: 'none',
+    requestId: 'deepseek-finalization'
+  });
+  assert.equal('tools' in bodies[0], false, 'a finalization turn offers no tools');
+  assert.equal(bodies[0].thinking?.type, 'disabled', 'a finalization turn that replays tool blocks keeps DeepSeek thinking off');
+  await deepSeek.complete({
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    requestId: 'deepseek-plain'
+  });
+  assert.equal('thinking' in bodies[1], false, 'plain requests keep the provider default');
+  await deepSeek.complete({
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0,
+    maxOutputTokens: 1024,
+    thinking: 'disabled',
+    requestId: 'deepseek-direct'
+  });
+  assert.equal(bodies[2].thinking?.type, 'disabled', 'callers can ask a thinking-by-default endpoint to answer directly');
+
+  // "must be passed back" proves thinking is on; it must not be learned as unsupported.
+  const replayBodies = [];
+  const replayGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      replayBodies.push(JSON.parse(request.body));
+      return new Response(JSON.stringify({
+        error: { type: 'invalid_request_error', message: 'The `content[].thinking` in the thinking mode must be passed back to the API.' }
+      }), { status: 400, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const toolRequest = {
+    system: 'system',
+    messages: toolHistory,
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    tools: [{ name: 'student_read_profile', description: '读取档案。', inputSchema: { type: 'object', properties: {} } }],
+    toolChoice: 'auto',
+    requestId: 'thinking-replay'
+  };
+  await assert.rejects(replayGateway.complete(toolRequest), (error) => error.kind === ai.ProviderErrorKind.InvalidRequest);
+  await assert.rejects(replayGateway.complete({ ...toolRequest, requestId: 'thinking-replay-2' }));
+  assert.equal(replayBodies.length, 2, 'a thinking-replay rejection is not retried as if thinking were unsupported');
+  assert.equal(replayBodies[1].thinking?.type, 'disabled', 'the disable flag survives a thinking-replay rejection');
+
+  // Thinking-only or max_tokens-without-text answers are a clear, non-retryable error.
+  let thinkingOnlyCalls = 0;
+  const thinkingOnly = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      thinkingOnlyCalls += 1;
+      if (JSON.parse(request.body).stream) {
+        return sse([
+          { type: 'message_start', message: { id: 'thinking-stream', usage: { input_tokens: 9, output_tokens: 0 } } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '用户想要……' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 64 } },
+          { type: 'message_stop' }
+        ]);
+      }
+      return new Response(JSON.stringify({
+        id: 'thinking-only',
+        content: [{ type: 'thinking', thinking: '用户想要……' }],
+        stop_reason: 'max_tokens'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const shortRequest = {
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0,
+    maxOutputTokens: 64,
+    requestId: 'thinking-only'
+  };
+  for (const attempt of [() => thinkingOnly.complete(shortRequest), () => thinkingOnly.stream(shortRequest, () => undefined)]) {
+    await assert.rejects(attempt(), (error) => {
+      assert.equal(error.kind, ai.ProviderErrorKind.OutputLimit);
+      assert.equal(error.code, 'provider.thinking_only');
+      assert.match(error.message, /思考/);
+      return true;
+    });
+  }
+  assert.equal(thinkingOnlyCalls, 2, 'each thinking-only answer costs exactly one provider call');
+
+  const streamCase = (events, options) => new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://anthropic.stream.test/v1',
+    model: 'stream-model'
+  }, { async send() { return sse(events, options); } });
+  const truncatedDeltas = [];
+  await assert.rejects(
+    streamCase([
+      { type: 'message_start', message: { id: 'truncated' } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '回答写到一半' } }
+    ]).stream(shortRequest, (event) => { truncatedDeltas.push(event.text); }),
+    (error) => error.kind === ai.ProviderErrorKind.Transient && error.code === 'provider.stream_interrupted',
+    'a stream that ends without message_stop is an error, not a short success'
+  );
+  assert.deepEqual(truncatedDeltas, ['回答写到一半']);
+  await assert.rejects(
+    streamCase([
+      { type: 'message_start', message: { id: 'overloaded' } },
+      { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }
+    ]).stream(shortRequest, () => undefined),
+    (error) => error.code === 'provider.overloaded',
+    'a mid-stream error event surfaces as that provider error'
+  );
+  const completed = await streamCase([
+    { type: 'message_start', message: { id: 'complete' } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '完整回答' } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+    { type: 'message_stop' }
+  ]).stream(shortRequest, () => undefined);
+  assert.equal(completed.text, '完整回答');
+
+  const openAIStream = (events, options) => new ai.OpenAICompatibleGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://openai.stream.test/v1',
+    model: 'stream-model'
+  }, { async send() { return sse(events, options); } });
+  await assert.rejects(
+    openAIStream([{ id: 'cut', choices: [{ delta: { content: '写到一半' } }] }]).stream(shortRequest, () => undefined),
+    (error) => error.code === 'provider.stream_interrupted',
+    'an OpenAI stream without [DONE] or finish_reason is an error'
+  );
+  await assert.rejects(
+    openAIStream([
+      { id: 'err', choices: [{ delta: { content: '先' } }] },
+      { error: { code: 'rate_limit_exceeded', message: 'Rate limit reached' } }
+    ]).stream(shortRequest, () => undefined),
+    (error) => error.kind === ai.ProviderErrorKind.RateLimited,
+    'an OpenAI error object inside the stream surfaces as that provider error'
+  );
+  await assert.rejects(
+    openAIStream([
+      { id: 'reasoning', choices: [{ delta: { reasoning_content: '思考……' } }] },
+      { id: 'reasoning', choices: [{ delta: {}, finish_reason: 'length' }] }
+    ], { done: true }).stream(shortRequest, () => undefined),
+    (error) => error.kind === ai.ProviderErrorKind.OutputLimit && error.code === 'provider.thinking_only'
+  );
+  const openAIComplete = await openAIStream([
+    { id: 'ok', choices: [{ delta: { content: '完整' } }] },
+    { id: 'ok', choices: [{ delta: {}, finish_reason: 'stop' }] }
+  ], { done: true }).stream(shortRequest, () => undefined);
+  assert.equal(openAIComplete.text, '完整');
+  assert.equal(ai.isOutputLengthFinish('max_tokens'), true);
+  assert.equal(ai.isOutputLengthFinish('length'), true);
+  assert.equal(ai.isOutputLengthFinish('end_turn'), false);
+}
+
+async function verifiesConnectionTestForThinkingModels(server) {
+  const settings = new Map([[
+    'zhangl-setting:secure-fallback:zhangl-ai-config',
+    JSON.stringify({
+      provider: 'anthropic',
+      apiKey: 'test-key',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      model: 'deepseek-v4-flash',
+      maxConcurrentTasks: 1
+    })
+  ]]);
+  const originalFetch = globalThis.fetch;
+  // Swap descriptors instead of reading Node's own localStorage accessor, which warns.
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const originalWindow = globalThis.window;
+  const requests = [];
+  let thinkingOnly = false;
+  globalThis.window = globalThis;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: {
+      getItem: (key) => settings.get(key) ?? null,
+      setItem: (key, value) => { settings.set(key, value); },
+      removeItem: (key) => { settings.delete(key); }
+    }
+  });
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    if (thinkingOnly) {
+      return new Response(JSON.stringify({ id: 't', content: [{ type: 'thinking', thinking: '……' }], stop_reason: 'max_tokens' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    return new Response(JSON.stringify(body.tools
+      ? { id: 's', content: [{ type: 'tool_use', name: 'submit_structured_result', input: { ok: true } }], stop_reason: 'tool_use' }
+      : { id: 'c', content: [{ type: 'text', text: '连接正常' }], stop_reason: 'end_turn' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    });
+  };
+  try {
+    const { configuredAIClient } = await server.ssrLoadModule('/src/composition-root/ai/ConfiguredAIClient.ts');
+    assert.equal(await configuredAIClient.testConnection(), '连接正常');
+    await configuredAIClient.testStructuredOutput();
+    assert(requests.every((body) => body.thinking?.type === 'disabled'), 'connection tests ask DeepSeek to answer without thinking');
+    assert(requests.every((body) => body.max_tokens >= 512), 'connection tests leave room for models that think anyway');
+    thinkingOnly = true;
+    await assert.rejects(configuredAIClient.testConnection(), (error) => {
+      assert.match(error.message, /[一-鿿]/, 'the settings sheet shows a Chinese explanation');
+      assert.doesNotMatch(error.message, /provider returned|empty content/i);
+      return true;
+    });
+    settings.delete('zhangl-setting:secure-fallback:zhangl-ai-config');
+    await assert.rejects(configuredAIClient.testConnection(), /还没有配置 AI 模型/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor);
+    else delete globalThis.localStorage;
+    globalThis.window = originalWindow;
   }
 }
 

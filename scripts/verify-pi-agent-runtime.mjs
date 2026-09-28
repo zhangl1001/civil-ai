@@ -27,6 +27,7 @@ try {
   await verifiesSideEffectFreeStableFallback(agent, ai, server);
   await verifiesFirstTurnStreaming(agent, pi, ai);
   await verifiesToolTurnTextIsProvisional(agent, pi, ai);
+  await verifiesOutputLimitHandling(agent, pi, ai);
   console.log('Pi Agent runtime verification passed.');
 } finally {
   await server.close();
@@ -352,6 +353,28 @@ async function verifiesToolTurnTextIsProvisional(agent, pi, ai) {
     ['已完成扫描。'],
     'narration of a forced tool turn is never streamed'
   );
+}
+
+async function verifiesOutputLimitHandling(agent, pi, ai) {
+  const executed = [];
+  const runtime = new pi.PiAgentLoopRuntime(
+    sequenceInvoker([
+      {
+        text: '',
+        toolCalls: [{ id: 'call:cut', name: 'practice_read', arguments: { scope: 'to' } }],
+        finishReason: 'max_tokens',
+        usage: {}
+      },
+      { text: '今天先做判断推理，然后', finishReason: 'max_tokens', usage: {} }
+    ]),
+    allowPolicy(),
+    { async execute(definition) { executed.push(definition.name); return { content: '{}', madeProgress: true }; } },
+    { async save() {} }
+  );
+  const result = await runtime.execute(command({ tools: [readTool('practice.read')] }), gateway(ai));
+  assert.deepEqual(executed, [], "Anthropic max_tokens maps to Pi's length stop, so truncated tool calls never run");
+  assert.match(result.text, /^今天先做判断推理，然后/);
+  assert.match(result.text, /已达长度上限/, 'a truncated final answer says it was cut off');
 }
 
 async function waitFor(predicate, timeoutMs = 1_000) {

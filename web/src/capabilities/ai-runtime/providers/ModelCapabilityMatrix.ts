@@ -31,12 +31,16 @@ export class ModelCapabilityMatrix {
     return thinking && this.thinkingSupported ? { thinking } : {};
   }
 
-  learnFromInvalidRequest(error: unknown): boolean {
+  /**
+   * Learns only from a rejection of a field the request actually carried;
+   * otherwise the retry would repeat the same request.
+   */
+  learnFromInvalidRequest(error: unknown, sent: { readonly thinking?: boolean } = {}): boolean {
     if (this.temperatureSupported && isUnsupportedTemperature(error)) {
       this.temperatureSupported = false;
       return true;
     }
-    if (this.thinkingSupported && isUnsupportedThinking(error)) {
+    if (this.thinkingSupported && sent.thinking && isUnsupportedThinking(error)) {
       this.thinkingSupported = false;
       return true;
     }
@@ -53,5 +57,9 @@ function isUnsupportedTemperature(error: unknown): boolean {
 function isUnsupportedThinking(error: unknown): boolean {
   return error instanceof ProviderGatewayError
     && error.kind === ProviderErrorKind.InvalidRequest
-    && /thinking|reasoning(?:_effort)?|extended thinking/i.test(error.message);
+    && /thinking|reasoning(?:_effort)?|extended thinking/i.test(error.message)
+    // "content[].thinking must be passed back" and "must start with a thinking
+    // block" prove thinking is supported and active; dropping the disable flag
+    // would make every later tool turn fail the same way.
+    && !/passed back|must be (?:passed|returned|included)|content\[\]\.thinking|thinking block/i.test(error.message);
 }

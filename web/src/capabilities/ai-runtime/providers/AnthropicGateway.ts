@@ -12,10 +12,16 @@ import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTranspo
 import {
   assertNonEmptyProviderResult,
   assertProviderResponse,
+  interruptedProviderStream,
   isHtmlResponse,
+  isStreamPayloadError,
   unreadableProviderResponse
 } from './ProviderHttpSupport';
-import { AnthropicStreamAccumulator, parseAnthropicResponse } from './ProviderResponseParser';
+import {
+  AnthropicStreamAccumulator,
+  anthropicResponseHasReasoning,
+  parseAnthropicResponse
+} from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
 import {
   hasRequiredStructuredRoot,
@@ -67,7 +73,7 @@ export class AnthropicGateway implements ProviderGateway {
     try {
       return await this.completeWithCurrentCapabilities(request, signal);
     } catch (error) {
-      if (!this.modelCapabilities.learnFromInvalidRequest(error)) throw error;
+      if (!this.learnFromInvalidRequest(error, request)) throw error;
       return this.completeWithCurrentCapabilities(request, signal);
     }
   }
@@ -113,14 +119,16 @@ export class AnthropicGateway implements ProviderGateway {
       response = await this.transport.send(this.httpRequest(request, true, 'none', signal));
       await assertProviderResponse(response);
     } catch (error) {
-      if (!this.modelCapabilities.learnFromInvalidRequest(error)) throw error;
+      if (!this.learnFromInvalidRequest(error, request)) throw error;
       return this.stream(request, onEvent, signal);
     }
     if (!response.body) return this.complete(request, signal);
     if (isHtmlResponse(response)) throw unreadableProviderResponse(response, 'Anthropic 兼容');
     const accumulator = new AnthropicStreamAccumulator();
+    let events = 0;
     try {
       await readServerSentEvents(response.body, async (data) => {
+        events += 1;
         const delta = accumulator.append(JSON.parse(data) as unknown);
         if (!delta) return;
         await onEvent({ type: 'text_delta', text: delta });
@@ -128,9 +136,15 @@ export class AnthropicGateway implements ProviderGateway {
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
+      if (!isStreamPayloadError(error)) throw interruptedProviderStream(error instanceof Error ? error.message : undefined);
       throw new ProviderGatewayError('Anthropic 兼容接口的流式响应格式无法识别', ProviderErrorKind.Protocol);
     }
-    return assertNonEmptyProviderResult(accumulator.response());
+    // A body that ends before message_stop is a broken stream, not a short answer.
+    if (!accumulator.isComplete) {
+      if (!events) throw new ProviderGatewayError('Anthropic 兼容接口没有返回流式模型响应', ProviderErrorKind.Protocol);
+      throw interruptedProviderStream();
+    }
+    return assertNonEmptyProviderResult(accumulator.response(), accumulator.sawReasoning);
   }
 
   private async sendCompletion(
@@ -141,7 +155,8 @@ export class AnthropicGateway implements ProviderGateway {
     const response = await this.transport.send(this.httpRequest(request, false, structuredMode, signal));
     await assertProviderResponse(response);
     try {
-      return assertNonEmptyProviderResult(parseAnthropicResponse(await response.json()));
+      const payload: unknown = await response.json();
+      return assertNonEmptyProviderResult(parseAnthropicResponse(payload), anthropicResponseHasReasoning(payload));
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
@@ -179,16 +194,7 @@ export class AnthropicGateway implements ProviderGateway {
     const system = request.responseSchema && structuredMode === 'prompt'
       ? structuredJsonInstruction(request.system, request.responseSchema)
       : request.system;
-    // Some compatible providers require every thinking block to be replayed
-    // on later tool turns. Reasoning is intentionally not persisted, so keep
-    // thinking disabled for the whole tool chain on those providers.
-    const usesTools = structuredMode === 'tool' && Boolean(request.responseSchema)
-      || Boolean(request.tools?.length);
-    const requiresDeterministicStructuredBody = Boolean(request.responseSchema);
-    const thinkingCompatibility = (usesTools || requiresDeterministicStructuredBody)
-      && requiresDisabledThinkingForToolUse(this.config.baseUrl)
-      ? { type: 'disabled' }
-      : undefined;
+    const thinkingCompatibility = this.disabledThinking(request);
     return {
       url: anthropicMessagesEndpoint(this.config.baseUrl),
       method: 'POST' as const,
@@ -210,6 +216,26 @@ export class AnthropicGateway implements ProviderGateway {
       }),
       signal
     };
+  }
+
+  /**
+   * DeepSeek thinks by default and requires every thinking block to be
+   * replayed on later tool turns. Reasoning is intentionally not persisted,
+   * so thinking stays disabled for any request that belongs to a tool chain —
+   * including a finalization turn that offers no tools but carries
+   * tool_use/tool_result history — for structured output, and on request.
+   */
+  private disabledThinking(request: ProviderRequest): { readonly type: 'disabled' } | undefined {
+    const toolChain = Boolean(request.tools?.length)
+      || request.messages.some((message) => message.role === 'tool' || Boolean(message.toolCalls?.length));
+    const wanted = toolChain || Boolean(request.responseSchema) || request.thinking === 'disabled';
+    return wanted && requiresDisabledThinkingForToolUse(this.config.baseUrl) ? { type: 'disabled' } : undefined;
+  }
+
+  private learnFromInvalidRequest(error: unknown, request: ProviderRequest): boolean {
+    return this.modelCapabilities.learnFromInvalidRequest(error, {
+      thinking: Boolean(this.disabledThinking(request))
+    });
   }
 }
 

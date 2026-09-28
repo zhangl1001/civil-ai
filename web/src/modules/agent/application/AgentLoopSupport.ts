@@ -17,6 +17,13 @@ export class AgentContextBudgetError extends Error {
   }
 }
 
+/** Shown under an answer that hit the output limit, so a cut-off never looks complete. */
+export const OUTPUT_LIMIT_NOTICE = '（已达长度上限，回复可能不完整。可以回复“继续”让我接着写。）';
+
+export function withOutputLimitNotice(text: string, truncated: boolean): string {
+  return truncated && text.trim() ? `${text.trimEnd()}\n\n${OUTPUT_LIMIT_NOTICE}` : text;
+}
+
 export type AgentGuidanceConsumer = () => readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
 
 export interface AgentLoopLimitOptions {
