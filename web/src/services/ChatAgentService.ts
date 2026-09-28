@@ -378,7 +378,11 @@ export class ChatAgentService {
       return;
     }
     const latest = await runtime.agentRunRepository.findById(runId);
-    if (latest?.run.status === 'cancelled') return;
+    if (latest?.run.status === 'cancelled') {
+      // Cancelled elsewhere (e.g. the task bar) while the model finished.
+      await this.recordStop(active);
+      return;
+    }
     // The answer is the final turn only; preambles of tool-calling turns were provisional.
     const finalContent = visibleAssistantText(result.text) || writer.visibleText;
     controller.signal.throwIfAborted();
@@ -419,7 +423,10 @@ export class ChatAgentService {
   /** A stop is the user's choice, not a failure: keep what was shown and mark it stopped. */
   private async recordStop(active: ActiveChatRun): Promise<void> {
     if (active.writer.hasCompletedAnswer) return;
-    await active.writer.stop(describeChatFailure(active.controller.signal.reason)).catch((error: unknown) => {
+    const reason = active.controller.signal.aborted
+      ? describeChatFailure(active.controller.signal.reason)
+      : chatFailureForCode(ChatFailureCode.Stopped);
+    await active.writer.stop(reason).catch((error: unknown) => {
       console.warn('[ChatAgent] stopped turn was not saved', error);
     });
   }

@@ -547,6 +547,18 @@ async function verifyChatAgentService() {
       assert.match(interruptedRows.at(-1).errorMessage, /后台/);
       const lifecycleCancel = harness.transitions.filter((item) => item.action === agent.AgentRunAction.Cancel).at(-1);
       assert.equal(lifecycleCancel.cancellationReason, 'app_lifecycle_interrupted_chat_agent');
+      const cancelledElsewhere = await harness.session('任务栏取消');
+      harness.loop = async ({ command, observer }) => {
+        await observer.onEvent({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: 1 });
+        await observer.onEvent({ type: 'text_delta', agentRunId: command.agentRunId, text: '已经写了一段' });
+        harness.runtime.runs.get(command.agentRunId).status = 'cancelled';
+        return { status: 'completed', text: '已经写了一段', checkpoint: { agentRunId: command.agentRunId, messages: [] } };
+      };
+      await service.handle('写一段总结', cancelledElsewhere, { thinkingEnabled: false });
+      const cancelledRow = (await harness.messages(cancelledElsewhere.id)).at(-1);
+      assert.equal(cancelledRow.status, 'stopped', 'a run cancelled from the task bar still leaves its stopped turn');
+      assert.equal(cancelledRow.errorCode, 'chat.stopped');
+      assert.equal(cancelledRow.content, '已经写了一段');
     } finally {
       console.warn = originalWarn;
     }
