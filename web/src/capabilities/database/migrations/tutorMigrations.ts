@@ -41,6 +41,7 @@ import promptExamScopeSql from './040_prompt_exam_scope.sql?raw';
 import questionSetGradingPolicySql from './041_question_set_grading_policy.sql?raw';
 import dailyPlanBlockSubjectSql from './042_daily_plan_block_subject.sql?raw';
 import repairSwallowedMigrationsSql from './043_repair_swallowed_migrations.sql?raw';
+import officialQuestionMaintenanceDeleteSql from './044_official_question_maintenance_delete.sql?raw';
 import type { Migration } from './Migration';
 
 export const tutorMigrations: readonly Migration[] = [
@@ -301,5 +302,11 @@ export const tutorMigrations: readonly Migration[] = [
     name: 'repair_swallowed_migrations',
     checksum: 'sha256:37da770ebb0f16e44c98d372886601650f072c588029835641d9011f286df37b',
     sql: repairSwallowedMigrationsSql
+  },
+  {
+    version: 44,
+    name: 'official_question_maintenance_delete',
+    checksum: 'sha256:8b5f9df2dc8f778f1cbe82cfbea00c6632c2c69cbc75c8d8ca9416fdf8439b1d',
+    sql: officialQuestionMaintenanceDeleteSql
   }
 ];

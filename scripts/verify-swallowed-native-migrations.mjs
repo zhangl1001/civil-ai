@@ -32,7 +32,7 @@ try {
   const prepared040 = prepareMigrationSql(sql040);
   const prepared042 = prepareMigrationSql(sql042);
   const repair = tutorMigrations.find((migration) => migration.version === 43);
-  assert.equal(tutorMigrations.length, 43);
+  assert.equal(tutorMigrations.length, 44);
   assert.equal(repair?.name, 'repair_swallowed_migrations');
   assert.equal(repair?.checksum, `sha256:${createHash('sha256').update(sql043).digest('hex')}`);
   assert.doesNotMatch(sql043, /DELETE FROM/i);
@@ -121,7 +121,7 @@ async function verifyRunnerRepairsExistingDevice(MigrationRunner, config, migrat
     state
   });
   await new MigrationRunner(database, config, migrations).migrate(1);
-  assert.equal(database.appliedVersions.at(-1), 43);
+  assert.equal(database.appliedVersions.at(-1), migrations.at(-1).version);
   assert.equal(promptColumns.includes('exam_type'), true);
   assert.match(state.planSql, /CHECK\(length\(subject\) > 0\)/);
 }
