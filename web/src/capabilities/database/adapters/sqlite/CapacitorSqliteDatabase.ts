@@ -8,6 +8,7 @@ import type {
   SqlTransaction
 } from '../../contracts/SqlDatabase';
 import type { TutorDatabaseLifecycle } from '../../contracts/TutorDatabaseLifecycle';
+import { TutorDatabaseBusyError } from '../../contracts/TutorDatabaseBusyError';
 import {
   TransactionWorkload,
   type UnitOfWorkOptions
@@ -33,8 +34,16 @@ export class TutorDatabaseTransactionTimeoutError extends Error {
   }
 }
 
+/** Who holds a connection lock, and until when every bound it runs under should have released it. */
+interface LockHolder {
+  readonly operation: string;
+  readonly generation: number;
+  expiresAt: number;
+}
+
 export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecycle {
   private mutex = new AsyncMutex();
+  private readonly lockHolders = new WeakMap<AsyncMutex, LockHolder>();
   private sqlite: SQLiteConnection | undefined;
   private connection: SQLiteDBConnection | undefined;
   private openPromise: Promise<void> | undefined;
@@ -42,7 +51,10 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
   private recoveryPromise: Promise<void> | undefined;
   private generation = 0;
 
-  constructor(private readonly config: TutorDatabaseConfig) {}
+  constructor(
+    private readonly config: TutorDatabaseConfig,
+    private readonly loadConnectionManager: () => Promise<SQLiteConnection> = loadCapacitorSqlite
+  ) {}
 
   async open(): Promise<void> {
     await this.waitUntilReady();
@@ -58,6 +70,9 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
       await this.ensureOpen();
       this.assertGeneration(generation);
       await this.verifyConnectionHealth(this.requireConnection());
+    }).catch((error: unknown) => {
+      // A holder still inside its own bounds is progress; recovering would roll it back.
+      if (!(error instanceof TutorDatabaseBusyError)) throw error;
     });
   }
 
@@ -86,8 +101,7 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
     await this.waitUntilReady();
     const pendingOpen = this.openPromise;
     if (pendingOpen) await pendingOpen.catch(() => undefined);
-    const mutex = this.mutex;
-    await mutex.runExclusive(async () => {
+    await this.exclusive(this.mutex, 'close', async () => {
       const connection = this.connection;
       this.connection = undefined;
       this.openPromise = undefined;
@@ -95,15 +109,14 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
       await this.rollbackIfActive(connection);
       await this.recoveryCall(() => connection.close());
       await this.recoveryCall(() => this.sqlite?.closeConnection(this.config.name, false));
-    }, this.lockOptions('close'));
+    });
   }
 
   async resetForDevelopment(): Promise<void> {
     await this.waitUntilReady();
     const pendingOpen = this.openPromise;
     if (pendingOpen) await pendingOpen.catch(() => undefined);
-    const mutex = this.mutex;
-    await mutex.runExclusive(async () => {
+    await this.exclusive(this.mutex, 'reset', async () => {
       const connection = this.connection;
       this.connection = undefined;
       this.openPromise = undefined;
@@ -113,7 +126,7 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
       }
       await this.recoveryCall(() => this.sqlite?.closeConnection(this.config.name, false));
       this.stalledError = undefined;
-    }, this.lockOptions('reset'));
+    });
   }
 
   async execute(sql: string): Promise<void> {
@@ -163,6 +176,7 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
       };
 
       try {
+        this.extendLockHolder(generation, deadlineMs);
         const deadline = new Promise<never>((_, reject) => {
           deadlineTimer = globalThis.setTimeout(() => {
             expired = true;
@@ -282,10 +296,7 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
   }
 
   private async connectionManager(): Promise<SQLiteConnection> {
-    if (!this.sqlite) {
-      const sqliteModule = await import('@capacitor-community/sqlite');
-      this.sqlite = new sqliteModule.SQLiteConnection(sqliteModule.CapacitorSQLite);
-    }
+    if (!this.sqlite) this.sqlite = await this.loadConnectionManager();
     return this.sqlite;
   }
 
@@ -371,14 +382,13 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
     await this.waitUntilReady();
     this.assertHealthy();
     const generation = this.generation;
-    const mutex = this.mutex;
-    return mutex.runExclusive(async () => {
+    return this.exclusive(this.mutex, operation, async () => {
       this.assertGeneration(generation);
       this.assertHealthy();
       const result = await work(generation);
       this.assertGeneration(generation);
       return result;
-    }, this.lockOptions(operation)).catch((error: unknown) => {
+    }).catch((error: unknown) => {
       if (
         error instanceof TutorDatabaseStalledError
         && error.operation !== 'connection.replaced'
@@ -390,16 +400,47 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
     });
   }
 
-  private lockOptions(operation: string) {
-    return {
+  private exclusive<T>(mutex: AsyncMutex, operation: string, work: () => Promise<T>): Promise<T> {
+    return mutex.runExclusive(async () => {
+      const holder: LockHolder = {
+        operation,
+        generation: this.generation,
+        expiresAt: Date.now() + this.config.lockHolderGraceMs
+      };
+      this.lockHolders.set(mutex, holder);
+      try {
+        return await work();
+      } finally {
+        if (this.lockHolders.get(mutex) === holder) this.lockHolders.delete(mutex);
+      }
+    }, {
       waitTimeoutMs: this.config.lockWaitTimeoutMs,
-      timeoutError: () => new TutorDatabaseStalledError(`${operation}.lock_wait`)
-    };
+      timeoutError: () => this.lockWaitError(mutex, operation)
+    });
+  }
+
+  /**
+   * A waiter that times out only learns another operation is still working,
+   * e.g. a backup restore inside its maintenance deadline. The database counts
+   * as stalled only when the holder overran every bound it declared: a native
+   * call timeout or transaction deadline that should already have released it.
+   */
+  private lockWaitError(mutex: AsyncMutex, operation: string): Error {
+    const holder = this.lockHolders.get(mutex);
+    if (holder && Date.now() > holder.expiresAt) return new TutorDatabaseStalledError(`${holder.operation}.overrun`);
+    return new TutorDatabaseBusyError(operation);
+  }
+
+  private extendLockHolder(generation: number, boundMs: number): void {
+    const holder = this.lockHolders.get(this.mutex);
+    if (!holder || holder.generation !== generation) return;
+    holder.expiresAt = Math.max(holder.expiresAt, Date.now() + boundMs + this.config.lockHolderGraceMs);
   }
 
   private async nativeCall<T>(operation: string, promise: Promise<T>): Promise<T> {
     this.assertHealthy();
     const generation = this.generation;
+    this.extendLockHolder(generation, this.config.nativeOperationTimeoutMs);
     let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = globalThis.setTimeout(() => {
@@ -419,6 +460,7 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
 
   private async recoveryCall<T>(work: () => Promise<T> | undefined): Promise<T | undefined> {
     let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+    this.extendLockHolder(this.generation, this.config.recoveryOperationTimeoutMs);
     try {
       return await Promise.race([
         Promise.resolve(work()),
@@ -480,4 +522,9 @@ export class CapacitorSqliteDatabase implements SqlDatabase, TutorDatabaseLifecy
       }));
     }
   }
+}
+
+async function loadCapacitorSqlite(): Promise<SQLiteConnection> {
+  const sqliteModule = await import('@capacitor-community/sqlite');
+  return new sqliteModule.SQLiteConnection(sqliteModule.CapacitorSQLite);
 }

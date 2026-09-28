@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core';
-import { tutorDatabaseConfig } from '@/capabilities/database/public';
+import { isTutorDatabaseBusy, tutorDatabaseConfig } from '@/capabilities/database/public';
 import {
   appLifecycleAdapter,
   type AppLifecycleEvent
@@ -120,6 +120,12 @@ export class TutorDatabaseLifecycleCoordinator {
       await this.runtime.databaseLifecycle.healthCheck();
       this.scheduleHealthCheck();
     } catch (error) {
+      // Busy means another operation still holds the connection inside its own
+      // deadline; recovering now would roll that work back.
+      if (isTutorDatabaseBusy(error)) {
+        this.scheduleHealthCheck();
+        return;
+      }
       this.dependencies.logger.warn('[TutorDatabaseLifecycle] health check failed', error);
       this.startRecovery('health_check_failed');
     }

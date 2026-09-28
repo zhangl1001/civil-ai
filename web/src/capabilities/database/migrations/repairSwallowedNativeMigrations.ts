@@ -2,6 +2,7 @@ import type { SqlDatabase, SqlRow } from '../contracts/SqlDatabase';
 import { TransactionWorkload } from '../contracts/UnitOfWork';
 import promptExamScopeSql from './040_prompt_exam_scope.sql?raw';
 import dailyPlanBlockSubjectSql from './042_daily_plan_block_subject.sql?raw';
+import { guardedMigrationSql, learningProgressPlanLinkGuard } from './migrationGuards';
 import { prepareMigrationSql } from './prepareMigrationSql';
 
 interface TableInfoRow extends SqlRow {
@@ -24,7 +25,11 @@ export async function repairSwallowedNativeMigrations(database: SqlDatabase): Pr
 
   await database.transaction(async (transaction) => {
     if (repairPromptScope) await transaction.execute(prepareMigrationSql(promptExamScopeSql));
-    if (repairPlanSubject) await transaction.execute(prepareMigrationSql(dailyPlanBlockSubjectSql));
+    if (repairPlanSubject) {
+      await transaction.execute(prepareMigrationSql(
+        guardedMigrationSql(dailyPlanBlockSubjectSql, learningProgressPlanLinkGuard)
+      ));
+    }
   }, { workload: TransactionWorkload.Maintenance });
 }
 

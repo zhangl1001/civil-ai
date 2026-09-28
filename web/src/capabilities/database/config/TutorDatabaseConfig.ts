@@ -4,7 +4,13 @@ export interface TutorDatabaseConfig {
   readonly name: typeof TUTOR_DATABASE_NAME;
   readonly version: number;
   readonly busyTimeoutMs: number;
+  /** How long a caller waits for the connection lock before failing as busy. */
   readonly lockWaitTimeoutMs: number;
+  /**
+   * Slack past a lock holder's own bound (native call timeout, transaction
+   * deadline) before its waiters treat it as hung and mark the database stalled.
+   */
+  readonly lockHolderGraceMs: number;
   readonly nativeOperationTimeoutMs: number;
   readonly transactionDeadlineMs: number;
   readonly maintenanceTransactionDeadlineMs: number;
@@ -19,6 +25,7 @@ export const tutorDatabaseConfig: TutorDatabaseConfig = {
   version: 1,
   busyTimeoutMs: 5_000,
   lockWaitTimeoutMs: 12_000,
+  lockHolderGraceMs: 5_000,
   nativeOperationTimeoutMs: 15_000,
   transactionDeadlineMs: 20_000,
   maintenanceTransactionDeadlineMs: 120_000,

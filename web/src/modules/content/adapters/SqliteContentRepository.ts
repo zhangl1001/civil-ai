@@ -41,7 +41,11 @@ import type {
 } from '../contracts/ContentRepository';
 import type { QuestionSetPracticeStatus, QuestionTemplateCode } from '../domain/ContentCodes';
 import { QuestionSetEntryMode, QuestionSetStatus } from '../domain/ContentCodes';
-import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
+import {
+  assertCommittedQuestionSetBundle,
+  assertQuestionSetQueryLimit,
+  assertRestorableQuestionSetBundle
+} from '../domain/ContentBundlePolicy';
 import { resolveQuestionSetEntryMode } from '../domain/QuestionSetEntryModePolicy';
 import { parseQuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import { applyQuestionSetEnrichmentSql } from './ApplyQuestionSetEnrichmentSql';
@@ -124,6 +128,15 @@ export class SqliteContentRepository implements ContentRepository {
 
   async commitQuestionSet(bundle: CommittedQuestionSetBundle, context: TransactionContext): Promise<void> {
     assertCommittedQuestionSetBundle(bundle);
+    await this.insertBundle(bundle, context);
+  }
+
+  async restoreQuestionSet(bundle: CommittedQuestionSetBundle, context: TransactionContext): Promise<void> {
+    assertRestorableQuestionSetBundle(bundle);
+    await this.insertBundle(bundle, context);
+  }
+
+  private async insertBundle(bundle: CommittedQuestionSetBundle, context: TransactionContext): Promise<void> {
     const transaction = this.transactionScope.resolve(context);
     for (const document of bundle.documents) await this.insertDocument(transaction, document);
     for (const lecture of bundle.lectures) await this.insertLecture(transaction, lecture);
