@@ -270,6 +270,19 @@ try {
     (error) => error?.code === 'agent_run.lease_lost',
     'IndexedDB must reject an old lease epoch with the stable fencing code'
   );
+  const lazyPiRuntimeSource = await readFile(path.join(root, 'src/modules/agent/application/LazyPiAgentLoopRuntime.ts'), 'utf8');
+  assert.doesNotMatch(
+    lazyPiRuntimeSource,
+    /^import\s+(?!type\b)[^;]*['"]\.\/PiAgentLoopRuntime['"]/m,
+    'the Pi runtime and its dependencies must stay out of the first-paint bundle'
+  );
+  assert.match(lazyPiRuntimeSource, /import\(\s*['"]\.\/PiAgentLoopRuntime['"]\s*\)/);
+  const compositionRootPublicSource = await readFile(path.join(root, 'src/composition-root/public.ts'), 'utf8');
+  assert.doesNotMatch(
+    compositionRootPublicSource,
+    /export\s*\{[^}]*\bcreate(?:Native|Web)TutorDatabase\b[^}]*\}/,
+    'a value re-export of a platform database factory defeats createTutorDatabaseRuntime\'s dynamic imports'
+  );
   assert.doesNotMatch(
     workerCoordinatorSource,
     /nextWorkAt\s*===\s*undefined\)\s*return/,

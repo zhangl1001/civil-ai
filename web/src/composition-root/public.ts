@@ -1,7 +1,8 @@
 // Concrete adapters are registered here; business modules depend only on their public ports.
-export { createNativeTutorDatabase } from './database/createNativeTutorDatabase';
+// The platform databases are reached only through createTutorDatabaseRuntime, whose dynamic
+// imports keep the adapter a device does not use out of its bundle; re-exporting either
+// factory here would pull both back into the first chunk.
 export type { NativeTutorDatabaseRuntime } from './database/createNativeTutorDatabase';
-export { createWebTutorDatabase } from './database/createWebTutorDatabase';
 export type { WebTutorDatabaseRuntime } from './database/createWebTutorDatabase';
 export { createTutorDatabaseRuntime } from './database/createTutorDatabaseRuntime';
 export type { TutorDatabaseRuntime } from './database/createTutorDatabaseRuntime';
