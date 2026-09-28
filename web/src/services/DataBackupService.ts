@@ -76,7 +76,10 @@ export class DataBackupService {
 
   /** Replaces the cycle's learning data with the backup in one maintenance transaction, then its conversations. */
   async importBackup(input: unknown): Promise<number> {
-    const backup = parseDataBackup(input);
+    // A backup is JSON by definition. Re-reading it as plain data drops any
+    // wrapper the caller put around it (a Vue ref makes it a reactive Proxy),
+    // which IndexedDB cannot structured-clone.
+    const backup = parseDataBackup(plainJson(input));
     const { runtime, current, restored, previous } = await this.restoreLearning(backup)
       .catch((error: unknown) => {
         throw importFailure(error);
@@ -228,4 +231,8 @@ function bytesText(bytes: number): string {
 function estimateBytes(value: unknown): number {
   const json = JSON.stringify(value);
   return typeof Blob === 'undefined' ? json.length : new Blob([json]).size;
+}
+
+function plainJson(input: unknown): unknown {
+  return input === undefined ? input : JSON.parse(JSON.stringify(input)) as unknown;
 }

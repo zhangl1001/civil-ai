@@ -125,11 +125,20 @@ export class TutorIndexedDb {
     await this.open();
     const storeNames = [...new Set(operations.map((operation) => operation.store))];
     const transaction = this.requireDatabase().transaction(storeNames, 'readwrite');
-    for (const operation of operations) {
-      const store = transaction.objectStore(operation.store);
-      if (operation.type === 'add') store.add(operation.value);
-      if (operation.type === 'put') store.put(operation.value);
-      if (operation.type === 'delete' && operation.key !== undefined) store.delete(operation.key);
+    try {
+      for (const operation of operations) {
+        const store = transaction.objectStore(operation.store);
+        if (operation.type === 'add') store.add(operation.value);
+        if (operation.type === 'put') store.put(operation.value);
+        if (operation.type === 'delete' && operation.key !== undefined) store.delete(operation.key);
+      }
+    } catch (error) {
+      // A request that throws synchronously (a value that cannot be cloned, a
+      // key the store rejects) must take the whole batch with it. Left alone,
+      // the requests queued before it still commit, so a restore kept its
+      // deletes and lost every write after the failing one.
+      transaction.abort();
+      throw error;
     }
     await transactionCompletion(transaction);
   }

@@ -44,6 +44,7 @@ try {
   const legacyBackup = await verifySqliteLegacyImport(modules);
   await verifyIndexedDbRoundTrip(modules, backup);
   await verifyIndexedDbLegacyImport(modules, legacyBackup);
+  await verifyIndexedDbBatchIsAtomic();
   console.log('Data maintenance isolation, coverage and backup round-trip verification passed.');
 } finally {
   await server.close();
@@ -565,4 +566,41 @@ function isolationBundle(examCycleId, questionSetId, questionId) {
       questions: [{ id: questionId }]
     }
   };
+}
+
+/**
+ * A request that throws synchronously inside a write batch (IndexedDB cannot
+ * clone a reactive Proxy, a store rejects a key) must abort the transaction.
+ * Before, the loop threw without aborting, the deletes queued ahead of the
+ * failing add still committed, and a restore wiped the cycle it was meant to
+ * replace while reporting that local data was left unchanged.
+ */
+async function verifyIndexedDbBatchIsAtomic() {
+  const { TutorIndexedDb } = await server.ssrLoadModule('/src/capabilities/database/adapters/indexeddb/TutorIndexedDb.ts');
+  const calls = [];
+  let aborted = 0;
+  const transaction = {
+    objectStore: (name) => ({
+      add: (value) => {
+        if (value && value.uncloneable) throw new DOMException('#<Object> could not be cloned.', 'DataCloneError');
+        calls.push(`add:${name}`);
+      },
+      put: () => calls.push(`put:${name}`),
+      delete: () => calls.push(`delete:${name}`)
+    }),
+    abort: () => { aborted += 1; }
+  };
+  const database = new TutorIndexedDb();
+  database.database = { transaction: () => transaction };
+  database.open = async () => undefined;
+  await assert.rejects(
+    () => database.writeBatch([
+      { type: 'delete', store: 'learning_assets', key: 'asset-1' },
+      { type: 'add', store: 'learning_assets', value: { uncloneable: true } },
+      { type: 'add', store: 'learning_assets', value: { id: 'asset-2' } }
+    ]),
+    (error) => error.name === 'DataCloneError'
+  );
+  assert.equal(aborted, 1, 'a synchronous request failure aborts the whole batch, so the delete ahead of it rolls back');
+  assert.deepEqual(calls, ['delete:learning_assets'], 'nothing after the failing request is queued');
 }

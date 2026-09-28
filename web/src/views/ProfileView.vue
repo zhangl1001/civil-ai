@@ -260,7 +260,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, reactive, ref, useId, watch } from 'vue';
+import { computed, onActivated, onDeactivated, onMounted, reactive, ref, useId, watch, shallowRef } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
@@ -317,7 +317,8 @@ const isSavingReminder = ref(false);
 const isSavingTargets = ref(false);
 const isDataBusy = ref(false);
 const showClearLearningConfirm = ref(false);
-const pendingBackup = ref<{ readonly fileName: string; readonly data: unknown } | null>(null);
+// Shallow: a parsed backup can be megabytes and must stay plain data for storage.
+const pendingBackup = shallowRef<{ readonly fileName: string; readonly data: unknown } | null>(null);
 const showImportConfirm = computed({
   get: () => Boolean(pendingBackup.value),
   set: (open: boolean) => { if (!open) pendingBackup.value = null; }
