@@ -29,7 +29,7 @@ import {
 import { aiChatRepository } from './AIChatRepository';
 import { aiConfigService } from './AIConfigService';
 import { aiStudentContextService } from './AIStudentContextService';
-import { isAgentCancellation, isAgentConfirmation } from './AgentConfirmationReply';
+import { classifyAgentConfirmationReply } from './AgentConfirmationReply';
 import { visibleAssistantText } from './AgentResponsePresentation';
 import { publishChatTaskMessage } from './ChatAgentTaskPresentation';
 import { compileChatAgentContext } from './ChatAgentContextCompiler';
@@ -50,7 +50,8 @@ import {
   compactText,
   confirmationText,
   findWaitingRun,
-  parseCheckpoint
+  parseCheckpoint,
+  pendingConfirmationReminder
 } from './ChatAgentRuntimeSupport';
 export interface ChatAgentResult {
   readonly handled: boolean;
@@ -133,9 +134,10 @@ export class ChatAgentService {
       if (waiting) {
         const waitingAggregate = await runtime.agentRunRepository.findById(waiting.id);
         const waitingCheckpoint = parseCheckpoint(waitingAggregate?.run.checkpoint.agentLoop);
+        const decision = classifyAgentConfirmationReply(text);
         if (waitingCheckpoint?.pauseReason === 'budget') {
           await this.addUserMessage(session, text, active);
-          if (isAgentCancellation(text)) {
+          if (decision === 'reject') {
             await runtime.cancelAgentRun.execute({
               agentRunId: waiting.id,
               reason: 'user_cancelled_budget_paused_agent'
@@ -148,11 +150,18 @@ export class ChatAgentService {
           await this.resumeBudget(runtime, session, waiting.id, waitingCheckpoint, options, active);
           return { handled: true };
         }
-        if (isAgentConfirmation(text) || isAgentCancellation(text)) {
+        if (decision !== 'ambiguous') {
           await this.addUserMessage(session, text, active);
           active.runId = waiting.id; runtime.agentRunExecutions.register(waiting.id, active.controller);
           active.controller.signal.throwIfAborted();
-          await this.resume(runtime, session, waiting.id, isAgentConfirmation(text) ? 'confirm' : 'reject', options, active);
+          await this.resume(runtime, session, waiting.id, decision, options, active);
+          return { handled: true };
+        }
+        if (waitingCheckpoint?.pendingConfirmation) {
+          // Neither yes nor no: keep the pending action and ask again rather
+          // than cancelling it and letting the model re-ask in a loop.
+          await this.addUserMessage(session, text, active);
+          await active.writer.complete(pendingConfirmationReminder(waitingCheckpoint.pendingConfirmation));
           return { handled: true };
         }
         await runtime.cancelAgentRun.execute({

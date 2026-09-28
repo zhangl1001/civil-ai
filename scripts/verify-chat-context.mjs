@@ -575,6 +575,52 @@ async function verifyChatAgentService() {
     window.dispatchEvent(new Event('app-did-enter-background'));
     assert.deepEqual(lifecycleCancels, ['lifecycle'], 'entering the iOS background interrupts the chat');
 
+    // Confirmation replies: clear answers decide, anything else keeps the action pending.
+    const { classifyAgentConfirmationReply } = await serviceServer.ssrLoadModule('/src/services/AgentConfirmationReply.ts');
+    const replies = {
+      confirm: ['确认', '确认。', '确认！', '是的', '好的，发布吧', '嗯嗯', 'OK!', '可以，开始吧', '没问题', '确定要发布', '那就这样吧', '好的谢谢', '发吧'],
+      reject: ['取消', '算了', '算了吧', '不要发布', '不用了', '先不发了', '不', 'no', '别发布了', '确认取消', '不确认'],
+      ambiguous: ['发布后还能修改吗？', '改成85分', '等一下', '为什么要发布', '好的，不过先别发布', '', '今天天气怎么样']
+    };
+    for (const [decision, texts] of Object.entries(replies)) {
+      for (const text of texts) {
+        assert.equal(classifyAgentConfirmationReply(text), decision, `"${text}" should read as ${decision}`);
+      }
+    }
+    const confirming = await harness.session('待确认');
+    const pendingCall = { id: 'call:publish', name: 'question_bank.publish', arguments: { draftId: 'draft:1', expectedVersion: 2 } };
+    harness.runtime.runs.set('AgentRunId:waiting-publish', {
+      id: 'AgentRunId:waiting-publish',
+      status: 'waiting_user',
+      sessionId: confirming.id,
+      checkpoint: {
+        agentLoop: {
+          agentRunId: 'AgentRunId:waiting-publish',
+          turnCount: 1,
+          toolCallCount: 1,
+          messages: [{ role: 'user', content: '导入这套真题' }],
+          pendingConfirmation: pendingCall
+        }
+      }
+    });
+    const resumed = [];
+    harness.loop = async ({ command }) => {
+      resumed.push(command.confirmationDecision);
+      return { status: 'completed', text: '已发布为正式题组。', checkpoint: { agentRunId: command.agentRunId, messages: [] } };
+    };
+    const cancellationsBefore = harness.cancellations.length;
+    await service.handle('发布后还能修改吗？', confirming, { thinkingEnabled: false });
+    assert.equal(harness.cancellations.length, cancellationsBefore, 'an unclear reply never cancels the pending action');
+    assert.equal(harness.runtime.runs.get('AgentRunId:waiting-publish').status, 'waiting_user');
+    assert.deepEqual(resumed, [], 'an unclear reply does not start a new model loop that would re-ask');
+    const reminder = (await harness.messages(confirming.id)).at(-1);
+    assert.equal(reminder.role, 'assistant');
+    assert.match(reminder.content, /还在等你确认/);
+    assert.match(reminder.content, /发布为正式题组/);
+    await service.handle('好的，发布吧', confirming, { thinkingEnabled: false });
+    assert.deepEqual(resumed, ['confirm'], 'a clear yes with particles and punctuation confirms the pending action');
+    assert.equal((await harness.messages(confirming.id)).at(-1).content, '已发布为正式题组。');
+
     const failures = [
       [new ai.ProviderGatewayError('Incorrect API key provided', ai.ProviderErrorKind.Authentication, 401), 'provider.authentication', /API Key/],
       [new ai.ProviderGatewayError('Insufficient Balance', ai.ProviderErrorKind.QuotaExceeded, 402), 'provider.quota_exceeded', /余额不足/],
