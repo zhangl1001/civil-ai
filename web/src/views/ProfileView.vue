@@ -260,8 +260,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onDeactivated, onMounted, reactive, ref, useId } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onActivated, onDeactivated, onMounted, reactive, ref, useId, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
 import AIModelSettingsPanel from '@/components/settings/AIModelSettingsPanel.vue';
@@ -307,6 +307,7 @@ import {
 // Named so App.vue can hold this tab root in its <KeepAlive> whitelist.
 defineOptions({ name: 'ProfileView' });
 
+const route = useRoute();
 const router = useRouter();
 const fieldId = useId();
 let candidateProfileFeaturePromise: Promise<CandidateProfileFeature> | undefined;
@@ -402,7 +403,29 @@ onMounted(() => {
   void aiSettings.load();
   void loadReminderStatus();
   void loadProfileStats();
+  void openRequestedSheet();
 });
+
+/**
+ * `/vue/profile?sheet=ai` opens the model settings, e.g. from the chat sheet.
+ * The request is honoured on first mount, when the cached page is re-activated
+ * with it, and when it arrives while the page is already showing; it is then
+ * removed from the URL so going back or refreshing does not reopen the sheet.
+ */
+let sheetRequestPending = false;
+async function openRequestedSheet(): Promise<void> {
+  if (sheetRequestPending || route.name !== 'VueProfile' || route.query.sheet !== 'ai') return;
+  sheetRequestPending = true;
+  openAISheet();
+  const { sheet: _sheet, ...query } = route.query;
+  try {
+    await router.replace({ query });
+  } finally {
+    sheetRequestPending = false;
+  }
+}
+onActivated(() => void openRequestedSheet());
+watch(() => route.query.sheet, () => void openRequestedSheet());
 
 // Sheets and dialogs are teleported to <body>. This page stays mounted in the
 // tab cache, so one left open would keep covering whatever route comes next.
