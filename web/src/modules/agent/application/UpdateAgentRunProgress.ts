@@ -1,9 +1,10 @@
 import type { UnitOfWork } from '@/capabilities/database/public';
 import type { AgentRunId, Clock, IdGenerator, JsonObject } from '@/kernel/public';
 import type { OutboxRepository } from '@/modules/task/public';
-import type { AgentRunAggregate, AgentRunLeaseToken, AgentRunRepository } from '../contracts/AgentRunRepository';
+import type { AgentRunAggregate, AgentRunLeaseToken, AgentRunRecord, AgentRunRepository } from '../contracts/AgentRunRepository';
 import { AgentRunStatus } from '../domain/AgentRunCodes';
 import type { TaskCenterStep } from '../domain/TaskCenterCodes';
+import { writeAgentRun } from './AgentRunWrite';
 
 export interface UpdateAgentRunProgressCommand {
   readonly agentRunId: AgentRunId;
@@ -23,38 +24,44 @@ export class UpdateAgentRunProgress {
     private readonly ids: IdGenerator
   ) {}
 
-  async execute(command: UpdateAgentRunProgressCommand): Promise<AgentRunAggregate> {
-    const aggregate = await this.repository.findById(command.agentRunId);
-    if (!aggregate) throw new Error(`Agent run does not exist: ${command.agentRunId}`);
-    if (aggregate.run.status !== AgentRunStatus.Running) {
-      throw new Error(`Agent run progress requires running status: ${aggregate.run.status}`);
-    }
-    const progress = Math.max(0, Math.min(99, Math.round(command.progress)));
-    const now = this.clock.now();
-    const run = {
-      ...aggregate.run,
-      checkpoint: {
-        ...aggregate.run.checkpoint,
-        step: command.step,
-        progress,
-        message: command.message.trim(),
-        ...(command.data ?? {})
-      },
-      updatedAt: now,
-      version: aggregate.run.version + 1
-    };
-    const event = {
-      id: this.ids.next('AgentRunEventId'),
-      agentRunId: run.id,
-      eventType: 'progressed' as const,
-      fromStatus: run.status,
-      toStatus: run.status,
-      reasonCode: `task.progress.${command.step}`,
-      payload: { progress, message: command.message.trim(), ...(command.data ?? {}) },
-      occurredAt: now,
-      idempotencyKey: `agent-run:${run.id}:progress:${run.version}`
-    };
-    await this.unitOfWork.run(async (context) => {
+  /**
+   * Progress writes race whenever one run works in parallel (a mock exam
+   * generates several question sets at once), so each write re-reads the run
+   * inside its own transaction instead of replacing a version read earlier.
+   */
+  execute(command: UpdateAgentRunProgressCommand): Promise<AgentRunAggregate> {
+    const requested = Math.max(0, Math.min(99, Math.round(command.progress)));
+    const message = command.message.trim();
+    return writeAgentRun(this.unitOfWork, this.repository, command.agentRunId, async (aggregate, context) => {
+      if (aggregate.run.status !== AgentRunStatus.Running) {
+        throw new Error(`Agent run progress requires running status: ${aggregate.run.status}`);
+      }
+      const now = this.clock.now();
+      const position = progressPosition(aggregate.run, command.step, requested);
+      const run = {
+        ...aggregate.run,
+        checkpoint: {
+          ...aggregate.run.checkpoint,
+          ...(command.data ?? {}),
+          step: position.step,
+          progress: position.progress,
+          progressAttempt: aggregate.run.attemptCount,
+          message
+        },
+        updatedAt: now,
+        version: aggregate.run.version + 1
+      };
+      const event = {
+        id: this.ids.next('AgentRunEventId'),
+        agentRunId: run.id,
+        eventType: 'progressed' as const,
+        fromStatus: run.status,
+        toStatus: run.status,
+        reasonCode: `task.progress.${position.step}`,
+        payload: { progress: position.progress, message, ...(command.data ?? {}) },
+        occurredAt: now,
+        idempotencyKey: `agent-run:${run.id}:progress:${run.version}`
+      };
       await this.repository.replace(
         run,
         aggregate.run.version,
@@ -67,12 +74,30 @@ export class UpdateAgentRunProgress {
         aggregateType: 'tutor_agent_run',
         aggregateId: run.id,
         eventType: 'tutor_agent_run.progressed',
-        payload: { agentRunId: run.id, step: command.step, progress, message: command.message.trim() },
+        payload: { agentRunId: run.id, step: position.step, progress: position.progress, message },
         occurredAt: now,
         attemptCount: 0,
         idempotencyKey: `${event.idempotencyKey}:outbox`
       }, context);
+      return { run, events: [...aggregate.events, event] };
     });
-    return { run, events: [...aggregate.events, event] };
   }
+}
+
+/**
+ * Within one attempt the reported progress is a high-water mark: a batch that
+ * reports late may refresh the activity message and its data, but cannot move
+ * the bar (or the stage it belongs to) backwards. A new attempt starts over.
+ */
+function progressPosition(
+  run: AgentRunRecord,
+  step: TaskCenterStep,
+  requested: number
+): { readonly step: string; readonly progress: number } {
+  const checkpoint = run.checkpoint;
+  const current = checkpoint.progressAttempt === run.attemptCount && typeof checkpoint.progress === 'number'
+    ? checkpoint.progress
+    : undefined;
+  if (current === undefined || requested >= current) return { step, progress: requested };
+  return { step: typeof checkpoint.step === 'string' ? checkpoint.step : step, progress: current };
 }

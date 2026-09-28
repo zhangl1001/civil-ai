@@ -24,8 +24,10 @@ export {
   AgentRunInputIncompatibleError,
   AgentRunLeaseLostError,
   AgentRunSuspendedError,
+  AgentRunVersionConflictError,
   isAgentRunLeaseLost,
-  isAgentRunSuspended
+  isAgentRunSuspended,
+  isAgentRunVersionConflict
 } from './domain/AgentRunInterruption';
 export { DurableAgentToolExecutor } from './application/DurableAgentToolExecutor';
 export { AuthorizedAgentToolExecutor } from './application/AuthorizedAgentToolExecutor';
@@ -161,4 +163,5 @@ export {
   type TutorAgentLifecycleObserver
 } from './application/RunTutorAgentBatch';
 export { invalidProviderRequestText } from './application/AgentRunErrorPresentation';
+export { agentRunFailureText } from './application/AgentRunFailureText';
 export { GetAgentRunViews, type AgentRunView } from './application/GetAgentRunViews';

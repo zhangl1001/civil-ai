@@ -5,7 +5,7 @@ import {
   resolveAgentRunNotificationMode,
   type AgentRunNotificationMode
 } from '../domain/TaskCenterCodes';
-import { invalidProviderRequestText } from './AgentRunErrorPresentation';
+import { agentRunFailureText } from './AgentRunFailureText';
 
 export interface AgentRunView {
   readonly id: AgentRunId;
@@ -147,7 +147,7 @@ function titleFor(aggregate: AgentRunAggregate): string {
 
 function detailFor(aggregate: AgentRunAggregate): string {
   if (aggregate.run.errorCode) {
-    return taskErrorText(
+    return agentRunFailureText(
       aggregate.run.errorCode,
       textField(aggregate.run.checkpoint.errorMessage) || textField(aggregate.run.checkpoint.message)
     );
@@ -182,33 +182,6 @@ function errorDiagnosisDetail(aggregate: AgentRunAggregate): string {
   }
   if (aggregate.run.status === AgentRunStatus.Cancelled) return '本次错因分析已取消';
   return '错因分析等待恢复';
-}
-
-function taskErrorText(code: string, diagnostic?: string): string {
-  if (code === 'agent.AbortError') return '模型连接意外中断，请重新执行任务';
-  if (
-    code === 'agent.GeneratedContentParseError'
-    || code === 'generation.json_invalid'
-    || code === 'generation.json_fence_invalid'
-  ) {
-    return '模型返回内容不完整，自动重试后仍无法解析';
-  }
-  if (code === 'generation.lecture_schema_invalid') return '讲义结构校验失败，请重新生成';
-  if (code === 'generation.question_schema_invalid' || code === 'generation.questions_invalid') {
-    return '题目结构校验失败，请重新生成';
-  }
-  if (code === 'generation.quality_invalid') return '题目结构不完整，请重新生成';
-  if (code === 'generation.error_diagnosis_invalid') return '模型返回的错因结构不完整，请重新分析';
-  if (code.startsWith('generation.')) return '生成内容校验失败，请重新生成';
-  if (code === 'provider.authentication') return '模型配置认证失败，请检查 API Key';
-  if (code === 'provider.invalid_request') return invalidProviderRequestText(diagnostic);
-  if (code === 'provider.rate_limited') return '模型服务限流，任务会自动重试';
-  if (code === 'provider.empty_response') return '模型没有返回有效内容，请重新生成';
-  if (code === 'provider.protocol') return '模型接口返回格式不兼容，请检查 Base URL';
-  if (code === 'provider.transient') return '模型网络或服务暂时异常，请稍后重试';
-  if (code.startsWith('provider.')) return '模型服务请求失败，请检查模型配置';
-  if (diagnostic && !/^agent\.(error|Error|unknown_error)$/.test(code)) return diagnostic;
-  return diagnostic || '任务执行失败，请重新生成';
 }
 
 function chatToolDetail(aggregate: AgentRunAggregate): string {

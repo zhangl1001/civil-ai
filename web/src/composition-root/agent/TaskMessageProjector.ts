@@ -8,7 +8,7 @@ import {
   AgentRunNotificationMode,
   AgentRunType,
   TaskTargetType,
-  invalidProviderRequestText,
+  agentRunFailureText,
   resolveAgentRunNotificationMode
 } from '@/modules/agent/public';
 import {
@@ -121,7 +121,7 @@ function title(run: AgentRunAggregate): string {
 
 function detail(run: AgentRunAggregate, fallback: string): string {
   if (run.run.errorCode) {
-    return taskErrorText(
+    return agentRunFailureText(
       run.run.errorCode,
       text(run.run.checkpoint.errorMessage) || text(run.run.checkpoint.message)
     );
@@ -133,31 +133,6 @@ function detail(run: AgentRunAggregate, fallback: string): string {
       : '已形成错因候选，可在题目解析下查看';
   }
   return text(run.run.checkpoint.message) || text(run.run.inputSnapshot.detail) || fallback;
-}
-
-function taskErrorText(code: string, diagnostic?: string): string {
-  if (code === 'agent_run.input_incompatible') {
-    return diagnostic || '该任务来自旧版本，无法安全恢复，请在对应页面重新发起。';
-  }
-  if (code === 'agent.AbortError' || code === 'generation.process_interrupted') {
-    return '模型连接意外中断，请重新执行任务';
-  }
-  if (code === 'agent.GeneratedContentParseError' || code.startsWith('generation.json')) {
-    return '模型返回内容不完整，自动重试后仍无法解析';
-  }
-  if (code.includes('schema_invalid') || code === 'generation.questions_invalid') return '生成内容结构校验失败，请重新生成';
-  if (code === 'generation.quality_invalid') return '生成内容结构不完整，请重新生成';
-  if (code === 'generation.error_diagnosis_invalid') return '模型返回的错因结构不完整，请重新分析';
-  if (code.startsWith('generation.')) return '生成内容校验失败，请重新生成';
-  if (code === 'provider.authentication') return '模型配置认证失败，请检查 API Key';
-  if (code === 'provider.invalid_request') return invalidProviderRequestText(diagnostic);
-  if (code === 'provider.rate_limited') return '模型服务限流，任务会自动重试';
-  if (code === 'provider.empty_response') return '模型没有返回有效内容，请重新生成';
-  if (code === 'provider.protocol') return '模型接口返回格式不兼容，请检查 Base URL';
-  if (code === 'provider.transient') return '模型网络或服务暂时异常，请稍后重试';
-  if (code.startsWith('provider.')) return '模型服务请求失败，请检查模型配置';
-  if (diagnostic && !/^agent\.(error|Error|unknown_error)$/.test(code)) return diagnostic;
-  return diagnostic || '任务执行失败，请重新生成';
 }
 
 function text(value: unknown): string | undefined {

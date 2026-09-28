@@ -169,6 +169,29 @@ try {
   const duplicate = await createWorkflow.execute(command);
   assert.equal(duplicate.workflow.id, created.workflow.id, 'creation must be idempotent');
   assert.equal(outboxRepository.events.length, 1, 'idempotent creation must publish one request event');
+  for (const [difference, changed] of [
+    ['requested count', { requestedCount: command.requestedCount + 11 }],
+    ['capability', { capabilityNodeId: 'capability:aptitude:verbal:main-idea' }],
+    ['difficulty', { difficultyMax: 0.9 }],
+    ['assessment role', { assessmentRole: 'retention' }],
+    ['purpose', { constraints: { ...command.constraints, source: 'custom' } }]
+  ]) {
+    await assert.rejects(
+      () => createWorkflow.execute({ ...command, ...changed }),
+      (error) => error?.code === 'content.generation_request_conflict',
+      `an idempotency hit with a different ${difference} must fail instead of returning another request's question set`
+    );
+  }
+  const evolvedConstraints = await createWorkflow.execute({
+    ...command,
+    constraints: { ...command.constraints, requestedBy: 'ai_or_practice_entry' }
+  });
+  assert.equal(
+    evolvedConstraints.workflow.id,
+    created.workflow.id,
+    'a retry whose free-form constraints gained a field is still the same request'
+  );
+  assert.equal(outboxRepository.events.length, 1, 'a refused request must not create a second generation');
   assert.equal(created.spec.contextSnapshot.learningEvidence.hasMasteryProjection, false);
   assert.equal(created.spec.contextSnapshot.target.evidenceLevel, 'self_reported');
   assert.equal(created.spec.promptVersionId, ai.structuredObjectivePromptV2.versionId);
@@ -924,6 +947,19 @@ try {
   );
   assert.equal(contentRepository.bundles.at(-1).questions.length, 25);
 
+  await verifiesMockExamBatches({
+    content,
+    ai,
+    curriculumBundle,
+    cycle,
+    createWorkflow,
+    runWorkflow,
+    generationRepository,
+    outboxRepository,
+    clock,
+    ids
+  });
+
   const cancellable = await createWorkflow.execute(generationCommand('generation:test:cancel'));
   const cancelled = await runWorkflow.cancel(cancellable.workflow.id);
   assert.equal(cancelled.status, content.GenerationWorkflowStatus.Cancelled);
@@ -932,6 +968,207 @@ try {
 } finally {
   await server.close();
 }
+}
+
+/**
+ * The 行测 mock exam end to end on the web adapters: five module batches at
+ * concurrency three, one run, a fake provider. Every batch must get its own
+ * generation and the concurrent progress writes of one run must all land.
+ */
+async function verifiesMockExamBatches(input) {
+  const [agent, teaching, labels, practice, progressReporter, objectiveMock, indexedDbRuns, indexedDbUnitOfWork] = await Promise.all([
+    server.ssrLoadModule('/src/modules/agent/public.ts'),
+    server.ssrLoadModule('/src/modules/teaching/public.ts'),
+    server.ssrLoadModule('/src/domain/labels.ts'),
+    server.ssrLoadModule('/src/composition-root/agent/BusinessPracticeGeneration.ts'),
+    server.ssrLoadModule('/src/composition-root/agent/BusinessAgentProgress.ts'),
+    server.ssrLoadModule('/src/composition-root/agent/ObjectiveMockExecutor.ts'),
+    server.ssrLoadModule('/src/modules/agent/adapters/IndexedDbAgentRunRepository.ts'),
+    server.ssrLoadModule('/src/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork.ts')
+  ]);
+  labels.installCurriculumLabels(input.curriculumBundle.capabilityNodes);
+  const candidates = {
+    findCurrentCycle: async () => input.cycle,
+    findCycle: async (id) => id === input.cycle.examCycle.id ? input.cycle : undefined
+  };
+  const curriculums = {
+    findBundle: async (id) => id === input.curriculumBundle.curriculum.id ? input.curriculumBundle : undefined
+  };
+  const passThrough = async (work) => work({ transactionId: `tx:${input.clock.now()}` });
+  const createThread = new teaching.CreateLearningThread(
+    { run: passThrough, runAutocommit: passThrough },
+    new MemoryLearningThreadRepository(),
+    candidates,
+    curriculums,
+    input.outboxRepository,
+    input.clock,
+    input.ids
+  );
+  const requestStructuredPractice = new teaching.RequestStructuredPractice(
+    new teaching.StartStructuredTeaching(candidates, curriculums, createThread),
+    input.createWorkflow
+  );
+
+  const agentRunScope = new indexedDbUnitOfWork.IndexedDbTransactionScope();
+  const agentRunDatabase = new MemoryAgentRunIndexedDb();
+  const agentRunUnitOfWork = new indexedDbUnitOfWork.IndexedDbUnitOfWork(agentRunDatabase, agentRunScope);
+  const agentRuns = new indexedDbRuns.IndexedDbAgentRunRepository(agentRunDatabase, agentRunScope);
+  const agentOutbox = { async append() {} };
+  const created = await new agent.CreateAgentRun(agentRunUnitOfWork, agentRuns, agentOutbox, input.clock, input.ids).execute({
+    idempotencyKey: 'business:mock:objective',
+    runType: agent.AgentRunType.TutorTurn,
+    targetResourceType: agent.TaskTargetType.BusinessOperation,
+    inputSnapshot: { intent: 'mock', detail: '行测模考' }
+  });
+  const [run] = await new agent.ClaimAgentRuns(agentRuns, input.clock, input.ids).execute({
+    workerId: 'worker:mock',
+    leaseExpiresAt: input.clock.now() + 600_000,
+    limit: 1
+  });
+  assert.equal(run?.run.id, created.run.id);
+  const updateProgress = new agent.UpdateAgentRunProgress(agentRunUnitOfWork, agentRuns, agentOutbox, input.clock, input.ids);
+  const gateway = new StubGateway(input.ai.ProviderCode.Anthropic, JSON.stringify(validGeneratedContent()));
+  const workflowsBefore = input.generationRepository.byWorkflow.size;
+  const saved = [];
+  const executeMock = async () => {
+    const signal = new AbortController().signal;
+    const reporter = progressReporter.createBusinessProgressReporter({ run, signal, progress: updateProgress });
+    const unused = async () => { throw new Error('the objective mock does not use this port'); };
+    await objectiveMock.objectiveMockExecutor({
+      id: run.run.id,
+      type: 'mock',
+      detail: '行测模考',
+      payload: { questionCount: 5, subjectName: '行测', date: '2026-09-28' }
+    }, {
+      signal,
+      ...reporter,
+      generatePractice: practice.createBusinessPracticeGenerator({
+        run,
+        gateway,
+        signal,
+        update: reporter.update,
+        dependencies: {
+          candidates,
+          curriculums,
+          requestStructuredPractice,
+          runStructuredObjectiveGenerationWorkflow: input.runWorkflow,
+          ensureQuestionSetEnrichment: { execute: async () => ({ complete: true }) }
+        }
+      }),
+      saveLearningAsset: async (asset) => {
+        saved.push(asset);
+        return { id: `asset:mock:${saved.length}`, version: saved.length };
+      },
+      setResult: async () => undefined,
+      compilePrompt: unused,
+      complete: unused,
+      stream: unused,
+      findLatestLearningAsset: unused,
+      listLearningAssets: unused,
+      recordSubjectiveAssessment: unused
+    });
+  };
+
+  await executeMock();
+  const mockWorkflows = [...input.generationRepository.byWorkflow.values()].slice(workflowsBefore);
+  assert.equal(mockWorkflows.length, 5, 'five module batches must create five generation workflows');
+  assert.equal(new Set(mockWorkflows.map((item) => item.workflow.idempotencyKey)).size, 5);
+  assert.equal(new Set(mockWorkflows.map((item) => item.spec.id)).size, 5, 'every batch gets its own generation spec');
+  assert.equal(
+    new Set(mockWorkflows.map((item) => item.spec.capabilityNodeId)).size,
+    5,
+    'every module batch generates for its own module'
+  );
+  assert.ok(
+    mockWorkflows.every((item) => item.workflow.status === input.content.GenerationWorkflowStatus.Committed),
+    'every batch generation completes'
+  );
+  assert.ok(
+    mockWorkflows.every((item) => item.workflow.idempotencyKey.startsWith(
+      `${practice.structuredPracticeIdempotencyKey(run.run.id)}:mock:`
+    )),
+    'mock batch keys extend the single-practice key of the run'
+  );
+  assert.equal(
+    practice.structuredPracticeIdempotencyKey(run.run.id),
+    `agent-run:${run.run.id}:structured-practice`,
+    'a single practice keeps the key shape existing runs were created with'
+  );
+  const manifest = saved.at(-1);
+  assert.equal(manifest.kind, input.content.LearningAssetKind.MockManifest);
+  assert.equal(manifest.payload.sections.length, 5);
+  assert.equal(new Set(manifest.payload.sections.map((section) => section.questionSetId)).size, 5, 'the mock manifest holds five distinct question sets');
+  assert.equal(manifest.payload.actualCount, 5);
+  const afterMock = await agentRuns.findById(run.run.id);
+  assert.equal(afterMock.run.status, agent.AgentRunStatus.Running, 'no progress write failed the mock run');
+  assert.equal(afterMock.run.checkpoint.progress, 94);
+  assert.equal(afterMock.run.checkpoint.message, '已写入 5 道模考题');
+  assert.deepEqual(
+    afterMock.events.filter((event) => event.eventType === 'progressed').map((event) => event.payload.message).filter((message) => message.startsWith('已完成')),
+    ['已完成 1/5 个题组', '已完成 2/5 个题组', '已完成 3/5 个题组', '已完成 4/5 个题组', '已完成 5/5 个题组'],
+    'batch completion is reported by count, whichever batch finishes first'
+  );
+
+  const callsBeforeReplay = gateway.callCount;
+  await executeMock();
+  assert.equal(input.generationRepository.byWorkflow.size, workflowsBefore + 5, 'a replayed mock reuses its batch generations');
+  assert.equal(gateway.callCount, callsBeforeReplay, 'a replayed batch does not call the provider again');
+  assert.deepEqual(
+    saved.at(-1).payload.sections.map((section) => section.questionSetId),
+    manifest.payload.sections.map((section) => section.questionSetId),
+    'each replayed batch lands on its own earlier question set'
+  );
+}
+
+class MemoryLearningThreadRepository {
+  threads = new Map();
+  async findOpen(examCycleId, capabilityNodeId) {
+    const thread = [...this.threads.values()].find((item) => (
+      item.examCycleId === examCycleId && item.primaryCapabilityNodeId === capabilityNodeId && item.status === 'active'
+    ));
+    return thread ? { thread, events: [] } : undefined;
+  }
+  async create(thread) {
+    if (this.threads.has(thread.id)) throw new Error('duplicate learning thread');
+    this.threads.set(thread.id, thread);
+  }
+}
+
+/** TutorIndexedDb store semantics (structured clones, atomic batches) for the Agent run stores. */
+class MemoryAgentRunIndexedDb {
+  stores = new Map();
+  keyPaths = { agent_run_aggregates: 'runId', agent_run_idempotency: 'idempotencyKey' };
+  store(name) {
+    if (!this.stores.has(name)) this.stores.set(name, new Map());
+    return this.stores.get(name);
+  }
+  async get(name, key) {
+    await new Promise((resolve) => setImmediate(resolve));
+    return structuredClone(this.store(name).get(key));
+  }
+  async getAll(name) {
+    await new Promise((resolve) => setImmediate(resolve));
+    return [...this.store(name).values()].map((value) => structuredClone(value));
+  }
+  async writeBatch(operations) {
+    await new Promise((resolve) => setImmediate(resolve));
+    this.apply(operations);
+  }
+  async mutateStore(name, mutation) {
+    await new Promise((resolve) => setImmediate(resolve));
+    const outcome = mutation([...this.store(name).values()].map((value) => structuredClone(value)));
+    this.apply(outcome.operations);
+    return outcome.result;
+  }
+  apply(operations) {
+    for (const operation of operations) {
+      const key = operation.value?.[this.keyPaths[operation.store]];
+      if (operation.type === 'add' && this.store(operation.store).has(key)) throw new Error('Key already exists in the object store.');
+    }
+    for (const operation of operations) {
+      this.store(operation.store).set(operation.value[this.keyPaths[operation.store]], structuredClone(operation.value));
+    }
+  }
 }
 
 class TestClock {

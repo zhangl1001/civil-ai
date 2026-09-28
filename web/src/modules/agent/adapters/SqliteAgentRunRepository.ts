@@ -23,7 +23,7 @@ import {
   type AgentRunType,
   type AgentWorkPool as AgentWorkPoolValue
 } from '../domain/AgentRunCodes';
-import { AgentRunLeaseLostError } from '../domain/AgentRunInterruption';
+import { AgentRunLeaseLostError, AgentRunVersionConflictError } from '../domain/AgentRunInterruption';
 import type { InvocationValidationStatus } from '@/capabilities/ai-runtime/public';
 
 interface RunRow extends SqlRow {
@@ -67,11 +67,18 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
       if (guard && !await hasActiveLeaseInTransaction(tx, guard.leaseToken, guard.now)) {
         throw new AgentRunLeaseLostError(run.id);
       }
-      throw new Error(`Agent run version conflict: ${run.id}`);
+      throw new AgentRunVersionConflictError(run.id);
     }
     await insertEvent(tx, event);
   }
   async findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined> { return this.find('id = ?', [runId]); }
+  async findByIdInTransaction(runId: AgentRunId, context: TransactionContext): Promise<AgentRunAggregate | undefined> {
+    const tx = this.transactionScope.resolve(context);
+    const [row] = await tx.query<RunRow>('SELECT * FROM tutor_agent_runs WHERE id = ? LIMIT 1', [runId]);
+    if (!row) return undefined;
+    const events = await tx.query<EventRow>('SELECT * FROM tutor_agent_run_events WHERE agent_run_id = ? ORDER BY occurred_at, id', [runId]);
+    return { run: mapRun(row), events: events.map(mapEvent) };
+  }
   async findByIdempotencyKey(key: string): Promise<AgentRunAggregate | undefined> { return this.find('idempotency_key = ?', [key]); }
   async findLatestByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{return this.find('target_resource_type = ? AND target_resource_id = ? ORDER BY updated_at DESC, id DESC',[type,id]);}
   async findActiveByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{return this.find("target_resource_type = ? AND target_resource_id = ? AND status IN ('queued','running','waiting_user') ORDER BY updated_at DESC, id DESC",[type,id]);}

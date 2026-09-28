@@ -53,6 +53,13 @@ export interface BusinessAgentExecutionContext {
     readonly purpose: string;
     readonly review: boolean;
     readonly capabilityIndex?: number;
+    /**
+     * Names one batch of a run that generates several question sets (a mock
+     * exam module batch). The same batch replays its own generation on retry;
+     * different batches never share one. A single practice omits it, which
+     * keeps its generation key unchanged.
+     */
+    readonly batchKey?: string;
   }): Promise<{
     readonly questionSetId: string;
     readonly learningThreadId: string;

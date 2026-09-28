@@ -3,7 +3,7 @@ import type {
   PromptRegistry,
   ProviderGateway
 } from '@/capabilities/ai-runtime/public';
-import { AssessmentRole, type CapabilityNodeId, type JsonObject } from '@/kernel/public';
+import type { JsonObject } from '@/kernel/public';
 import {
   AgentRunAction,
   AgentRunType,
@@ -18,16 +18,15 @@ import {
   type UpdateAgentRunProgress
 } from '@/modules/agent/public';
 import type { CandidateRepository } from '@/modules/candidate/public';
-import {
-  GenerationWorkflowStatus,
-  type ApplyQuestionSetEnrichment,
-  type ContentRepository,
-  type LearningAssetStore,
-  type QuestionImportDraftRepository,
-  type RunStructuredObjectiveGenerationWorkflow,
-  type ScanQuestionImportDraft
+import type {
+  ApplyQuestionSetEnrichment,
+  ContentRepository,
+  LearningAssetStore,
+  QuestionImportDraftRepository,
+  RunStructuredObjectiveGenerationWorkflow,
+  ScanQuestionImportDraft
 } from '@/modules/content/public';
-import { ExamDeliveryKind, projectExamSubjects, type CurriculumRepository } from '@/modules/curriculum/public';
+import { ExamDeliveryKind, type CurriculumRepository } from '@/modules/curriculum/public';
 import type {
   ErrorDiagnosisRepository,
   RecordSubjectiveAssessment,
@@ -42,7 +41,8 @@ import type {
 import type { UpdateDailyPlanItemStatus } from '@/modules/planning/public';
 import type { RequestStructuredPractice } from '@/modules/teaching/public';
 import { aiBusinessTools, type AIBusinessToolCall, type AIBusinessToolName, type AIBusinessToolResult } from '@/services/AIBusinessTools';
-import { selectPracticeCapability } from './selectPracticeCapability';
+import { createBusinessProgressReporter } from './BusinessAgentProgress';
+import { createBusinessPracticeGenerator } from './BusinessPracticeGeneration';
 import { compilePinned, pinPromptResolution } from './DurablePromptPinning';
 import type { GenerationIntent } from '@/services/GenerationTaskService';
 import {
@@ -248,6 +248,11 @@ async function executeBusinessOperation(
   let resultData: JsonObject = {};
   const executionSignal = signal ?? new AbortController().signal;
   const promptPins = await pinPromptResolution(run, dependencies);
+  const progress = createBusinessProgressReporter({
+    run,
+    signal: executionSignal,
+    progress: dependencies.updateAgentRunProgress
+  });
   const context: BusinessAgentExecutionContext = {
     signal: executionSignal,
     compilePrompt: (promptCode, payload) => {
@@ -258,26 +263,7 @@ async function executeBusinessOperation(
         responseSchema: compiled.responseSchema
       };
     },
-    update: async (progress, progressText = '执行中') => {
-      executionSignal.throwIfAborted();
-      await dependencies.updateAgentRunProgress.execute({
-        agentRunId: run.run.id,
-        step: stepForProgress(progress),
-        progress,
-        message: progressText,
-        leaseToken: leaseTokenOf(run.run)
-      });
-    },
-    log: async (message) => {
-      executionSignal.throwIfAborted();
-      await dependencies.updateAgentRunProgress.execute({
-        agentRunId: run.run.id,
-        step: TaskCenterStep.InvokingModel,
-        progress: 70,
-        message: message.slice(0, 160),
-        leaseToken: leaseTokenOf(run.run)
-      });
-    },
+    ...progress,
     setResult: async (result) => {
       executionSignal.throwIfAborted();
       resultData = {
@@ -298,65 +284,13 @@ async function executeBusinessOperation(
         invoke: dependencies.invokeAgentModel, onDelta
       });
     },
-    generatePractice: async (input) => {
-      executionSignal.throwIfAborted();
-      const cycle = await dependencies.candidates.findCurrentCycle();
-      if (!cycle) throw new Error('请先完成备考档案。');
-      const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
-      // Objective practice targets whichever subjects this package answers with
-      // questions, rather than the civil-service subject code: a track whose
-      // subjects are named differently still generates.
-      const objectiveSubjects = new Set(
-        (curriculum ? projectExamSubjects(curriculum) : [])
-          .filter((subject) => subject.deliveryKind === ExamDeliveryKind.Objective)
-          .map((subject) => subject.code as string)
-      );
-      const nodes = curriculum?.capabilityNodes
-        .filter((node) => node.status === 'active' && objectiveSubjects.has(node.subject)) ?? [];
-      const capability = selectPracticeCapability(nodes, input);
-      if (!capability) throw new Error('当前大纲没有可用的客观题能力节点。');
-      await context.update(42, '调用 AI 生成结构化讲义和题目');
-      const aggregate = await dependencies.requestStructuredPractice.execute({
-        idempotencyKey: `agent-run:${run.run.id}:structured-practice`,
-        sourceAgentRunId: run.run.rootAgentRunId,
-        capabilityNodeId: capability.id as CapabilityNodeId,
-        assessmentRole: AssessmentRole.Practice,
-        requestedCount: input.requestedCount,
-        difficultyMin: input.difficultyMin,
-        difficultyMax: input.difficultyMax,
-        goal: input.purpose,
-        constraints: {
-          source: 'agent_business_operation',
-          module: input.module,
-          knowledgePoint: input.knowledgePoint ?? capability.name,
-          requestedBy: input.review ? 'wrongbook_review' : 'ai_or_practice_entry'
-        }
-      });
-      if (aggregate.workflow.status === GenerationWorkflowStatus.Failed) {
-        await dependencies.runStructuredObjectiveGenerationWorkflow.retry(aggregate.workflow.id);
-      }
-      const result = await dependencies.runStructuredObjectiveGenerationWorkflow.execute(
-        aggregate.workflow.id,
-        gateway,
-        executionSignal
-      );
-      executionSignal.throwIfAborted();
-      if (!result.questionSetId || !aggregate.spec.learningThreadId) {
-        throw new Error('结构化题组生成失败：缺少题组或学习主线');
-      }
-      await dependencies.ensureQuestionSetEnrichment.execute({
-        questionSetId: result.questionSetId,
-        parentAgentRunId: run.run.id
-      }).catch((error: unknown) => {
-        console.warn('[TutorAgent] failed to schedule question-set enrichment', error);
-      });
-      return {
-        questionSetId: result.questionSetId,
-        learningThreadId: aggregate.spec.learningThreadId,
-        capabilityNodeId: capability.id,
-        capabilityCode: capability.code
-      };
-    },
+    generatePractice: createBusinessPracticeGenerator({
+      run,
+      gateway,
+      signal: executionSignal,
+      update: progress.update,
+      dependencies
+    }),
     saveLearningAsset: async (input) => {
       executionSignal.throwIfAborted();
       const cycle = await dependencies.candidates.findCurrentCycle();
@@ -580,13 +514,6 @@ function executorType(intent: GenerationIntent): BusinessAgentTaskType {
   if (intent === 'study') return 'study';
   if (intent === 'trueQuestionResearch') return 'research';
   return 'interview';
-}
-
-function stepForProgress(progress: number) {
-  if (progress < 25) return TaskCenterStep.PreparingContext;
-  if (progress < 55) return TaskCenterStep.InvokingModel;
-  if (progress < 80) return TaskCenterStep.ParsingResponse;
-  return TaskCenterStep.CommittingResult;
 }
 
 function toJsonObject(value: Record<string, unknown>): JsonObject {

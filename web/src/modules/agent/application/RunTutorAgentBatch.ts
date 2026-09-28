@@ -22,6 +22,7 @@ import { ClaimAgentRuns } from './ClaimAgentRuns';
 import { RecoverExpiredAgentRuns } from './RecoverExpiredAgentRuns';
 import { TransitionAgentRun } from './TransitionAgentRun';
 import { AgentRunExecutionRegistry } from './AgentRunExecutionRegistry';
+import { agentRunFailureText } from './AgentRunFailureText';
 
 export interface TutorAgentHandler {
   readonly runType: AgentRunType;
@@ -201,7 +202,9 @@ export class RunTutorAgentBatch {
   private async fail(run: AgentRunAggregate, code: string, error?: unknown): Promise<void> {
     try {
       const diagnostics = errorDiagnostics(error);
-      const message = readableErrorMessage(error);
+      // The raw message stays as the diagnostic; anything that shows the run's
+      // message (task views, the essay grading watcher) gets the learner text.
+      const errorMessage = readableErrorMessage(error);
       await this.transition.execute({
         idempotencyKey: `agent-run:${run.run.id}:failed:${run.run.attemptCount}`,
         agentRunId: run.run.id,
@@ -211,8 +214,8 @@ export class RunTutorAgentBatch {
         checkpoint: {
           ...run.run.checkpoint,
           errorCode: code,
-          errorMessage: message,
-          message,
+          errorMessage,
+          message: agentRunFailureText(code, errorMessage),
           ...(resolveAgentRunNotificationMode(run.run.inputSnapshot) === AgentRunNotificationMode.Terminal
             ? { taskCenterVisible: true }
             : {})

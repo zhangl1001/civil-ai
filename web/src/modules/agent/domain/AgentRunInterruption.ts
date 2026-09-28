@@ -16,6 +16,16 @@ export class AgentRunLeaseLostError extends Error {
   }
 }
 
+/** Another writer advanced the run between this writer's read and its write. */
+export class AgentRunVersionConflictError extends Error {
+  readonly code = 'agent_run.version_conflict';
+
+  constructor(runId: string) {
+    super(`Agent run version conflict: ${runId}`);
+    this.name = 'AgentRunVersionConflictError';
+  }
+}
+
 /** Persisted work created by an older input contract cannot be executed safely. */
 export class AgentRunInputIncompatibleError extends Error {
   readonly code = 'agent_run.input_incompatible';
@@ -41,5 +51,14 @@ export function isAgentRunLeaseLost(error: unknown): error is AgentRunLeaseLostE
       Boolean(error)
       && typeof error === 'object'
       && (error as { readonly code?: unknown }).code === 'agent_run.lease_lost'
+    );
+}
+
+export function isAgentRunVersionConflict(error: unknown): error is AgentRunVersionConflictError {
+  return error instanceof AgentRunVersionConflictError
+    || (
+      Boolean(error)
+      && typeof error === 'object'
+      && (error as { readonly code?: unknown }).code === 'agent_run.version_conflict'
     );
 }

@@ -20,7 +20,7 @@ import {
   resolveAgentWorkPool,
   type AgentWorkPool as AgentWorkPoolValue
 } from '../domain/AgentRunCodes';
-import { AgentRunLeaseLostError } from '../domain/AgentRunInterruption';
+import { AgentRunLeaseLostError, AgentRunVersionConflictError } from '../domain/AgentRunInterruption';
 
 interface StoredRun extends AgentRunAggregate { readonly runId: string; readonly idempotencyKey: string; readonly invocations: readonly AgentInvocationRecord[]; }
 interface StoredRunIdempotency { readonly idempotencyKey: string; readonly runId: AgentRunId; }
@@ -40,10 +40,12 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
     if (guard && (!current || !matchesActiveLease(current.run, guard.leaseToken, guard.now))) {
       throw new AgentRunLeaseLostError(run.id);
     }
-    if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new Error(`Agent run version conflict: ${run.id}`);
+    if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new AgentRunVersionConflictError(run.id);
     this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...current.events,event],(await this.get(run.id))!.invocations)});
   }
   async findById(id: AgentRunId): Promise<AgentRunAggregate|undefined> { const item=await this.get(id); return item&&{run:item.run,events:item.events}; }
+  /** IndexedDbUnitOfWork serializes this runtime's units of work, so the committed read inside one is the version its write replaces. */
+  async findByIdInTransaction(id: AgentRunId, _context: TransactionContext): Promise<AgentRunAggregate|undefined> { return this.findById(id); }
   async findByIdempotencyKey(key:string): Promise<AgentRunAggregate|undefined> {
     const reservation=await this.database.get<StoredRunIdempotency>(TutorIndexedDbStore.AgentRunIdempotency,key);
     return reservation ? this.findById(reservation.runId) : undefined;

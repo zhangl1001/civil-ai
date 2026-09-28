@@ -86,6 +86,13 @@ export interface AgentRunMutationGuard {
 export interface AgentRunRepository {
   create(run: AgentRunRecord, created: AgentRunEventRecord, context: TransactionContext): Promise<void>;
   findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined>;
+  /**
+   * Reads the committed run from inside the caller's unit of work, so a
+   * read-modify-write replaces exactly the version it read. Plain `findById`
+   * must not be used there: SQLite serializes every statement behind the open
+   * transaction and would wait on itself.
+   */
+  findByIdInTransaction(runId: AgentRunId, context: TransactionContext): Promise<AgentRunAggregate | undefined>;
   findByIdempotencyKey(idempotencyKey: string): Promise<AgentRunAggregate | undefined>;
   findLatestByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
   findActiveByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
