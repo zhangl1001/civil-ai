@@ -7,7 +7,7 @@
         <span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>思考中</span>
       </p>
-      <MarkdownContent v-else-if="message.content" class="md-message" :content="message.content" variant="chat" />
+      <MarkdownContent v-else-if="message.content && !outcome?.replacesContent" class="md-message" :content="message.content" variant="chat" />
       <div v-if="outcome" class="message-outcome" :role="outcome.status === 'failed' ? 'alert' : 'status'">
         <p>
           <TriangleAlertIcon v-if="outcome.status === 'failed'" aria-hidden="true" />

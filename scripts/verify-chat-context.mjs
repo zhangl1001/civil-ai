@@ -20,7 +20,8 @@ try {
     buildChatContext,
     buildConversationSummary,
     estimateChatTokens,
-    sanitizeContextMessage
+    sanitizeContextMessage,
+    sanitizeConversationSummary
   } = await server.ssrLoadModule('/src/ai/ChatContextBuilder.ts');
   const {
     compactAgentLoopMessages,
@@ -50,6 +51,45 @@ try {
   assert.equal(context.some((item) => item.content.includes('工具执行中')), false);
   assert.equal(context.some((item) => item.content.includes('回复失败')), false);
   assert.equal(context.some((item) => item.content === '今天怎么安排'), false);
+
+  const failedTurns = [
+    message('f1', 'user', '帮我规划今天'),
+    message('f2', 'assistant', 'AI 回复未能正常完成，请重试。'),
+    message('f3', 'user', '帮我规划今天'),
+    message('f4', 'assistant', 'AI 回复未能正常完成，请重试。'),
+    message('f5', 'user', '帮我规划今天'),
+    { ...message('f6', 'assistant', '先看一下你的'), status: 'stopped', errorCode: 'chat.stopped' },
+    message('f7', 'user', '帮我规划今天'),
+    { ...message('f8', 'assistant', ''), status: 'failed', errorCode: 'provider.authentication', errorMessage: '模型服务鉴权失败' },
+    message('f9', 'assistant', '我查到一些信息\n\n我已经完成前面的处理，但在整理结果时遇到问题：模型服务暂时没有响应，请稍后重试。'),
+    message('f10', 'assistant', '只答了一半\n\n[[ZH_AI_STOPPED]]'),
+    message('f11', 'user', '帮我规划今天')
+  ];
+  const retriedContext = buildChatContext(failedTurns, { currentPrompt: '帮我规划今天', budget: 2_000, maxMessages: 14 });
+  assert.deepEqual(
+    retriedContext,
+    [],
+    'failed, stopped and legacy placeholder turns never reach the model, and a re-sent question is not repeated'
+  );
+  const afterFailure = buildChatContext([
+    message('a1', 'user', '第一问'),
+    message('a2', 'assistant', '第一答'),
+    message('a3', 'user', '第二问'),
+    { ...message('a4', 'assistant', ''), status: 'failed', errorCode: 'provider.rate_limited' },
+    message('a5', 'user', '第三问')
+  ], { currentPrompt: '第三问', budget: 2_000, maxMessages: 14 });
+  assert.deepEqual(afterFailure.map((item) => item.content), ['第一问', '第一答', '第二问']);
+  const failedSummary = advanceConversationSummary([
+    ...failedTurns,
+    ...Array.from({ length: 16 }, (_, index) => message(`later-${index}`, index % 2 ? 'assistant' : 'user', `后续 ${index}`))
+  ], {}, 6);
+  assert.equal(failedSummary.summary.includes('未能正常完成'), false, 'rolling summaries skip failed turns');
+  assert.equal(failedSummary.summary.includes('先看一下你的'), false, 'rolling summaries skip stopped turns');
+  assert.equal(
+    sanitizeConversationSummary('用户：帮我规划今天\n助手：AI 回复未能正常完成，请重试。\n助手：今天先练判断推理'),
+    '用户：帮我规划今天\n助手：今天先练判断推理',
+    'summaries written by older builds drop their failure lines'
+  );
 
   const long = 'a'.repeat(4200);
   const clipped = sanitizeContextMessage(long);
@@ -265,7 +305,17 @@ try {
     statement: '回答尽量先给结论，再给步骤。',
     scope: 'global'
   });
+  await store.addMessage({ sessionId: session.id, role: 'user', content: '再来一题' });
+  await store.addMessage({ sessionId: session.id, role: 'assistant', content: '', status: 'failed', errorCode: 'provider.transient', errorMessage: '模型服务暂时不可用' });
+  await store.addMessage({ sessionId: session.id, role: 'assistant', content: 'AI 回复未能正常完成，请重试。' });
+  const storedOutcome = (await store.listMessages(session.id)).find((item) => item.status === 'failed');
+  assert.equal(storedOutcome.errorCode, 'provider.transient', 'outcome fields survive the conversation log');
   const prepared = await memoryService.prepare(runtime, session.id, '继续', '继续');
+  assert.equal(
+    prepared.messages.some((item) => String(item.content).includes('未能正常完成') || String(item.content).includes('暂时不可用')),
+    false,
+    'prepared model context excludes persisted failure outcomes'
+  );
   assert(prepared.sessionSummary.includes('集成消息 8'));
   assert(prepared.memoryContext.includes('回答尽量先给结论'));
   assert(prepared.messages.length <= 15);
@@ -366,6 +416,23 @@ async function verifyChatAgentService() {
     assert.equal(failingRows.at(-1).errorCode, 'provider.authentication');
     assert.match(failingRows.at(-1).errorMessage, /鉴权失败/);
     assert.equal(failingUpdates.at(-1).status, 'failed', 'the open sheet receives the failure outcome immediately');
+
+    const followUpRequests = [];
+    harness.loop = async ({ command }) => {
+      followUpRequests.push(command.messages);
+      return { status: 'completed', text: '今天先做一组判断推理。', checkpoint: { agentRunId: command.agentRunId, messages: [] } };
+    };
+    await service.handle('帮我规划今天', failing, { thinkingEnabled: false });
+    const replayed = JSON.stringify(followUpRequests[0]);
+    assert.equal(replayed.includes('鉴权失败'), false, 'a failed turn is never replayed as an assistant answer');
+    assert.equal(
+      followUpRequests[0].filter((item) => item.role === 'user' && String(item.content) === '帮我规划今天').length,
+      1,
+      'retrying a failed question sends it once'
+    );
+    const retriedRows = await harness.messages(failing.id);
+    assert.equal(retriedRows.at(-1).content, '今天先做一组判断推理。');
+    assert.equal(retriedRows.at(-1).status, undefined);
 
     const failures = [
       [new ai.ProviderGatewayError('Incorrect API key provided', ai.ProviderErrorKind.Authentication, 401), 'provider.authentication', /API Key/],

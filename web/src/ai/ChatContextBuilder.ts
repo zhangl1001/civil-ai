@@ -1,11 +1,64 @@
 import type { AIMessage } from '@/domain/ai';
 import type { AITextMessage } from '@/composition-root/ai/ConfiguredAIClient';
+import type { ConversationMessageStatus } from '@/modules/conversation/public';
 
 const DEFAULT_CONTEXT_BUDGET = 6_000;
 const DEFAULT_MAX_MESSAGES = 14;
 const MAX_SINGLE_MESSAGE_LENGTH = 4_000;
 const MAX_SUMMARY_LENGTH = 2_400;
-const ROLLING_SUMMARY_VERSION = 2;
+// v3 rebuilds summaries that absorbed failure placeholders as assistant turns.
+const ROLLING_SUMMARY_VERSION = 3;
+
+/** A chat row as far as model context is concerned. */
+export type ChatContextMessage = AIMessage & { readonly status?: ConversationMessageStatus };
+
+/**
+ * Texts older builds saved as ordinary assistant answers when a turn failed.
+ * Replaying them taught the model that it had failed ("这条我回复失败了").
+ */
+const LEGACY_FAILURE_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  'AI 回复未能正常完成，请重试。',
+  '模型服务鉴权失败，请检查 AI 配置中的接口地址和密钥。',
+  '当前模型不支持本次请求，请检查模型配置或更换兼容模型。',
+  '当前模型不支持图片理解，请在 AI 配置中换用支持视觉输入的模型后重试。',
+  '模型服务暂时没有响应，请稍后重试。',
+  '本地数据正在忙，请稍后重试。'
+]);
+const LEGACY_FAILURE_MARKERS = ['我已经完成前面的处理，但在整理结果时遇到问题：', '[[ZH_AI_STOPPED]]'];
+
+/** True when an older build saved nothing but a failure notice as the answer. */
+export function isLegacyFailureNotice(content: string): boolean {
+  const text = content.trim();
+  return LEGACY_FAILURE_PLACEHOLDERS.has(text) || /^回复失败：/.test(text);
+}
+
+/** True for the text of a failed or interrupted turn saved by an older build. */
+export function isLegacyFailurePlaceholder(content: string): boolean {
+  return isLegacyFailureNotice(content)
+    || LEGACY_FAILURE_MARKERS.some((marker) => content.includes(marker));
+}
+
+/**
+ * Only completed exchanges are replayed to the model. Failed and stopped
+ * turns stay visible in the chat but never become something the model said.
+ */
+export function isModelContextMessage(message: ChatContextMessage): boolean {
+  if (message.role !== 'user' && message.role !== 'assistant') return false;
+  if (message.role === 'user') return Boolean(message.content.trim());
+  return !message.status && !isLegacyFailurePlaceholder(message.content);
+}
+
+/** Drops summary lines that only recorded a failed assistant turn. */
+export function sanitizeConversationSummary(summary: string): string {
+  return summary
+    .split('\n')
+    .filter((line) => {
+      const match = line.match(/^助手：(.*)$/);
+      return !match || !isLegacyFailurePlaceholder(match[1].replace(/\.\.\.$/, ''));
+    })
+    .join('\n')
+    .trim();
+}
 
 export interface BuildChatContextOptions {
   readonly currentPrompt: string;
@@ -13,15 +66,17 @@ export interface BuildChatContextOptions {
   readonly maxMessages?: number;
 }
 
-export function buildChatContext(history: readonly AIMessage[], options: BuildChatContextOptions): AITextMessage[] {
+export function buildChatContext(history: readonly ChatContextMessage[], options: BuildChatContextOptions): AITextMessage[] {
   const budget = options.budget ?? DEFAULT_CONTEXT_BUDGET;
   const maxMessages = options.maxMessages ?? DEFAULT_MAX_MESSAGES;
   const selected: AITextMessage[] = [];
   let usedTokens = 0;
   const currentPrompt = options.currentPrompt.trim();
-  const usable = history
-    .filter((message) => message.role === 'user' || message.role === 'assistant')
-    .filter((message, index, items) => !(index === items.length - 1 && message.role === 'user' && message.content.trim() === currentPrompt))
+  const conversational = history.filter(isModelContextMessage);
+  if (conversational.at(-1)?.role === 'user' && conversational.at(-1)?.content.trim() === currentPrompt) {
+    conversational.pop();
+  }
+  const usable = withoutRepeatedQuestions(conversational, currentPrompt)
     .slice(-maxMessages)
     .reverse();
 
@@ -37,6 +92,22 @@ export function buildChatContext(history: readonly AIMessage[], options: BuildCh
   return selected.reverse();
 }
 
+/**
+ * A question sent again after its failed turn would otherwise reach the model
+ * twice in a row; keep only the latest copy.
+ */
+function withoutRepeatedQuestions(
+  messages: readonly ChatContextMessage[],
+  currentPrompt: string
+): ChatContextMessage[] {
+  return messages.filter((message, index) => {
+    if (message.role !== 'user') return true;
+    const next = messages[index + 1];
+    const nextQuestion = next ? (next.role === 'user' ? next.content.trim() : undefined) : currentPrompt;
+    return nextQuestion !== message.content.trim();
+  });
+}
+
 export function sanitizeContextMessage(content: string): string {
   const clean = content
     .replace(/\n?\s*\[\[ZH_AI_STOPPED\]\]\s*$/g, '')
@@ -46,7 +117,7 @@ export function sanitizeContextMessage(content: string): string {
   return clean.length > MAX_SINGLE_MESSAGE_LENGTH ? `${clean.slice(0, MAX_SINGLE_MESSAGE_LENGTH)}\n（以上为较长回复截断摘要）` : clean;
 }
 
-export function buildConversationSummary(history: readonly AIMessage[]): string {
+export function buildConversationSummary(history: readonly ChatContextMessage[]): string {
   return summarizeMessages('', history);
 }
 
@@ -62,7 +133,7 @@ export interface RollingConversationSummary {
  * The cursor prevents repeatedly summarizing the same messages.
  */
 export function advanceConversationSummary(
-  history: readonly AIMessage[],
+  history: readonly ChatContextMessage[],
   previous: {
     readonly summary?: string;
     readonly cursorMessageId?: string;
@@ -109,9 +180,9 @@ export function estimateChatTokens(text: string): number {
   return Math.max(1, Math.ceil(ascii / 4 + nonAscii / 1.6));
 }
 
-function summarizeMessages(previousSummary: string, history: readonly AIMessage[]): string {
+function summarizeMessages(previousSummary: string, history: readonly ChatContextMessage[]): string {
   const usable = history
-    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .filter(isModelContextMessage)
     .map((message) => ({ ...message, content: sanitizeContextMessage(message.content).replace(/\s+/g, ' ') }))
     .filter((message) => message.content);
   if (!usable.length) return clipSummary(previousSummary);
@@ -121,9 +192,8 @@ function summarizeMessages(previousSummary: string, history: readonly AIMessage[
   return clipSummary([previousSummary.trim(), turns.join('\n')].filter(Boolean).join('\n'));
 }
 
-function isUsableConversationMessage(message: AIMessage): boolean {
-  return (message.role === 'user' || message.role === 'assistant')
-    && Boolean(sanitizeContextMessage(message.content));
+function isUsableConversationMessage(message: ChatContextMessage): boolean {
+  return isModelContextMessage(message) && Boolean(sanitizeContextMessage(message.content));
 }
 
 function clip(value: string, max: number): string {

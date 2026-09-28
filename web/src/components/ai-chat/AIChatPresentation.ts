@@ -1,3 +1,4 @@
+import { isLegacyFailureNotice } from '@/ai/ChatContextBuilder';
 import type { ConversationMessageStatus } from '@/modules/conversation/public';
 import type { AIChatMessage } from '@/services/AIChatRepository';
 import { ChatFailureCode, chatFailureForCode, describeChatFailure } from '@/services/ChatAgentFailure';
@@ -6,6 +7,8 @@ export interface ChatMessageOutcome {
   readonly status: ConversationMessageStatus;
   readonly message: string;
   readonly configureModel: boolean;
+  /** The row's text is itself the failure notice (saved by an older build). */
+  readonly replacesContent: boolean;
 }
 
 export function compactGuidanceText(value: string): string {
@@ -26,12 +29,16 @@ export function chatMessageOutcome(message: AIChatMessage): ChatMessageOutcome |
     return {
       status: 'stopped',
       message: message.errorMessage?.trim() || chatFailureForCode(message.errorCode || ChatFailureCode.Stopped).message,
-      configureModel: false
+      configureModel: false,
+      replacesContent: false
     };
   }
-  if (message.status !== 'failed') return undefined;
-  const failure = chatFailureForCode(message.errorCode || ChatFailureCode.Unknown, message.errorMessage);
-  return { status: 'failed', message: failure.message, configureModel: failure.configureModel };
+  if (message.status === 'failed') {
+    const failure = chatFailureForCode(message.errorCode || ChatFailureCode.Unknown, message.errorMessage);
+    return { status: 'failed', message: failure.message, configureModel: failure.configureModel, replacesContent: false };
+  }
+  if (!isLegacyFailureNotice(message.content)) return undefined;
+  return { status: 'failed', message: message.content.trim(), configureModel: false, replacesContent: true };
 }
 
 export function formatSessionTime(timestamp: number): string {
