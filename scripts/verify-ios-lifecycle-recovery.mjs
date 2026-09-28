@@ -36,6 +36,12 @@ try {
   coordinator.install(runtime);
   assert.equal(timers.pendingCount, 1, 'Active native runtime schedules one health check');
 
+  lifecycle.emit('inactive', 'app-will-resign-active');
+  lifecycle.emit('active', 'app-did-become-active');
+  assert.deepEqual(calls, [], 'Control Center, banners and prompts (inactive only) never replace the connection');
+  assert.equal(timers.pendingCount, 1, 'An inactive-only interruption keeps the single health check');
+
+  lifecycle.emit('inactive', 'app-will-resign-active');
   lifecycle.emit('background', 'app-did-enter-background');
   assert.equal(timers.pendingCount, 0, 'Background transition cancels the health timer');
   lifecycle.emit('active', 'app-did-become-active');

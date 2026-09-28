@@ -73,7 +73,12 @@ export class TutorDatabaseLifecycleCoordinator {
   }
 
   private handle(event: AppLifecycleEvent): void {
-    if (event.state !== 'active') {
+    // iOS reports `inactive` for Control Center, the notification shade, call
+    // banners and permission prompts while the app keeps running. Recovering
+    // after those would replace the connection under a chat that kept
+    // streaming and writing, so only a real move to the background counts.
+    if (event.state === 'inactive') return;
+    if (event.state === 'background') {
       this.interrupted = true;
       this.clearHealthCheck();
       return;

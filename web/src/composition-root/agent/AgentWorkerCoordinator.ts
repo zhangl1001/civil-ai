@@ -15,6 +15,7 @@ import {
   ProviderConfigurationError
 } from '../ai/createConfiguredProviderGateway';
 import { Capacitor } from '@capacitor/core';
+import { isTutorDatabaseBusy } from '@/capabilities/database/public';
 import { runWithAgentWorkerLeadership } from './AgentWorkerLeadership';
 
 const WORKER_POLL_INTERVAL_MS = 1_000;
@@ -40,7 +41,10 @@ export class AgentWorkerCoordinator {
     this.runtime = runtime;
     if (!this.removeLifecycleListener) {
       this.removeLifecycleListener = appLifecycleAdapter.onChange((event) => {
-        if (event.state !== 'active') {
+        // `inactive` (Control Center, call banners, permission prompts) leaves
+        // the app running; aborting there threw away paid generation calls.
+        if (event.state === 'inactive') return;
+        if (event.state === 'background') {
           this.suspended = true;
           this.wakeRequested = false;
           this.activeController?.abort(new AgentRunSuspendedError());
@@ -154,7 +158,13 @@ export class AgentWorkerCoordinator {
       const executionClasses = agentExecutionClassesForLane(laneIndex, activeLimit);
       schedulingCycle += 1;
       const now = Date.now() as Parameters<typeof runtime.agentRunRepository.nextWorkAt>[0];
-      const nextWorkAt = await runtime.agentRunRepository.nextWorkAt(now, workPools, executionClasses);
+      const nextWorkAt = await unlessDatabaseBusy(
+        () => runtime.agentRunRepository.nextWorkAt(now, workPools, executionClasses)
+      );
+      if (nextWorkAt === DATABASE_BUSY) {
+        await delay(WORKER_POLL_INTERVAL_MS, signal);
+        continue;
+      }
       if (nextWorkAt === undefined) {
         await delay(WORKER_POLL_INTERVAL_MS, signal);
         continue;
@@ -163,15 +173,20 @@ export class AgentWorkerCoordinator {
         await delay(Math.min(WORKER_POLL_INTERVAL_MS, nextWorkAt - now), signal);
         continue;
       }
-      const batch = await runtime.runTutorAgentBatch.execute({
+      const gateway = await getGateway();
+      const batch = await unlessDatabaseBusy(() => runtime.runTutorAgentBatch.execute({
         workerId,
-        gateway: await getGateway(),
+        gateway,
         maxConcurrent: 1,
         leaseMs: WORKER_LEASE_MS,
         workPools,
         executionClasses,
         signal
-      });
+      }));
+      if (batch === DATABASE_BUSY) {
+        await delay(WORKER_POLL_INTERVAL_MS, signal);
+        continue;
+      }
       if (batch.retried > 0) {
         this.concurrency.recordRetry();
       } else if (batch.completed > 0) {
@@ -188,6 +203,22 @@ export class AgentWorkerCoordinator {
   private async refreshConcurrency(): Promise<void> {
     const config = await aiConfigService.load();
     this.concurrency.configure(config.maxConcurrentTasks);
+  }
+}
+
+const DATABASE_BUSY = Symbol('database-busy');
+
+/**
+ * Lock contention (a long maintenance transaction such as a backup restore) is
+ * not a worker failure: the lane polls again instead of stopping every lane
+ * until the next start().
+ */
+async function unlessDatabaseBusy<Result>(work: () => Promise<Result>): Promise<Result | typeof DATABASE_BUSY> {
+  try {
+    return await work();
+  } catch (error) {
+    if (isTutorDatabaseBusy(error)) return DATABASE_BUSY;
+    throw error;
   }
 }
 
