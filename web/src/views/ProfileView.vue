@@ -247,6 +247,15 @@
       tone="danger"
       @confirm="confirmClearLearningData"
     />
+
+    <ConfirmDialog
+      v-model="showImportConfirm"
+      title="导入备份数据"
+      :description="`将用「${pendingBackup?.fileName || '备份文件'}」替换当前工程的学习数据：题目、练习、错题、学习记录、学习计划和 AI 对话，当前内容不会保留。建议先导出一份当前数据。`"
+      confirm-text="确认导入"
+      tone="danger"
+      @confirm="confirmImportLocalData"
+    />
   </div>
 </template>
 
@@ -307,6 +316,11 @@ const isSavingReminder = ref(false);
 const isSavingTargets = ref(false);
 const isDataBusy = ref(false);
 const showClearLearningConfirm = ref(false);
+const pendingBackup = ref<{ readonly fileName: string; readonly data: unknown } | null>(null);
+const showImportConfirm = computed({
+  get: () => Boolean(pendingBackup.value),
+  set: (open: boolean) => { if (!open) pendingBackup.value = null; }
+});
 const reminderMessage = ref('');
 const profileMessage = ref('');
 const dataMessage = ref('');
@@ -395,6 +409,7 @@ onMounted(() => {
 onDeactivated(() => {
   closeSheet();
   showClearLearningConfirm.value = false;
+  showImportConfirm.value = false;
 });
 
 /**
@@ -603,6 +618,7 @@ async function exportLocalData() {
   }
 }
 
+/** Reads the chosen backup first; nothing is replaced until the confirmation names it. */
 function importLocalData() {
   if (isDataBusy.value) return;
   const input = document.createElement('input');
@@ -611,20 +627,31 @@ function importLocalData() {
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
-    isDataBusy.value = true;
     dataMessage.value = '';
     try {
-      const backup = JSON.parse(await file.text());
-      const count = await dataManagementService.importBackup(backup);
-      dataMessage.value = `导入完成：${count} 条记录`;
-      await Promise.all([loadCandidateHome(), loadDataSummary()]);
-    } catch (error) {
-      dataMessage.value = error instanceof Error ? error.message : '导入失败';
-    } finally {
-      isDataBusy.value = false;
+      pendingBackup.value = { fileName: file.name, data: JSON.parse(await file.text()) };
+    } catch {
+      dataMessage.value = '无法读取该备份文件，请选择从这里导出的 JSON 备份';
     }
   };
   input.click();
+}
+
+async function confirmImportLocalData() {
+  const backup = pendingBackup.value;
+  pendingBackup.value = null;
+  if (!backup || isDataBusy.value) return;
+  isDataBusy.value = true;
+  dataMessage.value = '';
+  try {
+    const count = await dataManagementService.importBackup(backup.data);
+    dataMessage.value = `导入完成：${count} 条记录`;
+    await Promise.all([loadCandidateHome(), loadDataSummary()]);
+  } catch (error) {
+    dataMessage.value = error instanceof Error ? error.message : '导入失败';
+  } finally {
+    isDataBusy.value = false;
+  }
 }
 
 async function clearLearningData() {
