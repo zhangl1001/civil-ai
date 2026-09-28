@@ -3,7 +3,12 @@ import type { SqlTransactionScope } from '../sqlite/SqlTransactionScope';
 import type { SqlDatabase } from '../../contracts/SqlDatabase';
 import { TransactionWorkload } from '../../contracts/UnitOfWork';
 import type { TransactionContext } from '../../contracts/UnitOfWork';
-import type { TutorDataMaintenance } from '../../contracts/TutorDataMaintenance';
+import type { LearningDataSnapshot, TutorDataMaintenance } from '../../contracts/TutorDataMaintenance';
+import {
+  readSqliteLearningData,
+  releaseMissingLegacyReferences,
+  writeSqliteLearningData
+} from './SqliteLearningDataSnapshot';
 
 interface MaintenanceStatement {
   readonly sql: string;
@@ -174,6 +179,36 @@ export class SqliteTutorDataMaintenance implements TutorDataMaintenance {
     }, { workload: TransactionWorkload.Maintenance });
   }
 
+  async exportLearningData(examCycleId: ExamCycleId, context?: TransactionContext): Promise<LearningDataSnapshot> {
+    if (context) return readSqliteLearningData(this.scope.resolve(context), examCycleId);
+    // One transaction keeps the snapshot consistent while agent workers keep writing.
+    return this.database.transaction(
+      (transaction) => readSqliteLearningData(transaction, examCycleId),
+      { workload: TransactionWorkload.Maintenance }
+    );
+  }
+
+  restoreLearningData(
+    examCycleId: ExamCycleId,
+    snapshot: LearningDataSnapshot,
+    context: TransactionContext
+  ): Promise<number> {
+    return writeSqliteLearningData(this.scope.resolve(context), examCycleId, snapshot);
+  }
+
+  async restoreLegacyRecords<T>(
+    examCycleId: ExamCycleId,
+    context: TransactionContext,
+    write: () => Promise<T>
+  ): Promise<T> {
+    const transaction = this.scope.resolve(context);
+    // Legacy backups list threads, plans and reviews in no particular order.
+    await transaction.execute('PRAGMA defer_foreign_keys = ON;');
+    const result = await write();
+    await releaseMissingLegacyReferences(transaction, examCycleId);
+    return result;
+  }
+
   private async clearWithTransaction(
     transaction: Pick<SqlDatabase, 'run'>,
     examCycleId: ExamCycleId
@@ -185,5 +220,4 @@ export class SqliteTutorDataMaintenance implements TutorDataMaintenance {
     }
     return changes;
   }
-
 }

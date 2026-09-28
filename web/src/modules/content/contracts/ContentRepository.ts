@@ -284,6 +284,8 @@ export interface ContentRepository {
   findPublishedSchema(schemaCode: string): Promise<ContentSchemaVersion | undefined>;
   findPublishedQuestionTemplate(templateCode: QuestionTemplateCode): Promise<QuestionTemplateVersion | undefined>;
   commitQuestionSet(bundle: CommittedQuestionSetBundle, context: TransactionContext): Promise<void>;
+  /** Writes a backed-up set with the lifecycle it reached (practised, retired) instead of as newly generated. */
+  restoreQuestionSet(bundle: CommittedQuestionSetBundle, context: TransactionContext): Promise<void>;
   findQuestionSet(questionSetId: QuestionSetId): Promise<CommittedQuestionSetBundle | undefined>;
   findQuestionSetByGenerationSpec(
     generationSpecId: GenerationSpecId
