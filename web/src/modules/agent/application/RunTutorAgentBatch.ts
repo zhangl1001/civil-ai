@@ -287,7 +287,8 @@ function retryDelay(
 }
 
 function errorCode(error: unknown): string {
-  if (error instanceof ProviderGatewayError) return `provider.${error.kind}`;
+  // `code` is `provider.<kind>` unless the gateway knows the finer cause.
+  if (error instanceof ProviderGatewayError) return error.code;
   if (isUnexpectedAbort(error)) return 'provider.transient';
   const code = codedError(error);
   if (code) return code;

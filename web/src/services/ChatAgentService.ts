@@ -19,6 +19,7 @@ import {
   AgentRunType,
   AuthorizedAgentToolExecutor,
   AgentRunSuspendedError,
+  CHAT_AGENT_LOOP_TOOL_NAME,
   isAgentRunSuspended,
   TaskCenterStep,
   TaskTargetType,
@@ -185,7 +186,7 @@ export class ChatAgentService {
           businessLine: 'tutor',
           category: 'tool',
           chatSessionId: session.id,
-          toolName: 'agent_loop',
+          toolName: CHAT_AGENT_LOOP_TOOL_NAME,
           scopeKey: `chat-agent:${session.id}`,
           actionParams: {}
         }

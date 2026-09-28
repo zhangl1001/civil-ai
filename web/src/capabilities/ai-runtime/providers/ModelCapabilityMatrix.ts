@@ -51,17 +51,17 @@ export class ModelCapabilityMatrix {
 
 /**
  * Claude Opus 4.7/4.8 and every 5.x Claude (Opus, Sonnet, Haiku, Fable,
- * Opus 5.5) removed temperature/top_p/top_k; sending one is a 400. Matching
+ * Mythos, Opus 5.5) removed temperature/top_p/top_k; sending one is a 400. Matching
  * on the model name also covers gateway spellings such as
  * `us.anthropic.claude-sonnet-5-v1:0` and OpenAI-compatible proxies.
  */
 export function rejectsSamplingParameters(model: string): boolean {
-  return /claude-(?:(?:opus|sonnet|haiku|fable)-5|opus-4-[78])(?![0-9])/i.test(model);
+  return /claude-(?:(?:opus|sonnet|haiku|fable|mythos)-5|opus-4-[78])(?![0-9])/i.test(model);
 }
 
-/** Claude Opus 5.5 and Fable 5.x always think; `thinking: {type: 'disabled'}` is a 400. */
+/** Claude Opus 5.5, Fable 5.x and Mythos 5.x always think; `thinking: {type: 'disabled'}` is a 400. */
 export function rejectsDisabledThinking(model: string): boolean {
-  return /claude-(?:opus-5-5|fable-5)(?![0-9])/i.test(model);
+  return /claude-(?:opus-5-5|fable-5|mythos-5)(?![0-9])/i.test(model);
 }
 
 function isUnsupportedTemperature(error: unknown): boolean {

@@ -38,6 +38,16 @@ function knownFailureText(code: string, diagnostic: string | undefined, readable
   if (code === 'provider.empty_response') return '模型没有返回有效内容，请重新生成';
   if (code === 'provider.protocol') return '模型接口返回格式不兼容，请检查 Base URL';
   if (code === 'provider.transient') return '模型网络或服务暂时异常，请稍后重试';
+  if (code === 'provider.quota_exceeded') return '模型账户余额不足或额度已用完，请充值或提升额度后重试';
+  if (code === 'provider.model_not_found') return '找不到配置的模型，请检查模型名称';
+  if (code === 'provider.endpoint_not_found' || code === 'provider.html_response') return '模型接口地址不正确，请检查 Base URL';
+  if (code === 'provider.context_too_long') return '任务内容超过模型上下文长度上限，请缩小范围后重试';
+  if (code === 'provider.unsupported_media') return '当前模型不支持图片等附件，请更换支持视觉输入的模型';
+  if (code === 'provider.output_limit' || code === 'provider.thinking_only') return '模型输出用完了长度上限却没有给出结果，请重新生成或换用非思考模型';
+  if (code === 'provider.stream_interrupted') return '模型回复在传输中途中断，请重新执行任务';
+  if (code === 'provider.overloaded') return '模型服务繁忙，请稍后重试';
+  if (code === 'provider.timeout') return '模型响应超时，请稍后重试';
+  if (code === 'network.unavailable') return '网络连接失败，请检查网络后重试';
   if (code.startsWith('provider.')) return '模型服务请求失败，请检查模型配置';
   return undefined;
 }
