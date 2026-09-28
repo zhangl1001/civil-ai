@@ -2,7 +2,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 import type { InterviewSpeechMetrics } from '@/domain/interview';
 
 interface NativeSpeechPlugin {
-  isAvailable(): Promise<{ available: boolean }>;
+  isAvailable(): Promise<{ available: boolean; onDevice?: boolean; reason?: string }>;
   requestSpeechPermissions(): Promise<{ granted: boolean }>;
   start(): Promise<{ transcript: string; durationSeconds: number }>;
   stop(): Promise<{ transcript: string; durationSeconds: number }>;
@@ -41,17 +41,32 @@ function metricsFor(transcript: string, durationSeconds: number): InterviewSpeec
   };
 }
 
+export type SpeechUnavailableReason = 'unsupported_platform' | 'unavailable' | 'on_device_unsupported';
+
+export interface SpeechAvailability {
+  available: boolean;
+  reason?: SpeechUnavailableReason;
+}
+
 export class SpeechRecognitionAdapter {
-  async isAvailable(): Promise<boolean> {
-    if (!Capacitor.isNativePlatform()) return false;
+  /** Only on-device recognition is offered, so the no-upload promise holds. */
+  async availability(): Promise<SpeechAvailability> {
     const plugin = nativeSpeech();
-    if (!plugin) return false;
+    if (!plugin) return { available: false, reason: 'unsupported_platform' };
     try {
       const result = await plugin.isAvailable();
-      return Boolean(result.available);
+      if (result.available && result.onDevice !== false) return { available: true };
+      return {
+        available: false,
+        reason: result.reason === 'on_device_unsupported' ? 'on_device_unsupported' : 'unavailable'
+      };
     } catch {
-      return false;
+      return { available: false, reason: 'unavailable' };
     }
+  }
+
+  async isAvailable(): Promise<boolean> {
+    return (await this.availability()).available;
   }
 
   async requestPermissions(): Promise<boolean> {

@@ -39,9 +39,15 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    /// The interview screen promises that audio never leaves the device, so
+    /// recognition is only offered where iOS can transcribe zh-CN on-device.
     @objc func isAvailable(_ call: CAPPluginCall) {
+        let recognizerAvailable = recognizer?.isAvailable == true
+        let onDevice = recognizer?.supportsOnDeviceRecognition == true
         call.resolve([
-            "available": recognizer?.isAvailable == true
+            "available": recognizerAvailable && onDevice,
+            "onDevice": onDevice,
+            "reason": !recognizerAvailable ? "unavailable" : (onDevice ? "" : "on_device_unsupported")
         ])
     }
 
@@ -62,7 +68,11 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func startOnMain(_ call: CAPPluginCall) {
         guard let recognizer = recognizer, recognizer.isAvailable else {
-            call.reject("Speech recognizer is unavailable", "SPEECH_UNAVAILABLE")
+            call.reject("语音识别暂不可用，请改用文本作答", "SPEECH_UNAVAILABLE")
+            return
+        }
+        guard recognizer.supportsOnDeviceRecognition else {
+            call.reject("当前设备不支持本地语音识别，为避免上传音频已停用语音作答", "SPEECH_ON_DEVICE_UNAVAILABLE")
             return
         }
         stopRecognition()
@@ -74,7 +84,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
-            call.reject("Audio session setup failed", "AUDIO_SESSION_FAILED", error)
+            call.reject("麦克风初始化失败，请稍后重试", "AUDIO_SESSION_FAILED", error)
             return
         }
 
@@ -82,12 +92,13 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
         let format = inputNode.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-            call.reject("Audio input is unavailable", "AUDIO_INPUT_UNAVAILABLE")
+            call.reject("没有可用的麦克风输入", "AUDIO_INPUT_UNAVAILABLE")
             return
         }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
         recognitionRequest = request
 
         inputNode.removeTap(onBus: 0)
@@ -113,7 +124,7 @@ public final class SpeechRecognitionPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         } catch {
             teardownRecognition()
-            call.reject("Audio engine start failed", "AUDIO_ENGINE_FAILED", error)
+            call.reject("录音启动失败，请稍后重试", "AUDIO_ENGINE_FAILED", error)
         }
     }
 
