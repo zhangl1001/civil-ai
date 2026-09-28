@@ -949,6 +949,11 @@ try {
   assert.equal(adaptiveOpenAIBodies[0].temperature, 0.2);
   assert.equal('temperature' in adaptiveOpenAIBodies[1], false);
 
+  await verifiesProviderFailureClassification(ai);
+  await verifiesDeepSeekThinkingAndStreamIntegrity(ai);
+  await verifiesClaudeSamplingAndThinkingReplay(ai);
+  await verifiesConnectionTestForThinkingModels(server);
+
   assert.equal(ai.openAITextDelta({ choices: [{ delta: { content: '甲' } }] }), '甲');
   assert.equal(ai.anthropicTextDelta({
     type: 'content_block_delta',
@@ -969,3 +974,469 @@ try {
 } finally {
   await server.close();
 }
+
+async function verifiesProviderFailureClassification(ai) {
+  const request = {
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0.2,
+    maxOutputTokens: 100,
+    requestId: 'classification'
+  };
+  const json = (status, body) => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' }
+  });
+  const html = (status) => new Response('<!DOCTYPE html><html><body>Not Found</body></html>', {
+    status,
+    headers: { 'content-type': 'text/html; charset=utf-8' }
+  });
+  const cases = [
+    ['401 invalid key', json(401, { error: { type: 'authentication_error', message: 'invalid x-api-key' } }), ai.ProviderErrorKind.Authentication, 'provider.authentication'],
+    ['401 OpenAI key', json(401, { error: { code: 'invalid_api_key', message: 'Incorrect API key provided' } }), ai.ProviderErrorKind.Authentication, 'provider.authentication'],
+    ['402 balance', json(402, { error: { message: 'Insufficient Balance' } }), ai.ProviderErrorKind.QuotaExceeded, 'provider.quota_exceeded'],
+    ['429 quota', json(429, { error: { code: 'insufficient_quota', message: 'You exceeded your current quota' } }), ai.ProviderErrorKind.QuotaExceeded, 'provider.quota_exceeded'],
+    ['429 TPM', json(429, { error: { code: 'rate_limit_exceeded', message: 'Rate limit reached on tokens per min (TPM)' } }), ai.ProviderErrorKind.RateLimited, 'provider.rate_limited'],
+    ['404 model', json(404, { error: { code: 'model_not_found', message: 'The model `gpt-x` does not exist' } }), ai.ProviderErrorKind.InvalidRequest, 'provider.model_not_found'],
+    ['400 model', json(400, { error: { type: 'invalid_request_error', message: 'Model Not Exist' } }), ai.ProviderErrorKind.InvalidRequest, 'provider.model_not_found'],
+    ['404 html', html(404), ai.ProviderErrorKind.InvalidRequest, 'provider.endpoint_not_found'],
+    ['400 context', json(400, { error: { message: "This model's maximum context length is 65536 tokens" } }), ai.ProviderErrorKind.InvalidRequest, 'provider.context_too_long'],
+    ['400 generic', json(400, { error: { message: 'unexpected field foo' } }), ai.ProviderErrorKind.InvalidRequest, 'provider.invalid_request'],
+    ['500', json(500, { error: { type: 'api_error', message: 'Internal server error' } }), ai.ProviderErrorKind.Transient, 'provider.transient'],
+    ['529', json(529, { error: { type: 'overloaded_error', message: 'Overloaded' } }), ai.ProviderErrorKind.Transient, 'provider.overloaded'],
+    ['200 html', html(200), ai.ProviderErrorKind.Protocol, 'provider.html_response']
+  ];
+  for (const [label, response, kind, code] of cases) {
+    for (const Gateway of [ai.AnthropicGateway, ai.OpenAICompatibleGateway]) {
+      const gateway = new Gateway({
+        apiKey: 'test-key',
+        baseUrl: 'https://classification.test/v1',
+        model: 'classification-model'
+      }, { async send() { return response.clone(); } });
+      await assert.rejects(gateway.complete(request), (error) => {
+        assert.equal(error.kind, kind, `${label} kind via ${Gateway.name}`);
+        assert.equal(error.code, code, `${label} code via ${Gateway.name}`);
+        return true;
+      });
+    }
+  }
+  const streamingHtml = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://classification.test/v1',
+    model: 'classification-model'
+  }, { async send() { return html(200); } });
+  await assert.rejects(
+    streamingHtml.stream(request, () => undefined),
+    (error) => error.code === 'provider.html_response',
+    'an HTML page answering a stream request is a Base URL problem, not an empty answer'
+  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  try {
+    await assert.rejects(
+      new ai.FetchHttpTransport().send({ url: 'https://offline.test', method: 'POST', headers: {}, body: '{}' }),
+      (error) => error.kind === ai.ProviderErrorKind.Transient && error.code === 'network.unavailable'
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+function sse(events, { done = false } = {}) {
+  const body = [
+    ...events.map((event) => `data: ${typeof event === 'string' ? event : JSON.stringify(event)}\n\n`),
+    ...(done ? ['data: [DONE]\n\n'] : [])
+  ].join('');
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+async function verifiesDeepSeekThinkingAndStreamIntegrity(ai) {
+  const toolHistory = [
+    { role: ai.ModelMessageRole.User, content: '今天练什么' },
+    { role: ai.ModelMessageRole.Assistant, content: '', toolCalls: [{ id: 'read-1', name: 'student_read_profile', arguments: {} }] },
+    { role: ai.ModelMessageRole.Tool, toolCallId: 'read-1', content: '{"targetScore":80}' }
+  ];
+  const bodies = [];
+  const deepSeek = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      bodies.push(JSON.parse(request.body));
+      return new Response(JSON.stringify({
+        id: 'deepseek-final',
+        content: [{ type: 'text', text: '今天先练判断推理。' }],
+        stop_reason: 'end_turn'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  await deepSeek.complete({
+    system: 'system',
+    messages: toolHistory,
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    toolChoice: 'none',
+    requestId: 'deepseek-finalization'
+  });
+  assert.equal('tools' in bodies[0], false, 'a finalization turn offers no tools');
+  assert.equal(bodies[0].thinking?.type, 'disabled', 'a finalization turn that replays tool blocks keeps DeepSeek thinking off');
+  await deepSeek.complete({
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    requestId: 'deepseek-plain'
+  });
+  assert.equal('thinking' in bodies[1], false, 'plain requests keep the provider default');
+  await deepSeek.complete({
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0,
+    maxOutputTokens: 1024,
+    thinking: 'disabled',
+    requestId: 'deepseek-direct'
+  });
+  assert.equal(bodies[2].thinking?.type, 'disabled', 'callers can ask a thinking-by-default endpoint to answer directly');
+
+  // "must be passed back" proves thinking is on; it must not be learned as unsupported.
+  const replayBodies = [];
+  const replayGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      replayBodies.push(JSON.parse(request.body));
+      return new Response(JSON.stringify({
+        error: { type: 'invalid_request_error', message: 'The `content[].thinking` in the thinking mode must be passed back to the API.' }
+      }), { status: 400, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const toolRequest = {
+    system: 'system',
+    messages: toolHistory,
+    temperature: 0.2,
+    maxOutputTokens: 1000,
+    tools: [{ name: 'student_read_profile', description: '读取档案。', inputSchema: { type: 'object', properties: {} } }],
+    toolChoice: 'auto',
+    requestId: 'thinking-replay'
+  };
+  await assert.rejects(replayGateway.complete(toolRequest), (error) => error.kind === ai.ProviderErrorKind.InvalidRequest);
+  await assert.rejects(replayGateway.complete({ ...toolRequest, requestId: 'thinking-replay-2' }));
+  assert.equal(replayBodies.length, 2, 'a thinking-replay rejection is not retried as if thinking were unsupported');
+  assert.equal(replayBodies[1].thinking?.type, 'disabled', 'the disable flag survives a thinking-replay rejection');
+
+  // Thinking-only or max_tokens-without-text answers are a clear, non-retryable error.
+  let thinkingOnlyCalls = 0;
+  const thinkingOnly = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      thinkingOnlyCalls += 1;
+      if (JSON.parse(request.body).stream) {
+        return sse([
+          { type: 'message_start', message: { id: 'thinking-stream', usage: { input_tokens: 9, output_tokens: 0 } } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '用户想要……' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 64 } },
+          { type: 'message_stop' }
+        ]);
+      }
+      return new Response(JSON.stringify({
+        id: 'thinking-only',
+        content: [{ type: 'thinking', thinking: '用户想要……' }],
+        stop_reason: 'max_tokens'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  const shortRequest = {
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0,
+    maxOutputTokens: 64,
+    requestId: 'thinking-only'
+  };
+  for (const attempt of [() => thinkingOnly.complete(shortRequest), () => thinkingOnly.stream(shortRequest, () => undefined)]) {
+    await assert.rejects(attempt(), (error) => {
+      assert.equal(error.kind, ai.ProviderErrorKind.OutputLimit);
+      assert.equal(error.code, 'provider.thinking_only');
+      assert.match(error.message, /思考/);
+      return true;
+    });
+  }
+  assert.equal(thinkingOnlyCalls, 2, 'each thinking-only answer costs exactly one provider call');
+
+  const streamCase = (events, options) => new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://anthropic.stream.test/v1',
+    model: 'stream-model'
+  }, { async send() { return sse(events, options); } });
+  const truncatedDeltas = [];
+  await assert.rejects(
+    streamCase([
+      { type: 'message_start', message: { id: 'truncated' } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '回答写到一半' } }
+    ]).stream(shortRequest, (event) => { truncatedDeltas.push(event.text); }),
+    (error) => error.kind === ai.ProviderErrorKind.Transient && error.code === 'provider.stream_interrupted',
+    'a stream that ends without message_stop is an error, not a short success'
+  );
+  assert.deepEqual(truncatedDeltas, ['回答写到一半']);
+  await assert.rejects(
+    streamCase([
+      { type: 'message_start', message: { id: 'overloaded' } },
+      { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }
+    ]).stream(shortRequest, () => undefined),
+    (error) => error.code === 'provider.overloaded',
+    'a mid-stream error event surfaces as that provider error'
+  );
+  const completed = await streamCase([
+    { type: 'message_start', message: { id: 'complete' } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '完整回答' } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+    { type: 'message_stop' }
+  ]).stream(shortRequest, () => undefined);
+  assert.equal(completed.text, '完整回答');
+
+  const openAIStream = (events, options) => new ai.OpenAICompatibleGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://openai.stream.test/v1',
+    model: 'stream-model'
+  }, { async send() { return sse(events, options); } });
+  await assert.rejects(
+    openAIStream([{ id: 'cut', choices: [{ delta: { content: '写到一半' } }] }]).stream(shortRequest, () => undefined),
+    (error) => error.code === 'provider.stream_interrupted',
+    'an OpenAI stream without [DONE] or finish_reason is an error'
+  );
+  await assert.rejects(
+    openAIStream([
+      { id: 'err', choices: [{ delta: { content: '先' } }] },
+      { error: { code: 'rate_limit_exceeded', message: 'Rate limit reached' } }
+    ]).stream(shortRequest, () => undefined),
+    (error) => error.kind === ai.ProviderErrorKind.RateLimited,
+    'an OpenAI error object inside the stream surfaces as that provider error'
+  );
+  await assert.rejects(
+    openAIStream([
+      { id: 'reasoning', choices: [{ delta: { reasoning_content: '思考……' } }] },
+      { id: 'reasoning', choices: [{ delta: {}, finish_reason: 'length' }] }
+    ], { done: true }).stream(shortRequest, () => undefined),
+    (error) => error.kind === ai.ProviderErrorKind.OutputLimit && error.code === 'provider.thinking_only'
+  );
+  const openAIComplete = await openAIStream([
+    { id: 'ok', choices: [{ delta: { content: '完整' } }] },
+    { id: 'ok', choices: [{ delta: {}, finish_reason: 'stop' }] }
+  ], { done: true }).stream(shortRequest, () => undefined);
+  assert.equal(openAIComplete.text, '完整');
+  assert.equal(ai.isOutputLengthFinish('max_tokens'), true);
+  assert.equal(ai.isOutputLengthFinish('length'), true);
+  assert.equal(ai.isOutputLengthFinish('end_turn'), false);
+}
+
+async function verifiesConnectionTestForThinkingModels(server) {
+  const settings = new Map([[
+    'zhangl-setting:secure-fallback:zhangl-ai-config',
+    JSON.stringify({
+      provider: 'anthropic',
+      apiKey: 'test-key',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      model: 'deepseek-v4-flash',
+      maxConcurrentTasks: 1
+    })
+  ]]);
+  const originalFetch = globalThis.fetch;
+  // Swap descriptors instead of reading Node's own localStorage accessor, which warns.
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const originalWindow = globalThis.window;
+  const requests = [];
+  let thinkingOnly = false;
+  globalThis.window = globalThis;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: {
+      getItem: (key) => settings.get(key) ?? null,
+      setItem: (key, value) => { settings.set(key, value); },
+      removeItem: (key) => { settings.delete(key); }
+    }
+  });
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    if (thinkingOnly) {
+      return new Response(JSON.stringify({ id: 't', content: [{ type: 'thinking', thinking: '……' }], stop_reason: 'max_tokens' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    return new Response(JSON.stringify(body.tools
+      ? { id: 's', content: [{ type: 'tool_use', name: 'submit_structured_result', input: { ok: true } }], stop_reason: 'tool_use' }
+      : { id: 'c', content: [{ type: 'text', text: '连接正常' }], stop_reason: 'end_turn' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    });
+  };
+  try {
+    const { configuredAIClient } = await server.ssrLoadModule('/src/composition-root/ai/ConfiguredAIClient.ts');
+    assert.equal(await configuredAIClient.testConnection(), '连接正常');
+    await configuredAIClient.testStructuredOutput();
+    assert(requests.every((body) => body.thinking?.type === 'disabled'), 'connection tests ask DeepSeek to answer without thinking');
+    assert(requests.every((body) => body.max_tokens >= 512), 'connection tests leave room for models that think anyway');
+    thinkingOnly = true;
+    await assert.rejects(configuredAIClient.testConnection(), (error) => {
+      assert.match(error.message, /[一-鿿]/, 'the settings sheet shows a Chinese explanation');
+      assert.doesNotMatch(error.message, /provider returned|empty content/i);
+      return true;
+    });
+    thinkingOnly = false;
+    requests.length = 0;
+    settings.set('zhangl-setting:secure-fallback:zhangl-ai-config', JSON.stringify({
+      provider: 'anthropic',
+      apiKey: 'test-key',
+      baseUrl: 'https://api.anthropic.com/v1',
+      model: 'claude-opus-5',
+      maxConcurrentTasks: 1
+    }));
+    assert.equal(await configuredAIClient.testConnection(), '连接正常');
+    assert.equal('temperature' in requests[0], false, 'the connection test sends no sampling parameters to Claude 5');
+    assert.equal('thinking' in requests[0], false, 'the connection test does not try to disable Claude thinking');
+    settings.delete('zhangl-setting:secure-fallback:zhangl-ai-config');
+    await assert.rejects(configuredAIClient.testConnection(), /还没有配置 AI 模型/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor);
+    else delete globalThis.localStorage;
+    globalThis.window = originalWindow;
+  }
+}
+
+async function verifiesClaudeSamplingAndThinkingReplay(ai) {
+  const request = {
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0,
+    maxOutputTokens: 256,
+    requestId: 'sampling'
+  };
+  const bodyFor = async (Gateway, model, baseUrl = 'https://api.anthropic.com/v1') => {
+    let body;
+    const gateway = new Gateway({ apiKey: 'test-key', baseUrl, model }, {
+      async send(sent) {
+        body = JSON.parse(sent.body);
+        return new Response(JSON.stringify(Gateway === ai.AnthropicGateway
+          ? { id: 'ok', content: [{ type: 'text', text: '连接正常' }], stop_reason: 'end_turn' }
+          : { id: 'ok', choices: [{ message: { content: '连接正常' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+    });
+    await gateway.complete(request);
+    return body;
+  };
+  for (const model of ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-4-7', 'claude-opus-4-8', 'us.anthropic.claude-sonnet-5-v1:0']) {
+    const body = await bodyFor(ai.AnthropicGateway, model);
+    assert.equal('temperature' in body, false, `${model} rejects sampling parameters, so none are sent`);
+    assert.equal('top_p' in body || 'top_k' in body, false);
+    assert.equal('thinking' in body, false, `${model} keeps its default thinking; nothing it rejects is sent`);
+  }
+  assert.equal('temperature' in await bodyFor(ai.OpenAICompatibleGateway, 'claude-opus-5', 'https://proxy.test/v1'), false);
+  assert.equal((await bodyFor(ai.AnthropicGateway, 'claude-opus-4-5')).temperature, 0, 'older models keep temperature');
+  const alwaysThinking = await bodyFor(ai.AnthropicGateway, 'claude-opus-5-5', 'https://api.deepseek.com/anthropic');
+  assert.equal('thinking' in alwaysThinking, false, 'a model that cannot disable thinking never receives {type:"disabled"}');
+
+  // A streamed tool_use turn with thinking round-trips its blocks, signature included.
+  const bodies = [];
+  const gateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.anthropic.com/v1',
+    model: 'claude-opus-5'
+  }, {
+    async send(sent) {
+      bodies.push(JSON.parse(sent.body));
+      if (bodies.length === 1) {
+        return sse([
+          { type: 'message_start', message: { id: 'thinking-tool', usage: { input_tokens: 20, output_tokens: 0 } } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '先读取档案，' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '再安排。' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-abc123' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'content_block_start', index: 1, content_block: { type: 'redacted_thinking', data: 'opaque-payload' } },
+          { type: 'content_block_stop', index: 1 },
+          { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'toolu_1', name: 'student_read_profile' } },
+          { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{}' } },
+          { type: 'content_block_stop', index: 2 },
+          { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 30 } },
+          { type: 'message_stop' }
+        ]);
+      }
+      return sse([
+        { type: 'message_start', message: { id: 'after-tool' } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '今天先练判断推理。' } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+        { type: 'message_stop' }
+      ]);
+    }
+  });
+  const tools = [{ name: 'student_read_profile', description: '读取档案。', inputSchema: { type: 'object', properties: {} } }];
+  const first = await gateway.stream({ ...request, tools, toolChoice: 'auto', requestId: 'thinking-tool-1' }, () => undefined);
+  assert.deepEqual(first.reasoning, [
+    { type: 'thinking', thinking: '先读取档案，再安排。', signature: 'sig-abc123' },
+    { type: 'redacted_thinking', data: 'opaque-payload' }
+  ], 'thinking_delta and signature_delta accumulate into the reasoning blocks');
+  assert.equal(first.text, '', 'reasoning never becomes visible text');
+  await gateway.stream({
+    ...request,
+    tools,
+    toolChoice: 'auto',
+    requestId: 'thinking-tool-2',
+    messages: [
+      { role: ai.ModelMessageRole.User, content: '今天练什么' },
+      { role: ai.ModelMessageRole.Assistant, content: first.text, toolCalls: first.toolCalls, reasoning: first.reasoning },
+      { role: ai.ModelMessageRole.Tool, toolCallId: 'toolu_1', content: '{"targetScore":80}' }
+    ]
+  }, () => undefined);
+  assert.deepEqual(bodies[1].messages[1].content, [
+    { type: 'thinking', thinking: '先读取档案，再安排。', signature: 'sig-abc123' },
+    { type: 'redacted_thinking', data: 'opaque-payload' },
+    { type: 'tool_use', id: 'toolu_1', name: 'student_read_profile', input: {} }
+  ], 'thinking blocks are replayed unchanged ahead of the tool_use they preceded');
+  const parsed = ai.parseAnthropicResponse({
+    id: 'non-stream',
+    content: [
+      { type: 'thinking', thinking: '', signature: 'sig-empty' },
+      { type: 'tool_use', id: 'toolu_2', name: 'student_read_profile', input: {} }
+    ],
+    stop_reason: 'tool_use'
+  });
+  assert.deepEqual(parsed.reasoning, [{ type: 'thinking', thinking: '', signature: 'sig-empty' }], 'empty thinking text is kept');
+
+  // DeepSeek tool chains disable thinking, so no thinking block is replayed there.
+  let deepSeekBody;
+  await new ai.AnthropicGateway({ apiKey: 'test-key', baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-v4-flash' }, {
+    async send(sent) {
+      deepSeekBody = JSON.parse(sent.body);
+      return new Response(JSON.stringify({ id: 'ds', content: [{ type: 'text', text: '好' }], stop_reason: 'end_turn' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+  }).complete({
+    ...request,
+    messages: [
+      { role: ai.ModelMessageRole.User, content: '今天练什么' },
+      { role: ai.ModelMessageRole.Assistant, content: '', toolCalls: first.toolCalls, reasoning: first.reasoning },
+      { role: ai.ModelMessageRole.Tool, toolCallId: 'toolu_1', content: '{}' }
+    ]
+  });
+  assert.equal(deepSeekBody.thinking.type, 'disabled');
+  assert.deepEqual(deepSeekBody.messages[1].content.map((block) => block.type), ['tool_use']);
+}
+

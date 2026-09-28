@@ -2,6 +2,7 @@ import type { Clock, IdGenerator, InstantMs } from '@/kernel/public';
 import type { AgentMemoryRepository } from '@/modules/agent/public';
 import type {
   ConversationMessage,
+  ConversationMessageOutcome,
   ConversationRole,
   ConversationSession
 } from '../contracts/ConversationTypes';
@@ -133,7 +134,7 @@ export class ConversationStore {
     readonly content: string;
     readonly toolName?: string;
     readonly toolCallId?: string;
-  }): Promise<ConversationMessage> {
+  } & ConversationMessageOutcome): Promise<ConversationMessage> {
     const session = await this.sessionLog.get(input.sessionId);
     if (!session) throw new Error('Conversation session does not exist');
     const now = this.clock.now();
@@ -144,6 +145,7 @@ export class ConversationStore {
       content: input.content,
       toolName: input.toolName,
       toolCallId: input.toolCallId,
+      ...outcomeFields(input),
       createdAt: now
     };
     await this.messageLog.append(message);
@@ -154,7 +156,7 @@ export class ConversationStore {
   async updateMessage(
     sessionId: string,
     messageId: string,
-    patch: Partial<Pick<ConversationMessage, 'content' | 'toolName' | 'toolCallId'>>
+    patch: Partial<Pick<ConversationMessage, 'content' | 'toolName' | 'toolCallId'>> & ConversationMessageOutcome
   ): Promise<ConversationMessage | undefined> {
     const message = await this.messageLog.get(sessionId, messageId);
     if (!message) return undefined;
@@ -192,4 +194,12 @@ export class ConversationStore {
     for (const session of sessions) await this.sessionLog.put(session);
     for (const message of messages) await this.messageLog.replace(message);
   }
+}
+
+function outcomeFields(input: ConversationMessageOutcome): ConversationMessageOutcome {
+  return {
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+    ...(input.errorMessage ? { errorMessage: input.errorMessage } : {})
+  };
 }

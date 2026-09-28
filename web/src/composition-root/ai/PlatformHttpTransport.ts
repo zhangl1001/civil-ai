@@ -1,6 +1,7 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import {
   ProviderErrorKind,
+  ProviderFailureCode,
   ProviderGatewayError,
   type HttpTransport,
   type HttpTransportRequest
@@ -120,7 +121,10 @@ function networkError(error: unknown): ProviderGatewayError {
   const message = error instanceof Error ? error.message : String(error || 'network request failed');
   return new ProviderGatewayError(
     `AI 网络请求失败：${message}`,
-    ProviderErrorKind.Transient
+    ProviderErrorKind.Transient,
+    undefined,
+    undefined,
+    ProviderFailureCode.NetworkUnavailable
   );
 }
 

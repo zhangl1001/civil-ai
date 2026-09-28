@@ -2,11 +2,13 @@ export {
   ModelMessageRole,
   ProviderCode,
   ProviderErrorKind,
+  ProviderFailureCode,
   ProviderGatewayError,
   type ModelContentPart,
   type ModelImageContentPart,
   type ModelMessage,
   type ModelMessageContent,
+  type ModelReasoningBlock,
   type ModelTextContentPart,
   type ModelToolCall,
   type ProviderGateway,
@@ -81,6 +83,7 @@ export {
   anthropicMessagesEndpoint,
   normalizeAnthropicModelName
 } from './providers/AnthropicCompatibility';
+export { isOutputLengthFinish } from './providers/ProviderHttpSupport';
 export {
   parseStructuredJson,
   StructuredJsonParseError

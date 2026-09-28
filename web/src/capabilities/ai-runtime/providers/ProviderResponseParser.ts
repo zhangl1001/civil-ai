@@ -1,5 +1,12 @@
-import type { ModelToolCall, ProviderResponse } from '../contracts/ProviderGateway';
+import {
+  ProviderErrorKind,
+  ProviderGatewayError,
+  type ModelReasoningBlock,
+  type ModelToolCall,
+  type ProviderResponse
+} from '../contracts/ProviderGateway';
 import type { JsonObject } from '@/kernel/public';
+import { classifyProviderFailure, providerErrorEnvelope } from './ProviderFailureClassification';
 
 export function parseOpenAIResponse(input: unknown): ProviderResponse {
   const root = asRecord(input, 'OpenAI response');
@@ -46,9 +53,13 @@ export function parseAnthropicResponse(input: unknown): ProviderResponse {
   const usage = root.usage ? asRecord(root.usage, 'Anthropic response usage') : undefined;
   const toolCalls = readAnthropicToolCalls(root.content);
   const structuredInput = toolCalls.find((call) => call.name === 'submit_structured_result')?.arguments;
+  const reasoning = Array.isArray(root.content)
+    ? root.content.flatMap((block) => anthropicReasoningBlock(block) ?? [])
+    : [];
   return {
     text: structuredInput === undefined ? readTextContent(root.content) : JSON.stringify(structuredInput),
     toolCalls: toolCalls.filter((call) => call.name !== 'submit_structured_result'),
+    ...(reasoning.length ? { reasoning } : {}),
     finishReason: readOptionalString(root.stop_reason),
     providerRequestId: readOptionalString(root.id),
     usage: {
@@ -56,6 +67,51 @@ export function parseAnthropicResponse(input: unknown): ProviderResponse {
       outputTokens: readOptionalNumber(usage?.output_tokens)
     }
   };
+}
+
+/** True when an Anthropic-style response carried thinking blocks. */
+export function anthropicResponseHasReasoning(input: unknown): boolean {
+  const root = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {};
+  return Array.isArray(root.content) && root.content.some((block) => isReasoningBlock(block));
+}
+
+/** True when an OpenAI-compatible response carried separate reasoning text. */
+export function openAIResponseHasReasoning(input: unknown): boolean {
+  const root = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {};
+  const choice = Array.isArray(root.choices) ? root.choices[0] as Record<string, unknown> | undefined : undefined;
+  const message = choice?.message && typeof choice.message === 'object' ? choice.message as Record<string, unknown> : undefined;
+  return Boolean(readOptionalString(message?.reasoning_content) || readOptionalString(message?.reasoning));
+}
+
+/** A provider error delivered inside an otherwise successful stream. */
+function streamFailure(payload: unknown): ProviderGatewayError {
+  const envelope = providerErrorEnvelope(payload);
+  const failure = classifyProviderFailure(envelope, ProviderErrorKind.Transient);
+  return new ProviderGatewayError(
+    envelope.message || '模型服务在回复过程中返回了错误',
+    failure.kind,
+    undefined,
+    undefined,
+    failure.code
+  );
+}
+
+/** Keeps a thinking/redacted_thinking block exactly as the provider sent it. */
+function anthropicReasoningBlock(block: unknown): ModelReasoningBlock | undefined {
+  if (!isReasoningBlock(block)) return undefined;
+  const source = block as Record<string, unknown>;
+  if (source.type === 'redacted_thinking') return { type: 'redacted_thinking', data: readOptionalString(source.data) };
+  return {
+    type: 'thinking',
+    thinking: readOptionalString(source.thinking),
+    ...(typeof source.signature === 'string' ? { signature: source.signature } : {})
+  };
+}
+
+function isReasoningBlock(block: unknown): boolean {
+  if (!block || typeof block !== 'object' || Array.isArray(block)) return false;
+  const type = (block as Record<string, unknown>).type;
+  return type === 'thinking' || type === 'redacted_thinking';
 }
 
 function readAnthropicToolCalls(input: unknown): ModelToolCall[] {
@@ -102,10 +158,26 @@ export class OpenAIStreamAccumulator {
   private providerRequestId?: string;
   private inputTokens?: number;
   private outputTokens?: number;
+  private done = false;
+  private reasoning = false;
   private readonly toolCalls = new Map<number, StreamToolCallBuffer>();
+
+  /** A stream is whole once it said `[DONE]` or reported why generation finished. */
+  get isComplete(): boolean {
+    return this.done || Boolean(this.finishReason);
+  }
+
+  get sawReasoning(): boolean {
+    return this.reasoning;
+  }
+
+  markDone(): void {
+    this.done = true;
+  }
 
   append(input: unknown): string {
     const root = asRecord(input, 'OpenAI stream event');
+    if (root.error) throw streamFailure(root);
     this.providerRequestId ||= readOptionalString(root.id) || undefined;
     const usage = root.usage ? asRecord(root.usage, 'OpenAI stream usage') : undefined;
     this.inputTokens = readOptionalNumber(usage?.prompt_tokens ?? usage?.input_tokens) ?? this.inputTokens;
@@ -115,6 +187,7 @@ export class OpenAIStreamAccumulator {
     const choice = asRecord(choices[0], 'OpenAI stream choice');
     this.finishReason = readOptionalString(choice.finish_reason) || this.finishReason;
     const delta = choice.delta ? asRecord(choice.delta, 'OpenAI stream delta') : undefined;
+    if (readOptionalString(delta?.reasoning_content) || readOptionalString(delta?.reasoning)) this.reasoning = true;
     const text = readTextContent(delta?.content);
     this.text += text;
     this.appendToolCalls(delta?.tool_calls);
@@ -169,14 +242,45 @@ export class AnthropicStreamAccumulator {
   private providerRequestId?: string;
   private inputTokens?: number;
   private outputTokens?: number;
+  private stopped = false;
+  private reasoning = false;
   private readonly toolCalls = new Map<number, StreamToolCallBuffer>();
+  private readonly reasoningBlocks = new Map<number, {
+    type: 'thinking' | 'redacted_thinking';
+    thinking: string;
+    signature?: string;
+    data?: string;
+  }>();
+
+  /** A stream is whole once it sent `message_stop` or reported its stop reason. */
+  get isComplete(): boolean {
+    return this.stopped || Boolean(this.finishReason);
+  }
+
+  get sawReasoning(): boolean {
+    return this.reasoning;
+  }
 
   append(input: unknown): string {
     const root = asRecord(input, 'Anthropic stream event');
+    if (root.type === 'error') throw streamFailure(root);
+    if (root.type === 'message_stop') {
+      this.stopped = true;
+      return '';
+    }
     this.captureMessageMetadata(root);
     const index = typeof root.index === 'number' ? root.index : 0;
     if (root.type === 'content_block_start') {
       const block = root.content_block ? asRecord(root.content_block, 'Anthropic content block') : undefined;
+      if (isReasoningBlock(block)) {
+        this.reasoning = true;
+        this.reasoningBlocks.set(index, {
+          type: block?.type === 'redacted_thinking' ? 'redacted_thinking' : 'thinking',
+          thinking: readOptionalString(block?.thinking),
+          ...(typeof block?.signature === 'string' && block.signature ? { signature: block.signature } : {}),
+          ...(block?.type === 'redacted_thinking' ? { data: readOptionalString(block.data) } : {})
+        });
+      }
       if (block?.type === 'tool_use') {
         this.toolCalls.set(index, {
           id: readOptionalString(block.id) || `anthropic-stream-tool-${index}`,
@@ -193,6 +297,14 @@ export class AnthropicStreamAccumulator {
       this.text += text;
       return text;
     }
+    if (delta?.type === 'thinking_delta' || delta?.type === 'signature_delta') {
+      this.reasoning = true;
+      const block = this.reasoningBlocks.get(index) ?? { type: 'thinking' as const, thinking: '' };
+      if (delta.type === 'thinking_delta') block.thinking += readOptionalString(delta.thinking);
+      else block.signature = `${block.signature ?? ''}${readOptionalString(delta.signature)}`;
+      this.reasoningBlocks.set(index, block);
+      return '';
+    }
     if (delta?.type === 'input_json_delta') {
       const current = this.toolCalls.get(index) ?? {
         id: `anthropic-stream-tool-${index}`,
@@ -208,6 +320,11 @@ export class AnthropicStreamAccumulator {
   }
 
   response(): ProviderResponse {
+    const reasoning = Array.from(this.reasoningBlocks.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([, block]): ModelReasoningBlock => block.type === 'redacted_thinking'
+        ? { type: 'redacted_thinking', data: block.data ?? '' }
+        : { type: 'thinking', thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) });
     return {
       text: this.text,
       toolCalls: Array.from(this.toolCalls.entries())
@@ -217,6 +334,7 @@ export class AnthropicStreamAccumulator {
           name: call.name,
           arguments: parseToolArguments(call.arguments)
         }] : []),
+      ...(reasoning.length ? { reasoning } : {}),
       finishReason: this.finishReason,
       providerRequestId: this.providerRequestId,
       usage: {

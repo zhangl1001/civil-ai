@@ -1404,6 +1404,207 @@ try {
   });
   assert.equal(subAgents.get('tutor.aptitude_specialist').maxTurns, 4);
 
+  const stableStreamEvents = [];
+  let stableDeltasObservedDuringTurn = 0;
+  const stableStreamingLoop = new agent.RunAgentLoop(
+    {
+      async invoke(invocation) {
+        if (stableStreamEvents.filter((event) => event.type === 'model_turn_started').length === 1) {
+          assert(invocation.tools.length > 0, 'the first chat turn offers tools');
+          for (const piece of ['我先看看', '你的档案。']) {
+            await invocation.onDelta?.(piece);
+            if (stableStreamEvents.some((event) => event.type === 'text_delta' && event.text === piece)) {
+              stableDeltasObservedDuringTurn += 1;
+            }
+          }
+          return {
+            text: '我先看看你的档案。',
+            toolCalls: [{ id: 'stable-read', name: 'student_read_profile', arguments: {} }],
+            usage: {}
+          };
+        }
+        await invocation.onDelta?.('## 今日建议');
+        await invocation.onDelta?.('\n先做判断推理。');
+        return { text: '## 今日建议\n先做判断推理。', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { return { content: '{"targetScore":80}', madeProgress: true }; } },
+    { async save() {} },
+    { onEvent(event) { stableStreamEvents.push(event); } }
+  );
+  const stableStreamResult = await stableStreamingLoop.execute({
+    agentRunId: 'agent-run-stable-streaming',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天怎么安排' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-stable-streaming' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'test-model' });
+  assert.equal(stableDeltasObservedDuringTurn, 2, 'the stable loop streams the first turn while the model is writing');
+  assert.equal(stableStreamResult.text, '## 今日建议\n先做判断推理。', 'the stable loop result is the final turn only');
+  assert.deepEqual(
+    stableStreamEvents
+      .filter((event) => ['model_turn_started', 'text_delta', 'tool_call_requested'].includes(event.type))
+      .map((event) => event.type === 'text_delta' ? `text:${event.text}` : event.type),
+    [
+      'model_turn_started',
+      'text:我先看看',
+      'text:你的档案。',
+      'tool_call_requested',
+      'model_turn_started',
+      'text:## 今日建议',
+      'text:\n先做判断推理。'
+    ],
+    'both loops expose the same turn boundaries to the chat'
+  );
+
+  // Thinking-only answers are billed once: no stream->complete fallback, no retries.
+  const invocationLedger = [];
+  const invokeModel = new agent.InvokeAgentModel(
+    {
+      async run(operation) { return operation({}); },
+      async runAutocommit(operation) { return operation({}); }
+    },
+    {
+      async findById(id) { return { run: { id, status: 'running' }, events: [] }; },
+      async hasActiveLease() { return true; },
+      async appendInvocation(invocation) { invocationLedger.push(invocation); },
+      async updateInvocationResult() {},
+      async updateInvocationValidation(id, status, code) { invocationLedger.push({ id, status, code }); }
+    },
+    { now() { return 3_000; }, monotonicNowMs() { return 3_000; } },
+    { next() { return `AiInvocationId:${invocationLedger.length + 1}`; } }
+  );
+  let thinkingOnlySends = 0;
+  const thinkingOnlyGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      thinkingOnlySends += 1;
+      if (JSON.parse(request.body).stream) {
+        return new Response([
+          { type: 'message_start', message: { id: 'thinking-stream' } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '……' } },
+          { type: 'message_delta', delta: { stop_reason: 'max_tokens' } },
+          { type: 'message_stop' }
+        ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' }
+        });
+      }
+      return new Response(JSON.stringify({ id: 't', content: [{ type: 'thinking', thinking: '……' }], stop_reason: 'max_tokens' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+  });
+  await assert.rejects(invokeModel.execute({
+    agentRunId: 'AgentRunId:thinking-only',
+    modelRole: 'agent.tutor_turn',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    preferStream: true,
+    onDelta() {}
+  }, thinkingOnlyGateway), (error) => {
+    assert.equal(error.kind, ai.ProviderErrorKind.OutputLimit);
+    assert.equal(error.code, 'provider.thinking_only');
+    return true;
+  });
+  assert.equal(thinkingOnlySends, 1, 'a thinking-only answer is one provider call, not a fallback plus retries');
+  assert.equal(invocationLedger.at(-1).code, 'provider.thinking_only', 'the invocation ledger keeps the precise code');
+
+  let emptySends = 0;
+  await assert.rejects(invokeModel.execute({
+    agentRunId: 'AgentRunId:empty',
+    modelRole: 'agent.tutor_turn',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    preferStream: true,
+    onDelta() {}
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete() {
+      emptySends += 1;
+      throw new ai.ProviderGatewayError('empty', ai.ProviderErrorKind.EmptyResponse);
+    },
+    async stream() {
+      emptySends += 1;
+      throw new ai.ProviderGatewayError('empty', ai.ProviderErrorKind.EmptyResponse);
+    }
+  }), (error) => error.kind === ai.ProviderErrorKind.EmptyResponse);
+  assert.equal(emptySends, 4, 'an empty answer gets one retry (stream + fallback twice), not four');
+
+  // The stable loop never executes tool calls cut off by the output limit, and marks truncated answers.
+  const truncatedExecutions = [];
+  let truncatedTurn = 0;
+  const truncatedLoop = new agent.RunAgentLoop(
+    {
+      async invoke() {
+        truncatedTurn += 1;
+        if (truncatedTurn === 1) {
+          return {
+            text: '',
+            toolCalls: [{ id: 'cut-call', name: 'student_read_profile', arguments: { scope: 'cur' } }],
+            finishReason: 'max_tokens',
+            usage: {}
+          };
+        }
+        return { text: '先练判断推理，再', finishReason: 'max_tokens', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute(definition) { truncatedExecutions.push(definition.name); return { content: '{}' }; } },
+    { async save() {} }
+  );
+  const truncatedResult = await truncatedLoop.execute({
+    agentRunId: 'agent-run-truncated',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天练什么' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-truncated' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'test-model' });
+  assert.deepEqual(truncatedExecutions, [], 'truncated tool arguments are never executed');
+  assert.match(truncatedResult.text, /^先练判断推理，再/);
+  assert.match(truncatedResult.text, /已达长度上限/, 'a truncated answer tells the user it was cut off');
+
+  const stableReasoning = [{ type: 'thinking', thinking: '先读档案。', signature: 'sig-stable' }];
+  let stableSecondTurn;
+  const reasoningLoop = new agent.RunAgentLoop(
+    {
+      async invoke(invocation) {
+        if (!stableSecondTurn && !invocation.messages.some((message) => message.role === ai.ModelMessageRole.Tool)) {
+          return {
+            text: '',
+            toolCalls: [{ id: 'toolu_stable', name: 'student_read_profile', arguments: {} }],
+            reasoning: stableReasoning,
+            usage: {}
+          };
+        }
+        stableSecondTurn = invocation.messages;
+        return { text: '今天先练判断推理。', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { return { content: '{"targetScore":80}', madeProgress: true }; } },
+    { async save() {} }
+  );
+  await reasoningLoop.execute({
+    agentRunId: 'agent-run-stable-reasoning',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天练什么' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-stable-reasoning' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'claude-opus-5' });
+  assert.deepEqual(
+    stableSecondTurn.find((message) => message.toolCalls?.length)?.reasoning,
+    stableReasoning,
+    'the stable loop keeps a tool turn reasoning for replay too'
+  );
+
   console.log('Agent loop verification passed.');
 } finally {
   await server.close();

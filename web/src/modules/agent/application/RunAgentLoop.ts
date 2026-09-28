@@ -1,4 +1,10 @@
-import { ModelMessageRole, type ModelMessage, type ModelToolCall, type ProviderGateway } from '@/capabilities/ai-runtime/public';
+import {
+  isOutputLengthFinish,
+  ModelMessageRole,
+  type ModelMessage,
+  type ModelToolCall,
+  type ProviderGateway
+} from '@/capabilities/ai-runtime/public';
 import type { AgentRunId } from '@/kernel/public';
 import {
   AgentToolPolicyDecision,
@@ -18,7 +24,8 @@ import type { AgentToolDefinition } from '../domain/AgentToolRegistry';
 import { ActiveAgentToolSet, providerToolName } from './ActiveAgentToolSet';
 import { AgentCompletionTracker, completionResolutionInstruction } from './AgentCompletionTracker';
 import type { AgentLoopResult, AgentLoopRuntime, RunAgentLoopCommand } from './AgentLoopContracts';
-import { agentToolArgumentsHash, cloneAgentToolCall } from './AgentToolCallIdentity';
+import { buildAgentLoopCheckpoint, type AgentLoopCheckpointState } from './AgentLoopCheckpointing';
+import { agentToolArgumentsHash } from './AgentToolCallIdentity';
 import { AgentToolInvocationValidator } from './AgentToolInvocationValidator';
 import {
   blockedRepeatReason,
@@ -40,9 +47,9 @@ import {
   createToolResultMessage,
   decrementToolSignature,
   limitToolResult,
-  sanitizeMessageForCheckpoint,
   skillContinuationInstruction,
-  validateAgentLoopLimits
+  validateAgentLoopLimits,
+  withOutputLimitNotice
 } from './AgentLoopSupport';
 /** Provider-neutral, bounded Agent loop. Business writes remain behind typed tool executors. */
 export class RunAgentLoop implements AgentLoopRuntime {
@@ -253,6 +260,8 @@ export class RunAgentLoop implements AgentLoopRuntime {
         outputReserveTokens: 4_096
       });
       messages = [...turnContext.messages];
+      // Stream every turn; a forced-tool turn only narrates, so it stays hidden.
+      const turnForcesTool = !finalizationOnly && forceRequiredTool && Boolean(requiredTool);
       const response = await this.modelInvoker.invoke({
         agentRunId: command.agentRunId, leaseToken: command.executionContext.leaseToken,
         modelRole: 'agent.tutor_turn', system: turnContext.system,
@@ -266,9 +275,7 @@ export class RunAgentLoop implements AgentLoopRuntime {
         toolSchemaVersion: 'tutor-tools@2',
         preferStream: command.preferStream !== false,
         onDelta: async (text) => {
-          if (text && (toolSet.providerTools.length === 0 || toolCallCount > 0 || finalizationOnly)) {
-            await this.emit({ type: 'text_delta', agentRunId: command.agentRunId, text });
-          }
+          if (text && !turnForcesTool) await this.emit({ type: 'text_delta', agentRunId: command.agentRunId, text });
         }
       }, gateway, signal);
       const calls = response.toolCalls ?? [];
@@ -360,8 +367,23 @@ export class RunAgentLoop implements AgentLoopRuntime {
           continue;
         }
         const checkpoint = await saveCheckpoint();
-        await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: response.text });
-        return { status: delegatedCompletion ? 'delegated' : 'completed', text: response.text, checkpoint };
+        const answer = withOutputLimitNotice(response.text, isOutputLengthFinish(response.finishReason));
+        await this.emit({ type: 'run_completed', agentRunId: command.agentRunId, text: answer });
+        return { status: delegatedCompletion ? 'delegated' : 'completed', text: answer, checkpoint };
+      }
+      if (isOutputLengthFinish(response.finishReason)) {
+        // Tool arguments cut off by the output limit may parse yet be incomplete.
+        messages.push({ role: ModelMessageRole.Assistant, content: response.text, toolCalls: calls, reasoning: response.reasoning });
+        for (const call of calls) {
+          messages.push(createToolObservationMessage(call, {
+            status: 'failed',
+            content: '本轮输出已达长度上限，工具参数可能被截断，本次调用未执行。请缩短内容后重新调用。',
+            retryable: true,
+            failureCode: 'agent.tool_arguments_truncated'
+          }));
+        }
+        await saveCheckpoint();
+        continue;
       }
       const toolBudget = budget.allowToolCalls(turnCount, toolCallCount, calls.length);
       if (calls.length > limits.maxToolCallsPerTurn || !toolBudget.allowed) {
@@ -378,7 +400,8 @@ export class RunAgentLoop implements AgentLoopRuntime {
       messages.push({
         role: ModelMessageRole.Assistant,
         content: response.text,
-        toolCalls: calls
+        toolCalls: calls,
+        ...(response.reasoning?.length ? { reasoning: response.reasoning } : {})
       });
       const executableCalls: Array<{
         readonly definition: AgentToolDefinition;
@@ -554,37 +577,12 @@ export class RunAgentLoop implements AgentLoopRuntime {
     messages: readonly ModelMessage[],
     signatures: Readonly<Record<string, number>>,
     toolAttempts: Readonly<Record<string, AgentToolAttemptState>>,
-    state: {
-      readonly pendingConfirmation?: ModelToolCall;
-      readonly activeSkills: readonly AgentSkillActivation[];
-      readonly activeToolNames: readonly string[];
-      readonly completedToolNames: readonly string[];
-      readonly skillWorkflowState: AgentSkillWorkflowState;
-      readonly awaitingCompletionVerification: boolean;
-      readonly pendingCompletionExpectations: AgentLoopCheckpoint['pendingCompletionExpectations'];
-    },
+    state: AgentLoopCheckpointState,
     leaseToken?: AgentToolExecutionContext['leaseToken']
   ): Promise<AgentLoopCheckpoint> {
-    const checkpoint: AgentLoopCheckpoint = {
-      agentRunId,
-      turnCount,
-      toolCallCount,
-      messages: messages.map(sanitizeMessageForCheckpoint),
-      toolSignatures: { ...signatures },
-      toolAttempts: { ...toolAttempts },
-      pendingConfirmation: state.pendingConfirmation
-        ? cloneAgentToolCall(state.pendingConfirmation)
-        : undefined,
-      pendingConfirmationArgumentsHash: state.pendingConfirmation
-        ? agentToolArgumentsHash(state.pendingConfirmation)
-        : undefined,
-      activeSkills: state.activeSkills,
-      activeToolNames: state.activeToolNames,
-      completedToolNames: state.completedToolNames,
-      skillWorkflowState: state.skillWorkflowState,
-      awaitingCompletionVerification: state.awaitingCompletionVerification,
-      pendingCompletionExpectations: state.pendingCompletionExpectations
-    };
+    const checkpoint = buildAgentLoopCheckpoint({
+      agentRunId, turnCount, toolCallCount, messages, signatures, toolAttempts, state
+    });
     await this.checkpoints.save(checkpoint, leaseToken);
     await this.emit({ type: 'checkpoint_saved', agentRunId, turn: turnCount });
     return checkpoint;

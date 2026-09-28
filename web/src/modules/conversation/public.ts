@@ -1,5 +1,7 @@
 export type {
   ConversationMessage,
+  ConversationMessageOutcome,
+  ConversationMessageStatus,
   ConversationRole,
   ConversationSession
 } from './contracts/ConversationTypes';

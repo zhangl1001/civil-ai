@@ -81,6 +81,11 @@ export function confirmationText(call?: ModelToolCall): string {
   return `准备执行“${toolLabel(call.name)}”。回复“确认”继续，回复“取消”终止。`;
 }
 
+/** Asked again when a reply to a pending confirmation was neither yes nor no. */
+export function pendingConfirmationReminder(call?: ModelToolCall): string {
+  return `这项操作还在等你确认：${confirmationText(call)}如果想先调整要求或聊别的，请先回复“取消”。`;
+}
+
 export function toolLabel(code: string): string {
   return ({
     'system.read_clock': '读取设备时间',

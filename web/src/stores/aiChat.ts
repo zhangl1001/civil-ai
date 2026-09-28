@@ -1,6 +1,10 @@
 import { defineStore } from 'pinia';
-import type { AIMessage, AISession } from '@/domain/ai';
-import { AI_MESSAGE_CHANGED_EVENT, aiChatRepository } from '@/services/AIChatRepository';
+import type { AISession } from '@/domain/ai';
+import {
+  AI_MESSAGE_CHANGED_EVENT,
+  aiChatRepository,
+  type AIChatMessage
+} from '@/services/AIChatRepository';
 import { AI_CHAT_MESSAGE_PAGE_SIZE } from '@/ai/ChatMessagePagination';
 import {
   chatAgentService,
@@ -12,16 +16,26 @@ import type { AgentWorkflowInvocation } from '@/modules/agent/public';
 
 let initializationPromise: Promise<void> | undefined;
 
+/** The latest request, so a retry can resend its workflow context and images. */
+let lastRequest: {
+  readonly sessionId: string;
+  readonly text: string;
+  readonly attachments?: readonly ModelImageContentPart[];
+  readonly invocation?: AgentWorkflowInvocation;
+} | undefined;
+
 export interface AIChatState {
   isOpen: boolean;
   isLoading: boolean;
   isSending: boolean;
   streamingMessageId: string;
+  /** Streaming bubble whose text came from a turn that went on to call tools. */
+  provisionalMessageId: string;
   pendingAssistantMessageId: string;
   initialized: boolean;
   session: AISession | null;
   sessions: AISession[];
-  messages: AIMessage[];
+  messages: AIChatMessage[];
   hasOlderMessages: boolean;
   isLoadingOlderMessages: boolean;
   thinkingEnabled: boolean;
@@ -36,6 +50,7 @@ export const useAIChatStore = defineStore('aiChat', {
     isLoading: false,
     isSending: false,
     streamingMessageId: '',
+    provisionalMessageId: '',
     pendingAssistantMessageId: '',
     initialized: false,
     session: null,
@@ -245,6 +260,8 @@ export const useAIChatStore = defineStore('aiChat', {
       this.streamingMessageId = this.pendingAssistantMessageId;
       this.activeRequestText = text;
       this.steeringCount = 0;
+      lastRequest = { sessionId: activeSession.id, text, attachments, invocation };
+      let delivered = false;
       try {
         if (shouldRename) {
           const title = text.length > 14 ? `${text.slice(0, 14)}...` : text;
@@ -259,6 +276,7 @@ export const useAIChatStore = defineStore('aiChat', {
           onAssistantStream: (update) => this.applyAssistantStream(update)
         });
         if (!routed.handled) throw new Error('AI Agent 未接管当前消息');
+        delivered = true;
         await this.refreshMessages();
         const refreshedSession = await aiChatRepository.getSession(activeSession.id);
         if (refreshedSession && this.session?.id === activeSession.id) {
@@ -269,14 +287,28 @@ export const useAIChatStore = defineStore('aiChat', {
         const pendingAssistantMessageId = this.pendingAssistantMessageId;
         this.isSending = false;
         this.streamingMessageId = '';
+        this.provisionalMessageId = '';
         this.pendingAssistantMessageId = '';
         this.activeSessionId = '';
         this.activeRequestText = '';
         this.steeringCount = 0;
-        if (pendingAssistantMessageId) {
-          this.messages = this.messages.filter((message) => message.id !== pendingAssistantMessageId);
-        }
+        // A request that threw never reached the conversation: drop its optimistic
+        // rows so the composer can offer the draft again.
+        this.messages = this.messages.filter((message) => (
+          message.id !== pendingAssistantMessageId && (delivered || message.id !== optimisticUserId)
+        ));
       }
+    },
+
+    /** Sends the question of a failed or stopped turn again. */
+    async retry(messageId: string) {
+      if (this.isSending) return;
+      const index = this.messages.findIndex((message) => message.id === messageId);
+      const question = this.messages.slice(0, Math.max(0, index)).reverse().find((message) => message.role === 'user');
+      if (index < 0 || !question?.content.trim()) return;
+      const text = question.content.trim();
+      const previous = lastRequest?.sessionId === question.sessionId && lastRequest.text === text ? lastRequest : undefined;
+      await this.send(text, previous?.attachments, previous?.invocation);
     },
 
     applyAssistantStream(update: ChatAssistantStreamUpdate) {
@@ -288,12 +320,15 @@ export const useAIChatStore = defineStore('aiChat', {
       const messageIndex = this.messages.findIndex((message) => message.id === update.messageId);
       const targetIndex = replacementIndex >= 0 ? replacementIndex : messageIndex;
       const previous = targetIndex >= 0 ? this.messages[targetIndex] : undefined;
-      const message: AIMessage = {
+      const message: AIChatMessage = {
         id: update.messageId,
         sessionId: this.session.id,
         role: 'assistant',
         content: update.content,
         toolCallId: previous?.toolCallId,
+        ...(update.status ? { status: update.status } : {}),
+        ...(update.errorCode ? { errorCode: update.errorCode } : {}),
+        ...(update.errorMessage ? { errorMessage: update.errorMessage } : {}),
         createdAt: previous?.createdAt ?? Date.now()
       };
       if (targetIndex >= 0) this.messages.splice(targetIndex, 1, message);
@@ -305,6 +340,7 @@ export const useAIChatStore = defineStore('aiChat', {
       if (replacementIndex >= 0 && replaceMessageId === this.pendingAssistantMessageId) {
         this.pendingAssistantMessageId = '';
       }
+      this.provisionalMessageId = update.provisional ? update.messageId : '';
       this.streamingMessageId = update.messageId;
     },
 
@@ -320,6 +356,6 @@ export const useAIChatStore = defineStore('aiChat', {
   }
 });
 
-function isPersistedMessage(message: AIMessage): boolean {
+function isPersistedMessage(message: AIChatMessage): boolean {
   return !message.id.startsWith('optimistic-user:') && !message.id.startsWith('pending-assistant:');
 }

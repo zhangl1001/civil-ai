@@ -7,10 +7,15 @@ export class ProviderConfigurationError extends Error {
   readonly code = 'provider.not_configured';
 }
 
+/** Cheap local check, so callers can refuse before creating any durable work. */
+export function isProviderConfigured(config: AIConfig): boolean {
+  return Boolean(config.apiKey.trim() && config.model.trim());
+}
+
 /** Composition-only bridge from user secure settings to the provider contract. */
 export async function createConfiguredProviderGateway(configOverride?: AIConfig): Promise<ProviderGateway> {
   const config = configOverride ?? await aiConfigService.load();
-  if (!config.apiKey.trim() || !config.model.trim()) {
+  if (!isProviderConfigured(config)) {
     throw new ProviderConfigurationError('请先在“我的”中完成 AI 模型配置。');
   }
   const baseUrl = config.baseUrl?.trim() || '';

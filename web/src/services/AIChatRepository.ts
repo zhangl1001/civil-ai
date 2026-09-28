@@ -1,7 +1,11 @@
 import { initializeTutorRuntime } from '@/composition-root/public';
 import type { AIMessage, AIMessageRole, AISession } from '@/domain/ai';
 import { paginateAIChatMessages, type AIMessagePage } from '@/ai/ChatMessagePagination';
+import type { ConversationMessageOutcome } from '@/modules/conversation/public';
 import { agentToolActivityService } from './AgentToolActivityService';
+
+/** A chat row plus the outcome of an assistant turn that did not complete. */
+export type AIChatMessage = AIMessage & ConversationMessageOutcome;
 
 export const AI_MESSAGE_CHANGED_EVENT = 'zhangl-ai-message-changed';
 
@@ -59,16 +63,16 @@ export class AIChatRepository {
     notifyMessageChanged(sessionId);
   }
 
-  async listMessages(sessionId: string): Promise<AIMessage[]> {
+  async listMessages(sessionId: string): Promise<AIChatMessage[]> {
     const runtime = await initializeTutorRuntime();
     return [...await runtime.conversationStore.listMessages(sessionId)]
-      .filter((message) => message.role !== 'tool') as AIMessage[];
+      .filter((message) => message.role !== 'tool') as AIChatMessage[];
   }
 
   async listMessagePage(
     sessionId: string,
     options: { readonly beforeMessageId?: string; readonly limit?: number } = {}
-  ): Promise<AIMessagePage> {
+  ): Promise<AIMessagePage<AIChatMessage>> {
     return paginateAIChatMessages(
       await this.listMessages(sessionId),
       options.beforeMessageId,
@@ -82,29 +86,29 @@ export class AIChatRepository {
     content: string;
     toolName?: string;
     toolCallId?: string;
-  }): Promise<AIMessage> {
+  } & ConversationMessageOutcome): Promise<AIChatMessage> {
     const runtime = await initializeTutorRuntime();
     const message = await runtime.conversationStore.addMessage(input);
     notifyMessageChanged(input.sessionId);
-    return message as AIMessage;
+    return message as AIChatMessage;
   }
 
-  async updateMessageContent(sessionId: string, messageId: string, content: string): Promise<AIMessage | undefined> {
+  async updateMessageContent(sessionId: string, messageId: string, content: string): Promise<AIChatMessage | undefined> {
     const runtime = await initializeTutorRuntime();
     const next = await runtime.conversationStore.updateMessage(sessionId, messageId, { content });
     notifyMessageChanged(next?.sessionId);
-    return next as AIMessage | undefined;
+    return next as AIChatMessage | undefined;
   }
 
   async updateMessageMeta(
     sessionId: string,
     messageId: string,
-    patch: Partial<Pick<AIMessage, 'content' | 'toolName' | 'toolCallId'>>
-  ): Promise<AIMessage | undefined> {
+    patch: Partial<Pick<AIMessage, 'content' | 'toolName' | 'toolCallId'>> & ConversationMessageOutcome
+  ): Promise<AIChatMessage | undefined> {
     const runtime = await initializeTutorRuntime();
     const next = await runtime.conversationStore.updateMessage(sessionId, messageId, patch);
     notifyMessageChanged(next?.sessionId);
-    return next as AIMessage | undefined;
+    return next as AIChatMessage | undefined;
   }
 }
 

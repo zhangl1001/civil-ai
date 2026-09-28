@@ -1,4 +1,4 @@
-import { ProviderErrorKind, ProviderGatewayError } from '../contracts/ProviderGateway';
+import { ProviderErrorKind, ProviderFailureCode, ProviderGatewayError } from '../contracts/ProviderGateway';
 
 export const AI_EXECUTION_BUDGET = {
   modelTurnMs: 180_000,
@@ -45,7 +45,10 @@ export function createProviderExecutionDeadline(
   const timer = globalThis.setTimeout(() => {
     controller.abort(new ProviderGatewayError(
       `${operation}超时，请稍后重试或减少本次生成数量。`,
-      ProviderErrorKind.Transient
+      ProviderErrorKind.Transient,
+      undefined,
+      undefined,
+      ProviderFailureCode.Timeout
     ));
   }, timeoutMs);
   return {

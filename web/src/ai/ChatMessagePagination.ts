@@ -2,16 +2,16 @@ import type { AIMessage } from '@/domain/ai';
 
 export const AI_CHAT_MESSAGE_PAGE_SIZE = 24;
 
-export interface AIMessagePage {
-  readonly messages: readonly AIMessage[];
+export interface AIMessagePage<T extends AIMessage = AIMessage> {
+  readonly messages: readonly T[];
   readonly hasMore: boolean;
 }
 
-export function paginateAIChatMessages(
-  messages: readonly AIMessage[],
+export function paginateAIChatMessages<T extends AIMessage>(
+  messages: readonly T[],
   beforeMessageId?: string,
   requestedLimit = AI_CHAT_MESSAGE_PAGE_SIZE
-): AIMessagePage {
+): AIMessagePage<T> {
   const limit = Math.max(1, Math.floor(requestedLimit));
   const cursorIndex = beforeMessageId
     ? messages.findIndex((message) => message.id === beforeMessageId)
