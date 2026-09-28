@@ -37,7 +37,7 @@ const FAILURES: Readonly<Record<string, readonly [message: string, configureMode
   'provider.protocol': ['模型接口返回的内容无法识别。请检查接口地址和接口协议是否匹配。', true],
   'provider.empty_response': ['模型没有返回可显示的内容，请重试。', false],
   'provider.output_limit': ['模型输出已达长度上限，却没有给出正文。请精简问题后重试。', false],
-  'provider.thinking_only': ['模型只输出了思考过程，没有给出正文（思考占满了输出长度）。请关闭模型的思考模式或换用非思考模型后重试。', true],
+  'provider.thinking_only': ['模型只输出了思考过程，没有给出正文（思考用完了输出长度）。请精简问题后重试；若经常出现，可换用非思考模型或关闭思考模式。', true],
   'provider.stream_interrupted': ['模型回复在传输中途中断，请检查网络后重试。', false],
   'provider.transient': ['模型服务暂时不可用，请稍后重试。', false],
   'provider.overloaded': ['模型服务当前繁忙（过载），请稍后重试。', false],

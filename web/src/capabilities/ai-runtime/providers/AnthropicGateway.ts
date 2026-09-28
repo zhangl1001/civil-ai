@@ -4,6 +4,7 @@ import {
   ProviderGatewayError,
   type ProviderGateway,
   type ModelContentPart,
+  type ModelReasoningBlock,
   type ProviderRequest,
   type ProviderResponse,
   type ProviderTextDelta
@@ -30,6 +31,7 @@ import {
 } from './StructuredOutputCapability';
 import {
   ModelCapabilityMatrix,
+  rejectsDisabledThinking,
   type ModelRequestCapabilityOverrides
 } from './ModelCapabilityMatrix';
 import {
@@ -66,7 +68,7 @@ export class AnthropicGateway implements ProviderGateway {
     this.structuredOutput = new StructuredOutputCapability(
       `anthropic:${normalizedCapabilityEndpoint(config.baseUrl)}:${this.model}`
     );
-    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides);
+    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides, this.model);
   }
 
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
@@ -209,7 +211,8 @@ export class AnthropicGateway implements ProviderGateway {
       body: JSON.stringify({
         model: this.config.model,
         system,
-        messages: toAnthropicMessages(request.messages),
+        // A disabled-thinking request (DeepSeek tool chains) replays no thinking blocks.
+        messages: toAnthropicMessages(request.messages, !thinkingCompatibility),
         max_tokens: request.maxOutputTokens,
         stream,
         ...this.modelCapabilities.samplingParameters(request.temperature),
@@ -221,17 +224,23 @@ export class AnthropicGateway implements ProviderGateway {
   }
 
   /**
-   * DeepSeek thinks by default and requires every thinking block to be
-   * replayed on later tool turns. Reasoning is intentionally not persisted,
-   * so thinking stays disabled for any request that belongs to a tool chain —
-   * including a finalization turn that offers no tools but carries
-   * tool_use/tool_result history — for structured output, and on request.
+   * DeepSeek thinks by default and then requires its thinking blocks back on
+   * every later tool turn, so its tool chains stay thinking-free: thinking is
+   * disabled for any request that belongs to a tool chain — including a
+   * finalization turn that offers no tools but carries tool_use/tool_result
+   * history — for structured output, and on request. Claude models keep their
+   * default; their thinking blocks are replayed instead (see toAnthropicMessages),
+   * and Opus 5.5 / Fable 5.x never receive a disable they would reject.
    */
   private disabledThinking(request: ProviderRequest): { readonly type: 'disabled' } | undefined {
     const toolChain = Boolean(request.tools?.length)
       || request.messages.some((message) => message.role === 'tool' || Boolean(message.toolCalls?.length));
     const wanted = toolChain || Boolean(request.responseSchema) || request.thinking === 'disabled';
-    return wanted && requiresDisabledThinkingForToolUse(this.config.baseUrl) ? { type: 'disabled' } : undefined;
+    return wanted
+      && requiresDisabledThinkingForToolUse(this.config.baseUrl)
+      && !rejectsDisabledThinking(this.model)
+      ? { type: 'disabled' }
+      : undefined;
   }
 
   private learnFromInvalidRequest(error: unknown, request: ProviderRequest): boolean {
@@ -261,7 +270,10 @@ function normalizedCapabilityEndpoint(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 }
 
-function toAnthropicMessages(messages: ProviderRequest['messages']): Array<Record<string, unknown>> {
+function toAnthropicMessages(
+  messages: ProviderRequest['messages'],
+  replayReasoning: boolean
+): Array<Record<string, unknown>> {
   const result: Array<Record<string, unknown>> = [];
   let index = 0;
   while (index < messages.length) {
@@ -280,10 +292,12 @@ function toAnthropicMessages(messages: ProviderRequest['messages']): Array<Recor
       result.push({ role: 'user', content });
       continue;
     }
-    if (message.role === 'assistant' && message.toolCalls?.length) {
-      const content: Array<Record<string, unknown>> = [];
+    const reasoning = replayReasoning && message.role === 'assistant' ? message.reasoning ?? [] : [];
+    if (message.role === 'assistant' && (message.toolCalls?.length || reasoning.length)) {
+      // Thinking blocks go back unchanged and first, ahead of the turn's text and tool_use.
+      const content: Array<Record<string, unknown>> = reasoning.map(toAnthropicReasoning);
       content.push(...toAnthropicContent(message.content));
-      message.toolCalls.forEach((call) => content.push({
+      message.toolCalls?.forEach((call) => content.push({
         type: 'tool_use',
         id: call.id,
         name: call.name,
@@ -296,6 +310,12 @@ function toAnthropicMessages(messages: ProviderRequest['messages']): Array<Recor
     index += 1;
   }
   return result;
+}
+
+function toAnthropicReasoning(block: ModelReasoningBlock): Record<string, unknown> {
+  return block.type === 'redacted_thinking'
+    ? { type: 'redacted_thinking', data: block.data ?? '' }
+    : { type: 'thinking', thinking: block.thinking ?? '', ...(block.signature ? { signature: block.signature } : {}) };
 }
 
 function toAnthropicContent(content: ProviderRequest['messages'][number]['content']): Array<Record<string, unknown>> {

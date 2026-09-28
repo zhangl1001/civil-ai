@@ -373,7 +373,7 @@ export class RunAgentLoop implements AgentLoopRuntime {
       }
       if (isOutputLengthFinish(response.finishReason)) {
         // Tool arguments cut off by the output limit may parse yet be incomplete.
-        messages.push({ role: ModelMessageRole.Assistant, content: response.text, toolCalls: calls });
+        messages.push({ role: ModelMessageRole.Assistant, content: response.text, toolCalls: calls, reasoning: response.reasoning });
         for (const call of calls) {
           messages.push(createToolObservationMessage(call, {
             status: 'failed',
@@ -400,7 +400,8 @@ export class RunAgentLoop implements AgentLoopRuntime {
       messages.push({
         role: ModelMessageRole.Assistant,
         content: response.text,
-        toolCalls: calls
+        toolCalls: calls,
+        ...(response.reasoning?.length ? { reasoning: response.reasoning } : {})
       });
       const executableCalls: Array<{
         readonly definition: AgentToolDefinition;

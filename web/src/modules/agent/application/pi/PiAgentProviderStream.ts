@@ -5,7 +5,7 @@ import {
 } from '@/capabilities/ai-runtime/public';
 import type { AgentModelInvoker } from '../../contracts/AgentRuntimePorts';
 import type { RunAgentLoopCommand } from '../AgentLoopContracts';
-import { toProviderMessages } from './PiAgentMessageAdapter';
+import { toPiThinking, toProviderMessages } from './PiAgentMessageAdapter';
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -106,6 +106,8 @@ async function produceProviderEvents(
     }
     const message: AssistantMessage = {
       ...partial,
+      // Reasoning leads the turn so it is replayed ahead of the tool calls.
+      content: [...(response.reasoning ?? []).map(toPiThinking), ...partial.content],
       responseId: response.providerRequestId,
       usage: toPiUsage(response),
       // A truncated turn is `length` even when it carries tool calls, so Pi

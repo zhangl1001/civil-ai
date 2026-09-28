@@ -35,11 +35,27 @@ export interface ModelImageContentPart {
 export type ModelContentPart = ModelTextContentPart | ModelImageContentPart;
 export type ModelMessageContent = string | readonly ModelContentPart[];
 
+/**
+ * Provider reasoning attached to an assistant turn. Anthropic requires the
+ * thinking blocks of a tool_use turn to be replayed unchanged (signature
+ * included) when its tool results are sent back. Never shown to users.
+ */
+export interface ModelReasoningBlock {
+  readonly type: 'thinking' | 'redacted_thinking';
+  /** Thinking text of a `thinking` block; may be empty. */
+  readonly thinking?: string;
+  readonly signature?: string;
+  /** Opaque payload of a `redacted_thinking` block. */
+  readonly data?: string;
+}
+
 export interface ModelMessage {
   readonly role: ModelMessageRole;
   readonly content: ModelMessageContent;
   readonly toolCallId?: string;
   readonly toolCalls?: readonly ModelToolCall[];
+  /** Assistant reasoning to replay verbatim before this turn's tool calls. */
+  readonly reasoning?: readonly ModelReasoningBlock[];
 }
 
 export interface ModelToolCall {
@@ -84,6 +100,8 @@ export interface ProviderUsage {
 export interface ProviderResponse {
   readonly text: string;
   readonly toolCalls?: readonly ModelToolCall[];
+  /** Reasoning blocks in provider order, for replay on the next tool turn. */
+  readonly reasoning?: readonly ModelReasoningBlock[];
   readonly finishReason?: string;
   readonly providerRequestId?: string;
   readonly usage: ProviderUsage;

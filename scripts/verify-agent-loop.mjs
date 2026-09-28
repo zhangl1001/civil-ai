@@ -1571,6 +1571,40 @@ try {
   assert.match(truncatedResult.text, /^先练判断推理，再/);
   assert.match(truncatedResult.text, /已达长度上限/, 'a truncated answer tells the user it was cut off');
 
+  const stableReasoning = [{ type: 'thinking', thinking: '先读档案。', signature: 'sig-stable' }];
+  let stableSecondTurn;
+  const reasoningLoop = new agent.RunAgentLoop(
+    {
+      async invoke(invocation) {
+        if (!stableSecondTurn && !invocation.messages.some((message) => message.role === ai.ModelMessageRole.Tool)) {
+          return {
+            text: '',
+            toolCalls: [{ id: 'toolu_stable', name: 'student_read_profile', arguments: {} }],
+            reasoning: stableReasoning,
+            usage: {}
+          };
+        }
+        stableSecondTurn = invocation.messages;
+        return { text: '今天先练判断推理。', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { return { content: '{"targetScore":80}', madeProgress: true }; } },
+    { async save() {} }
+  );
+  await reasoningLoop.execute({
+    agentRunId: 'agent-run-stable-reasoning',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天练什么' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-stable-reasoning' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'claude-opus-5' });
+  assert.deepEqual(
+    stableSecondTurn.find((message) => message.toolCalls?.length)?.reasoning,
+    stableReasoning,
+    'the stable loop keeps a tool turn reasoning for replay too'
+  );
+
   console.log('Agent loop verification passed.');
 } finally {
   await server.close();

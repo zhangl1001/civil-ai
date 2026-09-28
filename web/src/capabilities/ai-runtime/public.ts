@@ -8,6 +8,7 @@ export {
   type ModelImageContentPart,
   type ModelMessage,
   type ModelMessageContent,
+  type ModelReasoningBlock,
   type ModelTextContentPart,
   type ModelToolCall,
   type ProviderGateway,

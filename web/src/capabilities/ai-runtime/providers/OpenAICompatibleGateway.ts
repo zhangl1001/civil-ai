@@ -57,7 +57,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     this.structuredOutput = new StructuredOutputCapability(
       `openai-compatible:${normalizedCapabilityEndpoint(config.baseUrl)}:${this.model}`
     );
-    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides);
+    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides, this.model);
   }
 
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {

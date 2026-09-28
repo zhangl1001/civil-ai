@@ -28,6 +28,7 @@ try {
   await verifiesFirstTurnStreaming(agent, pi, ai);
   await verifiesToolTurnTextIsProvisional(agent, pi, ai);
   await verifiesOutputLimitHandling(agent, pi, ai);
+  await verifiesThinkingReplayThroughPi(pi, ai, server);
   console.log('Pi Agent runtime verification passed.');
 } finally {
   await server.close();
@@ -375,6 +376,86 @@ async function verifiesOutputLimitHandling(agent, pi, ai) {
   assert.deepEqual(executed, [], "Anthropic max_tokens maps to Pi's length stop, so truncated tool calls never run");
   assert.match(result.text, /^今天先做判断推理，然后/);
   assert.match(result.text, /已达长度上限/, 'a truncated final answer says it was cut off');
+}
+
+async function verifiesThinkingReplayThroughPi(pi, ai, server) {
+  const bodies = [];
+  const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' }
+  });
+  const gateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.anthropic.com/v1',
+    model: 'claude-opus-5'
+  }, {
+    async send(request) {
+      bodies.push(JSON.parse(request.body));
+      if (bodies.length === 1) {
+        return sse([
+          { type: 'message_start', message: { id: 'turn-1' } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '需要先看练习库。' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-pi-1' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_pi', name: 'practice_read' } },
+          { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"scope":"today"}' } },
+          { type: 'content_block_stop', index: 1 },
+          { type: 'message_delta', delta: { stop_reason: 'tool_use' } },
+          { type: 'message_stop' }
+        ]);
+      }
+      return sse([
+        { type: 'message_start', message: { id: 'turn-2' } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '整理答复。' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-pi-2' } },
+        { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '今天有一套待练题组。' } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+        { type: 'message_stop' }
+      ]);
+    }
+  });
+  const checkpoints = [];
+  const events = [];
+  const runtime = new pi.PiAgentLoopRuntime(
+    {
+      async invoke(invocation, selected, signal) {
+        return selected.stream({ ...invocation, requestId: `pi-${bodies.length + 1}` }, (event) => invocation.onDelta?.(event.text), signal);
+      }
+    },
+    allowPolicy(),
+    { async execute() { return { content: '{"count":1}', madeProgress: true }; } },
+    { async save(checkpoint) { checkpoints.push(checkpoint); } },
+    { onEvent(event) { events.push(event); } }
+  );
+  const result = await runtime.execute(command({ tools: [readTool('practice.read')] }), gateway);
+  assert.equal(result.text, '今天有一套待练题组。');
+  assert.equal(bodies.length, 2);
+  const replayed = bodies[1].messages.find((message) => message.role === 'assistant');
+  assert.deepEqual(replayed.content.map((block) => block.type), ['thinking', 'tool_use'], 'the tool_use turn is replayed with its thinking first');
+  assert.equal(replayed.content[0].thinking, '需要先看练习库。');
+  assert.equal(replayed.content[0].signature, 'sig-pi-1', 'the thinking signature survives the Pi message adapter');
+  assert.equal('temperature' in bodies[0], false, 'Pi turns send no sampling parameters to Claude 5');
+  const checkpointAssistant = checkpoints.at(-1).messages.find((message) => message.toolCalls?.length);
+  assert.deepEqual(checkpointAssistant.reasoning, [{ type: 'thinking', thinking: '需要先看练习库。', signature: 'sig-pi-1' }], 'checkpoints keep reasoning for confirmation resumes');
+  assert.equal(
+    events.some((event) => event.type === 'text_delta' && /需要先看|整理答复/.test(event.text)),
+    false,
+    'thinking never reaches the chat as text'
+  );
+  const adapter = await server.ssrLoadModule('/src/modules/agent/application/pi/PiAgentMessageAdapter.ts');
+  const roundTrip = adapter.toModelMessages(adapter.toPiMessages([{
+    role: ai.ModelMessageRole.Assistant,
+    content: '',
+    toolCalls: [{ id: 'toolu_x', name: 'practice_read', arguments: {} }],
+    reasoning: [{ type: 'thinking', thinking: '', signature: 'sig-x' }, { type: 'redacted_thinking', data: 'opaque' }]
+  }]));
+  assert.deepEqual(roundTrip[0].reasoning, [
+    { type: 'thinking', thinking: '', signature: 'sig-x' },
+    { type: 'redacted_thinking', data: 'opaque' }
+  ], 'checkpoint messages convert to Pi and back without touching reasoning');
 }
 
 async function waitFor(predicate, timeoutMs = 1_000) {
