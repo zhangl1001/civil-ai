@@ -129,6 +129,8 @@ export class AnthropicGateway implements ProviderGateway {
     try {
       await readServerSentEvents(response.body, async (data) => {
         events += 1;
+        // Some Anthropic-compatible proxies append the OpenAI sentinel.
+        if (data === '[DONE]') return;
         const delta = accumulator.append(JSON.parse(data) as unknown);
         if (!delta) return;
         await onEvent({ type: 'text_delta', text: delta });
