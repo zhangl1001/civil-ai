@@ -1509,6 +1509,10 @@ try {
     indexedDbAgentRunStore(indexedDbAgentRuns, indexedDbUnitOfWork)
   ]);
   await verifiesReadableFailureMessages(agent, taskMessages);
+  await verifiesForegroundChatRuns(agent, [
+    await sqliteAgentRunStore(sqliteAgentRuns, sqlScope),
+    indexedDbAgentRunStore(indexedDbAgentRuns, indexedDbUnitOfWork)
+  ]);
 
   assert.match(indexedDbSource, /AgentRunIdempotency:\s*'agent_run_idempotency'/);
   assert.match(indexedRunSource, /type:\s*'add',\s*store:\s*TutorIndexedDbStore\.AgentRunIdempotency/);
@@ -1610,6 +1614,157 @@ async function verifiesConcurrentRunWrites(agent, stores) {
     assert.equal(cancelled.run.cancellationReason, 'user_cancelled');
     await store.close?.();
   }
+}
+
+/**
+ * The chat creates its Agent-loop run queued, then starts it without a lease.
+ * Workers must never claim it, lease-less rows must never look like due work,
+ * and recovery must close one no live controller owns (a closed tab, a crash)
+ * while leaving a live one, in this or another tab, alone.
+ */
+async function verifiesForegroundChatRuns(agent, stores) {
+  const lanePools = agent.agentWorkPoolsForLane(0, 3);
+  const laneClasses = agent.agentExecutionClassesForLane(0, 3);
+  for (const store of stores) {
+    const { label, unitOfWork, repository } = store;
+    const clock = { value: 1_000_000, now() { return ++this.value; } };
+    let idSeed = 0;
+    const ids = { next: (namespace) => `${namespace}:${label}:foreground:${(idSeed += 1)}` };
+    const outbox = { async append() {} };
+    const createRun = new agent.CreateAgentRun(unitOfWork, repository, outbox, clock, ids);
+    const transition = new agent.TransitionAgentRun(unitOfWork, repository, outbox, clock, ids);
+    const claimRuns = new agent.ClaimAgentRuns(repository, clock, ids);
+    const otherTabRunIds = new Set();
+    const locks = fakeOwnershipLocks(otherTabRunIds);
+    const ownership = new agent.LockedAgentRunOwnership(locks);
+    const executions = new agent.AgentRunExecutionRegistry(ownership);
+    const recover = new agent.RecoverExpiredAgentRuns(repository, clock, ids, ownership);
+    const createChatRun = (key, toolName = agent.CHAT_AGENT_LOOP_TOOL_NAME) => createRun.execute({
+      idempotencyKey: `${label}:${key}`,
+      runType: agent.AgentRunType.TutorTurn,
+      targetResourceType: agent.TaskTargetType.ChatTool,
+      targetResourceId: 'session:foreground',
+      inputSnapshot: { title: 'AI 私教执行', chatSessionId: 'session:foreground', toolName, arguments: {} }
+    });
+    const startChatRun = (run) => transition.execute({
+      idempotencyKey: `chat-agent:${run.run.id}:started`,
+      agentRunId: run.run.id,
+      action: agent.AgentRunAction.Start,
+      reasonCode: 'chat_agent.started'
+    });
+    const status = async (run) => (await repository.findById(run.run.id)).run;
+
+    const chat = await createChatRun('live-chat');
+    assert.equal(agent.isChatAgentLoopRun(chat.run), true);
+    assert.equal(await repository.nextWorkAt(clock.now(), lanePools, laneClasses), undefined, `${label}: a queued chat loop is not worker work`);
+    assert.deepEqual(
+      await claimRuns.execute({ workerId: 'worker:lane', leaseExpiresAt: clock.now() + 60_000, limit: 3, workPools: lanePools, executionClasses: laneClasses }),
+      [],
+      `${label}: a worker lane must not claim the chat loop between its create and start`
+    );
+    assert.deepEqual(
+      await claimRuns.execute({ workerId: 'worker:unfiltered', leaseExpiresAt: clock.now() + 60_000, limit: 3 }),
+      [],
+      `${label}: no claim filter makes the chat loop claimable`
+    );
+    executions.register(chat.run.id, new AbortController());
+    await startChatRun(chat);
+    assert.equal((await status(chat)).status, agent.AgentRunStatus.Running);
+    assert.equal((await status(chat)).leaseExpiresAt, undefined);
+    assert.equal(
+      await repository.nextWorkAt(clock.now(), lanePools, laneClasses),
+      undefined,
+      `${label}: a lease-less running run must not look due and spin the lanes`
+    );
+
+    const toolRun = await createChatRun('legacy-tool', 'generate_practice');
+    const [claimedTool] = await claimRuns.execute({ workerId: 'worker:lane', leaseExpiresAt: clock.now() + 60_000, limit: 3 });
+    assert.equal(claimedTool?.run.id, toolRun.run.id, `${label}: other chat_tool runs stay worker-executable`);
+    await transition.execute({
+      idempotencyKey: `${label}:legacy-tool:done`,
+      agentRunId: toolRun.run.id,
+      action: agent.AgentRunAction.Complete,
+      reasonCode: 'chat_tool.completed',
+      leaseToken: agent.leaseTokenOf(claimedTool.run)
+    });
+
+    await recover.execute();
+    assert.equal((await status(chat)).status, agent.AgentRunStatus.Running, `${label}: recovery leaves a chat its controller still owns`);
+
+    const otherTabChat = await createChatRun('other-tab-chat');
+    await startChatRun(otherTabChat);
+    otherTabRunIds.add(otherTabChat.run.id);
+    await recover.execute();
+    assert.equal((await status(otherTabChat)).status, agent.AgentRunStatus.Running, `${label}: a chat another tab owns is left alone`);
+
+    executions.finish(chat.run.id);
+    // A lock is released asynchronously, like a real Web Lock; until then the
+    // run still counts as owned, which only ever delays a closure.
+    await yieldToEventLoop();
+    await recover.execute();
+    const orphaned = await repository.findById(chat.run.id);
+    assert.equal(orphaned.run.status, agent.AgentRunStatus.Cancelled, `${label}: an ownerless lease-less chat run is closed at recovery`);
+    assert.equal(orphaned.run.cancellationReason, agent.ORPHANED_FOREGROUND_RUN_REASON);
+    assert.ok(orphaned.run.completedAt, `${label}: the closed run is terminal`);
+    assert.ok(
+      orphaned.events.some((event) => event.eventType === 'cancelled' && event.reasonCode === agent.ORPHANED_FOREGROUND_RUN_REASON),
+      `${label}: the closure is recorded with its reason code`
+    );
+    const view = await new agent.GetAgentRunViews(repository).findById(chat.run.id);
+    assert.equal(view.detail, '对话在页面关闭或应用重启时中断，请重新发送');
+
+    const unstarted = await createChatRun('crashed-before-start');
+    await recover.execute();
+    assert.equal((await status(unstarted)).status, agent.AgentRunStatus.Queued, `${label}: a chat about to start is not closed`);
+    clock.value += 31_000;
+    await recover.execute();
+    assert.equal((await status(unstarted)).status, agent.AgentRunStatus.Cancelled, `${label}: a chat left queued by a crash is closed`);
+
+    const blindRecover = new agent.RecoverExpiredAgentRuns(repository, clock, ids, new agent.LockedAgentRunOwnership(null));
+    otherTabRunIds.clear();
+    await blindRecover.execute();
+    assert.equal(
+      (await status(otherTabChat)).status,
+      agent.AgentRunStatus.Running,
+      `${label}: without cross-tab visibility a recent lease-less run may be another tab's and is kept`
+    );
+    clock.value += 16 * 60_000 + 1_000;
+    await blindRecover.execute();
+    assert.equal(
+      (await status(otherTabChat)).status,
+      agent.AgentRunStatus.Cancelled,
+      `${label}: past the chat execution ceiling no tab can still own it`
+    );
+    await store.close?.();
+  }
+  const refusing = new agent.LockedAgentRunOwnership({
+    request() { throw new DOMException('Locks are not available here.', 'SecurityError'); },
+    async query() { return { held: [], pending: [] }; }
+  });
+  const releaseRefused = refusing.hold('AgentRunId:refused-lock');
+  const refusedSnapshot = await refusing.snapshot();
+  assert.equal(refusedSnapshot.coversOtherContexts, false, 'refused locks must not pass for cross-tab visibility');
+  assert.ok(refusedSnapshot.ownedRunIds.has('AgentRunId:refused-lock'), 'this context still knows its own runs');
+  releaseRefused();
+  assert.equal((await refusing.snapshot()).ownedRunIds.size, 0);
+}
+
+function fakeOwnershipLocks(otherContextRunIds) {
+  const held = new Set();
+  return {
+    async request(name, _options, callback) {
+      held.add(name);
+      try {
+        return await callback();
+      } finally {
+        held.delete(name);
+      }
+    },
+    async query() {
+      const other = [...otherContextRunIds].map((id) => `zhangl-agent:agent-run:${id}`);
+      return { held: [...held, ...other].map((name) => ({ name })), pending: [] };
+    }
+  };
 }
 
 async function verifiesReadableFailureMessages(agent, taskMessages) {

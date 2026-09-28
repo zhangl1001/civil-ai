@@ -1,3 +1,4 @@
+import { ORPHANED_FOREGROUND_RUN_REASON } from '../domain/ForegroundAgentRuns';
 import { invalidProviderRequestText } from './AgentRunErrorPresentation';
 
 const GENERIC_FAILURE_TEXT = '任务执行失败，请重新生成';
@@ -39,4 +40,19 @@ function knownFailureText(code: string, diagnostic: string | undefined, readable
   if (code === 'provider.transient') return '模型网络或服务暂时异常，请稍后重试';
   if (code.startsWith('provider.')) return '模型服务请求失败，请检查模型配置';
   return undefined;
+}
+
+/**
+ * Chinese text for a cancelled task. Cancellation reasons are codes chosen by
+ * the caller (`user_cancelled_from_task_dock`, `chat_agent.orphaned`); a reason
+ * that is already learner text is shown as it is.
+ */
+export function agentRunCancellationText(reason: string): string {
+  const code = reason.trim();
+  if (code === ORPHANED_FOREGROUND_RUN_REASON) return '对话在页面关闭或应用重启时中断，请重新发送';
+  if (code === 'app_lifecycle_interrupted_chat_agent') return '应用切到后台，本次对话已中断';
+  if (code === 'agent_run.worker_aborted') return '任务已中断，可重新发起';
+  if (code === 'user_replaced_pending_agent_action') return '已被新的请求替代';
+  if (CHINESE_TEXT.test(code)) return code;
+  return '任务已取消';
 }

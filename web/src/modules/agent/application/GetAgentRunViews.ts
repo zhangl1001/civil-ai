@@ -5,7 +5,7 @@ import {
   resolveAgentRunNotificationMode,
   type AgentRunNotificationMode
 } from '../domain/TaskCenterCodes';
-import { agentRunFailureText } from './AgentRunFailureText';
+import { agentRunCancellationText, agentRunFailureText } from './AgentRunFailureText';
 
 export interface AgentRunView {
   readonly id: AgentRunId;
@@ -152,7 +152,7 @@ function detailFor(aggregate: AgentRunAggregate): string {
       textField(aggregate.run.checkpoint.errorMessage) || textField(aggregate.run.checkpoint.message)
     );
   }
-  if (aggregate.run.cancellationReason) return aggregate.run.cancellationReason;
+  if (aggregate.run.cancellationReason) return agentRunCancellationText(aggregate.run.cancellationReason);
   if (
     aggregate.run.runType === AgentRunType.ErrorDiagnosis
     && (aggregate.run.status === AgentRunStatus.Completed || aggregate.run.status === AgentRunStatus.Cancelled)

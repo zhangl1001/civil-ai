@@ -100,6 +100,7 @@ export { tutorSubAgentCatalog } from './fixtures/tutorSubAgentCatalog';
 export {
   leaseTokenOf,
   type AgentInvocationRecord,
+  type AgentRunOrphanRecovery,
   type AgentRunAggregate,
   type AgentRunEventRecord,
   type AgentRunLeaseToken,
@@ -146,6 +147,17 @@ export { ClaimAgentRuns, type ClaimAgentRunsCommand } from './application/ClaimA
 export { RecoverExpiredAgentRuns } from './application/RecoverExpiredAgentRuns';
 export { CancelAgentRun } from './application/CancelAgentRun';
 export { AgentRunExecutionRegistry } from './application/AgentRunExecutionRegistry';
+export {
+  LockedAgentRunOwnership,
+  sharedAgentRunOwnership,
+  type AgentRunOwnership,
+  type AgentRunOwnershipSnapshot
+} from './application/AgentRunOwnership';
+export {
+  CHAT_AGENT_LOOP_TOOL_NAME,
+  ORPHANED_FOREGROUND_RUN_REASON,
+  isChatAgentLoopRun
+} from './domain/ForegroundAgentRuns';
 export { DefaultAgentContextCompiler } from './application/DefaultAgentContextCompiler';
 export { UpdateAgentRunProgress, type UpdateAgentRunProgressCommand } from './application/UpdateAgentRunProgress';
 export { InvokeAgentModel, type InvokeAgentModelCommand, type InvokeAgentModelResult } from './application/InvokeAgentModel';
@@ -163,5 +175,5 @@ export {
   type TutorAgentLifecycleObserver
 } from './application/RunTutorAgentBatch';
 export { invalidProviderRequestText } from './application/AgentRunErrorPresentation';
-export { agentRunFailureText } from './application/AgentRunFailureText';
+export { agentRunCancellationText, agentRunFailureText } from './application/AgentRunFailureText';
 export { GetAgentRunViews, type AgentRunView } from './application/GetAgentRunViews';
