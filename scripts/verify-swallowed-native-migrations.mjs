@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,10 +42,16 @@ try {
   assert.doesNotMatch(prepared040.trimStart(), /^--/);
   assert.match(prepared040, /CREATE TABLE prompt_definitions_v40/);
   assert.match(prepared040, /exam_type TEXT NOT NULL DEFAULT 'shared'/);
+  assert.match(prepared042, /INSERT INTO daily_plan_blocks_v42 SELECT id/);
+  assert.doesNotMatch(prepared042, /daily_plan_blocks_v42SELECT/);
+  assert.equal(prepared040.includes('\n'), false);
+  assert.equal(prepared042.includes('\n'), false);
 
-  const swallowed040 = iosExecute(sql040);
+  const swallowed040 = nativeExecute(sql040);
   assert.equal(swallowed040.includes('\n'), false);
   assert.match(swallowed040.trimStart(), /^--/);
+  assert.match(nativeExecute(sql042), /daily_plan_blocks_v42SELECT id/);
+  assert.match(nativeExecute(prepared042), /daily_plan_blocks_v42 SELECT id/);
 
   verifySqliteRepair(prepared040, prepared042);
   await verifyRunnerRepairsExistingDevice(MigrationRunner, tutorDatabaseConfig, tutorMigrations);
@@ -60,8 +66,13 @@ function readMigration(name) {
   return readFileSync(path.join(migrationsDir, name), 'utf8');
 }
 
-function iosExecute(sql) {
-  return /DELETE FROM/i.test(sql) ? sql.replace(/\n/g, '') : sql;
+function nativeExecute(sql) {
+  const trimmedLines = sql.split('\n').map((line) => line.trim()).join('\n');
+  if (!/DELETE FROM/i.test(trimmedLines)) return trimmedLines;
+  const withoutNewlines = trimmedLines.replace(/\n/g, '');
+  const statements = withoutNewlines.split(';');
+  statements.pop();
+  return statements.join(';');
 }
 
 function verifySqliteRepair(prepared040, prepared042) {
@@ -77,10 +88,22 @@ function verifySqliteRepair(prepared040, prepared042) {
     assert.equal(columnExists(databaseFile, 'prompt_definitions', 'exam_type'), false);
     assert.match(tableSql(databaseFile, 'daily_plan_blocks'), /CHECK\(subject IN/);
 
-    runSqlite(databaseFile, iosExecute(readMigration('040_prompt_exam_scope.sql')));
+    runSqlite(databaseFile, nativeExecute(readMigration('040_prompt_exam_scope.sql')));
     assert.equal(columnExists(databaseFile, 'prompt_definitions', 'exam_type'), false, 'iOS execute() must swallow 040');
 
-    runSqlite(databaseFile, `${prepared040};\n${prepared042};`);
+    const commentStripped042 = readMigration('042_daily_plan_block_subject.sql').split('\n').map((line) => {
+      const comment = line.indexOf('--');
+      return comment === -1 ? line : line.slice(0, comment);
+    }).join('\n');
+    const broken042 = nativeExecute(commentStripped042);
+    assert.match(broken042, /daily_plan_blocks_v42SELECT id/);
+    const probeFile = path.join(directory, 'broken-042.sqlite');
+    copyFileSync(databaseFile, probeFile);
+    const failed042 = spawnSync('sqlite3', [probeFile], { input: broken042, encoding: 'utf8' });
+    assert.notEqual(failed042.status, 0, 'iOS execute() must break 042 INSERT...SELECT');
+    assert.match(`${failed042.stderr}${failed042.stdout}`, /near "id"/);
+
+    runSqlite(databaseFile, `${nativeExecute(prepared040)};\n${nativeExecute(prepared042)};`);
     assert.equal(columnExists(databaseFile, 'prompt_definitions', 'exam_type'), true);
     assert.match(tableSql(databaseFile, 'daily_plan_blocks'), /CHECK\(length\(subject\) > 0\)/);
     assert.doesNotMatch(tableSql(databaseFile, 'daily_plan_blocks'), /CHECK\(subject IN/);

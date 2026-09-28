@@ -75,6 +75,49 @@ try {
   assert.equal(corePolicy.practiceQuestionAcceptanceRatio('aptitude.judgment.weaken'), 0.8);
   assert.equal(corePolicy.practiceQuestionAcceptanceRatio('aptitude.data_analysis.growth'), 0.8);
   assert.equal(corePolicy.practiceQuestionAcceptanceRatio('aptitude.judgment.graphical.position'), 0.6);
+
+  const sharded = await server.ssrLoadModule('/src/modules/content/application/ShardedObjectiveGenerator.ts');
+  const lectureFailure = new sharded.ShardedObjectiveGenerator(
+    {
+      compileBundle() {
+        return {
+          system: 'system',
+          user: 'user',
+          responseSchema: ai.structuredObjectivePromptV2.responseSchema
+        };
+      }
+    },
+    {
+      async invokeWithRetry(_aggregate, _gateway, _request, role) {
+        if (role === 'content_generation_lecture') throw new Error('provider lecture 429');
+        return { invocationId: `inv:${role}`, response: { text: '{}' } };
+      }
+    },
+    () => ({ lecture: {}, questions: [] })
+  );
+  await assert.rejects(
+    () => lectureFailure.generate({
+      aggregate: {
+        spec: {
+          assessmentRole: 'practice',
+          difficulty: { min: 0.35, max: 0.55 },
+          constraints: {},
+          contextSnapshot: {
+            capability: { code: 'aptitude.judgment.argument_structure', name: '论证结构', module: '判断推理' }
+          },
+          requestedCount: 8
+        },
+        workflow: { id: 'workflow:lecture-failure', attemptCount: 0 }
+      },
+      promptBundle: {},
+      plan: corePolicy.createPracticeGenerationPlan(8, 'aptitude.judgment.argument_structure'),
+      gateway: {},
+      signal: new AbortController().signal
+    }),
+    /provider lecture 429/,
+    'a failed lecture provider call must surface its own error instead of a missing-invocation wrapper'
+  );
+
   const clock = new TestClock();
   const ids = new TestIds();
   const curriculumBundle = curriculum.createBundledNationalCurriculum();
