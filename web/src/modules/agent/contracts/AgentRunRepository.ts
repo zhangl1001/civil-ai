@@ -86,6 +86,13 @@ export interface AgentRunMutationGuard {
 export interface AgentRunRepository {
   create(run: AgentRunRecord, created: AgentRunEventRecord, context: TransactionContext): Promise<void>;
   findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined>;
+  /**
+   * Reads the committed run from inside the caller's unit of work, so a
+   * read-modify-write replaces exactly the version it read. Plain `findById`
+   * must not be used there: SQLite serializes every statement behind the open
+   * transaction and would wait on itself.
+   */
+  findByIdInTransaction(runId: AgentRunId, context: TransactionContext): Promise<AgentRunAggregate | undefined>;
   findByIdempotencyKey(idempotencyKey: string): Promise<AgentRunAggregate | undefined>;
   findLatestByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
   findActiveByTarget(targetResourceType: string, targetResourceId: string): Promise<AgentRunAggregate | undefined>;
@@ -126,6 +133,27 @@ export function leaseTokenOf(run: AgentRunRecord): AgentRunLeaseToken | undefine
 export interface AgentRunRecoveryOptions {
   readonly now: InstantMs;
   readonly limit: number;
+  readonly eventIds: readonly string[];
+  /** Also close, in the same pass, foreground runs that no live controller owns any more. */
+  readonly orphans?: AgentRunOrphanRecovery;
+}
+
+/**
+ * A run without a lease is driven by a foreground controller (the chat), never
+ * by a worker: a running run without a lease, or a chat-loop run still queued
+ * for its controller to start it. Its lease can never expire, so once no live
+ * controller owns it, only this closes it. Closed runs are cancelled with
+ * `reasonCode`; they are not part of the returned (requeued) runs.
+ */
+export interface AgentRunOrphanRecovery {
+  /** Runs a live controller owns in this or, when observable, another context of the app. */
+  readonly ownedRunIds: readonly string[];
+  /** Only a lease-less running run last written strictly before this instant can be ownerless. */
+  readonly runningUpdatedBefore: InstantMs;
+  /** Only a queued chat-loop run last written strictly before this instant can be ownerless. */
+  readonly queuedUpdatedBefore: InstantMs;
+  readonly reasonCode: string;
+  /** One per run the pass may close, up to the recovery limit. */
   readonly eventIds: readonly string[];
 }
 

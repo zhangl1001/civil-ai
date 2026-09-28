@@ -7,10 +7,29 @@ import type {
   AgentToolPolicy
 } from '../contracts/AgentRuntimePorts';
 import type { AgentLoopResult, AgentLoopRuntime, RunAgentLoopCommand } from './AgentLoopContracts';
-import { PiAgentLoopRuntime } from './PiAgentLoopRuntime';
 import { RunAgentLoop } from './RunAgentLoop';
 
-/** Runs Pi by default and falls back only before any externally visible effect. */
+type PiAgentLoopRuntimeModule = typeof import('./PiAgentLoopRuntime');
+
+let piRuntimeModule: Promise<PiAgentLoopRuntimeModule> | undefined;
+
+/**
+ * Pi and its provider, schema and diff dependencies load with the first Agent
+ * turn instead of the app shell. A failed chunk load is forgotten so the next
+ * turn fetches it again rather than replaying the same rejection.
+ */
+function loadPiAgentLoopRuntime(): Promise<PiAgentLoopRuntimeModule> {
+  piRuntimeModule ??= import('./PiAgentLoopRuntime').catch((error: unknown) => {
+    piRuntimeModule = undefined;
+    throw error;
+  });
+  return piRuntimeModule;
+}
+
+/**
+ * Runs Pi by default and falls back only before any externally visible effect.
+ * Failing to load the Pi chunk is such a failure: nothing has run yet.
+ */
 export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
   constructor(
     private readonly modelInvoker: AgentModelInvoker,
@@ -37,14 +56,15 @@ export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
         await this.observer?.onEvent(event);
       }
     };
-    const runtime = new PiAgentLoopRuntime(
-      this.modelInvoker,
-      this.policy,
-      this.executor,
-      this.checkpoints,
-      observer
-    );
     try {
+      const { PiAgentLoopRuntime } = await loadPiAgentLoopRuntime();
+      const runtime = new PiAgentLoopRuntime(
+        this.modelInvoker,
+        this.policy,
+        this.executor,
+        this.checkpoints,
+        observer
+      );
       return await runtime.execute(command, gateway, signal);
     } catch (error) {
       if (!canFallbackToStableLoop(error, signal, activity)) throw error;

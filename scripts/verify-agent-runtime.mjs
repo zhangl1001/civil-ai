@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
 
@@ -21,6 +22,8 @@ try {
   const sqliteAgentRuns = await server.ssrLoadModule('/src/modules/agent/adapters/SqliteAgentRunRepository.ts');
   const indexedDbAgentRuns = await server.ssrLoadModule('/src/modules/agent/adapters/IndexedDbAgentRunRepository.ts');
   const { WebAgentWorkspaceStorage } = await server.ssrLoadModule('/src/modules/agent/adapters/WebAgentWorkspaceStorage.ts');
+  const sqlScope = await server.ssrLoadModule('/src/capabilities/database/adapters/sqlite/SqlTransactionScope.ts');
+  const indexedDbUnitOfWork = await server.ssrLoadModule('/src/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork.ts');
   const localStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   const workspaceLocalStorage = fakeLocalStorage();
   Object.defineProperty(globalThis, 'localStorage', {
@@ -266,6 +269,19 @@ try {
     ),
     (error) => error?.code === 'agent_run.lease_lost',
     'IndexedDB must reject an old lease epoch with the stable fencing code'
+  );
+  const lazyPiRuntimeSource = await readFile(path.join(root, 'src/modules/agent/application/LazyPiAgentLoopRuntime.ts'), 'utf8');
+  assert.doesNotMatch(
+    lazyPiRuntimeSource,
+    /^import\s+(?!type\b)[^;]*['"]\.\/PiAgentLoopRuntime['"]/m,
+    'the Pi runtime and its dependencies must stay out of the first-paint bundle'
+  );
+  assert.match(lazyPiRuntimeSource, /import\(\s*['"]\.\/PiAgentLoopRuntime['"]\s*\)/);
+  const compositionRootPublicSource = await readFile(path.join(root, 'src/composition-root/public.ts'), 'utf8');
+  assert.doesNotMatch(
+    compositionRootPublicSource,
+    /export\s*\{[^}]*\bcreate(?:Native|Web)TutorDatabase\b[^}]*\}/,
+    'a value re-export of a platform database factory defeats createTutorDatabaseRuntime\'s dynamic imports'
   );
   assert.doesNotMatch(
     workerCoordinatorSource,
@@ -1111,6 +1127,16 @@ try {
   assert.equal(exhaustedResult.failed, 1);
   assert.equal(retryTransitions[0].action, agent.AgentRunAction.Fail);
   assert.equal(retryTransitions[0].errorCode, 'generation.process_interrupted');
+  assert.equal(
+    retryTransitions[0].checkpoint.errorMessage,
+    'generation process interrupted',
+    'the raw failure stays on the run as its diagnostic'
+  );
+  assert.equal(
+    retryTransitions[0].checkpoint.message,
+    '模型连接意外中断，请重新执行任务',
+    'the message every task surface shows is the learner text, not the internal error'
+  );
 
   retryTransitions.length = 0;
   generationFailure.code = 'generation.json_invalid';
@@ -1416,6 +1442,7 @@ try {
   };
   const pinRepository = {
     async findById(id) { return id === pinnedRun.run.id ? pinnedRun : undefined; },
+    async findByIdInTransaction(id) { return this.findById(id); },
     async replace(run) { pinnedRun = { run, events: [] }; }
   };
   let pinIdSeed = 0;
@@ -1522,11 +1549,451 @@ try {
     /changed content since this run pinned it/
   );
 
+  await verifiesConcurrentRunWrites(agent, [
+    await sqliteAgentRunStore(sqliteAgentRuns, sqlScope),
+    indexedDbAgentRunStore(indexedDbAgentRuns, indexedDbUnitOfWork)
+  ]);
+  await verifiesReadableFailureMessages(agent, taskMessages);
+  await verifiesForegroundChatRuns(agent, [
+    await sqliteAgentRunStore(sqliteAgentRuns, sqlScope),
+    indexedDbAgentRunStore(indexedDbAgentRuns, indexedDbUnitOfWork)
+  ]);
+
   assert.match(indexedDbSource, /AgentRunIdempotency:\s*'agent_run_idempotency'/);
   assert.match(indexedRunSource, /type:\s*'add',\s*store:\s*TutorIndexedDbStore\.AgentRunIdempotency/);
   assert.match(indexedRunSource, /mutateStore<StoredRun,readonly AgentRunAggregate\[\]>/);
   console.log('Agent runtime verification passed.');
 } finally { await server.close(); }
+
+async function verifiesConcurrentRunWrites(agent, stores) {
+  for (const store of stores) {
+    const { label, unitOfWork, repository } = store;
+    const clock = { value: 50_000, now() { return ++this.value; } };
+    let idSeed = 0;
+    const ids = { next: (namespace) => `${namespace}:${label}:${(idSeed += 1)}` };
+    const outbox = { events: [], async append(event) { this.events.push(event); } };
+    const createRun = new agent.CreateAgentRun(unitOfWork, repository, outbox, clock, ids);
+    const claimRuns = new agent.ClaimAgentRuns(repository, clock, ids);
+    const progress = new agent.UpdateAgentRunProgress(unitOfWork, repository, outbox, clock, ids);
+    const transition = new agent.TransitionAgentRun(unitOfWork, repository, outbox, clock, ids);
+    const created = await createRun.execute({
+      idempotencyKey: `${label}:mock-exam`,
+      runType: agent.AgentRunType.TutorTurn,
+      targetResourceType: agent.TaskTargetType.BusinessOperation,
+      inputSnapshot: { intent: 'mock', detail: '行测模考' }
+    });
+    const [claimed] = await claimRuns.execute({ workerId: 'worker:mock', leaseExpiresAt: clock.now() + 60_000, limit: 1 });
+    assert.equal(claimed?.run.id, created.run.id, `${label}: the mock run is claimed`);
+    const leaseToken = agent.leaseTokenOf(claimed.run);
+
+    // Five module batches at concurrency 3 each report "42% generating" when
+    // they start and a completion share when they finish, all on one run.
+    const reported = [42, 42, 42, 33, 42, 46, 42, 60, 73, 88];
+    const outcomes = await Promise.allSettled(reported.map((value, index) => progress.execute({
+      agentRunId: created.run.id,
+      step: agent.TaskCenterStep.InvokingModel,
+      progress: value,
+      message: `题组进度 ${index + 1}`,
+      leaseToken
+    })));
+    assert.deepEqual(
+      outcomes.filter((outcome) => outcome.status === 'rejected').map((outcome) => outcome.reason?.message),
+      [],
+      `${label}: concurrent progress writes on one run must all land`
+    );
+    const settled = await repository.findById(created.run.id);
+    assert.equal(settled.run.status, agent.AgentRunStatus.Running);
+    assert.equal(settled.run.version, claimed.run.version + reported.length, `${label}: every write advanced the version once`);
+    assert.equal(
+      settled.events.filter((event) => event.eventType === 'progressed').length,
+      reported.length,
+      `${label}: every write kept its event`
+    );
+    assert.equal(settled.run.checkpoint.progress, 88, `${label}: progress is the high-water mark of the attempt`);
+    assert.equal(settled.run.leaseExpiresAt, claimed.run.leaseExpiresAt, `${label}: progress writes keep the lease`);
+
+    const late = await progress.execute({
+      agentRunId: created.run.id,
+      step: agent.TaskCenterStep.InvokingModel,
+      progress: 42,
+      message: '迟到的批次仍在生成',
+      data: { lateBatch: true },
+      leaseToken
+    });
+    assert.equal(late.run.checkpoint.progress, 88, `${label}: a late 42% must not overwrite 88%`);
+    assert.equal(late.run.checkpoint.step, agent.TaskCenterStep.InvokingModel);
+    assert.equal(late.run.checkpoint.message, '迟到的批次仍在生成', `${label}: a late report still refreshes the activity text`);
+    assert.equal(late.run.checkpoint.lateBatch, true, `${label}: a late report still merges its data`);
+
+    await assert.rejects(
+      () => progress.execute({
+        agentRunId: created.run.id,
+        step: agent.TaskCenterStep.InvokingModel,
+        progress: 90,
+        message: '旧租约写入',
+        leaseToken: { ...leaseToken, leaseEpoch: leaseToken.leaseEpoch + 7 }
+      }),
+      (error) => error?.code === 'agent_run.lease_lost',
+      `${label}: a stale lease is still fenced, not retried as a conflict`
+    );
+
+    const racing = await Promise.allSettled([
+      progress.execute({ agentRunId: created.run.id, step: agent.TaskCenterStep.InvokingModel, progress: 89, message: '并发进度 1', leaseToken }),
+      transition.execute({
+        idempotencyKey: `${label}:user-cancel`,
+        agentRunId: created.run.id,
+        action: agent.AgentRunAction.Cancel,
+        reasonCode: 'user_cancelled',
+        cancellationReason: 'user_cancelled'
+      }),
+      progress.execute({ agentRunId: created.run.id, step: agent.TaskCenterStep.InvokingModel, progress: 90, message: '并发进度 2', leaseToken })
+    ]);
+    assert.equal(racing[1].status, 'fulfilled', `${label}: a cancellation racing progress writes must land`);
+    for (const outcome of racing) {
+      if (outcome.status === 'rejected') {
+        assert.doesNotMatch(String(outcome.reason?.message), /version conflict/, `${label}: no writer may fail on a stale version`);
+      }
+    }
+    const cancelled = await repository.findById(created.run.id);
+    assert.equal(cancelled.run.status, agent.AgentRunStatus.Cancelled);
+    assert.equal(cancelled.run.cancellationReason, 'user_cancelled');
+    await store.close?.();
+  }
+}
+
+/**
+ * The chat creates its Agent-loop run queued, then starts it without a lease.
+ * Workers must never claim it, lease-less rows must never look like due work,
+ * and recovery must close one no live controller owns (a closed tab, a crash)
+ * while leaving a live one, in this or another tab, alone.
+ */
+async function verifiesForegroundChatRuns(agent, stores) {
+  const lanePools = agent.agentWorkPoolsForLane(0, 3);
+  const laneClasses = agent.agentExecutionClassesForLane(0, 3);
+  for (const store of stores) {
+    const { label, unitOfWork, repository } = store;
+    const clock = { value: 1_000_000, now() { return ++this.value; } };
+    let idSeed = 0;
+    const ids = { next: (namespace) => `${namespace}:${label}:foreground:${(idSeed += 1)}` };
+    const outbox = { async append() {} };
+    const createRun = new agent.CreateAgentRun(unitOfWork, repository, outbox, clock, ids);
+    const transition = new agent.TransitionAgentRun(unitOfWork, repository, outbox, clock, ids);
+    const claimRuns = new agent.ClaimAgentRuns(repository, clock, ids);
+    const otherTabRunIds = new Set();
+    const locks = fakeOwnershipLocks(otherTabRunIds);
+    const ownership = new agent.LockedAgentRunOwnership(locks);
+    const executions = new agent.AgentRunExecutionRegistry(ownership);
+    const recover = new agent.RecoverExpiredAgentRuns(repository, clock, ids, ownership);
+    const createChatRun = (key, toolName = agent.CHAT_AGENT_LOOP_TOOL_NAME) => createRun.execute({
+      idempotencyKey: `${label}:${key}`,
+      runType: agent.AgentRunType.TutorTurn,
+      targetResourceType: agent.TaskTargetType.ChatTool,
+      targetResourceId: 'session:foreground',
+      inputSnapshot: { title: 'AI 私教执行', chatSessionId: 'session:foreground', toolName, arguments: {} }
+    });
+    const startChatRun = (run) => transition.execute({
+      idempotencyKey: `chat-agent:${run.run.id}:started`,
+      agentRunId: run.run.id,
+      action: agent.AgentRunAction.Start,
+      reasonCode: 'chat_agent.started'
+    });
+    const status = async (run) => (await repository.findById(run.run.id)).run;
+
+    const chat = await createChatRun('live-chat');
+    assert.equal(agent.isChatAgentLoopRun(chat.run), true);
+    assert.equal(await repository.nextWorkAt(clock.now(), lanePools, laneClasses), undefined, `${label}: a queued chat loop is not worker work`);
+    assert.deepEqual(
+      await claimRuns.execute({ workerId: 'worker:lane', leaseExpiresAt: clock.now() + 60_000, limit: 3, workPools: lanePools, executionClasses: laneClasses }),
+      [],
+      `${label}: a worker lane must not claim the chat loop between its create and start`
+    );
+    assert.deepEqual(
+      await claimRuns.execute({ workerId: 'worker:unfiltered', leaseExpiresAt: clock.now() + 60_000, limit: 3 }),
+      [],
+      `${label}: no claim filter makes the chat loop claimable`
+    );
+    executions.register(chat.run.id, new AbortController());
+    await startChatRun(chat);
+    assert.equal((await status(chat)).status, agent.AgentRunStatus.Running);
+    assert.equal((await status(chat)).leaseExpiresAt, undefined);
+    assert.equal(
+      await repository.nextWorkAt(clock.now(), lanePools, laneClasses),
+      undefined,
+      `${label}: a lease-less running run must not look due and spin the lanes`
+    );
+
+    const toolRun = await createChatRun('legacy-tool', 'generate_practice');
+    const [claimedTool] = await claimRuns.execute({ workerId: 'worker:lane', leaseExpiresAt: clock.now() + 60_000, limit: 3 });
+    assert.equal(claimedTool?.run.id, toolRun.run.id, `${label}: other chat_tool runs stay worker-executable`);
+    await transition.execute({
+      idempotencyKey: `${label}:legacy-tool:done`,
+      agentRunId: toolRun.run.id,
+      action: agent.AgentRunAction.Complete,
+      reasonCode: 'chat_tool.completed',
+      leaseToken: agent.leaseTokenOf(claimedTool.run)
+    });
+
+    await recover.execute();
+    assert.equal((await status(chat)).status, agent.AgentRunStatus.Running, `${label}: recovery leaves a chat its controller still owns`);
+
+    const otherTabChat = await createChatRun('other-tab-chat');
+    await startChatRun(otherTabChat);
+    otherTabRunIds.add(otherTabChat.run.id);
+    await recover.execute();
+    assert.equal((await status(otherTabChat)).status, agent.AgentRunStatus.Running, `${label}: a chat another tab owns is left alone`);
+
+    executions.finish(chat.run.id);
+    // A lock is released asynchronously, like a real Web Lock; until then the
+    // run still counts as owned, which only ever delays a closure.
+    await yieldToEventLoop();
+    await recover.execute();
+    const orphaned = await repository.findById(chat.run.id);
+    assert.equal(orphaned.run.status, agent.AgentRunStatus.Cancelled, `${label}: an ownerless lease-less chat run is closed at recovery`);
+    assert.equal(orphaned.run.cancellationReason, agent.ORPHANED_FOREGROUND_RUN_REASON);
+    assert.ok(orphaned.run.completedAt, `${label}: the closed run is terminal`);
+    assert.ok(
+      orphaned.events.some((event) => event.eventType === 'cancelled' && event.reasonCode === agent.ORPHANED_FOREGROUND_RUN_REASON),
+      `${label}: the closure is recorded with its reason code`
+    );
+    const view = await new agent.GetAgentRunViews(repository).findById(chat.run.id);
+    assert.equal(view.detail, '对话在页面关闭或应用重启时中断，请重新发送');
+
+    const unstarted = await createChatRun('crashed-before-start');
+    await recover.execute();
+    assert.equal((await status(unstarted)).status, agent.AgentRunStatus.Queued, `${label}: a chat about to start is not closed`);
+    clock.value += 31_000;
+    await recover.execute();
+    assert.equal((await status(unstarted)).status, agent.AgentRunStatus.Cancelled, `${label}: a chat left queued by a crash is closed`);
+
+    const blindRecover = new agent.RecoverExpiredAgentRuns(repository, clock, ids, new agent.LockedAgentRunOwnership(null));
+    otherTabRunIds.clear();
+    await blindRecover.execute();
+    assert.equal(
+      (await status(otherTabChat)).status,
+      agent.AgentRunStatus.Running,
+      `${label}: without cross-tab visibility a recent lease-less run may be another tab's and is kept`
+    );
+    clock.value += 16 * 60_000 + 1_000;
+    await blindRecover.execute();
+    assert.equal(
+      (await status(otherTabChat)).status,
+      agent.AgentRunStatus.Cancelled,
+      `${label}: past the chat execution ceiling no tab can still own it`
+    );
+    await store.close?.();
+  }
+  const refusing = new agent.LockedAgentRunOwnership({
+    request() { throw new DOMException('Locks are not available here.', 'SecurityError'); },
+    async query() { return { held: [], pending: [] }; }
+  });
+  const releaseRefused = refusing.hold('AgentRunId:refused-lock');
+  const refusedSnapshot = await refusing.snapshot();
+  assert.equal(refusedSnapshot.coversOtherContexts, false, 'refused locks must not pass for cross-tab visibility');
+  assert.ok(refusedSnapshot.ownedRunIds.has('AgentRunId:refused-lock'), 'this context still knows its own runs');
+  releaseRefused();
+  assert.equal((await refusing.snapshot()).ownedRunIds.size, 0);
+}
+
+function fakeOwnershipLocks(otherContextRunIds) {
+  const held = new Set();
+  return {
+    async request(name, _options, callback) {
+      held.add(name);
+      try {
+        return await callback();
+      } finally {
+        held.delete(name);
+      }
+    },
+    async query() {
+      const other = [...otherContextRunIds].map((id) => `zhangl-agent:agent-run:${id}`);
+      return { held: [...held, ...other].map((name) => ({ name })), pending: [] };
+    }
+  };
+}
+
+async function verifiesReadableFailureMessages(agent, taskMessages) {
+  const failed = (errorCode, errorMessage) => ({
+    run: {
+      id: `run:failure:${errorCode}`,
+      runType: agent.AgentRunType.TutorTurn,
+      status: agent.AgentRunStatus.Failed,
+      targetResourceType: agent.TaskTargetType.BusinessOperation,
+      inputSnapshot: { title: '行测模考', intent: 'mock' },
+      checkpoint: { errorCode, errorMessage, message: errorMessage },
+      errorCode,
+      attemptCount: 1,
+      leaseEpoch: 1,
+      idempotencyKey: `run:failure:${errorCode}`,
+      createdAt: 1,
+      updatedAt: 2,
+      version: 3
+    },
+    events: []
+  });
+  const cases = [
+    [failed('agent_run.version_conflict', 'Agent run version conflict: AgentRunId:mock'), '任务进度同步冲突，请重新执行任务'],
+    [failed('agent.Error', 'Agent run progress requires running status: cancelled'), '任务执行失败，请重新生成'],
+    [failed('agent.TypeError', "Cannot read properties of undefined (reading 'id')"), '任务执行失败，请重新生成'],
+    [failed('content.generation_request_conflict', 'Generation idempotency key was already used for a different request: k'), '同一任务的出题请求前后不一致，已停止以免返回错误的题组，请重新发起'],
+    [failed('agent.Error', '请先完成备考档案。'), '请先完成备考档案。']
+  ];
+  for (const [run, expected] of cases) {
+    const published = [];
+    const projector = new taskMessages.TaskMessageProjector(
+      { async publish(message) { published.push(message); return message; } },
+      { async findById() { return run; } }
+    );
+    await projector.failed(run);
+    assert.equal(published.length, 1);
+    assert.equal(published[0].content, expected, `message center text for ${run.run.errorCode}`);
+    assert.doesNotMatch(published[0].content, /Agent run|Cannot read|idempotency/, 'internal English never reaches the message center');
+    const view = await new agent.GetAgentRunViews({ async findById() { return run; }, async listInvocations() { return []; } })
+      .findById(run.run.id);
+    assert.equal(view.detail, expected, `task center detail for ${run.run.errorCode}`);
+    assert.equal(run.run.errorCode, run.run.checkpoint.errorCode, 'the internal code stays on the run for diagnosis');
+  }
+}
+
+async function sqliteAgentRunStore(sqliteAgentRuns, sqlScope) {
+  const native = new DatabaseSync(':memory:');
+  const migrations = path.join(root, 'src/capabilities/database/migrations');
+  for (const file of (await readdir(migrations)).filter((name) => name.endsWith('.sql')).sort()) {
+    native.exec(await readFile(path.join(migrations, file), 'utf8'));
+  }
+  const database = serializedSqliteDatabase(native);
+  const scope = new sqlScope.SqlTransactionScope();
+  return {
+    label: 'sqlite',
+    native,
+    database,
+    unitOfWork: new sqlScope.SqlUnitOfWork(database, scope),
+    repository: new sqliteAgentRuns.SqliteAgentRunRepository(database, scope),
+    close: async () => native.close()
+  };
+}
+
+function indexedDbAgentRunStore(indexedDbAgentRuns, indexedDbUnitOfWork, database = memoryTutorIndexedDb()) {
+  const scope = new indexedDbUnitOfWork.IndexedDbTransactionScope();
+  return {
+    label: 'indexeddb',
+    database,
+    unitOfWork: new indexedDbUnitOfWork.IndexedDbUnitOfWork(database, scope),
+    repository: new indexedDbAgentRuns.IndexedDbAgentRunRepository(database, scope)
+  };
+}
+
+/**
+ * Mirrors CapacitorSqliteDatabase: one connection, and every statement or
+ * transaction runs behind one lock. A statement issued on the database while
+ * a transaction holds the lock waits for it, exactly as on iOS, and the wait
+ * is bounded so a self-deadlock fails the check instead of hanging it.
+ * (Function declarations, not classes: the checks above run before a class
+ * declaration at the bottom of this module would be initialized.)
+ */
+function serializedSqliteDatabase(native) {
+  let tail = Promise.resolve();
+  const direct = {
+    query: async (sql, parameters = []) => {
+      await yieldToEventLoop();
+      return native.prepare(sql).all(...parameters);
+    },
+    run: async (sql, parameters = []) => {
+      await yieldToEventLoop();
+      return { changes: Number(native.prepare(sql).run(...parameters).changes) };
+    },
+    execute: async (sql) => {
+      await yieldToEventLoop();
+      native.exec(sql);
+    }
+  };
+  const serialized = (work) => {
+    const previous = tail;
+    let release;
+    tail = new Promise((resolve) => { release = resolve; });
+    let timer;
+    const waited = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('SQLite lock wait timed out: a statement waited on its own transaction')), 2_000);
+    });
+    return Promise.race([previous, waited])
+      .finally(() => clearTimeout(timer))
+      .then(work)
+      .finally(release);
+  };
+  return {
+    query: (sql, parameters) => serialized(() => direct.query(sql, parameters)),
+    run: (sql, parameters) => serialized(() => direct.run(sql, parameters)),
+    execute: (sql) => serialized(() => direct.execute(sql)),
+    transaction: (work) => serialized(async () => {
+      native.exec('BEGIN');
+      try {
+        const result = await work(direct);
+        native.exec('COMMIT');
+        return result;
+      } catch (error) {
+        native.exec('ROLLBACK');
+        throw error;
+      }
+    })
+  };
+}
+
+/** Store semantics of TutorIndexedDb (structured clones, atomic batches) without a browser. */
+function memoryTutorIndexedDb() {
+  const stores = new Map();
+  const keyPaths = { agent_run_aggregates: 'runId', agent_run_idempotency: 'idempotencyKey' };
+  const store = (name) => {
+    if (!stores.has(name)) stores.set(name, new Map());
+    return stores.get(name);
+  };
+  const keyOf = (name, value) => {
+    const keyPath = keyPaths[name];
+    if (!keyPath) throw new Error(`Unsupported test store: ${name}`);
+    return value[keyPath];
+  };
+  const apply = (operations) => {
+    for (const operation of operations) {
+      if (operation.type === 'add' && store(operation.store).has(keyOf(operation.store, operation.value))) {
+        throw new DOMException('Key already exists in the object store.', 'ConstraintError');
+      }
+    }
+    for (const operation of operations) {
+      if (operation.type === 'delete') store(operation.store).delete(operation.key);
+      else store(operation.store).set(keyOf(operation.store, operation.value), structuredClone(operation.value));
+    }
+  };
+  const database = {
+    async get(name, key) {
+      await yieldToEventLoop();
+      return structuredClone(store(name).get(key));
+    },
+    async getAll(name) {
+      await yieldToEventLoop();
+      return [...store(name).values()].map((value) => structuredClone(value));
+    },
+    async getAllByIndex(name, index, key) {
+      if (index !== 'by_target') throw new Error(`Unsupported test index: ${index}`);
+      return (await database.getAll(name)).filter((value) => (
+        value.run.targetResourceType === key[0] && value.run.targetResourceId === key[1]
+      ));
+    },
+    async writeBatch(operations) {
+      await yieldToEventLoop();
+      apply(operations);
+    },
+    async mutateStore(name, mutation) {
+      await yieldToEventLoop();
+      const outcome = mutation([...store(name).values()].map((value) => structuredClone(value)));
+      apply(outcome.operations);
+      return outcome.result;
+    }
+  };
+  return database;
+}
+
+function yieldToEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 function deferred() {
   let resolve;

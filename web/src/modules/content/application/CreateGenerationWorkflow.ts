@@ -1,5 +1,6 @@
 import type { UnitOfWork } from '@/capabilities/database/public';
 import {
+  canonicalJson,
   sha256Json,
   type AgentRunId,
   type CapabilityNodeId,
@@ -41,6 +42,21 @@ export interface CreateGenerationWorkflowCommand {
   readonly constraints?: JsonObject;
 }
 
+/**
+ * An idempotency key names exactly one generation request. Reusing it for a
+ * different request is a caller bug: silently answering with the first
+ * request's question set is how every batch of a mock exam once received the
+ * same set, so it fails loudly instead.
+ */
+export class GenerationRequestConflictError extends Error {
+  readonly code = 'content.generation_request_conflict';
+
+  constructor(idempotencyKey: string) {
+    super(`Generation idempotency key was already used for a different request: ${idempotencyKey}`);
+    this.name = 'GenerationRequestConflictError';
+  }
+}
+
 export class CreateGenerationWorkflow {
   constructor(
     private readonly unitOfWork: UnitOfWork,
@@ -57,7 +73,7 @@ export class CreateGenerationWorkflow {
   async execute(command: CreateGenerationWorkflowCommand): Promise<GenerationAggregate> {
     if (!command.idempotencyKey.trim()) throw new Error('Generation idempotency key is required');
     const existing = await this.generationRepository.findByIdempotencyKey(command.idempotencyKey);
-    if (existing) return existing;
+    if (existing) return sameRequestOrThrow(existing, command);
     const [compiled, referencePack, schema, template] = await Promise.all([
       this.contextCompiler.compile(command),
       this.buildReferencePack.execute(command),
@@ -159,10 +175,72 @@ export class CreateGenerationWorkflow {
       return aggregate;
     } catch (error) {
       const concurrent = await this.generationRepository.findByIdempotencyKey(command.idempotencyKey);
-      if (concurrent) return concurrent;
+      if (concurrent) return sameRequestOrThrow(concurrent, command);
       throw error;
     }
   }
+}
+
+function sameRequestOrThrow(
+  aggregate: GenerationAggregate,
+  command: CreateGenerationWorkflowCommand
+): GenerationAggregate {
+  const { spec } = aggregate;
+  // Compared on what the caller asked for, not on what was derived from it: a
+  // retry may land on a newer context snapshot, reference pack or learning
+  // thread and is still the same request. Free-form constraints are left out
+  // for the same reason (their shape evolves between releases, and a run that
+  // retries across an upgrade must still find its generation); their purpose
+  // is compared through the generation intent they resolve to. Fields an older
+  // spec never stored are not held against it.
+  const stored = requestFingerprint({
+    examCycleId: spec.examCycleId,
+    capabilityNodeId: spec.capabilityNodeId,
+    assessmentRole: spec.assessmentRole,
+    requestedCount: spec.requestedCount,
+    difficultyMin: spec.difficulty.min,
+    difficultyMax: spec.difficulty.max,
+    generationIntent: spec.generationIntent,
+    sourceAgentRunId: spec.sourceAgentRunId,
+    teachingBlueprintId: spec.teachingBlueprintId
+  });
+  const requested = requestFingerprint({
+    examCycleId: command.examCycleId,
+    capabilityNodeId: command.capabilityNodeId,
+    assessmentRole: command.assessmentRole,
+    requestedCount: spec.requestedCount === undefined ? undefined : command.requestedCount,
+    difficultyMin: command.difficultyMin,
+    difficultyMax: command.difficultyMax,
+    generationIntent: spec.generationIntent === undefined ? undefined : generationIntent(command),
+    sourceAgentRunId: spec.sourceAgentRunId === undefined ? undefined : command.sourceAgentRunId,
+    teachingBlueprintId: spec.teachingBlueprintId === undefined ? undefined : command.teachingBlueprintId
+  });
+  if (stored !== requested) throw new GenerationRequestConflictError(command.idempotencyKey);
+  return aggregate;
+}
+
+function requestFingerprint(request: {
+  readonly examCycleId: string;
+  readonly capabilityNodeId: string;
+  readonly assessmentRole: string;
+  readonly requestedCount?: number;
+  readonly difficultyMin: unknown;
+  readonly difficultyMax: unknown;
+  readonly generationIntent?: string;
+  readonly sourceAgentRunId?: string;
+  readonly teachingBlueprintId?: string;
+}): string {
+  return canonicalJson({
+    examCycleId: request.examCycleId,
+    capabilityNodeId: request.capabilityNodeId,
+    assessmentRole: request.assessmentRole,
+    requestedCount: request.requestedCount ?? null,
+    difficultyMin: typeof request.difficultyMin === 'number' ? request.difficultyMin : null,
+    difficultyMax: typeof request.difficultyMax === 'number' ? request.difficultyMax : null,
+    generationIntent: request.generationIntent ?? null,
+    sourceAgentRunId: request.sourceAgentRunId ?? null,
+    teachingBlueprintId: request.teachingBlueprintId ?? null
+  });
 }
 
 function generationIntent(command: CreateGenerationWorkflowCommand): QuestionGenerationIntent {

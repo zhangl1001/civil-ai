@@ -8,6 +8,7 @@ import type {
   AgentRunClaimOptions,
   AgentRunEventRecord,
   AgentRunMutationGuard,
+  AgentRunOrphanRecovery,
   AgentRunRecord,
   AgentRunRecoveryOptions,
   AgentRunRepository,
@@ -23,8 +24,13 @@ import {
   type AgentRunType,
   type AgentWorkPool as AgentWorkPoolValue
 } from '../domain/AgentRunCodes';
-import { AgentRunLeaseLostError } from '../domain/AgentRunInterruption';
+import { AgentRunLeaseLostError, AgentRunVersionConflictError } from '../domain/AgentRunInterruption';
+import { CHAT_AGENT_LOOP_TOOL_NAME } from '../domain/ForegroundAgentRuns';
+import { TaskTargetType } from '../domain/TaskCenterCodes';
 import type { InvocationValidationStatus } from '@/capabilities/ai-runtime/public';
+
+/** SQL form of isChatAgentLoopRun; COALESCE keeps rows without a target type claimable. */
+const CHAT_AGENT_LOOP_SQL = `COALESCE(target_resource_type = '${TaskTargetType.ChatTool}' AND json_extract(input_snapshot_json, '$.toolName') = '${CHAT_AGENT_LOOP_TOOL_NAME}', 0)`;
 
 interface RunRow extends SqlRow {
   id: string; root_agent_run_id: string | null; parent_agent_run_id: string | null; run_type: AgentRunType; work_pool: AgentWorkPoolValue; execution_class: AgentExecutionClassValue; status: AgentRunStatus; exam_cycle_id: string | null; learning_thread_id: string | null;
@@ -67,11 +73,18 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
       if (guard && !await hasActiveLeaseInTransaction(tx, guard.leaseToken, guard.now)) {
         throw new AgentRunLeaseLostError(run.id);
       }
-      throw new Error(`Agent run version conflict: ${run.id}`);
+      throw new AgentRunVersionConflictError(run.id);
     }
     await insertEvent(tx, event);
   }
   async findById(runId: AgentRunId): Promise<AgentRunAggregate | undefined> { return this.find('id = ?', [runId]); }
+  async findByIdInTransaction(runId: AgentRunId, context: TransactionContext): Promise<AgentRunAggregate | undefined> {
+    const tx = this.transactionScope.resolve(context);
+    const [row] = await tx.query<RunRow>('SELECT * FROM tutor_agent_runs WHERE id = ? LIMIT 1', [runId]);
+    if (!row) return undefined;
+    const events = await tx.query<EventRow>('SELECT * FROM tutor_agent_run_events WHERE agent_run_id = ? ORDER BY occurred_at, id', [runId]);
+    return { run: mapRun(row), events: events.map(mapEvent) };
+  }
   async findByIdempotencyKey(key: string): Promise<AgentRunAggregate | undefined> { return this.find('idempotency_key = ?', [key]); }
   async findLatestByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{return this.find('target_resource_type = ? AND target_resource_id = ? ORDER BY updated_at DESC, id DESC',[type,id]);}
   async findActiveByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{return this.find("target_resource_type = ? AND target_resource_id = ? AND status IN ('queued','running','waiting_user') ORDER BY updated_at DESC, id DESC",[type,id]);}
@@ -108,7 +121,7 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
   }
   async listRunnable(now: InstantMs, limit: number): Promise<readonly AgentRunAggregate[]> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 3) throw new RangeError('Agent runnable limit must be between 1 and 3');
-    const rows = await this.database.query<RunRow>(`SELECT * FROM tutor_agent_runs WHERE status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?) ORDER BY updated_at, id LIMIT ?`, [now, limit]);
+    const rows = await this.database.query<RunRow>(`SELECT * FROM tutor_agent_runs WHERE status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?) AND NOT ${CHAT_AGENT_LOOP_SQL} ORDER BY updated_at, id LIMIT ?`, [now, limit]);
     return Promise.all(rows.map((row) => this.load(row)));
   }
   async nextWorkAt(now: InstantMs, workPools?: readonly AgentWorkPoolValue[], executionClasses?: readonly AgentExecutionClassValue[]): Promise<InstantMs | undefined> {
@@ -116,16 +129,19 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
     const classes = normalizeExecutionClasses(executionClasses);
     const poolFilter = pools.length ? ` AND work_pool IN (${pools.map(() => '?').join(',')})` : '';
     const classFilter = classes.length ? ` AND execution_class IN (${classes.map(() => '?').join(',')})` : '';
+    // A running run is worker work only through its lease: without one it is
+    // driven by a foreground controller and must not wake the lanes. The chat
+    // loop is never worker work, queued or not.
     const rows = await this.database.query<{ next_work_at: number | null }>(
       `SELECT MIN(
          CASE
            WHEN status='queued' THEN COALESCE(next_run_at, ?)
-           WHEN status='running' THEN COALESCE(lease_expires_at, ?)
+           WHEN status='running' THEN lease_expires_at
          END
        ) AS next_work_at
        FROM tutor_agent_runs
-       WHERE status IN ('queued','running')${poolFilter}${classFilter}`,
-      [now, now, ...pools, ...classes]
+       WHERE status IN ('queued','running') AND NOT ${CHAT_AGENT_LOOP_SQL}${poolFilter}${classFilter}`,
+      [now, ...pools, ...classes]
     );
     return rows[0]?.next_work_at === null || rows[0]?.next_work_at === undefined
       ? undefined
@@ -148,7 +164,7 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
     return this.database.transaction(async (tx) => {
       const rows = await tx.query<RunRow>(
         `SELECT * FROM tutor_agent_runs
-         WHERE status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?)${poolFilter}${classFilter}
+         WHERE status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?) AND NOT ${CHAT_AGENT_LOOP_SQL}${poolFilter}${classFilter}
          ORDER BY ${classOrder}${poolOrder} updated_at, id LIMIT ?`,
         [options.now, ...pools, ...classes, ...classOrderParameters, ...poolOrderParameters, options.limit]
       );
@@ -180,8 +196,9 @@ export class SqliteAgentRunRepository implements AgentRunRepository {
     return rows[0]?.total === 1;
   }
   async recoverExpiredLeases(options: AgentRunRecoveryOptions): Promise<readonly AgentRunAggregate[]> {
-    if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100 || options.eventIds.length < options.limit) throw new Error('Invalid agent run recovery options');
+    if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100 || options.eventIds.length < options.limit || (options.orphans && options.orphans.eventIds.length < options.limit)) throw new Error('Invalid agent run recovery options');
     return this.database.transaction(async (tx) => {
+      if (options.orphans) await closeOrphanedForegroundRuns(tx, options.orphans, options.now, options.limit);
       const rows = await tx.query<RunRow>(`SELECT * FROM tutor_agent_runs WHERE status='running' AND lease_expires_at <= ? ORDER BY lease_expires_at, id LIMIT ?`, [options.now, options.limit]);
       const recovered: AgentRunAggregate[] = [];
       for (let index=0; index<rows.length; index+=1) { const row=rows[index]; const result=await tx.run(`UPDATE tutor_agent_runs SET status='queued', next_run_at=?, lease_owner=NULL, lease_expires_at=NULL, updated_at=?, version=version+1 WHERE id=? AND version=? AND status='running' AND lease_expires_at <= ?`, [options.now,options.now,row.id,row.version,options.now]); if(result.changes!==1)continue; const event:AgentRunEventRecord={id:options.eventIds[index],agentRunId:row.id as AgentRunId,eventType:'recovered',fromStatus:'running',toStatus:'queued',reasonCode:'agent_run.lease_expired',payload:{},occurredAt:options.now,idempotencyKey:`agent-run:${row.id}:recover:${row.version+1}`};await insertEvent(tx,event);recovered.push({run:{...mapRun(row),status:'queued',nextRunAt:options.now,leaseOwner:undefined,leaseExpiresAt:undefined,updatedAt:options.now,version:row.version+1},events:[event]}); }
@@ -222,6 +239,44 @@ function assertMutationGuard(runId: AgentRunId, guard?: AgentRunMutationGuard): 
   const token = guard.leaseToken;
   if (token.agentRunId !== runId || !token.workerId.trim() || token.leaseEpoch < 1) {
     throw new Error(`Invalid agent run lease token: ${runId}`);
+  }
+}
+
+async function closeOrphanedForegroundRuns(
+  tx: SqlTransaction,
+  orphans: AgentRunOrphanRecovery,
+  now: InstantMs,
+  limit: number
+): Promise<void> {
+  const owned = [...new Set(orphans.ownedRunIds)];
+  const ownedFilter = owned.length ? ` AND id NOT IN (${owned.map(() => '?').join(',')})` : '';
+  const rows = await tx.query<RunRow>(
+    `SELECT * FROM tutor_agent_runs
+     WHERE ((status='running' AND lease_expires_at IS NULL AND updated_at < ?)
+        OR (status='queued' AND ${CHAT_AGENT_LOOP_SQL} AND updated_at < ?))${ownedFilter}
+     ORDER BY updated_at, id LIMIT ?`,
+    [orphans.runningUpdatedBefore, orphans.queuedUpdatedBefore, ...owned, limit]
+  );
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const result = await tx.run(
+      `UPDATE tutor_agent_runs
+       SET status='cancelled', cancellation_reason=?, error_code=NULL, next_run_at=NULL, lease_owner=NULL, lease_expires_at=NULL, completed_at=?, updated_at=?, version=version+1
+       WHERE id=? AND version=? AND status=? AND lease_expires_at IS NULL`,
+      [orphans.reasonCode, now, now, row.id, row.version, row.status]
+    );
+    if (result.changes !== 1) continue;
+    await insertEvent(tx, {
+      id: orphans.eventIds[index],
+      agentRunId: row.id as AgentRunId,
+      eventType: 'cancelled',
+      fromStatus: row.status,
+      toStatus: 'cancelled',
+      reasonCode: orphans.reasonCode,
+      payload: { lastUpdatedAt: row.updated_at },
+      occurredAt: now,
+      idempotencyKey: `agent-run:${row.id}:orphaned:${row.version + 1}`
+    });
   }
 }
 
