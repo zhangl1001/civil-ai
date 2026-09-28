@@ -147,8 +147,8 @@
               </div>
 
               <div v-else-if="activeSheet === 'reminder'" class="sheet-body">
-                <label>
-                  <span>私教主动程度</span>
+                <div class="sheet-field" role="group" :aria-labelledby="`${fieldId}-proactive`">
+                  <span :id="`${fieldId}-proactive`">私教主动程度</span>
                   <div class="option-group">
                     <button
                       v-for="item in proactiveOptions"
@@ -160,7 +160,7 @@
                       {{ item.label }}
                     </button>
                   </div>
-                </label>
+                </div>
                 <button class="toggle-row toggle-button" type="button" @click="reminderForm.enabled = !reminderForm.enabled">
                   <span>开启每日提醒</span>
                   <i :class="['switch-control', { active: reminderForm.enabled }]" aria-hidden="true"></i>
@@ -237,14 +237,14 @@
               </div>
 
               <div v-else class="sheet-body">
-                <label>
-                  <span>服务商</span>
+                <div class="sheet-field" role="group" :aria-labelledby="`${fieldId}-provider`">
+                  <span :id="`${fieldId}-provider`">服务商</span>
                   <div class="option-group provider-options">
                     <button v-for="item in aiProviderOptions" :key="item.value" type="button" :class="{ active: aiForm.provider === item.value }" @click="aiForm.provider = item.value">
                       {{ item.label }}
                     </button>
                   </div>
-                </label>
+                </div>
                 <label>
                   <span>Base URL</span>
                   <input v-model="aiForm.baseUrl" placeholder="https://api.openai.com/v1" />
@@ -261,8 +261,8 @@
                   <span>流式输出</span>
                   <i :class="['switch-control', { active: aiForm.streamingEnabled !== false }]" aria-hidden="true"></i>
                 </button>
-                <label>
-                  <span>并发任务</span>
+                <div class="sheet-field" role="group" :aria-labelledby="`${fieldId}-concurrency`">
+                  <span :id="`${fieldId}-concurrency`">并发任务</span>
                   <div class="option-group concurrency-options">
                     <button
                       v-for="count in AI_TASK_CONCURRENCY_OPTIONS"
@@ -275,7 +275,7 @@
                     </button>
                   </div>
                   <small>同时最多执行 {{ aiForm.maxConcurrentTasks }} 个 AI 任务，遇到限流会自动降速</small>
-                </label>
+                </div>
                 <WebResearchSettingsFields
                   v-model:enabled="webResearchForm.enabled"
                   v-model:provider="webResearchForm.provider"
@@ -311,7 +311,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, useId } from 'vue';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
@@ -371,6 +371,7 @@ import {
 defineOptions({ name: 'ProfileView' });
 
 const router = useRouter();
+const fieldId = useId();
 let candidateProfileFeaturePromise: Promise<CandidateProfileFeature> | undefined;
 const cachedCandidateSnapshot = peekCandidateProfileSnapshot();
 const isSavingConfig = ref(false);

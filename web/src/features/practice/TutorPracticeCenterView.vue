@@ -124,8 +124,8 @@
     </PullToRefresh>
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
       <div class="custom-sheet">
-        <label>
-          <span>模块</span>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-module`">
+          <span :id="`${fieldId}-module`">模块</span>
           <div class="choice-row">
             <button
               v-for="item in availableModules"
@@ -137,9 +137,9 @@
               {{ item.name }}
             </button>
           </div>
-        </label>
-        <label>
-          <span>题型</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-question-type`">
+          <span :id="`${fieldId}-question-type`">题型</span>
           <div class="choice-row">
             <button
               v-for="item in availableQuestionTypes"
@@ -151,9 +151,9 @@
               {{ item.name }}
             </button>
           </div>
-        </label>
-        <label>
-          <span>考点</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-capability`">
+          <span :id="`${fieldId}-capability`">考点</span>
           <div class="capability-list">
             <button
               v-for="item in filteredCapabilities"
@@ -165,15 +165,15 @@
               {{ item.name }}
             </button>
           </div>
-        </label>
-        <label>
-          <span>题量</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-count`">
+          <span :id="`${fieldId}-count`">题量</span>
           <div class="choice-row">
             <button v-for="count in [5, 10, 15, 20, 25]" :key="count" type="button" :class="{ active: customCount === count }" @click="customCount = count">
               {{ count }}题
             </button>
           </div>
-        </label>
+        </div>
         <button class="generate-button" type="button" :disabled="launching || !selectedCustomCapability" @click="generateCustom">
           <SparklesIcon />
           {{ launching ? '正在创建任务' : '生成并开始练习' }}
@@ -183,51 +183,51 @@
 
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showTrueFilterSheet" title="筛选真题" subtitle="只筛选来源元数据，不读取题目正文" variant="filter">
       <div class="custom-sheet">
-        <label>
-          <span>来源</span>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-origin`">
+          <span :id="`${fieldId}-origin`">来源</span>
           <div class="choice-row">
             <button type="button" :class="{ active: trueOriginFilter === 'all' }" @click="trueOriginFilter = 'all'">全部</button>
             <button type="button" :class="{ active: trueOriginFilter === QuestionOriginType.Official }" @click="trueOriginFilter = QuestionOriginType.Official">官方真题</button>
             <button type="button" :class="{ active: trueOriginFilter === QuestionOriginType.Imported }" @click="trueOriginFilter = QuestionOriginType.Imported">导入题</button>
             <button type="button" :class="{ active: trueOriginFilter === QuestionOriginType.UserCreated }" @click="trueOriginFilter = QuestionOriginType.UserCreated">自建题</button>
           </div>
-        </label>
-        <label v-if="trueQuestionYears.length">
-          <span>年份</span>
+        </div>
+        <div v-if="trueQuestionYears.length" class="choice-field" role="group" :aria-labelledby="`${fieldId}-year`">
+          <span :id="`${fieldId}-year`">年份</span>
           <div class="choice-row">
             <button type="button" :class="{ active: !trueYearFilter }" @click="trueYearFilter = 0">全部</button>
             <button v-for="year in trueQuestionYears" :key="year" type="button" :class="{ active: trueYearFilter === year }" @click="trueYearFilter = year">{{ year }}年</button>
           </div>
-        </label>
-        <label v-if="trueQuestionProvinces.length">
-          <span>地区</span>
+        </div>
+        <div v-if="trueQuestionProvinces.length" class="choice-field" role="group" :aria-labelledby="`${fieldId}-province`">
+          <span :id="`${fieldId}-province`">地区</span>
           <div class="choice-row">
             <button type="button" :class="{ active: !trueProvinceFilter }" @click="trueProvinceFilter = ''">全部</button>
             <button v-for="province in trueQuestionProvinces" :key="province" type="button" :class="{ active: trueProvinceFilter === province }" @click="trueProvinceFilter = province">{{ province }}</button>
           </div>
-        </label>
-        <label v-if="trueQuestionModules.length">
-          <span>模块</span>
+        </div>
+        <div v-if="trueQuestionModules.length" class="choice-field" role="group" :aria-labelledby="`${fieldId}-true-module`">
+          <span :id="`${fieldId}-true-module`">模块</span>
           <div class="choice-row">
             <button type="button" :class="{ active: !trueModuleFilter }" @click="trueModuleFilter = ''">全部</button>
             <button v-for="module in trueQuestionModules" :key="module" type="button" :class="{ active: trueModuleFilter === module }" @click="trueModuleFilter = module">{{ moduleLabel(module) }}</button>
           </div>
-        </label>
-        <label>
-          <span>练习状态</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-status`">
+          <span :id="`${fieldId}-status`">练习状态</span>
           <div class="choice-row">
             <button type="button" :class="{ active: trueStatusFilter === 'all' }" @click="trueStatusFilter = 'all'">全部</button>
             <button type="button" :class="{ active: trueStatusFilter === QuestionSetPracticeStatus.NotStarted }" @click="trueStatusFilter = QuestionSetPracticeStatus.NotStarted">未练习</button>
             <button type="button" :class="{ active: trueStatusFilter === QuestionSetPracticeStatus.InProgress }" @click="trueStatusFilter = QuestionSetPracticeStatus.InProgress">进行中</button>
             <button type="button" :class="{ active: trueStatusFilter === QuestionSetPracticeStatus.Completed }" @click="trueStatusFilter = QuestionSetPracticeStatus.Completed">已完成</button>
           </div>
-        </label>
-        <label>
-          <span>专项题量</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-true-count`">
+          <span :id="`${fieldId}-true-count`">专项题量</span>
           <div class="choice-row">
             <button v-for="count in [5, 10, 15, 20, 25, 30]" :key="count" type="button" :class="{ active: truePracticeCount === count }" @click="truePracticeCount = count">{{ count }}题</button>
           </div>
-        </label>
+        </div>
         <div class="filter-footer">
           <button type="button" class="filter-reset" @click="resetTrueQuestionFilters">重置</button>
           <button type="button" class="filter-apply" @click="showTrueFilterSheet = false">
@@ -249,7 +249,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ChevronRightIcon, LandmarkIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
@@ -295,6 +295,7 @@ import { PracticeSubject, type PracticeSubject as PracticeSubjectCode } from './
 type PracticeMode = PracticeCenterMode;
 const route = useRoute();
 const router = useRouter();
+const fieldId = useId();
 const loading = ref(true);
 const launching = ref(false);
 const error = ref('');
@@ -833,9 +834,9 @@ function roleLabel(role: string) {
 .generation-card em { margin-top:4px; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .generation-card>svg { width:16px; height:16px; color:var(--text-secondary-color); }
 .page-error { margin:0; color:var(--red-color); font-size:var(--type-size-caption); }
-.custom-sheet,.custom-sheet label { display:flex; flex-direction:column; gap:9px; }
+.custom-sheet,.custom-sheet .choice-field { display:flex; flex-direction:column; gap:9px; }
 .custom-sheet { gap:15px; }
-.custom-sheet label>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
+.custom-sheet .choice-field>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 .choice-row { display:flex; flex-wrap:wrap; gap:7px; }
 .choice-row button,.capability-list button { min-height:34px; border:0; border-radius:999px; padding:0 11px; color:var(--text-secondary-color); background:var(--surface-control); font:inherit; font-size:var(--type-size-caption); }
 .choice-row button.active,.capability-list button.active { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.13); font-weight:var(--type-weight-semibold); }

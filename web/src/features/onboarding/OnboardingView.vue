@@ -28,7 +28,7 @@
         <FormField label="计划名称" :error="fieldErrors.projectName">
           <input v-model.trim="form.projectName" placeholder="例如：2027 国考" maxlength="80" />
         </FormField>
-        <FormField v-if="examPackOptions.length > 1" label="备考方向">
+        <FormField v-if="examPackOptions.length > 1" label="备考方向" group>
           <SegmentedControl
             :model-value="form.examType"
             label="备考方向"
@@ -36,7 +36,7 @@
             @update:model-value="switchExamPack"
           />
         </FormField>
-        <FormField v-if="isRegionScoped" label="考试范围">
+        <FormField v-if="isRegionScoped" label="考试范围" group>
           <SegmentedControl v-model="form.examScope" label="考试范围" :options="examScopeOptions" />
         </FormField>
         <div class="form-grid">
@@ -52,7 +52,7 @@
               @input="formatExamDateInput"
             />
           </FormField>
-          <FormField v-if="isRegionScoped" label="报考地区">
+          <FormField v-if="isRegionScoped" label="报考地区" group>
             <div class="province-picker" role="listbox" aria-label="报考地区">
               <button
                 v-for="item in provinceOptions"
@@ -106,7 +106,7 @@
           </div>
         </header>
 
-        <FormField label="备考状态">
+        <FormField label="备考状态" group>
           <SegmentedControl v-model="form.studyMode" label="备考状态" :options="studyModeOptions" />
         </FormField>
         <div class="form-grid">
@@ -123,10 +123,10 @@
             <input v-model.number="form.weekendMinutes" type="number" inputmode="numeric" min="0" max="1440" step="10" />
           </FormField>
         </div>
-        <FormField label="教学顺序">
+        <FormField label="教学顺序" group>
           <SegmentedControl v-model="form.teachingOrder" label="教学顺序" :options="teachingOrderOptions" />
         </FormField>
-        <FormField label="AI 主动程度">
+        <FormField label="AI 主动程度" group>
           <SegmentedControl v-model="form.proactiveLevel" label="AI 主动程度" :options="proactiveOptions" />
         </FormField>
         <p v-if="fieldErrors.study" class="section-error">{{ fieldErrors.study }}</p>

@@ -1,18 +1,33 @@
 <template>
-  <label class="form-field">
-    <span class="form-field-label">{{ label }}</span>
+  <component
+    :is="group ? 'div' : 'label'"
+    class="form-field"
+    :role="group ? 'group' : undefined"
+    :aria-labelledby="group ? labelId : undefined"
+  >
+    <span :id="group ? labelId : undefined" class="form-field-label">{{ label }}</span>
     <slot></slot>
     <small v-if="error" class="form-field-error">{{ error }}</small>
     <small v-else-if="hint" class="form-field-hint">{{ hint }}</small>
-  </label>
+  </component>
 </template>
 
 <script setup lang="ts">
+import { useId } from 'vue';
+
 defineProps<{
   label: string;
   hint?: string;
   error?: string;
+  /**
+   * Set when the field holds buttons (a segmented control, a chip picker). A
+   * <label> activates its first labelable descendant on any tap inside it, so
+   * tapping the caption would silently select the first option.
+   */
+  group?: boolean;
 }>();
+
+const labelId = useId();
 </script>
 
 <style scoped>
