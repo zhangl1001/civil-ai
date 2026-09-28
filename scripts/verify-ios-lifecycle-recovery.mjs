@@ -19,6 +19,7 @@ try {
   const { TutorDatabaseLifecycleCoordinator } = await server.ssrLoadModule(
     '/src/composition-root/database/TutorDatabaseLifecycleCoordinator.ts'
   );
+  const { TutorDatabaseBusyError } = await server.ssrLoadModule('/src/capabilities/database/public.ts');
 
   const lifecycle = createFakeLifecycle();
   const timers = createFakeTimers();
@@ -86,6 +87,25 @@ try {
   await healthCoordinator.waitUntilReady();
   assert.deepEqual(healthCalls, ['health', 'recover:health_check_failed', 'agent-runs']);
   healthCoordinator.dispose();
+
+  // A busy connection is held by work inside its own deadline; recovery would roll that work back.
+  const busyLifecycle = createFakeLifecycle();
+  const busyTimers = createFakeTimers();
+  const busyCalls = [];
+  const busyCoordinator = new TutorDatabaseLifecycleCoordinator(dependencies(busyLifecycle, busyTimers));
+  busyCoordinator.install(createRuntime({
+    healthCheck: async () => {
+      busyCalls.push('health');
+      throw new TutorDatabaseBusyError('health_check');
+    },
+    recoverAfterInterruption: async (reason) => busyCalls.push(`recover:${reason}`)
+  }));
+  await busyTimers.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  await busyCoordinator.waitUntilReady();
+  assert.deepEqual(busyCalls, ['health'], 'a busy health check must not recover the connection');
+  assert.equal(busyTimers.pendingCount, 1, 'a busy health check reschedules the next check');
+  busyCoordinator.dispose();
 
   console.log('iOS lifecycle recovery verification passed.');
 } finally {
