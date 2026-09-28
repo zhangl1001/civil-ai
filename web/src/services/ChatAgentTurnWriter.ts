@@ -36,6 +36,8 @@ export interface ChatAgentTurnWriterOptions {
  */
 export class ChatAgentTurnWriter {
   private turnText = '';
+  /** Text of the next turn, held back until it has something to show. */
+  private nextTurnText = '';
   private provisional = false;
   private replaceOnNextDelta = false;
   private streamPublished = false;
@@ -81,6 +83,7 @@ export class ChatAgentTurnWriter {
   startTurn(): void {
     if (!this.turnText) return;
     this.replaceOnNextDelta = true;
+    this.nextTurnText = '';
     this.markProvisional();
   }
 
@@ -92,11 +95,17 @@ export class ChatAgentTurnWriter {
   appendDelta(delta: string): void {
     if (!delta || this.settled) return;
     if (this.replaceOnNextDelta) {
-      this.turnText = '';
+      // Keep the provisional preamble on screen until the next turn has
+      // visible text; a leading "#" or "<think>" alone would blank the bubble.
+      this.nextTurnText += delta;
+      if (!hasVisibleAssistantContent(visibleAssistantText(this.nextTurnText))) return;
+      this.turnText = this.nextTurnText;
+      this.nextTurnText = '';
       this.replaceOnNextDelta = false;
       this.provisional = false;
+    } else {
+      this.turnText += delta;
     }
-    this.turnText += delta;
     this.schedule(false);
   }
 

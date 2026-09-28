@@ -451,6 +451,27 @@ async function verifyChatAgentService() {
     assert.equal(coalesced.length, 2, 'the coalesced burst is published once after the interval');
     assert.equal(coalesced.at(-1), Array.from({ length: 50 }, (_, index) => `字${index}`).join(''));
     coalescingWriter.dispose();
+    const preambleUpdates = [];
+    const preambleWriter = new ChatAgentTurnWriter({
+      sessionId: 'session:preamble',
+      streamMessageId: 'stream:preamble',
+      repository: { async addMessage() { throw new Error('not persisted in this check'); }, async updateMessageMeta() {} },
+      publish: (update) => { preambleUpdates.push(update); },
+      publishIntervalMs: 0
+    });
+    preambleWriter.appendDelta('我先看一下时间。');
+    preambleWriter.markToolCall();
+    preambleWriter.startTurn();
+    preambleWriter.appendDelta('#');
+    preambleWriter.appendDelta('# ');
+    assert.deepEqual(
+      preambleUpdates.map((update) => [update.content, Boolean(update.provisional)]),
+      [['我先看一下时间。', false], ['我先看一下时间。', true]],
+      'the provisional preamble stays until the next turn has visible text'
+    );
+    preambleWriter.appendDelta('今日建议');
+    assert.deepEqual([preambleUpdates.at(-1).content, Boolean(preambleUpdates.at(-1).provisional)], ['## 今日建议', false]);
+    preambleWriter.dispose();
 
     const streamed = [];
     let loopReturned = false;
