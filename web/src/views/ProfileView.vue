@@ -251,7 +251,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, useId } from 'vue';
+import { computed, onDeactivated, onMounted, reactive, ref, useId } from 'vue';
 import { useRouter } from 'vue-router';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
@@ -388,6 +388,13 @@ onMounted(() => {
   void aiSettings.load();
   void loadReminderStatus();
   void loadProfileStats();
+});
+
+// Sheets and dialogs are teleported to <body>. This page stays mounted in the
+// tab cache, so one left open would keep covering whatever route comes next.
+onDeactivated(() => {
+  closeSheet();
+  showClearLearningConfirm.value = false;
 });
 
 /**

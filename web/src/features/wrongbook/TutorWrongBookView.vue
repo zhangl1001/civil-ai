@@ -163,7 +163,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, useId, watch } from 'vue';
+import { computed, onDeactivated, onMounted, ref, useId, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { CheckIcon, ChevronDownIcon, FilterIcon, LayersIcon, MinusIcon, NotebookPenIcon } from 'lucide-vue-next';
 import { AppStateView, FloatingActionButton, InfiniteScrollPagination, InitialRefreshState, PullToRefresh, SegmentedControl } from '@/capabilities/design-system/public';
@@ -225,6 +225,8 @@ onMounted(() => { void load(); });
 // Reloading keeps the listed entries on screen: `loaded` stays true, so the
 // refresh placeholder never comes back once the first page has arrived.
 useCachedViewRefresh(load);
+// The filter sheet and flashcards are teleported; this cached tab root must not leave them over the next route.
+onDeactivated(() => { showFilter.value = false; showFlashcards.value = false; });
 watch(filtered, () => { if (flashcardIndex.value >= filtered.value.length) flashcardIndex.value = Math.max(0, filtered.value.length - 1); });
 watch(flashcardIndex, () => { revealed.value = false; });
 watch(mode, (next) => {
