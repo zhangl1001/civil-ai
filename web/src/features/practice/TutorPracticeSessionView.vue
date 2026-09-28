@@ -159,7 +159,7 @@ import type { AssessmentRole } from '@/kernel/public';
 import { correctOptionIdsOf, hasCompleteExplanation, isMultiAnswerChoice, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
 import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, isMistakenAttempt, submittedOptionIds, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
 import { useAIChatStore } from '@/stores/aiChat';
-import { PracticeSessionFeature } from './PracticeSessionFeature';
+import { applyCompletedQuestionSets, PracticeSessionFeature } from './PracticeSessionFeature';
 import { PracticeSessionDraftService, type PracticeSessionDraftIdentity } from './PracticeSessionDraftService';
 import { resolveQuestionSwipe } from './QuestionSwipeNavigation';
 import { submitPracticeBundle } from './SubmitPracticeBundle';
@@ -204,11 +204,9 @@ const { contentCompleting, submissionPersisted, needsCompletion: loadedContentNe
   completeBeforeReview, refreshInBackground: refreshContentInBackground } = usePracticeContentCompletion({
   sessionFeature,
   applyCompletedContent: (completed) => {
-    const byId = new Map(completed.map((item) => [item.questionSet.id, item]));
-    if (bundle.value) bundle.value = byId.get(bundle.value.questionSet.id) || bundle.value;
-    manifestSections.value = manifestSections.value.map((item) => ({
-      ...item, bundle: byId.get(item.bundle.questionSet.id) || item.bundle
-    }));
+    const next = applyCompletedQuestionSets({ bundle: bundle.value, sections: manifestSections.value }, completed);
+    bundle.value = next.bundle;
+    manifestSections.value = next.sections;
   }
 });
 const question = computed(() => bundle.value?.questions[index.value]);

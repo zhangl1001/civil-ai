@@ -233,6 +233,29 @@ function selectQuestionSubset(
   };
 }
 
+/**
+ * Swaps question sets whose explanations just finished into an open session.
+ * A manifest paper (a mock, a redo) merges several sets under its first set's
+ * id, so it is rebuilt from its completed sections: swapping by id replaced
+ * the whole paper with that first set the moment its explanations landed,
+ * which turned a freshly generated 60-question mock into a 12-question set.
+ */
+export function applyCompletedQuestionSets<Section extends { readonly bundle: CommittedQuestionSetBundle }>(
+  current: { readonly bundle?: CommittedQuestionSetBundle; readonly sections: readonly Section[] },
+  completed: readonly CommittedQuestionSetBundle[]
+): { bundle?: CommittedQuestionSetBundle; sections: Section[] } {
+  const byId = new Map(completed.map((item) => [item.questionSet.id, item]));
+  const sections = current.sections.map((section) => ({
+    ...section,
+    bundle: byId.get(section.bundle.questionSet.id) || section.bundle
+  }));
+  if (!current.bundle) return { bundle: current.bundle, sections };
+  const bundle = sections.length
+    ? mergeQuestionBundles(sections.map((section) => section.bundle), current.bundle.questionSet.module)
+    : byId.get(current.bundle.questionSet.id) || current.bundle;
+  return { bundle, sections };
+}
+
 function mergeQuestionBundles(
   values: readonly CommittedQuestionSetBundle[],
   module?: string

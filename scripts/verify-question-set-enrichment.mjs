@@ -216,6 +216,7 @@ try {
   cancellationController.abort(new Error('user cancelled'));
   await assert.rejects(cancelled, /user cancelled/);
   assert.equal(appliedAfterCancellation, 0, 'cancelled enrichment must not commit late shard results');
+  await verifiesManifestPaperSurvivesCompletion();
   console.log('Question-set enrichment verification passed (8 questions, 3 compact requests, peak concurrency 3).');
 } finally {
   await server.close();
@@ -338,4 +339,44 @@ function abortableDelay(ms, signal) {
       reject(signal.reason);
     }, { once: true });
   });
+}
+
+/**
+ * Explanations finish per question set while a merged paper (mock, redo) is
+ * open. The paper carries its first set's id, so swapping completed sets in by
+ * id used to replace the whole 60-question paper with that first set.
+ */
+async function verifiesManifestPaperSurvivesCompletion() {
+  const { applyCompletedQuestionSets } = await server.ssrLoadModule('/src/features/practice/PracticeSessionFeature.ts');
+  const set = (id, questionIds, explained = false) => ({
+    questionSet: { id, module: `module:${id}`, questionCount: questionIds.length },
+    questions: questionIds.map((questionId) => ({ id: questionId, content: { explanation: explained ? `解析 ${questionId}` : '' } })),
+    documents: [{ id: `document:${id}` }],
+    lectures: [{ id: `lecture:${id}` }],
+    lectureLinks: [],
+    capabilityLinks: []
+  });
+  const first = set('set:first', ['q1', 'q2']);
+  const second = set('set:second', ['q3', 'q4']);
+  const paper = {
+    ...first,
+    documents: [],
+    lectures: [],
+    questions: [...first.questions, ...second.questions],
+    questionSet: { ...first.questionSet, module: '行测模考', questionCount: 4 }
+  };
+  const sections = [
+    { bundle: first, learningThreadId: 'thread:first', module: '判断推理' },
+    { bundle: second, learningThreadId: 'thread:second', module: '言语理解' }
+  ];
+  const completedFirst = set('set:first', ['q1', 'q2'], true);
+  const next = applyCompletedQuestionSets({ bundle: paper, sections }, [completedFirst]);
+  assert.equal(next.bundle.questions.length, 4, 'the merged paper keeps every section after its first set completes');
+  assert.equal(next.bundle.questionSet.module, '行测模考', 'the paper keeps its own title');
+  assert.equal(next.bundle.lectures.length, 0, 'a merged paper never gains a single set lecture tab');
+  assert.equal(next.bundle.questions[0].content.explanation, '解析 q1', 'completed explanations reach the paper');
+  assert.equal(next.sections[0].bundle, completedFirst);
+  assert.equal(next.sections[1].bundle, second);
+  const single = applyCompletedQuestionSets({ bundle: first, sections: [] }, [completedFirst]);
+  assert.equal(single.bundle, completedFirst, 'a single set session still takes its completed bundle');
 }
