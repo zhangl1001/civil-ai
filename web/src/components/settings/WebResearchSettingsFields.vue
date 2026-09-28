@@ -4,8 +4,8 @@
     <i :class="['switch-control', { active: enabled }]" aria-hidden="true"></i>
   </button>
   <template v-if="enabled">
-    <label>
-      <span>搜索服务</span>
+    <div class="sheet-field" role="group" :aria-labelledby="`${fieldId}-provider`">
+      <span :id="`${fieldId}-provider`">搜索服务</span>
       <div class="option-group provider-options">
         <button
           v-for="item in providerOptions"
@@ -18,7 +18,7 @@
         </button>
       </div>
       <small>按需调用搜索与网页读取，失败时自动切换可用来源</small>
-    </label>
+    </div>
     <label v-if="provider !== WebSearchProvider.Auto && provider !== WebSearchProvider.SearXNG">
       <span>搜索 API Key</span>
       <input v-model="apiKey" type="password" placeholder="未填写时使用内置搜索兜底" autocomplete="off" />
@@ -49,6 +49,7 @@
 </template>
 
 <script setup lang="ts">
+import { useId } from 'vue';
 import {
   WebSearchProvider,
   type WebSearchProviderCode
@@ -58,6 +59,7 @@ defineProps<{
   providerOptions: ReadonlyArray<{ value: WebSearchProviderCode; label: string }>;
 }>();
 
+const fieldId = useId();
 const enabled = defineModel<boolean>('enabled', { required: true });
 const provider = defineModel<WebSearchProviderCode>('provider', { required: true });
 const apiKey = defineModel<string>('apiKey', { required: true });

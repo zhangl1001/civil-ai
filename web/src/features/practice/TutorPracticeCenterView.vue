@@ -120,12 +120,13 @@
         :daily-plan-item-id="queryText(route.query.dailyPlanItemId)"
         :capability-node-id="queryText(route.query.capabilityNodeId)"
         :auto-start="route.query.mode === 'tutor' && Boolean(route.query.start)"
+        @auto-start-handled="consumeAutoStartRequest"
       />
     </PullToRefresh>
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showCustomSheet" title="自主刷题" subtitle="按模块、考点和题量生成" variant="filter">
       <div class="custom-sheet">
-        <label>
-          <span>模块</span>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-module`">
+          <span :id="`${fieldId}-module`">模块</span>
           <div class="choice-row">
             <button
               v-for="item in availableModules"
@@ -137,9 +138,9 @@
               {{ item.name }}
             </button>
           </div>
-        </label>
-        <label>
-          <span>题型</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-question-type`">
+          <span :id="`${fieldId}-question-type`">题型</span>
           <div class="choice-row">
             <button
               v-for="item in availableQuestionTypes"
@@ -151,9 +152,9 @@
               {{ item.name }}
             </button>
           </div>
-        </label>
-        <label>
-          <span>考点</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-capability`">
+          <span :id="`${fieldId}-capability`">考点</span>
           <div class="capability-list">
             <button
               v-for="item in filteredCapabilities"
@@ -165,15 +166,15 @@
               {{ item.name }}
             </button>
           </div>
-        </label>
-        <label>
-          <span>题量</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-count`">
+          <span :id="`${fieldId}-count`">题量</span>
           <div class="choice-row">
             <button v-for="count in [5, 10, 15, 20, 25]" :key="count" type="button" :class="{ active: customCount === count }" @click="customCount = count">
               {{ count }}题
             </button>
           </div>
-        </label>
+        </div>
         <button class="generate-button" type="button" :disabled="launching || !selectedCustomCapability" @click="generateCustom">
           <SparklesIcon />
           {{ launching ? '正在创建任务' : '生成并开始练习' }}
@@ -183,51 +184,51 @@
 
     <BottomSheet v-if="activeSubject === PracticeSubject.Aptitude" v-model="showTrueFilterSheet" title="筛选真题" subtitle="只筛选来源元数据，不读取题目正文" variant="filter">
       <div class="custom-sheet">
-        <label>
-          <span>来源</span>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-origin`">
+          <span :id="`${fieldId}-origin`">来源</span>
           <div class="choice-row">
             <button type="button" :class="{ active: trueOriginFilter === 'all' }" @click="trueOriginFilter = 'all'">全部</button>
             <button type="button" :class="{ active: trueOriginFilter === QuestionOriginType.Official }" @click="trueOriginFilter = QuestionOriginType.Official">官方真题</button>
             <button type="button" :class="{ active: trueOriginFilter === QuestionOriginType.Imported }" @click="trueOriginFilter = QuestionOriginType.Imported">导入题</button>
             <button type="button" :class="{ active: trueOriginFilter === QuestionOriginType.UserCreated }" @click="trueOriginFilter = QuestionOriginType.UserCreated">自建题</button>
           </div>
-        </label>
-        <label v-if="trueQuestionYears.length">
-          <span>年份</span>
+        </div>
+        <div v-if="trueQuestionYears.length" class="choice-field" role="group" :aria-labelledby="`${fieldId}-year`">
+          <span :id="`${fieldId}-year`">年份</span>
           <div class="choice-row">
             <button type="button" :class="{ active: !trueYearFilter }" @click="trueYearFilter = 0">全部</button>
             <button v-for="year in trueQuestionYears" :key="year" type="button" :class="{ active: trueYearFilter === year }" @click="trueYearFilter = year">{{ year }}年</button>
           </div>
-        </label>
-        <label v-if="trueQuestionProvinces.length">
-          <span>地区</span>
+        </div>
+        <div v-if="trueQuestionProvinces.length" class="choice-field" role="group" :aria-labelledby="`${fieldId}-province`">
+          <span :id="`${fieldId}-province`">地区</span>
           <div class="choice-row">
             <button type="button" :class="{ active: !trueProvinceFilter }" @click="trueProvinceFilter = ''">全部</button>
             <button v-for="province in trueQuestionProvinces" :key="province" type="button" :class="{ active: trueProvinceFilter === province }" @click="trueProvinceFilter = province">{{ province }}</button>
           </div>
-        </label>
-        <label v-if="trueQuestionModules.length">
-          <span>模块</span>
+        </div>
+        <div v-if="trueQuestionModules.length" class="choice-field" role="group" :aria-labelledby="`${fieldId}-true-module`">
+          <span :id="`${fieldId}-true-module`">模块</span>
           <div class="choice-row">
             <button type="button" :class="{ active: !trueModuleFilter }" @click="trueModuleFilter = ''">全部</button>
             <button v-for="module in trueQuestionModules" :key="module" type="button" :class="{ active: trueModuleFilter === module }" @click="trueModuleFilter = module">{{ moduleLabel(module) }}</button>
           </div>
-        </label>
-        <label>
-          <span>练习状态</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-status`">
+          <span :id="`${fieldId}-status`">练习状态</span>
           <div class="choice-row">
             <button type="button" :class="{ active: trueStatusFilter === 'all' }" @click="trueStatusFilter = 'all'">全部</button>
             <button type="button" :class="{ active: trueStatusFilter === QuestionSetPracticeStatus.NotStarted }" @click="trueStatusFilter = QuestionSetPracticeStatus.NotStarted">未练习</button>
             <button type="button" :class="{ active: trueStatusFilter === QuestionSetPracticeStatus.InProgress }" @click="trueStatusFilter = QuestionSetPracticeStatus.InProgress">进行中</button>
             <button type="button" :class="{ active: trueStatusFilter === QuestionSetPracticeStatus.Completed }" @click="trueStatusFilter = QuestionSetPracticeStatus.Completed">已完成</button>
           </div>
-        </label>
-        <label>
-          <span>专项题量</span>
+        </div>
+        <div class="choice-field" role="group" :aria-labelledby="`${fieldId}-true-count`">
+          <span :id="`${fieldId}-true-count`">专项题量</span>
           <div class="choice-row">
             <button v-for="count in [5, 10, 15, 20, 25, 30]" :key="count" type="button" :class="{ active: truePracticeCount === count }" @click="truePracticeCount = count">{{ count }}题</button>
           </div>
-        </label>
+        </div>
         <div class="filter-footer">
           <button type="button" class="filter-reset" @click="resetTrueQuestionFilters">重置</button>
           <button type="button" class="filter-apply" @click="showTrueFilterSheet = false">
@@ -249,7 +250,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ChevronRightIcon, LandmarkIcon, SlidersHorizontalIcon, SparklesIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
@@ -260,7 +261,6 @@ import { initializeTutorRuntime } from '@/composition-root/public';
 import { curriculumModuleOptions, practiceModuleLabel } from '@/domain/labels';
 import { objectiveSubjectCodes } from '@/domain/subjectDelivery';
 import { AssessmentRole } from '@/kernel/public';
-import type { AgentRunView } from '@/modules/agent/public';
 import { CapabilityNodeType, type CapabilityNode } from '@/modules/curriculum/public';
 import {
   QuestionOriginType,
@@ -273,7 +273,7 @@ import {
 } from '@/modules/content/public';
 import type { TutorPracticePrescription } from './TutorDailyPracticeFeature';
 import { difficultyFor } from './TutorDailyPracticeFeature';
-import { actionQuery, StructuredPracticeTaskCenter } from './StructuredPracticeTaskCenter';
+import { StructuredPracticeTaskCenter } from './StructuredPracticeTaskCenter';
 import { PracticeCenterFeature } from './PracticeCenterFeature';
 import { TrueQuestionPracticeFeature } from './TrueQuestionPracticeFeature';
 import TrueQuestionLibraryActions from './TrueQuestionLibraryActions.vue';
@@ -287,6 +287,8 @@ import type { TrueQuestionResearchCriteria } from './TrueQuestionResearchCriteri
 import { usePracticeModeSwipe } from './PracticeModeSwipe';
 import { practiceModeCopy } from './PracticeModePresentation';
 import { usePracticeSelfAutoStart } from './usePracticeSelfAutoStart';
+import { usePracticeCenterTasks } from './usePracticeCenterTasks';
+import { PRACTICE_CENTER_PATH, withoutAutoStart } from './PracticeNavigation';
 import PracticeSubjectSwitcher from './PracticeSubjectSwitcher.vue';
 import PracticeSubjectMark from './PracticeSubjectMark.vue';
 import EssayPracticeCenterPanel from './EssayPracticeCenterPanel.vue';
@@ -295,6 +297,7 @@ import { PracticeSubject, type PracticeSubject as PracticeSubjectCode } from './
 type PracticeMode = PracticeCenterMode;
 const route = useRoute();
 const router = useRouter();
+const fieldId = useId();
 const loading = ref(true);
 const launching = ref(false);
 const error = ref('');
@@ -314,11 +317,6 @@ const activeMode = ref<PracticeMode>(
 const activeSubject = ref<PracticeSubjectCode>(
   route.query.subject === PracticeSubject.Essay ? PracticeSubject.Essay : PracticeSubject.Aptitude
 );
-const tutorTask = ref<AgentRunView | null>(null);
-const selfTask = ref<AgentRunView | null>(null);
-const trueTask = ref<AgentRunView | null>(null);
-const foregroundTaskId = ref('');
-const navigatedTaskId = ref('');
 const showCustomSheet = ref(false);
 const showTrueFilterSheet = ref(false);
 const showTrueResearchSheet = ref(false);
@@ -344,6 +342,15 @@ const {
   module: trueModuleFilter,
   status: trueStatusFilter
 });
+let pageDisposed = false;
+const { tutorTask, selfTask, trueTask, restoreTasks, trackTask, cancelTask } = usePracticeCenterTasks({
+  router,
+  isPageActive,
+  beforeFollow: consumeAutoStartRequest,
+  reloadTrueQuestionSets,
+  reloadGeneratedQuestionSets,
+  reportError: (message) => { error.value = message; }
+});
 const {
   showResearchDraft,
   publishingResearchDraft,
@@ -362,7 +369,6 @@ const customModule = ref('');
 const customQuestionTypeId = ref('');
 const customCapabilityId = ref('');
 const customCount = ref(10);
-let pollTimer: number | undefined;
 let practiceCenterFeaturePromise: Promise<PracticeCenterFeature> | undefined;
 const moduleDefinitions = curriculumModuleOptions();
 const curriculumNodesById = computed(() => new Map(curriculumNodes.value.map((item) => [item.id, item])));
@@ -422,6 +428,7 @@ const { tryStart: autoStartRequestedSelfPractice } = usePracticeSelfAutoStart({
   route,
   router,
   loading,
+  isActive: isPageActive,
   start: async ({ count }) => {
     activeSubject.value = PracticeSubject.Aptitude;
     activeMode.value = QuestionSetEntryMode.Self;
@@ -430,35 +437,36 @@ const { tryStart: autoStartRequestedSelfPractice } = usePracticeSelfAutoStart({
     return generateCustom();
   }
 });
+// Every step re-checks the page: leaving during the initial load must not
+// start a (paid) generation task for a page that is already gone.
 onMounted(async () => {
   await load();
+  if (!isPageActive()) return;
   await loadResearchDraftFromRoute();
-  if (
-    activeSubject.value === PracticeSubject.Aptitude
-    && route.query.mode === 'tutor'
-    && route.query.start
-  ) await startTutorPractice();
+  if (!isPageActive()) return;
+  if (activeSubject.value === PracticeSubject.Aptitude && route.query.mode === 'tutor' && route.query.start) {
+    if (await startTutorPractice()) await consumeAutoStartRequest();
+    if (!isPageActive()) return;
+  }
   await autoStartRequestedSelfPractice();
-  pollTimer = window.setInterval(() => void refreshTasks(), 1200);
 });
+onBeforeUnmount(() => { pageDisposed = true; });
 
 watch(() => route.query.draftId, () => void loadResearchDraftFromRoute());
+// Switching mode or subject supersedes a pending one-shot start request.
 watch(activeMode, (mode) => {
-  void router.replace({ query: { ...route.query, subject: activeSubject.value, mode } });
+  void router.replace({ query: { ...withoutAutoStart(route.query), subject: activeSubject.value, mode } });
 });
 watch(activeSubject, (subject) => {
   if (subject === PracticeSubject.Essay) {
     showCustomSheet.value = false;
     showTrueFilterSheet.value = false;
   }
-  void router.replace({ query: { ...route.query, subject } });
+  void router.replace({ query: { ...withoutAutoStart(route.query), subject } });
 });
 watch([trueOriginFilter, trueYearFilter, trueProvinceFilter, trueModuleFilter, trueStatusFilter], () => {
   if (!loading.value) void reloadTrueQuestionSets();
 }, { flush: 'post' });
-onBeforeUnmount(() => {
-  if (pollTimer) window.clearInterval(pollTimer);
-});
 
 async function load() {
   loading.value = true;
@@ -502,29 +510,32 @@ function initializeCustomSelection() {
   if ([5, 10, 15, 20, 25].includes(requestedCount)) customCount.value = requestedCount;
 }
 
-function restoreTasks(activeRuns: readonly AgentRunView[]) {
-  tutorTask.value = activeRuns.find((item) => taskMode(item) === 'tutor') || null;
-  selfTask.value = activeRuns.find((item) => taskMode(item) === 'self') || null;
-  trueTask.value = activeRuns.find((item) => taskMode(item) === 'true') || null;
-  if (tutorTask.value || selfTask.value || trueTask.value) {
-    void initializeTutorRuntime().then((runtime) => new StructuredPracticeTaskCenter(runtime).resume());
-  }
+function isPageActive(): boolean {
+  return !pageDisposed && route.path === PRACTICE_CENTER_PATH;
+}
+
+/** Drops `start=1` from this page's entry once the request is satisfied; never touches another page. */
+async function consumeAutoStartRequest(): Promise<void> {
+  if (!isPageActive() || route.query.start === undefined) return;
+  await router.replace({ query: withoutAutoStart(route.query) });
 }
 async function startTrueQuestionResearch(criteria: TrueQuestionResearchCriteria) {
   const result = await researchTrueQuestions(criteria);
   if (!result) return;
   showTrueResearchSheet.value = false;
-  trueTask.value = result.task;
-  foregroundTaskId.value = result.task.id;
+  trackTask(result.task, 'true');
 }
 
-async function startTutorPractice() {
+/** Resolves true once a tutor task is running: created now, or already in flight when asked. */
+async function startTutorPractice(): Promise<boolean> {
   const prescription = tutorPrescription.value;
-  if (!prescription || launching.value || tutorTask.value?.isActive) return;
+  if (tutorTask.value?.isActive) return true;
+  if (!prescription || launching.value) return false;
   launching.value = true;
   error.value = '';
   try {
     const runtime = await initializeTutorRuntime();
+    if (!isPageActive()) return false;
     const scopeKey = tutorScope(prescription);
     const difficulty = difficultyFor(prescription.assessmentRole);
     const task = await new StructuredPracticeTaskCenter(runtime).start({
@@ -549,8 +560,10 @@ async function startTutorPractice() {
       reviewQueueItemId: prescription.planItem?.reviewQueueItemId
     });
     trackTask(task, QuestionSetEntryMode.Tutor);
+    return true;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '创建私教练习失败';
+    return false;
   } finally {
     launching.value = false;
   }
@@ -598,73 +611,13 @@ async function generateCustom(): Promise<boolean> {
   }
 }
 
-function trackTask(task: AgentRunView, mode: PracticeMode) {
-  if (mode === 'tutor') tutorTask.value = task;
-  else selfTask.value = task;
-  foregroundTaskId.value = task.id;
-}
-
-async function refreshTasks() {
-  const tracked = [tutorTask.value, selfTask.value, trueTask.value]
-    .filter((item): item is AgentRunView => Boolean(item?.id && item.isActive));
-  if (!tracked.length) return;
-  try {
-    const runtime = await initializeTutorRuntime();
-    const refreshed = (await Promise.all(tracked.map((item) => runtime.getAgentRunViews.findById(item.id))))
-      .filter((item): item is AgentRunView => Boolean(item));
-    for (const task of refreshed) {
-      if (taskMode(task) === 'tutor') tutorTask.value = task;
-      else if (taskMode(task) === 'self') selfTask.value = task;
-      else trueTask.value = task;
-      if (task.status === 'failed' && task.id === foregroundTaskId.value) error.value = task.detail || '生成练习失败';
-    }
-    const completedModes = [...new Set(refreshed.filter((task) => !task.isActive).map(taskMode))];
-    await Promise.all(completedModes.map((mode) => (
-      mode === 'true' ? reloadTrueQuestionSets() : reloadGeneratedQuestionSets(mode)
-    )));
-    const completed = refreshed.find((task) => (
-      task.id === foregroundTaskId.value
-      && task.status === 'completed'
-      && task.questionSetId
-      && task.learningThreadId
-      && navigatedTaskId.value !== task.id
-    ));
-    if (completed) {
-      navigatedTaskId.value = completed.id;
-      foregroundTaskId.value = '';
-      await router.push({ path: completed.actionRoute || '/vue/practice/objective-session', query: actionQuery(completed) });
-    }
-    const completedResearch = refreshed.find((task) => (
-      taskMode(task) === 'true'
-      && task.id === foregroundTaskId.value
-      && task.status === 'completed'
-      && typeof task.actionParams.draftId === 'string'
-      && navigatedTaskId.value !== task.id
-    ));
-    if (completedResearch) {
-      navigatedTaskId.value = completedResearch.id;
-      foregroundTaskId.value = '';
-      await router.push({ path: completedResearch.actionRoute || '/vue/practice', query: actionQuery(completedResearch) });
-    }
-  } catch {
-    // A later poll or pull-to-refresh restores durable task state.
-  }
-}
-
 function practiceCenterFeature(): Promise<PracticeCenterFeature> {
   practiceCenterFeaturePromise ??= initializeTutorRuntime().then((runtime) => new PracticeCenterFeature(runtime));
   return practiceCenterFeaturePromise;
 }
 
-async function cancelCurrentTask() {
-  const task = activeTask.value;
-  if (!task) return;
-  const runtime = await initializeTutorRuntime();
-  await new StructuredPracticeTaskCenter(runtime).cancel(task);
-  if (activeMode.value === QuestionSetEntryMode.Tutor) tutorTask.value = null;
-  else if (activeMode.value === QuestionSetEntryMode.Self) selfTask.value = null;
-  else trueTask.value = null;
-  if (foregroundTaskId.value === task.id) foregroundTaskId.value = '';
+function cancelCurrentTask() {
+  return cancelTask(activeMode.value);
 }
 
 function selectModule(module: string) {
@@ -763,15 +716,6 @@ const {
   resetTouch: resetModeTouch
 } = usePracticeModeSwipe(() => activeMode.value, selectMode);
 
-function taskMode(task: AgentRunView): PracticeMode {
-  if (task.scopeKey?.startsWith('trueQuestionResearch:')) return 'true';
-  if (task.actionParams.mode === QuestionSetEntryMode.Tutor) return QuestionSetEntryMode.Tutor;
-  if (task.actionParams.mode === QuestionSetEntryMode.Self) return QuestionSetEntryMode.Self;
-  return task.scopeKey?.startsWith('practice:tutor:')
-    ? QuestionSetEntryMode.Tutor
-    : QuestionSetEntryMode.Self;
-}
-
 function normalizeModule(value: string): string {
   if (/判断|图推|逻辑/.test(value)) return 'judgment';
   if (/言语/.test(value)) return 'verbal';
@@ -833,9 +777,9 @@ function roleLabel(role: string) {
 .generation-card em { margin-top:4px; overflow:hidden; color:var(--text-secondary-color); font-size:var(--type-size-caption); font-style:normal; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .generation-card>svg { width:16px; height:16px; color:var(--text-secondary-color); }
 .page-error { margin:0; color:var(--red-color); font-size:var(--type-size-caption); }
-.custom-sheet,.custom-sheet label { display:flex; flex-direction:column; gap:9px; }
+.custom-sheet,.custom-sheet .choice-field { display:flex; flex-direction:column; gap:9px; }
 .custom-sheet { gap:15px; }
-.custom-sheet label>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
+.custom-sheet .choice-field>span { color:var(--text-secondary-color); font-size:var(--type-size-caption); font-weight:var(--type-weight-semibold); }
 .choice-row { display:flex; flex-wrap:wrap; gap:7px; }
 .choice-row button,.capability-list button { min-height:34px; border:0; border-radius:999px; padding:0 11px; color:var(--text-secondary-color); background:var(--surface-control); font:inherit; font-size:var(--type-size-caption); }
 .choice-row button.active,.capability-list button.active { color:var(--primary-color); background:rgba(var(--color-brand-rgb),.13); font-weight:var(--type-weight-semibold); }

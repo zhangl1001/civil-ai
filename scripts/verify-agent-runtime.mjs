@@ -294,6 +294,51 @@ try {
     model: 'test-model',
     maxConcurrentTasks: 9
   }).maxConcurrentTasks, 3);
+  // Provider, Base URL and model stay coherent, and a Base URL that can never
+  // work is refused before it replaces a working configuration.
+  const defaults = aiConfig.AI_PROVIDER_DEFAULTS;
+  assert.equal(aiConfig.normalizeAIConfig({ provider: 'anthropic', apiKey: '', model: 'm', baseUrl: '' }).baseUrl, defaults.anthropic.baseUrl);
+  assert.equal(aiConfig.normalizeAIConfig({ provider: 'openai', apiKey: '', model: 'm', baseUrl: '  ' }).baseUrl, defaults.openai.baseUrl);
+  assert.equal(aiConfig.normalizeAIConfig({ provider: 'anthropic', apiKey: '' }).model, defaults.anthropic.model);
+  assert.deepEqual(aiConfig.switchAIProvider({ baseUrl: 'https://api.openai.com/v1/', model: 'gpt-4o-mini' }, 'anthropic'), defaults.anthropic);
+  assert.deepEqual(aiConfig.switchAIProvider({ baseUrl: '', model: '' }, 'openai'), defaults.openai);
+  assert.deepEqual(
+    aiConfig.switchAIProvider({ baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-v4-flash' }, 'openai'),
+    { baseUrl: 'https://api.deepseek.com/anthropic', model: 'deepseek-v4-flash' }
+  );
+  for (const [provider, baseUrl] of [
+    ['anthropic', 'https://api.deepseek.com/anthropic'],
+    ['anthropic', 'https://api.anthropic.com'],
+    ['openai', 'https://api.openai.com/v1'],
+    ['openai', 'https://gateway.example.com/openai/v1/chat/completions'],
+    ['openai', '']
+  ]) {
+    assert.equal(aiConfig.validateAIBaseUrl(provider, baseUrl), undefined, `${provider} ${baseUrl} must stay valid`);
+  }
+  for (const [provider, baseUrl, reason] of [
+    ['anthropic', 'https://api.openai.com/vhttps://api.deepseek.com/anthropic', /多个地址/],
+    ['openai', 'https://api.example.com/v1https:/api.other.com', /多个地址/],
+    ['openai', 'api.openai.com/v1', /完整地址/],
+    ['openai', 'http://api.openai.com/v1', /https:\/\//],
+    ['openai', 'https://key:secret@api.example.com/v1', /用户名或密码/],
+    ['openai', 'https://api.example.com:8443/v1', /端口/],
+    ['openai', 'https://api.example.com/v1?key=1', /参数/],
+    ['openai', 'https://api example.com/v1', /空格/],
+    ['openai', 'https://localhost/v1', /域名/],
+    ['anthropic', 'https://api.openai.com/v1', /OpenAI 的地址/]
+  ]) {
+    assert.match(aiConfig.validateAIBaseUrl(provider, baseUrl) ?? '', reason, `${provider} ${baseUrl} must be rejected`);
+  }
+  await assert.rejects(
+    aiConfig.aiConfigService.save({
+      provider: 'anthropic',
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.openai.com/vhttps://api.deepseek.com/anthropic',
+      model: 'deepseek-v4-flash',
+      maxConcurrentTasks: 3
+    }),
+    (error) => error instanceof aiConfig.AIConfigValidationError
+  );
 
   const concurrency = new agent.AdaptiveAgentConcurrency(3);
   assert.equal(concurrency.activeLimit, 3);

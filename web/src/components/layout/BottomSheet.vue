@@ -167,6 +167,9 @@ function close() {
   flex-shrink: 0;
 }
 
+/* `.sheet-field` is the non-label twin of a sheet `label`: a caption plus a
+   group of option buttons. A <label> would click its first button whenever the
+   caption is tapped, so button groups use <div class="sheet-field" role="group">. */
 .bottom-sheet-actions :deep(.menu-field),
 .bottom-sheet-filter :deep(.filter-card),
 .bottom-sheet-filter :deep(.form-row),
@@ -174,8 +177,11 @@ function close() {
 .bottom-sheet-filter :deep(.essay-type),
 .bottom-sheet-filter :deep(.module-sheet),
 .bottom-sheet-form :deep(label),
+.bottom-sheet-form :deep(.sheet-field),
 .bottom-sheet-card :deep(.sheet-body label),
-.bottom-sheet-card :deep(.sheet-form label) {
+.bottom-sheet-card :deep(.sheet-body .sheet-field),
+.bottom-sheet-card :deep(.sheet-form label),
+.bottom-sheet-card :deep(.sheet-form .sheet-field) {
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -188,7 +194,9 @@ function close() {
 }
 
 .bottom-sheet-card :deep(.sheet-body label span),
-.bottom-sheet-card :deep(.sheet-form label span) {
+.bottom-sheet-card :deep(.sheet-body .sheet-field span),
+.bottom-sheet-card :deep(.sheet-form label span),
+.bottom-sheet-card :deep(.sheet-form .sheet-field span) {
   display: block;
   margin: 0;
   color: var(--text-secondary-color);
@@ -197,7 +205,9 @@ function close() {
 }
 
 .bottom-sheet-card :deep(.sheet-body label small),
-.bottom-sheet-card :deep(.sheet-form label small) {
+.bottom-sheet-card :deep(.sheet-body .sheet-field small),
+.bottom-sheet-card :deep(.sheet-form label small),
+.bottom-sheet-card :deep(.sheet-form .sheet-field small) {
   display: block;
   margin-top: 6px;
   color: var(--text-secondary-color);
@@ -223,7 +233,8 @@ function close() {
 
 .bottom-sheet-filter :deep(.tag-panel label),
 .bottom-sheet-filter :deep(.form-row label),
-.bottom-sheet-form :deep(label span) {
+.bottom-sheet-form :deep(label span),
+.bottom-sheet-form :deep(.sheet-field span) {
   color: var(--text-secondary-color);
   font-size: var(--type-size-caption);
   font-weight: var(--type-weight-semibold);
@@ -419,7 +430,8 @@ function close() {
   box-shadow: none;
 }
 
-.bottom-sheet-form :deep(label) {
+.bottom-sheet-form :deep(label),
+.bottom-sheet-form :deep(.sheet-field) {
   display: flex;
   flex-direction: column;
   gap: 7px;
