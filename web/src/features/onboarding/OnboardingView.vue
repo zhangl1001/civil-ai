@@ -48,7 +48,7 @@
               inputmode="numeric"
               autocomplete="off"
               maxlength="10"
-              placeholder="2027-11-29"
+              placeholder="如 2027-11-29"
               @input="formatExamDateInput"
             />
           </FormField>
