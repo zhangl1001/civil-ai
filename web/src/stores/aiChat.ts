@@ -16,6 +16,14 @@ import type { AgentWorkflowInvocation } from '@/modules/agent/public';
 
 let initializationPromise: Promise<void> | undefined;
 
+/** The latest request, so a retry can resend its workflow context and images. */
+let lastRequest: {
+  readonly sessionId: string;
+  readonly text: string;
+  readonly attachments?: readonly ModelImageContentPart[];
+  readonly invocation?: AgentWorkflowInvocation;
+} | undefined;
+
 export interface AIChatState {
   isOpen: boolean;
   isLoading: boolean;
@@ -252,6 +260,7 @@ export const useAIChatStore = defineStore('aiChat', {
       this.streamingMessageId = this.pendingAssistantMessageId;
       this.activeRequestText = text;
       this.steeringCount = 0;
+      lastRequest = { sessionId: activeSession.id, text, attachments, invocation };
       let delivered = false;
       try {
         if (shouldRename) {
@@ -297,7 +306,9 @@ export const useAIChatStore = defineStore('aiChat', {
       const index = this.messages.findIndex((message) => message.id === messageId);
       const question = this.messages.slice(0, Math.max(0, index)).reverse().find((message) => message.role === 'user');
       if (index < 0 || !question?.content.trim()) return;
-      await this.send(question.content);
+      const text = question.content.trim();
+      const previous = lastRequest?.sessionId === question.sessionId && lastRequest.text === text ? lastRequest : undefined;
+      await this.send(text, previous?.attachments, previous?.invocation);
     },
 
     applyAssistantStream(update: ChatAssistantStreamUpdate) {
