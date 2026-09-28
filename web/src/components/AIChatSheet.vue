@@ -87,15 +87,15 @@
                 <span :class="['empty-cat', { active: hasRunning }]" aria-hidden="true"><CatIcon /></span>
                 <strong>需要生成题目、批改申论或整理积累时，直接说。</strong>
               </div>
-              <article v-for="message in displayMessages" :key="message.id" :class="['message', message.role]">
-                <span v-if="message.role !== 'user'" :class="['message-cat', { active: isStreamingAssistant(message) }]" aria-hidden="true"><CatIcon /></span>
-                <p v-if="message.role === 'user'">{{ message.content }}</p>
-                <p v-else-if="isStreamingAssistant(message) && !message.content" class="streaming-placeholder">
-                  <span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-                  <span>思考中</span>
-                </p>
-                <MarkdownContent v-else class="md-message" :content="message.content" variant="chat" />
-              </article>
+              <ChatMessageBubble
+                v-for="message in displayMessages"
+                :key="message.id"
+                :message="message"
+                :streaming="isStreamingAssistant(message)"
+                :actionable="!chat.isSending && message.id === latestAssistantId"
+                @retry="retryMessage(message.id)"
+                @configure="openModelSettings"
+              />
             </main>
 
             <div v-if="taskRows.length" :class="['task-process', { running: hasTaskRunning, open: taskOpen }]" @click="taskOpen = !taskOpen">
@@ -248,9 +248,10 @@ import {
   type AgentToolActivityStatus
 } from '@/services/AgentToolActivityService';
 import { initializeTutorRuntime } from '@/composition-root/public';
-import type { AIMessage } from '@/domain/ai';
+import type { AIChatMessage } from '@/services/AIChatRepository';
+import { CHAT_MODEL_SETTINGS_ROUTE } from '@/services/ChatAgentFailure';
 import type { AgentRunStatus, AgentRunView } from '@/modules/agent/public';
-import MarkdownContent from '@/components/MarkdownContent.vue';
+import ChatMessageBubble from '@/components/ai-chat/ChatMessageBubble.vue';
 import ProcessStatusLight from '@/components/ai-chat/ProcessStatusLight.vue';
 import { chatErrorText, clampChatSheetHeight, compactGuidanceText, formatSessionTime } from '@/components/ai-chat/AIChatPresentation';
 import { useChatMessageScroll } from '@/components/ai-chat/useChatMessageScroll';
@@ -355,6 +356,7 @@ const hasToolRunning = computed(() => toolRows.value.some((task) => task.isRunni
 const toolProcessStatus = computed<ProcessStatus>(() => hasToolRunning.value ? 'running' : toolRows.value.some((task) => task.status === 'failed') ? 'failed' : toolRows.value.every((task) => task.status === 'done') ? 'done' : 'queued');
 const hasRunning = computed(() => chat.isSending || hasToolRunning.value || hasTaskRunning.value);
 const displayMessages = computed(() => chat.messages.filter((message) => message.role !== 'tool'));
+const latestAssistantId = computed(() => displayMessages.value.at(-1)?.role === 'assistant' ? displayMessages.value.at(-1)?.id : '');
 const isSteeringDraft = computed(() => chat.isSending && Boolean(guidancePreview.value));
 const isKeyboardOpen = computed(() => keyboardInset.value > 0);
 const sheetStyle = computed(() => {
@@ -555,8 +557,22 @@ watch(hasRunning, async () => {
   scrollToLatest();
 });
 
-function isStreamingAssistant(message: AIMessage): boolean {
+function isStreamingAssistant(message: AIChatMessage): boolean {
   return message.role === 'assistant' && message.id === chat.streamingMessageId;
+}
+
+async function retryMessage(messageId: string) {
+  composerError.value = '';
+  try {
+    await chat.retry(messageId);
+  } catch (error) {
+    composerError.value = chatErrorText(error);
+  }
+}
+
+async function openModelSettings() {
+  chat.close();
+  await router.push(CHAT_MODEL_SETTINGS_ROUTE);
 }
 
 function resizeComposer() {
@@ -957,9 +973,7 @@ function clampFabPosition(position: { left: number; top: number }) {
   animation: aiFabPulse 1.15s ease-in-out infinite;
 }
 
-.ai-fab.running .ai-pet,
-.message-cat.active,
-.message.pending .message-cat {
+.ai-fab.running .ai-pet {
   animation: catThinking 1.05s ease-in-out infinite;
 }
 
@@ -1491,91 +1505,6 @@ function clampFabPosition(position: { left: number; top: number }) {
   animation: catThinking 1.05s ease-in-out infinite;
 }
 
-.message {
-  max-width: 84%;
-  padding: 10px 12px;
-  border-radius: 15px;
-  line-height: 1.58;
-  font-size: var(--type-size-body);
-  position: relative;
-}
-
-.message p {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-.message.user {
-  align-self: flex-end;
-  color: #fff;
-  background: var(--primary-color);
-  border-bottom-right-radius: 5px;
-}
-
-.message.assistant,
-.message.tool,
-.message.system {
-  align-self: flex-start;
-  margin-left: 30px;
-  color: var(--text-color);
-  background: rgba(255, 255, 255, .86);
-  border: 1px solid rgba(var(--color-ink-rgb), .06);
-  border-bottom-left-radius: 5px;
-}
-
-.message-cat {
-  position: absolute;
-  left: -30px;
-  top: 2px;
-  width: 24px;
-  height: 24px;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-brand-strong);
-  background: rgba(var(--color-brand-rgb), .13);
-}
-
-.message-cat svg {
-  width: 15px;
-  height: 15px;
-}
-
-.message.pending {
-  color: var(--text-secondary-color);
-}
-
-.streaming-placeholder {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary-color);
-}
-
-.thinking-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.thinking-dots i {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--color-brand);
-  animation: thinkingDot 1.1s ease-in-out infinite;
-}
-
-.thinking-dots i:nth-child(2) {
-  animation-delay: .14s;
-}
-
-.thinking-dots i:nth-child(3) {
-  animation-delay: .28s;
-}
-
-
 .active-turn-guide {
   width: calc(100% - 24px);
   min-height: 32px;
@@ -1861,11 +1790,6 @@ function clampFabPosition(position: { left: number; top: number }) {
 @keyframes processBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: .38; }
-}
-
-@keyframes thinkingDot {
-  0%, 60%, 100% { transform: translateY(0); opacity: .38; }
-  30% { transform: translateY(-3px); opacity: 1; }
 }
 
 @keyframes aiFabPulse {

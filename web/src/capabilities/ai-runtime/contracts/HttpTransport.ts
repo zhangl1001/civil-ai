@@ -1,4 +1,4 @@
-import { ProviderErrorKind, ProviderGatewayError } from './ProviderGateway';
+import { ProviderErrorKind, ProviderFailureCode, ProviderGatewayError } from './ProviderGateway';
 
 export interface HttpTransportRequest {
   readonly url: string;
@@ -27,7 +27,13 @@ export class FetchHttpTransport implements HttpTransport {
       }
       if (error instanceof ProviderGatewayError) throw error;
       const message = error instanceof Error ? error.message : String(error || 'network request failed');
-      throw new ProviderGatewayError(`AI 网络请求失败：${message}`, ProviderErrorKind.Transient);
+      throw new ProviderGatewayError(
+        `AI 网络请求失败：${message}`,
+        ProviderErrorKind.Transient,
+        undefined,
+        undefined,
+        ProviderFailureCode.NetworkUnavailable
+      );
     }
   }
 }

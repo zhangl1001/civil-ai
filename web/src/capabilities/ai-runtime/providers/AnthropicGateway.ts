@@ -9,7 +9,12 @@ import {
   type ProviderTextDelta
 } from '../contracts/ProviderGateway';
 import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTransport';
-import { assertNonEmptyProviderResult, assertProviderResponse } from './ProviderHttpSupport';
+import {
+  assertNonEmptyProviderResult,
+  assertProviderResponse,
+  isHtmlResponse,
+  unreadableProviderResponse
+} from './ProviderHttpSupport';
 import { AnthropicStreamAccumulator, parseAnthropicResponse } from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
 import {
@@ -112,6 +117,7 @@ export class AnthropicGateway implements ProviderGateway {
       return this.stream(request, onEvent, signal);
     }
     if (!response.body) return this.complete(request, signal);
+    if (isHtmlResponse(response)) throw unreadableProviderResponse(response, 'Anthropic 兼容');
     const accumulator = new AnthropicStreamAccumulator();
     try {
       await readServerSentEvents(response.body, async (data) => {
@@ -122,7 +128,7 @@ export class AnthropicGateway implements ProviderGateway {
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
-      throw new ProviderGatewayError('Anthropic stream protocol is invalid', ProviderErrorKind.Protocol);
+      throw new ProviderGatewayError('Anthropic 兼容接口的流式响应格式无法识别', ProviderErrorKind.Protocol);
     }
     return assertNonEmptyProviderResult(accumulator.response());
   }
@@ -139,10 +145,7 @@ export class AnthropicGateway implements ProviderGateway {
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
-      throw new ProviderGatewayError(
-        'Anthropic-compatible provider returned an invalid response format',
-        ProviderErrorKind.Protocol
-      );
+      throw unreadableProviderResponse(response, 'Anthropic 兼容');
     }
   }
 

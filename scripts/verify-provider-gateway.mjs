@@ -949,6 +949,8 @@ try {
   assert.equal(adaptiveOpenAIBodies[0].temperature, 0.2);
   assert.equal('temperature' in adaptiveOpenAIBodies[1], false);
 
+  await verifiesProviderFailureClassification(ai);
+
   assert.equal(ai.openAITextDelta({ choices: [{ delta: { content: '甲' } }] }), '甲');
   assert.equal(ai.anthropicTextDelta({
     type: 'content_block_delta',
@@ -969,3 +971,71 @@ try {
 } finally {
   await server.close();
 }
+
+async function verifiesProviderFailureClassification(ai) {
+  const request = {
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    temperature: 0.2,
+    maxOutputTokens: 100,
+    requestId: 'classification'
+  };
+  const json = (status, body) => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' }
+  });
+  const html = (status) => new Response('<!DOCTYPE html><html><body>Not Found</body></html>', {
+    status,
+    headers: { 'content-type': 'text/html; charset=utf-8' }
+  });
+  const cases = [
+    ['401 invalid key', json(401, { error: { type: 'authentication_error', message: 'invalid x-api-key' } }), ai.ProviderErrorKind.Authentication, 'provider.authentication'],
+    ['401 OpenAI key', json(401, { error: { code: 'invalid_api_key', message: 'Incorrect API key provided' } }), ai.ProviderErrorKind.Authentication, 'provider.authentication'],
+    ['402 balance', json(402, { error: { message: 'Insufficient Balance' } }), ai.ProviderErrorKind.QuotaExceeded, 'provider.quota_exceeded'],
+    ['429 quota', json(429, { error: { code: 'insufficient_quota', message: 'You exceeded your current quota' } }), ai.ProviderErrorKind.QuotaExceeded, 'provider.quota_exceeded'],
+    ['429 TPM', json(429, { error: { code: 'rate_limit_exceeded', message: 'Rate limit reached on tokens per min (TPM)' } }), ai.ProviderErrorKind.RateLimited, 'provider.rate_limited'],
+    ['404 model', json(404, { error: { code: 'model_not_found', message: 'The model `gpt-x` does not exist' } }), ai.ProviderErrorKind.InvalidRequest, 'provider.model_not_found'],
+    ['400 model', json(400, { error: { type: 'invalid_request_error', message: 'Model Not Exist' } }), ai.ProviderErrorKind.InvalidRequest, 'provider.model_not_found'],
+    ['404 html', html(404), ai.ProviderErrorKind.InvalidRequest, 'provider.endpoint_not_found'],
+    ['400 context', json(400, { error: { message: "This model's maximum context length is 65536 tokens" } }), ai.ProviderErrorKind.InvalidRequest, 'provider.context_too_long'],
+    ['400 generic', json(400, { error: { message: 'unexpected field foo' } }), ai.ProviderErrorKind.InvalidRequest, 'provider.invalid_request'],
+    ['500', json(500, { error: { type: 'api_error', message: 'Internal server error' } }), ai.ProviderErrorKind.Transient, 'provider.transient'],
+    ['529', json(529, { error: { type: 'overloaded_error', message: 'Overloaded' } }), ai.ProviderErrorKind.Transient, 'provider.overloaded'],
+    ['200 html', html(200), ai.ProviderErrorKind.Protocol, 'provider.html_response']
+  ];
+  for (const [label, response, kind, code] of cases) {
+    for (const Gateway of [ai.AnthropicGateway, ai.OpenAICompatibleGateway]) {
+      const gateway = new Gateway({
+        apiKey: 'test-key',
+        baseUrl: 'https://classification.test/v1',
+        model: 'classification-model'
+      }, { async send() { return response.clone(); } });
+      await assert.rejects(gateway.complete(request), (error) => {
+        assert.equal(error.kind, kind, `${label} kind via ${Gateway.name}`);
+        assert.equal(error.code, code, `${label} code via ${Gateway.name}`);
+        return true;
+      });
+    }
+  }
+  const streamingHtml = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://classification.test/v1',
+    model: 'classification-model'
+  }, { async send() { return html(200); } });
+  await assert.rejects(
+    streamingHtml.stream(request, () => undefined),
+    (error) => error.code === 'provider.html_response',
+    'an HTML page answering a stream request is a Base URL problem, not an empty answer'
+  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  try {
+    await assert.rejects(
+      new ai.FetchHttpTransport().send({ url: 'https://offline.test', method: 'POST', headers: {}, body: '{}' }),
+      (error) => error.kind === ai.ProviderErrorKind.Transient && error.code === 'network.unavailable'
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+

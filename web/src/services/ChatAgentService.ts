@@ -11,6 +11,7 @@ import {
   initializeTutorRuntime,
   type TutorDatabaseRuntime
 } from '@/composition-root/public';
+import { isProviderConfigured } from '@/composition-root/ai/createConfiguredProviderGateway';
 import type { AIMessage, AISession } from '@/domain/ai';
 import type { AgentRunId } from '@/kernel/public';
 import {
@@ -22,50 +23,39 @@ import {
   TaskCenterStep,
   TaskTargetType,
   type AgentLoopCheckpoint,
-  type AgentRuntimeEvent,
+  type AgentLoopResult,
   type AgentWorkflowInvocation
 } from '@/modules/agent/public';
 import { aiChatRepository } from './AIChatRepository';
 import { aiConfigService } from './AIConfigService';
 import { aiStudentContextService } from './AIStudentContextService';
-import { agentToolActivityService } from './AgentToolActivityService';
 import { isAgentCancellation, isAgentConfirmation } from './AgentConfirmationReply';
-import {
-  chatExecutionFailureText,
-  hasVisibleAssistantContent,
-  visibleAssistantText
-} from './AgentResponsePresentation';
-import { chatTaskPresentation, publishChatTaskMessage } from './ChatAgentTaskPresentation';
+import { visibleAssistantText } from './AgentResponsePresentation';
+import { publishChatTaskMessage } from './ChatAgentTaskPresentation';
 import { compileChatAgentContext } from './ChatAgentContextCompiler';
 import {
   chatAgentSystemPromptComposer,
   planChatAgentCapabilities,
 } from './ChatAgentCapabilities';
+import { ChatFailureCode, chatFailureForCode, describeChatFailure } from './ChatAgentFailure';
+import { createChatRunObserver } from './ChatAgentRunObserver';
 import { createChatAgentToolExecutor } from './ChatAgentToolExecutors';
+import { ChatAgentTurnWriter, type ChatAssistantStreamUpdate } from './ChatAgentTurnWriter';
 import { composeGroundedAgentSystem } from './AgentSystemTools';
 import { ChatAgentToolAuthorization } from './ChatAgentToolAuthorization';
 import { agentConversationMemoryService } from './AgentConversationMemoryService';
 import {
-  activityStatus,
   asJsonObject,
   budgetContinuationCheckpoint,
   compactText,
   confirmationText,
-  eventStatus,
   findWaitingRun,
-  isToolActivityEvent,
-  parseCheckpoint,
-  toolLabel
+  parseCheckpoint
 } from './ChatAgentRuntimeSupport';
 export interface ChatAgentResult {
   readonly handled: boolean;
 }
-export interface ChatAssistantStreamUpdate {
-  readonly sessionId: string;
-  readonly messageId: string;
-  readonly content: string;
-  readonly replaceMessageId?: string;
-}
+export type { ChatAssistantStreamUpdate } from './ChatAgentTurnWriter';
 export interface ChatAgentOptions {
   readonly thinkingEnabled: boolean;
   readonly onAssistantStream?: (update: ChatAssistantStreamUpdate) => void | Promise<void>;
@@ -78,7 +68,10 @@ interface ActiveChatRun {
   runId?: AgentRunId;
   readonly controller: AbortController;
   readonly guidanceQueue: string[];
+  readonly writer: ChatAgentTurnWriter;
+  userMessagePersisted: boolean;
 }
+type RunId = Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0];
 export class ChatAgentService {
   private readonly activeRuns = new Map<string, ActiveChatRun>();
   cancel(sessionId?: string, reason: 'user' | 'lifecycle' = 'user'): void {
@@ -116,11 +109,24 @@ export class ChatAgentService {
     this.activeRuns.get(session.id)?.controller.abort();
     const active: ActiveChatRun = {
       controller: new AbortController(),
-      guidanceQueue: []
+      guidanceQueue: [],
+      writer: new ChatAgentTurnWriter({
+        sessionId: session.id,
+        streamMessageId: `stream:${crypto.randomUUID()}`,
+        repository: aiChatRepository,
+        publish: options.onAssistantStream
+      }),
+      userMessagePersisted: false
     };
     this.activeRuns.set(session.id, active);
     let runtime: TutorDatabaseRuntime | undefined;
     try {
+      if (!isProviderConfigured(await aiConfigService.load())) {
+        // Nothing can run without a model: answer locally before any durable run exists.
+        await this.addUserMessage(session, text, active);
+        await active.writer.fail(chatFailureForCode(ChatFailureCode.NotConfigured));
+        return { handled: true };
+      }
       runtime = await initializeTutorRuntime();
       active.controller.signal.throwIfAborted();
       const waiting = await findWaitingRun(runtime, session.id);
@@ -128,15 +134,14 @@ export class ChatAgentService {
         const waitingAggregate = await runtime.agentRunRepository.findById(waiting.id);
         const waitingCheckpoint = parseCheckpoint(waitingAggregate?.run.checkpoint.agentLoop);
         if (waitingCheckpoint?.pauseReason === 'budget') {
+          await this.addUserMessage(session, text, active);
           if (isAgentCancellation(text)) {
-            await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
             await runtime.cancelAgentRun.execute({
               agentRunId: waiting.id,
               reason: 'user_cancelled_budget_paused_agent'
             });
             return { handled: true };
           }
-          await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
           active.runId = waiting.id;
           runtime.agentRunExecutions.register(waiting.id, active.controller);
           active.controller.signal.throwIfAborted();
@@ -144,7 +149,7 @@ export class ChatAgentService {
           return { handled: true };
         }
         if (isAgentConfirmation(text) || isAgentCancellation(text)) {
-          await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
+          await this.addUserMessage(session, text, active);
           active.runId = waiting.id; runtime.agentRunExecutions.register(waiting.id, active.controller);
           active.controller.signal.throwIfAborted();
           await this.resume(runtime, session, waiting.id, isAgentConfirmation(text) ? 'confirm' : 'reject', options, active);
@@ -155,7 +160,7 @@ export class ChatAgentService {
           reason: 'user_replaced_pending_agent_action'
         });
       }
-      await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
+      await this.addUserMessage(session, text, active);
       active.controller.signal.throwIfAborted();
       const cycle = await runtime.candidateRepository.findCurrentCycle();
       active.controller.signal.throwIfAborted();
@@ -184,10 +189,15 @@ export class ChatAgentService {
         action: AgentRunAction.Start,
         reasonCode: 'chat_agent.started'
       });
-      await this.run(runtime, session, aggregate.run.id, text, undefined, undefined, options, active, options.attachments);
+      await this.run(runtime, session, aggregate.run.id, undefined, undefined, options, active, options.attachments);
       return { handled: true };
     } catch (error) {
-      if (!active.controller.signal.aborted) throw error;
+      if (!active.controller.signal.aborted) {
+        // Before the question is on screen the composer can simply keep the draft.
+        if (!active.userMessagePersisted) throw error;
+        await this.recordFailure(runtime, active, error);
+        return { handled: true };
+      }
       if (runtime && active.runId) {
         const current = await runtime.agentRunRepository.findById(active.runId);
         if (current?.run.status === 'running' || current?.run.status === 'waiting_user') {
@@ -207,10 +217,14 @@ export class ChatAgentService {
       }
     }
   }
+  private async addUserMessage(session: AISession, text: string, active: ActiveChatRun): Promise<void> {
+    await aiChatRepository.addMessage({ sessionId: session.id, role: 'user', content: text });
+    active.userMessagePersisted = true;
+  }
   private async resume(
     runtime: TutorDatabaseRuntime,
     session: AISession,
-    runId: Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0],
+    runId: RunId,
     decision: 'confirm' | 'reject',
     options: ChatAgentOptions,
     active: ActiveChatRun
@@ -224,13 +238,13 @@ export class ChatAgentService {
       action: AgentRunAction.Resume,
       reasonCode: decision === 'confirm' ? 'chat_agent.confirmed' : 'chat_agent.rejected'
     });
-    await this.run(runtime, session, runId, '', checkpoint, decision, options, active);
+    await this.run(runtime, session, runId, checkpoint, decision, options, active);
   }
 
   private async resumeBudget(
     runtime: TutorDatabaseRuntime,
     session: AISession,
-    runId: Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0],
+    runId: RunId,
     checkpoint: AgentLoopCheckpoint,
     options: ChatAgentOptions,
     active: ActiveChatRun
@@ -241,155 +255,60 @@ export class ChatAgentService {
       action: AgentRunAction.Resume,
       reasonCode: 'chat_agent.budget_continued'
     });
-    await this.run(
-      runtime,
-      session,
-      runId,
-      '',
-      budgetContinuationCheckpoint(checkpoint),
-      undefined,
-      options,
-      active
-    );
+    await this.run(runtime, session, runId, budgetContinuationCheckpoint(checkpoint), undefined, options, active);
   }
 
   private async run(
     runtime: TutorDatabaseRuntime,
     session: AISession,
-    runId: Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0],
-    _routingText: string,
+    runId: RunId,
     checkpoint: AgentLoopCheckpoint | undefined,
     confirmationDecision: 'confirm' | 'reject' | undefined,
     options: ChatAgentOptions,
     active: ActiveChatRun,
     attachments?: readonly ModelImageContentPart[]
   ): Promise<void> {
-    const controller = active.controller;
-    controller.signal.throwIfAborted();
-    const executor = new AuthorizedAgentToolExecutor(createChatAgentToolExecutor(runtime, session.id), new ChatAgentToolAuthorization(runtime, session.id));
-    const streamMessageId = `stream:${runId}`;
-    let streamedText = '';
-    let streamPublished = false;
-    let persistedMessageId = '';
-    let persistedContent = '';
-    const publishAssistant = async (
-      messageId: string,
-      content: string,
-      replaceMessageId?: string
-    ) => {
-      await options.onAssistantStream?.({
-        sessionId: session.id,
-        messageId,
-        content,
-        ...(replaceMessageId ? { replaceMessageId } : {})
-      });
-    };
-    const appendAssistantDelta = async (delta: string) => {
-      if (!delta) return;
-      streamedText += delta;
-      const visibleText = visibleAssistantText(streamedText);
-      if (!hasVisibleAssistantContent(visibleText)) return;
-      streamPublished = true;
-      await publishAssistant(streamMessageId, visibleText);
-    };
-    const persistAssistant = async (content: string) => {
-      if (!content.trim()) return;
-      if (persistedMessageId) {
-        if (content === persistedContent) return;
-        const message = await aiChatRepository.updateMessageContent(session.id, persistedMessageId, content);
-        persistedContent = content;
-        if (message) await publishAssistant(message.id, message.content);
-        return;
-      }
-      const message = await aiChatRepository.addMessage({
-          sessionId: session.id,
-          role: 'assistant',
-          content,
-          toolCallId: runId
-      });
-      persistedMessageId = message.id;
-      persistedContent = message.content;
-      await publishAssistant(
-        message.id,
-        message.content,
-        streamPublished ? streamMessageId : undefined
-      );
-    };
-    const observer = {
-      onEvent: async (event: AgentRuntimeEvent) => {
-        if (event.type === 'text_delta') {
-          await appendAssistantDelta(event.text);
-          return;
-        }
-        if (!isToolActivityEvent(event)) return;
-        const status = eventStatus(event);
-        if (!status) return;
-        agentToolActivityService.record({
-          chatSessionId: session.id,
-          agentRunId: runId,
-          call: event.call,
-          label: toolLabel(event.call.name),
-          status: activityStatus(event),
-          ...('resultRef' in event && event.resultRef ? { resultRef: event.resultRef } : {}),
-          ...('reasonCode' in event ? { reasonCode: event.reasonCode } : {})
-        });
-        const current = await runtime.agentRunRepository.findById(runId);
-        if (current?.run.status === 'running') {
-          const linkedTask = status.taskId
-            ? (await runtime.getAgentRunViews.execute({ limit: 50 })).find((run) => run.id === status.taskId)
-            : undefined;
-          await runtime.updateAgentRunProgress.execute({
-            agentRunId: runId,
-            step: status.step,
-            progress: status.progress,
-            message: status.message,
-            data: {
-              ...(status.toolName ? { toolName: status.toolName } : {}),
-              ...(status.taskId ? { taskId: status.taskId } : {}),
-              ...chatTaskPresentation(status.toolName),
-              ...(linkedTask?.actionRoute ? { actionRoute: linkedTask.actionRoute } : {}),
-              ...(linkedTask?.actionParams ? { actionParams: linkedTask.actionParams } : {})
-            }
-          });
-        }
-      }
-    };
-    const history = await aiChatRepository.listMessages(session.id);
-    const currentPrompt = history.filter((item) => item.role === 'user').at(-1)?.content || '';
-    const currentUserContent: ModelMessage['content'] = attachments?.length
-      ? [{ type: 'text', text: currentPrompt }, ...attachments]
-      : currentPrompt;
-    const preparedContext = await agentConversationMemoryService.prepare(
-      runtime,
-      session.id,
-      currentPrompt,
-      currentUserContent
-    );
-    const exposure = planChatAgentCapabilities({
-      preselectedSkillNames: options.invocation?.skillNames,
-      pendingToolName: checkpoint?.pendingConfirmation?.name
-    });
-    const studentContext = await aiStudentContextService.buildContextData();
-    const system = chatAgentSystemPromptComposer.compose({
-      basePrompt: buildCompanionChatPrompt(options.thinkingEnabled),
-      skillCatalog: exposure.skillCatalog
-    });
-    const groundedSystem = composeGroundedAgentSystem([system, options.invocation?.systemConstraint].filter(Boolean).join('\n\n'));
-    const compiledContext = await compileChatAgentContext({
-      agentRunId: runId,
-      system: groundedSystem,
-      studentContext,
-      conversation: preparedContext,
-      tools: exposure.tools,
-    });
-    const config = await aiConfigService.load();
+    const { controller, writer } = active;
+    writer.bindRun(runId);
     const deadline = createProviderExecutionDeadline(
       controller.signal,
       AI_EXECUTION_BUDGET.chatRunMs,
       '本次 AI 对话'
     );
     try {
-      const result = await runtime.createAgentLoop(executor, observer).execute({
+      controller.signal.throwIfAborted();
+      const executor = new AuthorizedAgentToolExecutor(createChatAgentToolExecutor(runtime, session.id), new ChatAgentToolAuthorization(runtime, session.id));
+      const history = await aiChatRepository.listMessages(session.id);
+      const currentPrompt = history.filter((item) => item.role === 'user').at(-1)?.content || '';
+      const currentUserContent: ModelMessage['content'] = attachments?.length
+        ? [{ type: 'text', text: currentPrompt }, ...attachments]
+        : currentPrompt;
+      const preparedContext = await agentConversationMemoryService.prepare(
+        runtime,
+        session.id,
+        currentPrompt,
+        currentUserContent
+      );
+      const exposure = planChatAgentCapabilities({
+        preselectedSkillNames: options.invocation?.skillNames,
+        pendingToolName: checkpoint?.pendingConfirmation?.name
+      });
+      const studentContext = await aiStudentContextService.buildContextData();
+      const system = chatAgentSystemPromptComposer.compose({
+        basePrompt: buildCompanionChatPrompt(options.thinkingEnabled),
+        skillCatalog: exposure.skillCatalog
+      });
+      const groundedSystem = composeGroundedAgentSystem([system, options.invocation?.systemConstraint].filter(Boolean).join('\n\n'));
+      const compiledContext = await compileChatAgentContext({
+        agentRunId: runId,
+        system: groundedSystem,
+        studentContext,
+        conversation: preparedContext,
+        tools: exposure.tools,
+      });
+      const config = await aiConfigService.load();
+      const gateway = await createConfiguredProviderGateway(config);
+      const result = await runtime.createAgentLoop(executor, createChatRunObserver(runtime, session.id, runId, writer)).execute({
         agentRunId: runId,
         system: compiledContext.system,
         messages: compiledContext.messages,
@@ -405,115 +324,123 @@ export class ChatAgentService {
         maxParallelReadToolCalls: config.maxConcurrentTasks,
         consumeGuidance: () => this.consumeGuidance(session.id, runId),
         preferStream: config.streamingEnabled !== false,
-      }, await createConfiguredProviderGateway(), deadline.signal);
-      if (result.status === 'waiting_user') {
-        await persistAssistant(streamedText);
-        const call = result.checkpoint.pendingConfirmation;
-        await aiChatRepository.addMessage({
-          sessionId: session.id,
-          role: 'assistant',
-          content: confirmationText(call)
-        });
-        await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
-        await runtime.transitionAgentRun.execute({
-          idempotencyKey: `chat-agent:${runId}:waiting:${result.checkpoint.turnCount}`,
-          agentRunId: runId,
-          action: AgentRunAction.WaitForUser,
-          reasonCode: 'chat_agent.confirmation_required'
-        });
-        return;
-      }
-      if (result.status === 'budget_exhausted') {
-        await persistAssistant(streamedText);
-        await aiChatRepository.addMessage({
-          sessionId: session.id,
-          role: 'assistant',
-          content: '这一步已到达本段安全执行边界，进度和工具证据已经保留。你可以直接补充要求或让我继续，我会从当前状态接着处理。'
-        });
-        await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
-        const current = await runtime.agentRunRepository.findById(runId);
-        await runtime.transitionAgentRun.execute({
-          idempotencyKey: `chat-agent:${runId}:waiting:budget:${result.checkpoint.turnCount}`,
-          agentRunId: runId,
-          action: AgentRunAction.WaitForUser,
-          reasonCode: 'chat_agent.budget_paused',
-          checkpoint: {
-            ...(current?.run.checkpoint || {}),
-            agentLoop: asJsonObject({
-              ...result.checkpoint,
-              pauseReason: 'budget'
-            })
-          }
-        });
-        return;
-      }
-      const latest = await runtime.agentRunRepository.findById(runId);
-      if (latest?.run.status === 'cancelled') {
-        return;
-      }
-      const visibleStreamedText = visibleAssistantText(streamedText);
-      const finalText = visibleAssistantText(result.text);
-      const finalContent = finalText && !visibleStreamedText.endsWith(finalText)
-        ? [visibleStreamedText, finalText].filter(Boolean).join('\n\n')
-        : visibleStreamedText || finalText;
-      controller.signal.throwIfAborted();
-      await persistAssistant(finalContent);
-      await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
-      const current = latest ?? await runtime.agentRunRepository.findById(runId);
-      const delegated = result.status === 'delegated';
-      const completed = await runtime.transitionAgentRun.execute({
-        idempotencyKey: `chat-agent:${runId}:completed`,
-        agentRunId: runId,
-        action: AgentRunAction.Complete,
-        reasonCode: delegated ? 'chat_agent.delegated' : 'chat_agent.completed',
-        checkpoint: {
-          ...(current?.run.checkpoint || {}),
-          progress: 100,
-          step: TaskCenterStep.Completed,
-          message: delegated ? '任务已受理' : '已完成'
-        }
-      });
-      await publishChatTaskMessage(runtime, completed, 'completed');
+      }, gateway, deadline.signal);
+      await this.settle(runtime, session, runId, result, active);
     } catch (error) {
-      console.warn('[ChatAgent] execution failed', {
-        runId,
-        name: error instanceof Error ? error.name : 'UnknownError',
-        message: error instanceof Error ? error.message : String(error)
-      });
-      const aborted = controller.signal.aborted;
-      const lifecycleInterrupted = isAgentRunSuspended(controller.signal.reason);
-      const visibleStreamedText = visibleAssistantText(streamedText);
-      const interruptedContent = aborted
-        ? ''
-        : [
-            visibleStreamedText,
-            visibleStreamedText
-              ? `我已经完成前面的处理，但在整理结果时遇到问题：${chatExecutionFailureText(error)}`
-              : chatExecutionFailureText(error)
-          ].filter(Boolean).join('\n\n');
-      if (interruptedContent) await persistAssistant(interruptedContent);
-      if (interruptedContent) {
-        await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
-      }
-      const current = await runtime.agentRunRepository.findById(runId);
-      if (current?.run.status === 'running') {
-        const failed = await runtime.transitionAgentRun.execute({
-          idempotencyKey: `chat-agent:${runId}:${aborted ? 'cancelled' : 'failed'}:${Date.now()}`,
-          agentRunId: runId,
-          action: aborted ? AgentRunAction.Cancel : AgentRunAction.Fail,
-          reasonCode: aborted ? 'chat_agent.cancelled' : 'chat_agent.failed',
-          ...(aborted
-            ? {
-                cancellationReason: lifecycleInterrupted
-                  ? 'app_lifecycle_interrupted_chat_agent'
-                  : 'user_cancelled_chat_agent'
-              }
-            : { errorCode: 'agent.execution_failed' })
-        });
-        await publishChatTaskMessage(runtime, failed, aborted ? 'cancelled' : 'failed');
-      }
+      if (controller.signal.aborted) await this.settleAbort(runtime, runId, active);
+      else await this.recordFailure(runtime, active, error);
     } finally {
       deadline.dispose();
+    }
+  }
+
+  private async settle(
+    runtime: TutorDatabaseRuntime,
+    session: AISession,
+    runId: RunId,
+    result: AgentLoopResult,
+    active: ActiveChatRun
+  ): Promise<void> {
+    const { controller, writer } = active;
+    if (result.status === 'waiting_user' || result.status === 'budget_exhausted') {
+      const waiting = result.status === 'waiting_user';
+      await writer.persist(writer.visibleText);
+      await aiChatRepository.addMessage({
+        sessionId: session.id,
+        role: 'assistant',
+        content: waiting ? confirmationText(result.checkpoint.pendingConfirmation) : BUDGET_PAUSE_TEXT
+      });
+      await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
+      const current = waiting ? undefined : await runtime.agentRunRepository.findById(runId);
+      await runtime.transitionAgentRun.execute({
+        idempotencyKey: `chat-agent:${runId}:waiting:${waiting ? '' : 'budget:'}${result.checkpoint.turnCount}`,
+        agentRunId: runId,
+        action: AgentRunAction.WaitForUser,
+        reasonCode: waiting ? 'chat_agent.confirmation_required' : 'chat_agent.budget_paused',
+        ...(waiting ? {} : {
+          checkpoint: {
+            ...(current?.run.checkpoint || {}),
+            agentLoop: asJsonObject({ ...result.checkpoint, pauseReason: 'budget' })
+          }
+        })
+      });
+      return;
+    }
+    const latest = await runtime.agentRunRepository.findById(runId);
+    if (latest?.run.status === 'cancelled') return;
+    const visibleStreamedText = writer.visibleText;
+    const finalText = visibleAssistantText(result.text);
+    const finalContent = finalText && !visibleStreamedText.endsWith(finalText)
+      ? [visibleStreamedText, finalText].filter(Boolean).join('\n\n')
+      : visibleStreamedText || finalText;
+    controller.signal.throwIfAborted();
+    await writer.complete(finalContent);
+    await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
+    const delegated = result.status === 'delegated';
+    const completed = await runtime.transitionAgentRun.execute({
+      idempotencyKey: `chat-agent:${runId}:completed`,
+      agentRunId: runId,
+      action: AgentRunAction.Complete,
+      reasonCode: delegated ? 'chat_agent.delegated' : 'chat_agent.completed',
+      checkpoint: {
+        ...(latest?.run.checkpoint || {}),
+        progress: 100,
+        step: TaskCenterStep.Completed,
+        message: delegated ? '任务已受理' : '已完成'
+      }
+    });
+    await publishChatTaskMessage(runtime, completed, 'completed');
+  }
+
+  private async settleAbort(runtime: TutorDatabaseRuntime, runId: RunId, active: ActiveChatRun): Promise<void> {
+    const current = await runtime.agentRunRepository.findById(runId);
+    if (current?.run.status !== 'running') return;
+    const cancelled = await runtime.transitionAgentRun.execute({
+      idempotencyKey: `chat-agent:${runId}:cancelled:${Date.now()}`,
+      agentRunId: runId,
+      action: AgentRunAction.Cancel,
+      reasonCode: 'chat_agent.cancelled',
+      cancellationReason: isAgentRunSuspended(active.controller.signal.reason)
+        ? 'app_lifecycle_interrupted_chat_agent'
+        : 'user_cancelled_chat_agent'
+    });
+    await publishChatTaskMessage(runtime, cancelled, 'cancelled');
+  }
+
+  /** Shows why the turn failed and fails its run with the same stable code. */
+  private async recordFailure(
+    runtime: TutorDatabaseRuntime | undefined,
+    active: ActiveChatRun,
+    error: unknown
+  ): Promise<void> {
+    const failure = describeChatFailure(error);
+    console.warn('[ChatAgent] execution failed', {
+      runId: active.runId,
+      code: failure.code,
+      name: error instanceof Error ? error.name : 'UnknownError',
+      message: error instanceof Error ? error.message : String(error)
+    });
+    // A finished answer stays an answer even if later bookkeeping failed.
+    if (!active.writer.hasCompletedAnswer) {
+      await active.writer.fail(failure).catch((persistError: unknown) => {
+        console.warn('[ChatAgent] failure outcome was not saved', persistError);
+      });
+    }
+    if (!runtime || !active.runId) return;
+    const runId = active.runId;
+    try {
+      const current = await runtime.agentRunRepository.findById(runId);
+      if (current?.run.status !== 'running') return;
+      const failed = await runtime.transitionAgentRun.execute({
+        idempotencyKey: `chat-agent:${runId}:failed:${Date.now()}`,
+        agentRunId: runId,
+        action: AgentRunAction.Fail,
+        reasonCode: 'chat_agent.failed',
+        errorCode: failure.code
+      });
+      await publishChatTaskMessage(runtime, failed, 'failed');
+    } catch (transitionError) {
+      console.warn('[ChatAgent] failed run was not closed', { runId, transitionError });
     }
   }
 
@@ -527,6 +454,8 @@ export class ChatAgentService {
     }));
   }
 }
+
+const BUDGET_PAUSE_TEXT = '这一步已到达本段安全执行边界，进度和工具证据已经保留。你可以直接补充要求或让我继续，我会从当前状态接着处理。';
 
 function shouldUseAgent(text: string): boolean {
   return Boolean(text.trim());

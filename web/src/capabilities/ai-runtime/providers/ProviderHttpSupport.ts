@@ -1,41 +1,58 @@
 import {
   ProviderErrorKind,
+  ProviderFailureCode,
   ProviderGatewayError,
   type ProviderResponse
 } from '../contracts/ProviderGateway';
+import { classifyProviderFailure, providerErrorEnvelope } from './ProviderFailureClassification';
 
 export async function assertProviderResponse(response: Response): Promise<void> {
   if (response.ok) return;
   const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
-  let message = response.statusText || 'AI provider request failed';
-  try {
-    const payload: unknown = await response.json();
-    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-      const root = payload as Record<string, unknown>;
-      const error = root.error && typeof root.error === 'object' && !Array.isArray(root.error)
-        ? root.error as Record<string, unknown>
-        : undefined;
-      if (typeof error?.message === 'string') message = error.message;
-      else if (typeof root.message === 'string') message = root.message;
-    }
-  } catch {
-    // Status and statusText remain enough for classification.
-  }
-  const kind = response.status === 401 || response.status === 403
-    ? ProviderErrorKind.Authentication
-    : response.status === 429
-      ? ProviderErrorKind.RateLimited
-      : response.status === 408 || response.status >= 500
-        ? ProviderErrorKind.Transient
-        : ProviderErrorKind.InvalidRequest;
-  throw new ProviderGatewayError(message, kind, response.status, retryAfter);
+  const raw = await response.text().catch(() => '');
+  const html = isHtmlResponse(response, raw);
+  const envelope = html ? { message: '' } : parseErrorEnvelope(raw);
+  const failure = classifyProviderFailure({ ...envelope, status: response.status, html });
+  throw new ProviderGatewayError(
+    envelope.message || response.statusText || `AI 服务请求失败（HTTP ${response.status}）`,
+    failure.kind,
+    response.status,
+    retryAfter,
+    failure.code
+  );
+}
+
+/** A 2xx body that could not be read as a model response. */
+export function unreadableProviderResponse(response: Response, provider: string): ProviderGatewayError {
+  return isHtmlResponse(response)
+    ? new ProviderGatewayError(
+        `${provider}接口返回了网页而不是模型响应，请检查接口地址（Base URL）`,
+        ProviderErrorKind.Protocol,
+        response.status,
+        undefined,
+        ProviderFailureCode.HtmlResponse
+      )
+    : new ProviderGatewayError(`${provider}接口返回的响应格式无法识别`, ProviderErrorKind.Protocol, response.status);
+}
+
+export function isHtmlResponse(response: Response, body = ''): boolean {
+  return /text\/html/i.test(response.headers.get('content-type') ?? '')
+    || /^\s*<(?:!doctype\s+html|html)[\s>]/i.test(body);
 }
 
 export function assertNonEmptyProviderResult(response: ProviderResponse): ProviderResponse {
   if (!response.text.trim() && !response.toolCalls?.length) {
-    throw new ProviderGatewayError('AI provider returned empty content', ProviderErrorKind.EmptyResponse);
+    throw new ProviderGatewayError('模型没有返回可显示的内容', ProviderErrorKind.EmptyResponse);
   }
   return { ...response, text: response.text.trim() };
+}
+
+function parseErrorEnvelope(raw: string): ReturnType<typeof providerErrorEnvelope> {
+  try {
+    return providerErrorEnvelope(JSON.parse(raw) as unknown);
+  } catch {
+    return { message: raw.trim().slice(0, 300) };
+  }
 }
 
 function parseRetryAfter(value: string | null): number | undefined {

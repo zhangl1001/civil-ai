@@ -4,6 +4,7 @@ import {
   InvocationValidationStatus,
   ModelMessageRole,
   ProviderErrorKind,
+  ProviderFailureCode,
   ProviderGatewayError,
   type ModelMessage,
   type ProviderGateway,
@@ -188,7 +189,7 @@ export class InvokeAgentModel implements AgentModelInvoker {
       const code = signal?.aborted
         ? 'agent.invocation_cancelled'
         : error instanceof ProviderGatewayError
-          ? `provider.${error.kind}`
+          ? error.code
           : 'agent.invocation_failed';
       try {
         await this.unitOfWork.runAutocommit((context) => this.repository.updateInvocationValidation(
@@ -219,16 +220,25 @@ function hashableMessageContent(content: ModelMessage['content']): JsonValue {
       });
 }
 
+/**
+ * Only generic rejections may mean "this endpoint cannot stream". A specific
+ * cause (wrong model, context overflow, HTML page, ...) fails the same way
+ * without streaming, so a second call would only add latency and cost.
+ */
 function canFallbackFromStream(
   error: unknown,
   emittedDelta: boolean,
   deadlineAborted: boolean
 ): boolean {
   if (emittedDelta || deadlineAborted || !(error instanceof ProviderGatewayError)) return false;
-  return error.kind === ProviderErrorKind.InvalidRequest
-    || error.kind === ProviderErrorKind.EmptyResponse
-    || error.kind === ProviderErrorKind.Protocol;
+  return STREAM_FALLBACK_CODES.has(error.code);
 }
+
+const STREAM_FALLBACK_CODES: ReadonlySet<string> = new Set([
+  `provider.${ProviderErrorKind.InvalidRequest}`,
+  `provider.${ProviderErrorKind.EmptyResponse}`,
+  `provider.${ProviderErrorKind.Protocol}`
+]);
 
 async function invokeProviderWithRecovery(
   gateway: ProviderGateway,
@@ -270,6 +280,7 @@ function canRetryProviderTurn(
 ): boolean {
   if (emittedDelta || signal.aborted) return false;
   if (!(error instanceof ProviderGatewayError)) return false;
+  if (error.code === ProviderFailureCode.HtmlResponse) return false;
   return attempt < providerAttemptLimit(profile, error.kind) - 1;
 }
 

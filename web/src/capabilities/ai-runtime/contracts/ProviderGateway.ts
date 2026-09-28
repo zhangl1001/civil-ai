@@ -113,6 +113,8 @@ export interface ProviderGateway {
 export const ProviderErrorKind = {
   Authentication: 'authentication',
   RateLimited: 'rate_limited',
+  /** Balance or quota is exhausted. Waiting does not help, so nothing retries it. */
+  QuotaExceeded: 'quota_exceeded',
   Transient: 'transient',
   InvalidRequest: 'invalid_request',
   EmptyResponse: 'empty_response',
@@ -121,14 +123,37 @@ export const ProviderErrorKind = {
 
 export type ProviderErrorKind = typeof ProviderErrorKind[keyof typeof ProviderErrorKind];
 
+/**
+ * Stable failure identity below the recovery class: `kind` decides whether a
+ * call may be retried, `code` says what actually went wrong so callers can
+ * explain it without parsing provider prose.
+ */
+export const ProviderFailureCode = {
+  ModelNotFound: 'provider.model_not_found',
+  EndpointNotFound: 'provider.endpoint_not_found',
+  ContextTooLong: 'provider.context_too_long',
+  UnsupportedMedia: 'provider.unsupported_media',
+  HtmlResponse: 'provider.html_response',
+  Overloaded: 'provider.overloaded',
+  Timeout: 'provider.timeout',
+  NetworkUnavailable: 'network.unavailable'
+} as const;
+
+export type ProviderFailureCode = typeof ProviderFailureCode[keyof typeof ProviderFailureCode];
+
 export class ProviderGatewayError extends Error {
+  /** `provider.<kind>` unless a finer {@link ProviderFailureCode} is known. */
+  readonly code: string;
+
   constructor(
     message: string,
     readonly kind: ProviderErrorKind,
     readonly status?: number,
-    readonly retryAfterMs?: number
+    readonly retryAfterMs?: number,
+    code?: ProviderFailureCode
   ) {
     super(message);
     this.name = 'ProviderGatewayError';
+    this.code = code ?? `provider.${kind}`;
   }
 }

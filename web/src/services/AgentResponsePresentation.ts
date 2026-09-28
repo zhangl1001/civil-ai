@@ -1,3 +1,6 @@
+export { CHAT_MODEL_SETTINGS_ROUTE, describeChatFailure, type ChatFailure } from './ChatAgentFailure';
+import { describeChatFailure } from './ChatAgentFailure';
+
 const INTERNAL_AGENT_LABELS: Readonly<Record<string, string>> = {
   'agent.select_skills': '工作流选择',
   'research.true_questions': '真题检索流程',
@@ -32,23 +35,7 @@ export function hasVisibleAssistantContent(value: string): boolean {
 }
 
 export function chatExecutionFailureText(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error || '');
-  if (/authentication|unauthorized|invalid api key|401|鉴权|认证|密钥/i.test(message)) {
-    return '模型服务鉴权失败，请检查 AI 配置中的接口地址和密钥。';
-  }
-  if (/invalid request|unsupported|not support|model.*unavailable|模型.*不支持|结构化请求/i.test(message)) {
-    return '当前模型不支持本次请求，请检查模型配置或更换兼容模型。';
-  }
-  if (/multimodal|vision|image input|image_url|media_type|图片.*不支持|不支持.*图片/i.test(message)) {
-    return '当前模型不支持图片理解，请在 AI 配置中换用支持视觉输入的模型后重试。';
-  }
-  if (/network|fetch|timeout|超时|连接|provider\.transient|provider\.rate_limited/i.test(message)) {
-    return '模型服务暂时没有响应，请稍后重试。';
-  }
-  if (/version conflict|database|sqlite|transaction|事务|数据库/i.test(message)) {
-    return '本地数据正在忙，请稍后重试。';
-  }
-  return 'AI 回复未能正常完成，请重试。';
+  return describeChatFailure(error).message;
 }
 
 function replaceInternalAgentNames(value: string): string {

@@ -2,6 +2,7 @@ export {
   ModelMessageRole,
   ProviderCode,
   ProviderErrorKind,
+  ProviderFailureCode,
   ProviderGatewayError,
   type ModelContentPart,
   type ModelImageContentPart,
