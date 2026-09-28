@@ -559,6 +559,21 @@ async function verifyChatAgentService() {
       assert.equal(cancelledRow.status, 'stopped', 'a run cancelled from the task bar still leaves its stopped turn');
       assert.equal(cancelledRow.errorCode, 'chat.stopped');
       assert.equal(cancelledRow.content, '已经写了一段');
+      const cancelledWhilePausing = await harness.session('确认前被取消');
+      harness.loop = async ({ command, observer }) => {
+        await observer.onEvent({ type: 'model_turn_started', agentRunId: command.agentRunId, turn: 1 });
+        await observer.onEvent({ type: 'text_delta', agentRunId: command.agentRunId, text: '准备发布题组' });
+        harness.runtime.runs.get(command.agentRunId).status = 'cancelled';
+        return {
+          status: 'waiting_user',
+          text: '准备发布题组',
+          checkpoint: { agentRunId: command.agentRunId, messages: [], turnCount: 1, pendingConfirmation: { id: 'c', name: 'question_bank.publish', arguments: {} } }
+        };
+      };
+      await service.handle('发布吧', cancelledWhilePausing, { thinkingEnabled: false });
+      const pausedRows = await harness.messages(cancelledWhilePausing.id);
+      assert.equal(pausedRows.at(-1).status, 'stopped', 'a run cancelled before it could pause keeps a stopped turn');
+      assert.equal(pausedRows.some((row) => row.content.includes('回复“确认”继续')), false, 'no confirmation is asked for a cancelled run');
     } finally {
       console.warn = originalWarn;
     }

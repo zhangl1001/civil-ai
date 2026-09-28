@@ -353,6 +353,13 @@ export class ChatAgentService {
     active: ActiveChatRun
   ): Promise<void> {
     const { controller, writer } = active;
+    const latest = await runtime.agentRunRepository.findById(runId);
+    if (latest?.run.status === 'cancelled') {
+      // Cancelled elsewhere (the task bar, or recovery of an orphaned run) while
+      // the model finished: keep what was shown, marked stopped.
+      await this.recordStop(active);
+      return;
+    }
     if (result.status === 'waiting_user' || result.status === 'budget_exhausted') {
       const waiting = result.status === 'waiting_user';
       await writer.persist(writer.visibleText);
@@ -362,7 +369,6 @@ export class ChatAgentService {
         content: waiting ? confirmationText(result.checkpoint.pendingConfirmation) : BUDGET_PAUSE_TEXT
       });
       await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
-      const current = waiting ? undefined : await runtime.agentRunRepository.findById(runId);
       await runtime.transitionAgentRun.execute({
         idempotencyKey: `chat-agent:${runId}:waiting:${waiting ? '' : 'budget:'}${result.checkpoint.turnCount}`,
         agentRunId: runId,
@@ -370,17 +376,11 @@ export class ChatAgentService {
         reasonCode: waiting ? 'chat_agent.confirmation_required' : 'chat_agent.budget_paused',
         ...(waiting ? {} : {
           checkpoint: {
-            ...(current?.run.checkpoint || {}),
+            ...(latest?.run.checkpoint || {}),
             agentLoop: asJsonObject({ ...result.checkpoint, pauseReason: 'budget' })
           }
         })
       });
-      return;
-    }
-    const latest = await runtime.agentRunRepository.findById(runId);
-    if (latest?.run.status === 'cancelled') {
-      // Cancelled elsewhere (e.g. the task bar) while the model finished.
-      await this.recordStop(active);
       return;
     }
     // The answer is the final turn only; preambles of tool-calling turns were provisional.
