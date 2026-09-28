@@ -35,7 +35,7 @@ try {
   const prepared040 = prepareMigrationSql(sql040);
   const prepared042 = prepareMigrationSql(sql042);
   const repair = tutorMigrations.find((migration) => migration.version === 43);
-  assert.equal(tutorMigrations.length, 44);
+  verifyMigrationChecksums(tutorMigrations);
   assert.equal(repair?.name, 'repair_swallowed_migrations');
   assert.equal(repair?.checksum, `sha256:${createHash('sha256').update(sql043).digest('hex')}`);
   assert.doesNotMatch(sql043, /DELETE FROM/i);
@@ -64,6 +64,25 @@ try {
   console.log('Swallowed native migration repair verification passed.');
 } finally {
   await server.close();
+}
+
+/**
+ * Devices reject a migration whose recorded checksum differs from the app's, so
+ * each constant must be the sha256 of the file it ships: an edited file, a
+ * stale constant or an unregistered file fails the build here.
+ */
+function verifyMigrationChecksums(migrations) {
+  const registered = migrations.map((migration) => `${String(migration.version).padStart(3, '0')}_${migration.name}.sql`);
+  assert.deepEqual(registered, migrationFiles(), 'every migration file must be registered once, in version order, under its own name');
+  for (const [index, migration] of migrations.entries()) {
+    const bytes = readFileSync(path.join(migrationsDir, registered[index]));
+    assert.equal(
+      migration.checksum,
+      `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      `${registered[index]}: checksum constant must match the file; add a new migration instead of editing an applied one`
+    );
+    assert.equal(migration.sql, bytes.toString('utf8'), `${registered[index]}: the bundled SQL must be the file's bytes`);
+  }
 }
 
 function readMigration(name) {
