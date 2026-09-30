@@ -269,7 +269,7 @@ export class RunAgentLoop implements AgentLoopRuntime {
         maxOutputTokens: 4_096, tools: turnContext.tools,
         toolChoice: finalizationOnly
           ? 'none'
-          : forceRequiredTool && requiredTool
+          : forceRequiredTool && requiredTool && gateway.capabilities?.forcedToolChoice !== false
             ? { name: providerToolName(requiredTool.name) }
             : 'auto',
         toolSchemaVersion: 'tutor-tools@2',

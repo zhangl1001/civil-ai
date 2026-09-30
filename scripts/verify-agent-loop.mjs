@@ -1605,7 +1605,101 @@ try {
     'the stable loop keeps a tool turn reasoning for replay too'
   );
 
+  await verifiesReasoningBudget(agent, ai, server);
+  await verifiesMissingToolIdDurableReplay(agent, ai, server);
   console.log('Agent loop verification passed.');
 } finally {
   await server.close();
+}
+
+async function verifiesReasoningBudget(agent, ai, server) {
+  const support = await server.ssrLoadModule('/src/modules/agent/application/AgentLoopSupport.ts');
+  const { PiAgentLoopRuntime } = await server.ssrLoadModule('/src/modules/agent/application/PiAgentLoopRuntime.ts');
+  const adapter = await server.ssrLoadModule('/src/modules/agent/application/pi/PiAgentMessageAdapter.ts');
+  const visible = { role: 'assistant', content: 'Done' };
+  const long = { ...visible, reasoning: [{ type: 'thinking', thinking: '推理'.repeat(20000), signature: 'sig' }] };
+  assert(support.estimateAgentMessageTokens([long]) > 25000, 'R3: 40,000 thinking characters are charged to the input budget');
+  assert.throws(() => support.compactAgentLoopMessages([long], 100), support.AgentContextBudgetError);
+  for (const block of [
+    { type: 'thinking', thinking: 'short', signature: 'x'.repeat(12000) },
+    { type: 'redacted_thinking', data: 'x'.repeat(12000) },
+    { type: 'thinking', thinking: 'short', signature: 'opaque', budgetTokens: 12000 }
+  ]) {
+    const message = { ...visible, reasoning: [block] };
+    const roundTrip = adapter.toModelMessages(adapter.toPiMessages(JSON.parse(JSON.stringify([message]))));
+    assert.deepEqual(roundTrip[0].reasoning, message.reasoning, 'budget and opaque payload survive checkpoint/Pi round trips');
+    assert(support.estimateAgentMessageTokens(roundTrip) >= 12000, 'opaque thinking uses a conservative budget');
+    for (const Runtime of [agent.RunAgentLoop, PiAgentLoopRuntime]) {
+      let calls = 0;
+      const runtime = new Runtime({ async invoke() { calls++; throw new Error('should not send'); } },
+        { async evaluate() { assert.fail('unexpected policy'); } }, { async execute() { assert.fail('unexpected tool'); } }, { async save() {} });
+      await assert.rejects(runtime.execute({
+        agentRunId: 'budget', system: 'system', messages: [
+          { role: 'user', content: 'question' },
+          { ...message, toolCalls: [{ id: 'budget-call', name: 'read', arguments: {} }] },
+          { role: 'tool', toolCallId: 'budget-call', content: 'latest evidence' }
+        ], tools: [],
+        maxContextTokens: 6000, executionContext: { agentRunId: 'budget' }
+      }, { provider: 'anthropic', model: 'test', capabilities: { multimodalInput: true } }), support.AgentContextBudgetError);
+      assert.equal(calls, 0, 'both engines enforce reasoning budget before any model invocation');
+    }
+  }
+  const parsed = ai.parseAnthropicResponse({ content: [{ type: 'thinking', thinking: 'short', signature: 'opaque' }, { type: 'text', text: 'Done' }], usage: { output_tokens: 16000 } });
+  assert.equal(parsed.reasoning[0].budgetTokens, 16000, 'reported output bounds hidden thinking beyond the summary');
+  assert(support.estimateAgentMessageTokens([{ ...visible, reasoning: parsed.reasoning }]) >= 16000);
+  const compacted = support.compactAgentLoopMessages([long, ...Array.from({ length: 18 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'old '.repeat(500) })), { role: 'user', content: 'latest' }], 1500);
+  assert(support.estimateAgentMessageTokens(compacted) <= 1500);
+  assert(!JSON.stringify(compacted).includes('推理'), 'compaction never exposes hidden thinking in its summary');
+}
+
+// R21: real durable executor, with a minimal receipt store; no database or model API.
+async function verifiesMissingToolIdDurableReplay(agent, ai, server) {
+  const { buildAgentLoopCheckpoint } = await server.ssrLoadModule('/src/modules/agent/application/AgentLoopCheckpointing.ts');
+  const parsers = [
+    score => ai.parseOpenAIResponse({ choices: [{ message: { tool_calls: [{ type: 'function', function: { name: 'change', arguments: JSON.stringify({ score }) } }] } }] }),
+    score => ai.parseAnthropicResponse({ content: [{ type: 'tool_use', name: 'change', input: { score } }] }),
+    score => {
+      const acc = new ai.OpenAIStreamAccumulator();
+      acc.append({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'change', arguments: JSON.stringify({ score }) } }] } }] });
+      return acc.response();
+    },
+    score => {
+      const acc = new ai.AnthropicStreamAccumulator();
+      acc.append({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'change' } });
+      acc.append({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ score }) } });
+      return acc.response();
+    }
+  ];
+  for (const parse of parsers) {
+    const rows = new Map();
+    const receipts = {
+      async claim(receipt) {
+        if (!rows.has(receipt.toolCallId)) rows.set(receipt.toolCallId, receipt);
+        return rows.get(receipt.toolCallId);
+      },
+      async replace(receipt, expected) {
+        assert.equal(rows.get(receipt.toolCallId).version, expected);
+        rows.set(receipt.toolCallId, receipt);
+      }
+    };
+    let score = 0, writes = 0;
+    const executor = new agent.DurableAgentToolExecutor({ async execute(_definition, call) {
+      score = call.arguments.score; writes++; return { content: `score=${score}`, madeProgress: true };
+    } }, receipts, { now: () => 1 });
+    const definition = { name: 'change', description: 'change score', risk: 'write', requiresConfirmation: false, enabledFor: ['tutor_turn'], inputSchema: { type: 'object', properties: { score: { type: 'number' } }, required: ['score'] } };
+    const first = parse(85).toolCalls[0], second = parse(90).toolCalls[0];
+    await executor.execute(definition, first, { agentRunId: 'id-test' });
+    await executor.execute(definition, second, { agentRunId: 'id-test' });
+    assert.equal(score, 90, 'a missing provider ID must not collide with the earlier turn receipt');
+    const checkpoint = JSON.parse(JSON.stringify(buildAgentLoopCheckpoint({
+      agentRunId: 'id-test', turnCount: 2, toolCallCount: 2,
+      messages: [{ role: 'assistant', content: '', toolCalls: [second] }], signatures: {}, toolAttempts: {},
+      state: { pendingConfirmation: second, activeSkills: [], activeToolNames: ['change'], completedToolNames: [], skillWorkflowState: 'waiting_user', awaitingCompletionVerification: false, pendingCompletionExpectations: [] }
+    })));
+    assert.equal(checkpoint.messages[0].toolCalls[0].id, second.id);
+    assert.equal(checkpoint.pendingConfirmation.id, second.id);
+    const replayed = await executor.execute(definition, checkpoint.pendingConfirmation, { agentRunId: 'id-test' });
+    assert.equal(replayed.content, 'score=90');
+    assert.equal(writes, 2, 'restoring the checkpoint replays the receipt without repeating a business write');
+  }
 }

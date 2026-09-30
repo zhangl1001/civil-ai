@@ -6,6 +6,7 @@ import {
 export interface ModelRequestCapabilityOverrides {
   readonly temperature?: boolean;
   readonly thinking?: boolean;
+  readonly forcedToolChoice?: boolean;
 }
 
 /**
@@ -15,11 +16,13 @@ export interface ModelRequestCapabilityOverrides {
 export class ModelCapabilityMatrix {
   private temperatureSupported: boolean;
   private thinkingSupported: boolean;
+  readonly forcedToolChoice: boolean;
 
   constructor(overrides: ModelRequestCapabilityOverrides = {}, model = '') {
     // Known up front, so no request is spent on a 400 to learn it.
     this.temperatureSupported = overrides.temperature ?? !rejectsSamplingParameters(model);
     this.thinkingSupported = overrides.thinking !== false;
+    this.forcedToolChoice = overrides.forcedToolChoice ?? !rejectsForcedToolChoice(model);
   }
 
   samplingParameters(temperature: number): Readonly<Record<string, unknown>> {
@@ -62,6 +65,11 @@ export function rejectsSamplingParameters(model: string): boolean {
 /** Claude Opus 5.5, Fable 5.x and Mythos 5.x always think; `thinking: {type: 'disabled'}` is a 400. */
 export function rejectsDisabledThinking(model: string): boolean {
   return /claude-(?:opus-5-5|fable-5|mythos-5)(?![0-9])/i.test(model);
+}
+
+/** https://platform.claude.com/docs/en/build-with-claude/thinking#response-prefill-and-forced-tool-use */
+function rejectsForcedToolChoice(model: string): boolean {
+  return /claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?![0-9])/i.test(model);
 }
 
 function isUnsupportedTemperature(error: unknown): boolean {

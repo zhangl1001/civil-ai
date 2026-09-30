@@ -38,15 +38,29 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
     this.scope.stage(context, { type:'add', store:TutorIndexedDbStore.AgentRunAggregates, value:stored(run,[created],[]) });
   }
   async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext, guard?: AgentRunMutationGuard): Promise<void> {
-    const current=await this.findById(run.id);
-    if (guard && (!current || !matchesActiveLease(current.run, guard.leaseToken, guard.now))) {
-      throw new AgentRunLeaseLostError(run.id);
-    }
-    if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new AgentRunVersionConflictError(run.id);
-    this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...current.events,event],(await this.get(run.id))!.invocations)});
+    const before = await this.findById(run.id);
+    if (guard && (!before || !matchesActiveLease(before.run, guard.leaseToken, guard.now))) throw new AgentRunLeaseLostError(run.id);
+    if (!before || before.run.version !== expectedVersion || run.version !== expectedVersion + 1) throw new AgentRunVersionConflictError(run.id);
+    this.scope.stage(context, {
+      type: 'update', store: TutorIndexedDbStore.AgentRunAggregates, key: run.id,
+      update: (value) => {
+        const current = value as StoredRun | undefined;
+        if (guard && (!current || !matchesActiveLease(current.run, guard.leaseToken, guard.now))) {
+          throw new AgentRunLeaseLostError(run.id);
+        }
+        if (!current || current.run.version !== expectedVersion || run.version !== expectedVersion + 1) {
+          throw new AgentRunVersionConflictError(run.id);
+        }
+        // Heartbeats do not increment the run version; preserve a renewal in the same lease epoch.
+        const keepsLease = run.status === 'running' && run.leaseOwner === current.run.leaseOwner
+          && run.leaseEpoch === current.run.leaseEpoch;
+        const next = keepsLease ? { ...run, leaseExpiresAt: current.run.leaseExpiresAt } : run;
+        return stored(next, [...current.events, event], current.invocations);
+      }
+    });
   }
   async findById(id: AgentRunId): Promise<AgentRunAggregate|undefined> { const item=await this.get(id); return item&&{run:item.run,events:item.events}; }
-  /** IndexedDbUnitOfWork serializes this runtime's units of work, so the committed read inside one is the version its write replaces. */
+  /** Reads a candidate version; replace validates it again in the native write transaction. */
   async findByIdInTransaction(id: AgentRunId, _context: TransactionContext): Promise<AgentRunAggregate|undefined> { return this.findById(id); }
   async findByIdempotencyKey(key:string): Promise<AgentRunAggregate|undefined> {
     const reservation=await this.database.get<StoredRunIdempotency>(TutorIndexedDbStore.AgentRunIdempotency,key);
@@ -54,9 +68,36 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
   }
   async findLatestByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{const all=await this.targetRuns(type,id);const item=[...all].sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id)))[0];return item&&{run:item.run,events:item.events};}
   async findActiveByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{const all=await this.targetRuns(type,id);const item=all.filter(value=>active(value.run.status)).sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id)))[0];return item&&{run:item.run,events:item.events};}
-  async appendInvocation(invocation:AgentInvocationRecord, context:TransactionContext):Promise<void> { const current=await this.get(invocation.agentRunId); if(!current) throw new Error(`Agent run not found: ${invocation.agentRunId}`); this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(current.run,current.events,[...current.invocations,invocation])}); }
-  async updateInvocationResult(id:AgentInvocationRecord['id'], value:Pick<AgentInvocationRecord,'providerRequestId'|'inputTokens'|'outputTokens'|'latencyMs'|'finishReason'>, context:TransactionContext):Promise<void>{const current=await this.findInvocation(id);if(!current||current.invocation.validationStatus!=='pending')throw new Error(`Agent invocation result conflict: ${id}`);this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(current.stored.run,current.stored.events,current.stored.invocations.map(item=>item.id===id?{...item,...value}:item))});}
-  async updateInvocationValidation(id:AgentInvocationRecord['id'], status:AgentInvocationRecord['validationStatus'], errorCode:string|undefined, context:TransactionContext):Promise<void>{const current=await this.findInvocation(id);if(!current||current.invocation.validationStatus!=='pending')throw new Error(`Agent invocation validation conflict: ${id}`);this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(current.stored.run,current.stored.events,current.stored.invocations.map(item=>item.id===id?{...item,validationStatus:status,errorCode}:item))});}
+  async appendInvocation(invocation: AgentInvocationRecord, context: TransactionContext): Promise<void> {
+    this.stageInvocations(invocation.agentRunId, context, (items) => {
+      if (items.some((item) => item.id === invocation.id)) throw new Error(`Duplicate Agent invocation: ${invocation.id}`);
+      return [...items, invocation];
+    });
+  }
+  async updateInvocationResult(id: AgentInvocationRecord['id'], value: Pick<AgentInvocationRecord, 'providerRequestId'|'inputTokens'|'outputTokens'|'latencyMs'|'finishReason'>, context: TransactionContext): Promise<void> {
+    await this.updateInvocation(id, value, context);
+  }
+  async updateInvocationValidation(id: AgentInvocationRecord['id'], status: AgentInvocationRecord['validationStatus'], errorCode: string | undefined, context: TransactionContext): Promise<void> {
+    await this.updateInvocation(id, { validationStatus: status, errorCode }, context);
+  }
+  private async updateInvocation(id: AgentInvocationRecord['id'], patch: Partial<AgentInvocationRecord>, context: TransactionContext): Promise<void> {
+    const found = await this.findInvocation(id);
+    if (!found) throw new Error(`Agent invocation does not exist: ${id}`);
+    this.stageInvocations(found.stored.run.id, context, (items) => {
+      if (items.find((item) => item.id === id)?.validationStatus !== 'pending') throw new Error(`Agent invocation conflict: ${id}`);
+      return items.map((item) => item.id === id ? { ...item, ...patch } : item);
+    });
+  }
+  private stageInvocations(id: AgentRunId, context: TransactionContext, update: (items: readonly AgentInvocationRecord[]) => readonly AgentInvocationRecord[]): void {
+    this.scope.stage(context, {
+      type: 'update', store: TutorIndexedDbStore.AgentRunAggregates, key: id,
+      update: (value) => {
+        const current = value as StoredRun | undefined;
+        if (!current) throw new Error(`Agent run not found: ${id}`);
+        return stored(current.run, current.events, update(current.invocations));
+      }
+    });
+  }
   async listInvocations(id:AgentRunId):Promise<readonly AgentInvocationRecord[]> { return (await this.get(id))?.invocations??[]; }
   async countInvocations(runIds:readonly AgentRunId[]):Promise<Readonly<Record<string,number>>>{const wanted=new Set<string>(runIds);const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates);return Object.fromEntries(all.filter(item=>wanted.has(item.run.id)).map(item=>[item.run.id,item.invocations.length]));}
   async listRecent(limit:number):Promise<readonly AgentRunAggregate[]> { if(!Number.isInteger(limit)||limit<1||limit>50)throw new RangeError('Agent recent limit must be between 1 and 50'); const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates); return [...all].sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id))).slice(0,limit).map(v=>({run:v.run,events:v.events})); }

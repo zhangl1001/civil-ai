@@ -153,7 +153,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { useMockTaskFollow } from '@/features/exam/useMockTaskFollow';
+import { completedMockTaskLocation, useMockTaskFollow } from '@/features/exam/useMockTaskFollow';
 import { useRouter } from 'vue-router';
 import {
   BookOpenIcon,
@@ -227,7 +227,7 @@ const startButtonText = computed(() => {
 });
 onMounted(loadDashboard);
 const mockFollow = useMockTaskFollow(
-  async () => { await loadDashboard(subject.value?.code); const latest = history.value.find((item) => item.manifestId || !isObjective.value); if (latest) openHistory(latest); },
+  async (task, signal) => { const to = completedMockTaskLocation(task); if (!signal.aborted && to) await router.push(to); },
   (task) => { notice.value = task.detail || '模考生成失败，请重新生成'; }
 );
 async function loadDashboard(subjectCode?: ExamSubjectView['code']) {

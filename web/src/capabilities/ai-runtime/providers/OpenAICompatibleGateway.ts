@@ -43,7 +43,9 @@ const STRUCTURED_RESULT_TOOL = 'submit_structured_result';
 
 export class OpenAICompatibleGateway implements ProviderGateway {
   readonly provider = ProviderCode.OpenAICompatible;
-  readonly capabilities = { multimodalInput: true } as const;
+  get capabilities() {
+    return { multimodalInput: true, forcedToolChoice: this.modelCapabilities.forcedToolChoice };
+  }
   readonly model: string;
   private readonly structuredOutput: StructuredOutputCapability;
   private readonly modelCapabilities: ModelCapabilityMatrix;
@@ -70,6 +72,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   }
 
   async prepareStructuredOutput(signal?: AbortSignal): Promise<void> {
+    if (!this.capabilities.forcedToolChoice) return;
     const request = structuredOutputProbeRequest();
     await this.structuredOutput.execute({
       invoke: (mode) => this.sendCompletion(request, mode, signal),
@@ -83,7 +86,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     signal?: AbortSignal
   ): Promise<ProviderResponse> {
     if (!request.responseSchema) return this.sendCompletion(request, 'tool', signal);
-    if (request.structuredOutputMode === 'prompt') {
+    if (request.structuredOutputMode === 'prompt' || !this.capabilities.forcedToolChoice) {
       return this.sendCompletion(request, 'prompt', signal);
     }
     return this.structuredOutput.execute({
@@ -201,7 +204,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
           parameters: tool.inputSchema
         }
       }));
-      body.tool_choice = openAIToolChoice(request.toolChoice);
+      body.tool_choice = openAIToolChoice(request.toolChoice, this.capabilities.forcedToolChoice);
     }
     return {
       url: providerEndpoint(this.config.baseUrl, 'chat/completions'),
@@ -269,7 +272,8 @@ function toOpenAIContent(content: ProviderRequest['messages'][number]['content']
       });
 }
 
-function openAIToolChoice(choice: ProviderRequest['toolChoice']): unknown {
+function openAIToolChoice(choice: ProviderRequest['toolChoice'], canForce: boolean): unknown {
+  if (!canForce && choice !== 'none') return 'auto';
   if (!choice || choice === 'auto' || choice === 'none' || choice === 'required') return choice ?? 'auto';
   return { type: 'function', function: { name: choice.name } };
 }

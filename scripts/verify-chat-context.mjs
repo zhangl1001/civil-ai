@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => { throw new Error('Network is prohibited in chat context verification'); };
 const server = await createServer({
   root,
   configFile: false,
@@ -104,7 +106,7 @@ try {
     ...Array.from({ length: 16 }, (_, index) => message(`later-${index}`, index % 2 ? 'assistant' : 'user', `后续 ${index}`))
   ], {}, 6);
   assert.equal(failedSummary.summary.includes('未能正常完成'), false, 'rolling summaries skip failed turns');
-  assert.equal(failedSummary.summary.includes('先看一下你的'), false, 'rolling summaries skip stopped turns');
+  assert.match(failedSummary.summary, /先看一下你的.*被用户中断/, 'summaries retain stopped context with its outcome');
   assert.equal(
     sanitizeConversationSummary('用户：帮我规划今天\n助手：AI 回复未能正常完成，请重试。\n助手：今天先练判断推理'),
     '用户：帮我规划今天\n助手：今天先练判断推理',
@@ -116,6 +118,37 @@ try {
   assert.equal(clipped.startsWith('a'.repeat(100)), true);
   assert.equal(clipped.includes('较长回复截断摘要'), true);
   assert.equal(clipped.length < long.length, true);
+  const interruptedHistory = [
+    message('long-q', 'user', '原中断问题'),
+    { ...message('long-a', 'assistant', '范文正文。'.repeat(900)), status: 'stopped' },
+    message('long-next', 'user', '换个角度')
+  ];
+  const interruptedContext = buildChatContext(interruptedHistory, { currentPrompt: '换个角度' });
+  assert.match(interruptedContext.find((item) => item.role === 'assistant').content, /被用户中断.*不要继续或重答/);
+  assert.match(buildConversationSummary(interruptedHistory), /范文正文.*被用户中断.*不要继续或重答/);
+  const failedAndGuided = [
+    message('failed-q', 'user', '失败原请求不应回放'),
+    message('failed-guide', 'user', '失败补充引导不应回放'),
+    { ...message('failed-a', 'assistant', '失败半句'), status: 'failed' },
+    message('empty-stop-q', 'user', '空中断请求不应回放'),
+    { ...message('empty-stop-a', 'assistant', ''), status: 'stopped' },
+    ...interruptedHistory.slice(0, 2),
+    ...Array.from({ length: 20 }, (_, index) => message(`valid-${index}`, index % 2 ? 'assistant' : 'user', `正常问答${index}`))
+  ];
+  const repairedSummary = advanceConversationSummary(failedAndGuided, { summary: '用户：失败原请求不应回放', version: 3 });
+  assert.doesNotMatch(repairedSummary.summary, /不应回放|失败半句/);
+  assert.match(repairedSummary.summary, /原中断问题/);
+  assert.match(repairedSummary.summary, /被用户中断.*不要继续或重答/);
+  const repairedShort = advanceConversationSummary(failedAndGuided.slice(0, 5), { summary: '用户：失败原请求不应回放', version: 3 });
+  assert.equal(repairedShort.summary, '', 'upgrade also clears stale summaries when no older valid exchanges remain');
+  const boundarySummary = advanceConversationSummary(interruptedHistory.slice(0, 2), {}, 1);
+  assert.equal(boundarySummary.summary, '', 'summary boundary does not separate the question from its interrupted answer');
+  const boundedStops = buildConversationSummary(Array.from({ length: 20 }, (_, index) => [
+    message(`bounded-q-${index}`, 'user', `中断问题${index}`),
+    { ...message(`bounded-a-${index}`, 'assistant', long), status: 'stopped' }
+  ]).flat());
+  assert(boundedStops.length <= 2400);
+  assert(boundedStops.split('\n').filter((line) => line.startsWith('助手：')).every((line) => line.includes('被用户中断')));
 
   const summary = buildConversationSummary(history);
   assert.equal(summary.includes('用户：今天怎么安排'), true);
@@ -340,6 +373,22 @@ try {
   assert(prepared.memoryContext.includes('回答尽量先给结论'));
   assert(prepared.messages.length <= 15);
   assert(prepared.contextCodes.includes('memory:user.response_preference'));
+  const regressionSession = await store.createSession('project:1', '摘要与近期过滤一致');
+  for (const row of failedAndGuided) await store.addMessage({ ...row, sessionId: regressionSession.id });
+  await store.updateSession(regressionSession.id, { summary: '用户：失败原请求不应回放', summaryVersion: 3 });
+  const beforeRefresh = await memoryService.prepare(runtime, regressionSession.id, '新问题', '新问题');
+  assert.doesNotMatch(JSON.stringify(beforeRefresh), /不应回放|失败半句/);
+  await memoryService.refreshSessionSummary(runtime, regressionSession.id);
+  const afterRefresh = await memoryService.prepare(runtime, regressionSession.id, '新问题', '新问题');
+  assert.doesNotMatch(JSON.stringify(afterRefresh), /不应回放|失败半句/);
+  assert.match(afterRefresh.sessionSummary, /被用户中断.*不要继续或重答/);
+  const savedSummary = await store.getSession(regressionSession.id);
+  await memoryService.refreshSessionSummary(runtime, regressionSession.id);
+  assert.deepEqual(await store.getSession(regressionSession.id), savedSummary, 'summary cursor and version are mapped correctly and prevent repeated writes');
+  const shortSession = await store.createSession('project:1', '长中断');
+  for (const row of interruptedHistory) await store.addMessage({ ...row, sessionId: shortSession.id });
+  const longPrepared = await memoryService.prepare(runtime, shortSession.id, '换个角度', '换个角度');
+  assert.match(longPrepared.messages.find((item) => item.role === 'assistant').content, /被用户中断.*不要继续或重答/);
 
   const pagedHistory = Array.from({ length: 55 }, (_, index) => message(`page-${index + 1}`, 'user', `消息 ${index + 1}`));
   const latestPage = paginateAIChatMessages(pagedHistory, undefined, 24);
@@ -354,6 +403,7 @@ try {
   console.log('Chat context verification passed.');
 } finally {
   await server.close();
+  globalThis.fetch = originalFetch;
 }
 
 function message(id, role, content) {
@@ -648,13 +698,18 @@ async function verifyChatAgentService() {
     const replies = {
       confirm: ['确认', '确认。', '确认！', '是的', '好的，发布吧', '嗯嗯', 'OK!', '可以，开始吧', '没问题', '确定要发布', '那就这样吧', '好的谢谢', '发吧'],
       reject: ['取消', '算了', '算了吧', '不要发布', '不用了', '先不发了', '不', 'no', '别发布了', '确认取消', '不确认'],
-      ambiguous: ['发布后还能修改吗？', '改成85分', '等一下', '为什么要发布', '好的，不过先别发布', '', '今天天气怎么样']
+      ambiguous: ['发布？', '确认?', '发布❓', '可以嘛', '是的呢', '改一下', '好的，改一下', '好的，提交吧', '生成', '去', '做', '发布后还能修改吗？', '改成85分', '等一下', '为什么要发布', '好的，不过先别发布', '', '今天天气怎么样']
     };
     for (const [decision, texts] of Object.entries(replies)) {
       for (const text of texts) {
-        assert.equal(classifyAgentConfirmationReply(text), decision, `"${text}" should read as ${decision}`);
+        assert.equal(classifyAgentConfirmationReply(text, 'question_bank.publish'), decision, `"${text}" should read as ${decision}`);
       }
     }
+    assert.equal(classifyAgentConfirmationReply('发吧', 'question_bank.confirm'), 'ambiguous');
+    assert.equal(classifyAgentConfirmationReply('发吧'), 'ambiguous', 'action-only approval requires a matching pending tool');
+    assert.equal(classifyAgentConfirmationReply('是的'), 'confirm');
+    assert.equal(classifyAgentConfirmationReply('确认'), 'confirm');
+    assert.equal(classifyAgentConfirmationReply('修改一下', 'profile.update_target'), 'ambiguous');
     const confirming = await harness.session('待确认');
     const pendingCall = { id: 'call:publish', name: 'question_bank.publish', arguments: { draftId: 'draft:1', expectedVersion: 2 } };
     harness.runtime.runs.set('AgentRunId:waiting-publish', {
@@ -677,7 +732,11 @@ async function verifyChatAgentService() {
       return { status: 'completed', text: '已发布为正式题组。', checkpoint: { agentRunId: command.agentRunId, messages: [] } };
     };
     const cancellationsBefore = harness.cancellations.length;
-    await service.handle('发布后还能修改吗？', confirming, { thinkingEnabled: false });
+    for (const reply of ['发布后还能修改吗？', '发布？', '改一下', '好的，提交吧']) {
+      await service.handle(reply, confirming, { thinkingEnabled: false });
+      assert.equal(harness.runtime.runs.get('AgentRunId:waiting-publish').status, 'waiting_user');
+      assert.deepEqual(resumed, [], `${reply} must not authorize the original checkpoint`);
+    }
     assert.equal(harness.cancellations.length, cancellationsBefore, 'an unclear reply never cancels the pending action');
     assert.equal(harness.runtime.runs.get('AgentRunId:waiting-publish').status, 'waiting_user');
     assert.deepEqual(resumed, [], 'an unclear reply does not start a new model loop that would re-ask');
@@ -688,6 +747,7 @@ async function verifyChatAgentService() {
     await service.handle('好的，发布吧', confirming, { thinkingEnabled: false });
     assert.deepEqual(resumed, ['confirm'], 'a clear yes with particles and punctuation confirms the pending action');
     assert.equal((await harness.messages(confirming.id)).at(-1).content, '已发布为正式题组。');
+    await verifyChatStore(serviceServer, harness);
 
     const failures = [
       [new ai.ProviderGatewayError('Incorrect API key provided', ai.ProviderErrorKind.Authentication, 401), 'provider.authentication', /API Key/],
@@ -721,6 +781,192 @@ async function verifyChatAgentService() {
     await serviceServer.close();
     await rm(path.join(tmpdir(), `chat-service-harness-${process.pid}`), { recursive: true, force: true });
   }
+}
+
+async function verifyChatStore(serviceServer, harness) {
+  const { createPinia } = await import('../web/node_modules/pinia/dist/pinia.mjs');
+  const { useAIChatStore } = await serviceServer.ssrLoadModule('/src/stores/aiChat.ts');
+  const { aiChatRepository: repository } = await serviceServer.ssrLoadModule('/src/services/AIChatRepository.ts');
+  const { projectRepository } = await serviceServer.ssrLoadModule('/src/services/ProjectRepository.ts');
+  const { chatAgentService } = await serviceServer.ssrLoadModule('/src/services/ChatAgentService.ts');
+  const originals = { project: projectRepository.getActiveProject, page: repository.listMessagePage, session: repository.getSession,
+    create: repository.createSession, latest: repository.getOrCreateSession, steer: chatAgentService.steer };
+  projectRepository.getActiveProject = async () => ({ id: 'project:chat-service' });
+  const storeFor = (session) => { const store = useAIChatStore(createPinia()); store.session = session; return store; };
+  const add = (session, role, content) => harness.runtime.conversationStore.addMessage({ sessionId: session.id, role, content });
+  const completed = { status: 'completed', text: '本地模拟已完成', checkpoint: {} };
+  try {
+    const session = await harness.session('重试原请求');
+    const store = storeFor(session);
+    const entered = deferred(), release = deferred();
+    harness.loop = async ({ command, observer }) => {
+      await observer.onEvent({ type: 'text_delta', agentRunId: command.agentRunId, text: '已经写出的部分正文' });
+      entered.resolve();
+      await release.promise;
+      throw new Error('mock network unavailable');
+    };
+    const image = { type: 'image', mediaType: 'image/png', dataBase64: 'LOCAL_TEST_IMAGE' };
+    const invocation = { skillNames: ['tutor.essay_workflow'], systemConstraint: 'ORIGINAL_CONSTRAINT' };
+    const sending = store.send('根据本题写一篇申论范文', [image], invocation);
+    await entered.promise;
+    assert.equal(await store.steer('短一点'), true);
+    assert.equal(await store.steer('先给结论'), true);
+    release.resolve();
+    await sending;
+    const failed = store.messages.find((item) => item.status === 'failed');
+    assert(failed);
+    assert.deepEqual(failed.retryRequest, { text: '根据本题写一篇申论范文', invocation, guidance: ['短一点', '先给结论'] });
+    assert.equal(JSON.stringify(failed).includes(image.dataBase64), false, 'image bytes are not persisted in chat history');
+
+    // Another run with identical prose must not replace the first run's workflow/images.
+    harness.loop = async () => { throw new Error('mock second failure'); };
+    await store.send('根据本题写一篇申论范文', undefined, { systemConstraint: 'OTHER_CONSTRAINT' });
+    const otherSession = await harness.session('其他会话');
+    await store.switchSession(otherSession.id);
+    await store.switchSession(session.id);
+    let retried;
+    harness.loop = async ({ command }) => { retried = command; return completed; };
+    await store.retry(failed.id);
+    assert.match(retried.system, /ORIGINAL_CONSTRAINT/);
+    assert.doesNotMatch(retried.system, /OTHER_CONSTRAINT/);
+    const prompt = retried.messages.at(-1);
+    assert.equal(prompt.content[1].dataBase64, image.dataBase64);
+    assert.match(prompt.content[0].text, /^根据本题写一篇申论范文/);
+    assert.match(prompt.content[0].text, /【用户在执行中补充的引导】\n短一点/);
+    assert.match(prompt.content[0].text, /先给结论/);
+
+    const reloaded = storeFor(session);
+    await reloaded.refreshMessages();
+    await reloaded.retry(failed.id);
+    assert.match(retried.system, /ORIGINAL_CONSTRAINT/, 'persisted retry metadata restores the workflow after recreating the store');
+    assert.match(retried.messages.at(-1).content, /^根据本题写一篇申论范文/);
+    assert.match(retried.messages.at(-1).content, /短一点/);
+
+    const a = await harness.session('A'), b = await harness.session('B');
+    for (let index = 0; index < 30; index += 1) await add(a, index % 2 ? 'assistant' : 'user', `A:${index}`);
+    await add(b, 'user', 'B问题'); await add(b, 'assistant', 'B回答');
+    const paging = storeFor(a);
+    await paging.refreshMessages();
+    for (const action of ['loadOlderMessages', 'refreshMessages']) {
+      await paging.switchSession(a.id);
+      const enteredPage = deferred(), releasePage = deferred();
+      repository.listMessagePage = async function (sessionId, options) {
+        const page = await originals.page.call(this, sessionId, options);
+        if (sessionId === a.id) { enteredPage.resolve(); await releasePage.promise; }
+        return page;
+      };
+      const oldRequest = paging[action]();
+      await enteredPage.promise;
+      await paging.switchSession(b.id);
+      releasePage.resolve();
+      await oldRequest;
+      assert.equal(paging.session.id, b.id);
+      assert(paging.messages.length > 0 && paging.messages.every((row) => row.sessionId === b.id), `${action} cannot write A into B`);
+      assert.equal(paging.isLoadingOlderMessages, false);
+      repository.listMessagePage = originals.page;
+    }
+
+    // A -> B -> A: session identity alone is insufficient to reject the original page.
+    await paging.switchSession(a.id);
+    const oldEntered = deferred(), oldRelease = deferred();
+    let held = false;
+    repository.listMessagePage = async function (sessionId, options) {
+      const page = await originals.page.call(this, sessionId, options);
+      if (!held) { held = true; oldEntered.resolve(); await oldRelease.promise; }
+      return page;
+    };
+    const oldRefresh = paging.refreshMessages();
+    await oldEntered.promise;
+    await paging.switchSession(b.id);
+    await add(a, 'assistant', 'A最新消息');
+    await paging.switchSession(a.id);
+    oldRelease.resolve(); await oldRefresh;
+    assert.equal(paging.messages.at(-1).content, 'A最新消息', 'returning to A does not make its obsolete read valid again');
+    repository.listMessagePage = originals.page;
+
+    const refreshEntered = deferred(), refreshRelease = deferred();
+    held = false;
+    repository.listMessagePage = async function (...args) {
+      const page = await originals.page.apply(this, args);
+      if (!held) { held = true; refreshEntered.resolve(); await refreshRelease.promise; }
+      return page;
+    };
+    const staleSameSession = paging.refreshMessages();
+    await refreshEntered.promise;
+    await add(a, 'assistant', '同会话较新刷新');
+    await paging.refreshMessages();
+    refreshRelease.resolve(); await staleSameSession;
+    assert.equal(paging.messages.at(-1).content, '同会话较新刷新');
+    repository.listMessagePage = originals.page;
+
+    const selectionEntered = deferred(), selectionRelease = deferred();
+    repository.getSession = async function (sessionId) {
+      const result = await originals.session.call(this, sessionId);
+      if (sessionId === a.id) { selectionEntered.resolve(); await selectionRelease.promise; }
+      return result;
+    };
+    const slowSwitch = paging.switchSession(a.id);
+    await selectionEntered.promise;
+    await paging.switchSession(b.id);
+    selectionRelease.resolve(); await slowSwitch;
+    assert.equal(paging.session.id, b.id, 'the last selection wins even when session lookups return out of order');
+    repository.getSession = originals.session;
+
+    // Guidance persists in A, but a late acknowledgement must not append it to B's UI.
+    const guidanceEntered = deferred(), guidanceRelease = deferred(), runEntered = deferred(), runRelease = deferred();
+    await paging.switchSession(a.id);
+    harness.loop = async () => { runEntered.resolve(); await runRelease.promise; return completed; };
+    const active = paging.send('执行时切会话');
+    await runEntered.promise;
+    chatAgentService.steer = async function (...args) {
+      const result = await originals.steer.apply(this, args);
+      guidanceEntered.resolve(); await guidanceRelease.promise; return result;
+    };
+    const guidance = paging.steer('迟到的引导');
+    await guidanceEntered.promise;
+    await paging.switchSession(b.id);
+    guidanceRelease.resolve(); await guidance;
+    assert(paging.messages.every((row) => row.sessionId === b.id));
+    runRelease.resolve(); await active;
+    assert(paging.messages.every((row) => row.sessionId === b.id), 'completion of A also leaves B intact');
+
+    const createEntered = deferred(), createRelease = deferred();
+    repository.createSession = async function (...args) {
+      const created = await originals.create.apply(this, args);
+      createEntered.resolve(); await createRelease.promise; return created;
+    };
+    const creating = paging.newSession();
+    await createEntered.promise;
+    paging.applyAssistantStream({ sessionId: b.id, messageId: 'late:B', content: '创建会话期间的旧回调' });
+    createRelease.resolve(); await creating;
+    assert.notEqual(paging.session.id, b.id);
+    assert.deepEqual(paging.messages, [], 'a newly created session cannot inherit rows appended during its creation');
+    repository.createSession = originals.create;
+
+    const initEntered = deferred(), initRelease = deferred();
+    repository.getOrCreateSession = async () => { initEntered.resolve(); await initRelease.promise; return a; };
+    const initializing = storeFor(null);
+    const initialization = initializing.init();
+    await initEntered.promise;
+    await initializing.switchSession(b.id);
+    initRelease.resolve(); await initialization;
+    assert.equal(initializing.session.id, b.id);
+    assert(initializing.messages.every((row) => row.sessionId === b.id));
+    assert.equal(initializing.initialized, true, 'an invalidated init still installs message observation');
+  } finally {
+    projectRepository.getActiveProject = originals.project;
+    repository.listMessagePage = originals.page;
+    repository.getSession = originals.session;
+    repository.createSession = originals.create;
+    repository.getOrCreateSession = originals.latest;
+    chatAgentService.steer = originals.steer;
+  }
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 function installChatServiceHarness() {
@@ -862,4 +1108,3 @@ async function waitUntil(predicate, timeoutMs = 2_000) {
     await delay(2);
   }
 }
-

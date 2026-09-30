@@ -952,6 +952,8 @@ try {
   await verifiesProviderFailureClassification(ai);
   await verifiesDeepSeekThinkingAndStreamIntegrity(ai);
   await verifiesClaudeSamplingAndThinkingReplay(ai);
+  await verifiesBindingPolicyAndForcedTools(ai, server);
+  verifiesResponseScopedToolIds(ai);
   await verifiesConnectionTestForThinkingModels(server);
 
   assert.equal(ai.openAITextDelta({ choices: [{ delta: { content: '甲' } }] }), '甲');
@@ -1343,7 +1345,10 @@ async function verifiesClaudeSamplingAndThinkingReplay(ai) {
     const body = await bodyFor(ai.AnthropicGateway, model);
     assert.equal('temperature' in body, false, `${model} rejects sampling parameters, so none are sent`);
     assert.equal('top_p' in body || 'top_k' in body, false);
-    assert.equal('thinking' in body, false, `${model} keeps its default thinking; nothing it rejects is sent`);
+    if (['claude-fable-5-1', 'claude-opus-5-5'].includes(model)) {
+      assert.equal(body.thinking.type, 'adaptive');
+      assert.equal(body.thinking.block_binding.prefix_mismatch_behavior, 'drop_block');
+    } else assert.equal('thinking' in body, false, `${model} keeps its default thinking`);
   }
   assert.equal('temperature' in await bodyFor(ai.OpenAICompatibleGateway, 'claude-opus-5', 'https://proxy.test/v1'), false);
   assert.equal((await bodyFor(ai.AnthropicGateway, 'claude-opus-4-5')).temperature, 0, 'older models keep temperature');
@@ -1388,7 +1393,7 @@ async function verifiesClaudeSamplingAndThinkingReplay(ai) {
   const tools = [{ name: 'student_read_profile', description: '读取档案。', inputSchema: { type: 'object', properties: {} } }];
   const first = await gateway.stream({ ...request, tools, toolChoice: 'auto', requestId: 'thinking-tool-1' }, () => undefined);
   assert.deepEqual(first.reasoning, [
-    { type: 'thinking', thinking: '先读取档案，再安排。', signature: 'sig-abc123' },
+    { type: 'thinking', thinking: '先读取档案，再安排。', signature: 'sig-abc123', budgetTokens: 30 },
     { type: 'redacted_thinking', data: 'opaque-payload' }
   ], 'thinking_delta and signature_delta accumulate into the reasoning blocks');
   assert.equal(first.text, '', 'reasoning never becomes visible text');
@@ -1440,3 +1445,120 @@ async function verifiesClaudeSamplingAndThinkingReplay(ai) {
   assert.deepEqual(deepSeekBody.messages[1].content.map((block) => block.type), ['tool_use']);
 }
 
+async function verifiesBindingPolicyAndForcedTools(ai, server) {
+  const { compactAgentLoopMessages, sanitizeMessageForCheckpoint } = await server.ssrLoadModule('/src/modules/agent/application/AgentLoopSupport.ts');
+  const base = { system: 'fixed', messages: [{ role: 'user', content: 'start' }], temperature: 0, maxOutputTokens: 512, requestId: 'binding' };
+  const tool = { name: 'scan', description: 'scan', inputSchema: { type: 'object', properties: {} } };
+  const thinking = [{ type: 'thinking', thinking: 'summary', signature: 'sig', budgetTokens: 80 }, { type: 'redacted_thinking', data: 'opaque' }];
+  const history = [base.messages[0], { role: 'assistant', content: '', toolCalls: [{ id: 'call', name: 'scan', arguments: {} }], reasoning: thinking }, { role: 'tool', toolCallId: 'call', content: 'ok' }];
+  for (const model of ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5']) {
+    const requests = [];
+    const transport = { async send(request) {
+      requests.push({ body: JSON.parse(request.body), headers: request.headers });
+      return JSON.parse(request.body).stream
+        ? sse([{ type: 'message_start', message: {} }, { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'done' } }, { type: 'message_stop' }])
+        : Response.json({ content: [{ type: 'text', text: '{"ok":true}' }], stop_reason: 'end_turn' });
+    } };
+    const config = { apiKey: 'test', baseUrl: 'https://api.anthropic.com/v1', model };
+    let selected = new ai.AnthropicGateway(config, transport);
+    assert.equal(selected.capabilities.forcedToolChoice, false);
+    await selected.complete({ ...base, tools: [tool] });
+    await selected.complete({ ...base, system: 'new skill', tools: [tool, { ...tool, name: 'read' }], messages: history });
+    await selected.stream({ ...base, messages: history }, () => undefined);
+    // Restart must reconstruct the same binding policy, even if the checkpoint
+    // dropped an image or context compaction rewrote messages before the signature.
+    selected = new ai.AnthropicGateway(config, transport);
+    const imageHistory = [{ role: 'user', content: [{ type: 'image', mediaType: 'image/png', dataBase64: 'private-image' }] }, ...history.slice(1)];
+    const restored = JSON.parse(JSON.stringify(imageHistory.map(sanitizeMessageForCheckpoint)));
+    assert(!JSON.stringify(restored).includes('private-image'));
+    await selected.complete({ ...base, messages: restored });
+    const compacted = compactAgentLoopMessages([...Array.from({ length: 16 }, () => ({ role: 'user', content: 'old '.repeat(500) })), ...history], 900);
+    assert.match(compacted[0].content, /系统压缩/);
+    await selected.complete({ ...base, messages: compacted });
+    for (const choice of ['required', { name: 'scan' }, 'none']) {
+      await selected.complete({ ...base, messages: history, tools: [tool], toolChoice: choice });
+      assert.equal(requests.at(-1).body.tool_choice.type, choice === 'none' ? 'none' : 'auto');
+    }
+    await selected.prepareStructuredOutput();
+    const count = requests.length;
+    await selected.complete({ ...base, responseSchema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } });
+    assert.equal(requests.length, count + 1, 'known unsupported forcing needs no rejected probe');
+    assert.equal(requests.at(-1).body.tools, undefined);
+    for (const { body, headers } of requests) {
+      assert.equal(headers['anthropic-beta'], 'thinking-binding-controls-2026-08-01');
+      assert.deepEqual(body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+      assert(!JSON.stringify(body).includes('budgetTokens'), 'internal budget is never sent to Anthropic');
+    }
+    assert.equal(requests[1].body.messages[1].content[0].signature, 'sig');
+    assert.equal(requests[1].body.messages[1].content[1].data, 'opaque');
+  }
+  for (const [baseUrl, optIn] of [['https://proxy.test/v1', undefined], ['https://api.anthropic.com.evil.test/v1', undefined], ['http://api.anthropic.com/v1', undefined], ['https://proxy.test/v1', true], ['https://api.anthropic.com/v1', false]]) {
+    const requests = [];
+    const config = { apiKey: 'test', baseUrl, model: 'claude-fable-5-1', thinkingBindingControls: optIn };
+    for (let turn = 0; turn < 2; turn++) {
+      await new ai.AnthropicGateway(config, { async send(request) {
+        requests.push({ body: JSON.parse(request.body), headers: request.headers });
+        return Response.json({ content: [{ type: 'text', text: 'done' }] });
+      } }).complete({ ...base, messages: history });
+    }
+    requests.forEach(({ body, headers }) => {
+      assert.equal(Boolean(headers['anthropic-beta']), optIn === true);
+      const blocks = body.messages[1].content;
+      assert.equal(blocks.some(b => b.type === 'thinking' || b.type === 'redacted_thinking'), optIn === true);
+      assert.equal(blocks.at(-1).id, 'call', 'stripping thinking preserves tool identity');
+    });
+  }
+  // The OpenAI wire protocol can also front the same always-thinking model.
+  let body;
+  const selected = new ai.OpenAICompatibleGateway({ apiKey: 'test', baseUrl: 'https://proxy.test/v1', model: 'claude-fable-5-1' }, {
+    async send(request) { body = JSON.parse(request.body); return Response.json({ choices: [{ message: { content: 'done' } }] }); }
+  });
+  await selected.complete({ ...base, tools: [tool], toolChoice: { name: 'scan' } });
+  assert.equal(body.tool_choice, 'auto');
+  for (const model of ['claude-mythos-5-1', 'claude-opus-4-5', 'claude-fable-5', 'claude-mythos-5']) {
+    const selected = new ai.AnthropicGateway({ apiKey: 'test', baseUrl: 'https://api.anthropic.com/v1', model }, {
+      async send(request) { body = JSON.parse(request.body); return Response.json({ content: [{ type: 'text', text: 'done' }] }); }
+    });
+    await selected.complete({ ...base, tools: [tool], toolChoice: 'required' });
+    assert.equal(body.tool_choice.type, model === 'claude-mythos-5-1' ? 'auto' : 'any', 'force restrictions stay scoped to documented models');
+  }
+  let rejectedCalls = 0;
+  const rejecting = new ai.AnthropicGateway({ apiKey: 'test', baseUrl: 'https://proxy.test/v1', model: 'claude-fable-5-1', thinkingBindingControls: true }, {
+    async send(request) {
+      rejectedCalls++;
+      assert.equal(JSON.parse(request.body).thinking.block_binding.prefix_mismatch_behavior, 'drop_block');
+      return Response.json({ error: { message: 'thinking.block_binding: Extra inputs are not permitted' } }, { status: 400 });
+    }
+  });
+  for (let turn = 0; turn < 2; turn++) await assert.rejects(rejecting.complete(base), error => error.kind === ai.ProviderErrorKind.InvalidRequest);
+  assert.equal(rejectedCalls, 2, 'a rejected binding policy is never silently disabled or retried with unsafe signature replay');
+}
+
+function verifiesResponseScopedToolIds(ai) {
+  const parse = {
+    openai: (value, id) => ai.parseOpenAIResponse({ id: 'reused-response-id', choices: [{ message: { tool_calls: [{ id, type: 'function', function: { name: 'change', arguments: JSON.stringify({ value }) } }] } }] }),
+    anthropic: (value, id) => ai.parseAnthropicResponse({ content: [{ type: 'tool_use', id, name: 'change', input: { value } }] }),
+    'openai-stream': (value, id) => {
+      const stream = new ai.OpenAIStreamAccumulator();
+      stream.append({ choices: [{ delta: { tool_calls: [{ index: 0, id, function: { name: 'change', arguments: '{"value":' } }] } }] });
+      const partialId = stream.response().toolCalls[0].id;
+      stream.append({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: `${value}}` } }] }, finish_reason: 'tool_calls' }] });
+      assert.equal(stream.response().toolCalls[0].id, partialId);
+      assert.deepEqual(stream.response(), stream.response(), 'stream snapshots retain allocated identity');
+      return stream.response();
+    },
+    'anthropic-stream': (value, id) => {
+      const stream = new ai.AnthropicStreamAccumulator();
+      stream.append({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id, name: 'change' } });
+      stream.append({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ value }) } });
+      assert.deepEqual(stream.response(), stream.response());
+      return stream.response();
+    }
+  };
+  for (const [mode, response] of Object.entries(parse)) {
+    const first = response(85).toolCalls[0], second = response(90).toolCalls[0];
+    assert.notEqual(first.id, second.id, `${mode} allocates an identity unique to each response, even without response IDs`);
+    assert.equal(response(90, 'provider-id').toolCalls[0].id, 'provider-id');
+    assert.equal(JSON.parse(JSON.stringify(first)).id, first.id, 'checkpoint replay does not allocate a new identity');
+  }
+}

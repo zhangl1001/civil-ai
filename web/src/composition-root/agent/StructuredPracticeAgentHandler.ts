@@ -10,6 +10,8 @@ import {
   AgentRunType,
   TaskCenterStep,
   TaskTargetType,
+  isAgentRunLeaseLost,
+  isAgentRunSuspended,
   leaseTokenOf,
   type AgentRunAggregate,
   type TransitionAgentRun,
@@ -72,19 +74,23 @@ async function executeStructuredPractice(
   let reviewStarted = false;
   try {
     await progress(dependencies.updateProgress, run, TaskCenterStep.ResolvingPlan, 8, '正在读取今日计划和能力优先级', signal);
+    signal?.throwIfAborted();
     if (dailyPlanItemId) {
       await dependencies.updateDailyPlanItemStatus.execute({ dailyPlanItemId, status: 'in_progress' });
     }
     if (reviewQueueItemId) {
       const current = await dependencies.masteryRepository.findReview(reviewQueueItemId);
+      signal?.throwIfAborted();
       if (current?.status === ReviewStatus.Failed) {
         await dependencies.retryReviewQueueItem.execute(reviewQueueItemId);
       }
+      signal?.throwIfAborted();
       await dependencies.startReviewQueueItem.execute(reviewQueueItemId);
       reviewStarted = true;
     }
 
     await progress(dependencies.updateProgress, run, TaskCenterStep.PreparingContext, 18, '正在准备个人画像、薄弱点和知识点上下文', signal);
+    signal?.throwIfAborted();
     const aggregate = await dependencies.requestPractice.execute({
       idempotencyKey: `agent-run:${run.run.id}:practice`,
       sourceAgentRunId: run.run.rootAgentRunId,
@@ -96,8 +102,9 @@ async function executeStructuredPractice(
       goal: text(snapshot.goal),
       constraints: generationConstraints(snapshot)
     });
+    signal?.throwIfAborted();
     if (aggregate.workflow.status === GenerationWorkflowStatus.Failed) {
-      await dependencies.runGeneration.retry(aggregate.workflow.id);
+      await dependencies.runGeneration.retry(aggregate.workflow.id, signal);
     }
 
     const result = await dependencies.runGeneration.execute(
@@ -147,6 +154,7 @@ async function executeStructuredPractice(
       },
       leaseToken: leaseTokenOf(run.run)
     });
+    signal?.throwIfAborted();
     await dependencies.ensureQuestionSetEnrichment.execute({
         questionSetId: result.questionSetId,
         parentAgentRunId: run.run.id,
@@ -156,6 +164,10 @@ async function executeStructuredPractice(
         console.warn('[StructuredPractice] failed to schedule question-set enrichment', error);
       });
   } catch (error) {
+    // A new lease resumes the same plan/review. The old worker must not reset it.
+    if (isAgentRunLeaseLost(error) || isAgentRunSuspended(error)
+      || (signal?.aborted && (isAgentRunLeaseLost(signal.reason)
+        || isAgentRunSuspended(signal.reason) || signal.reason === 'agent_run.replaced'))) throw error;
     if (dailyPlanItemId) {
       await dependencies.updateDailyPlanItemStatus.execute({
         dailyPlanItemId,

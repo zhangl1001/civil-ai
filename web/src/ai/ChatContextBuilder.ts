@@ -6,8 +6,8 @@ const DEFAULT_CONTEXT_BUDGET = 6_000;
 const DEFAULT_MAX_MESSAGES = 14;
 const MAX_SINGLE_MESSAGE_LENGTH = 4_000;
 const MAX_SUMMARY_LENGTH = 2_400;
-// v3 rebuilds summaries that absorbed failure placeholders as assistant turns.
-const ROLLING_SUMMARY_VERSION = 3;
+// v4 rebuilds summaries after selecting complete exchanges with their outcomes.
+const ROLLING_SUMMARY_VERSION = 4;
 
 /** A chat row as far as model context is concerned. */
 export type ChatContextMessage = AIMessage & { readonly status?: ConversationMessageStatus };
@@ -78,17 +78,16 @@ export function modelContextMessages(history: readonly ChatContextMessage[]): Ch
     pendingReply = undefined;
     if (outcome === 'completed') exchanges.push(message);
     else if (outcome === 'stopped' && answersKeptQuestion) {
-      exchanges.push({ ...message, status: undefined, content: `${stoppedText(message)}\n\n${INTERRUPTED_REPLY_NOTE}` });
+      exchanges.push({ ...message, status: 'stopped' });
     }
   });
   return exchanges;
 }
 
-/** The assistant row that answered the question at `index`, if any came before the next question. */
+/** Consecutive user rows include guidance for the same pending answer. */
 function replyTo(history: readonly ChatContextMessage[], index: number): ChatContextMessage | undefined {
   for (let next = index + 1; next < history.length; next += 1) {
     const candidate = history[next];
-    if (candidate?.role === 'user') return undefined;
     if (candidate?.role === 'assistant') return candidate;
   }
   return undefined;
@@ -137,7 +136,7 @@ export function buildChatContext(history: readonly ChatContextMessage[], options
     .reverse();
 
   for (const message of usable) {
-    const item = sanitizeContextMessage(message.content);
+    const item = contextText(message);
     if (!item) continue;
     const itemTokens = estimateChatTokens(item);
     if (usedTokens + itemTokens > budget) break;
@@ -174,7 +173,7 @@ export function sanitizeContextMessage(content: string): string {
 }
 
 export function buildConversationSummary(history: readonly ChatContextMessage[]): string {
-  return summarizeMessages('', history);
+  return summarizeMessages('', modelContextMessages(history));
 }
 
 export interface RollingConversationSummary {
@@ -197,21 +196,24 @@ export function advanceConversationSummary(
   },
   recentMessageCount = DEFAULT_MAX_MESSAGES
 ): RollingConversationSummary {
-  const usable = history.filter(isUsableConversationMessage);
-  const eligible = usable.slice(0, Math.max(0, usable.length - recentMessageCount));
+  const usable = modelContextMessages(history).filter((message) => Boolean(sanitizeContextMessage(message.content)));
+  let end = Math.max(0, usable.length - recentMessageCount);
+  // Do not move a question to the summary before its answer is eligible too.
+  while (end > 0 && usable[end - 1]?.role === 'user') end -= 1;
+  const eligible = usable.slice(0, end);
+  const needsVersionUpgrade = previous.version !== ROLLING_SUMMARY_VERSION;
   if (!eligible.length) {
     return {
-      summary: previous.summary?.trim() || '',
-      cursorMessageId: previous.cursorMessageId,
+      summary: '',
+      cursorMessageId: undefined,
       version: ROLLING_SUMMARY_VERSION,
-      changed: false
+      changed: needsVersionUpgrade || Boolean(previous.summary || previous.cursorMessageId)
     };
   }
   const previousCursorIndex = previous.cursorMessageId
     ? eligible.findIndex((message) => message.id === previous.cursorMessageId)
     : -1;
   const unseen = eligible.slice(previousCursorIndex + 1);
-  const needsVersionUpgrade = previous.version !== ROLLING_SUMMARY_VERSION;
   if (!unseen.length && !needsVersionUpgrade) {
     return {
       summary: previous.summary?.trim() || '',
@@ -220,8 +222,9 @@ export function advanceConversationSummary(
       changed: false
     };
   }
-  const source = needsVersionUpgrade ? eligible : unseen;
-  const base = needsVersionUpgrade ? '' : previous.summary?.trim() || '';
+  const rebuild = needsVersionUpgrade || previousCursorIndex < 0;
+  const source = rebuild ? eligible : unseen;
+  const base = rebuild ? '' : previous.summary?.trim() || '';
   return {
     summary: summarizeMessages(base, source),
     cursorMessageId: eligible.at(-1)?.id,
@@ -237,18 +240,21 @@ export function estimateChatTokens(text: string): number {
 }
 
 function summarizeMessages(previousSummary: string, history: readonly ChatContextMessage[]): string {
-  const usable = modelContextMessages(history)
-    .map((message) => ({ ...message, content: sanitizeContextMessage(message.content).replace(/\s+/g, ' ') }))
+  const usable = history
+    .map((message) => ({ ...message, content: contextText(message, message.role === 'user' ? 140 : 180).replace(/\s+/g, ' ') }))
     .filter((message) => message.content);
   if (!usable.length) return clipSummary(previousSummary);
   const turns = usable.map((message) => (
-    `${message.role === 'user' ? '用户' : '助手'}：${clip(message.content, message.role === 'user' ? 140 : 180)}`
+    `${message.role === 'user' ? '用户' : '助手'}：${message.content}`
   ));
   return clipSummary([previousSummary.trim(), turns.join('\n')].filter(Boolean).join('\n'));
 }
 
-function isUsableConversationMessage(message: ChatContextMessage): boolean {
-  return isModelContextMessage(message) && Boolean(sanitizeContextMessage(message.content));
+function contextText(message: ChatContextMessage, maxLength?: number): string {
+  const clean = sanitizeContextMessage(message.content);
+  const body = maxLength === undefined ? clean : clip(clean, maxLength);
+  // Outcome is appended after every body truncation, including the summary's tighter limit.
+  return body && message.role === 'assistant' && replyOutcome(message) === 'stopped' ? `${body}\n\n${INTERRUPTED_REPLY_NOTE}` : body;
 }
 
 function clip(value: string, max: number): string {
@@ -257,8 +263,8 @@ function clip(value: string, max: number): string {
 
 function clipSummary(value: string): string {
   if (value.length <= MAX_SUMMARY_LENGTH) return value;
-  const marker = '\n...[较早会话摘要已压缩]...\n';
-  const headLength = Math.floor((MAX_SUMMARY_LENGTH - marker.length) * 0.34);
-  const tailLength = MAX_SUMMARY_LENGTH - marker.length - headLength;
-  return `${value.slice(0, headLength)}${marker}${value.slice(-tailLength)}`;
+  const marker = '...[较早会话摘要已压缩]...\n';
+  const blocks = value.replace(/^\.\.\.\[较早会话摘要已压缩\]\.\.\.\n/, '').split(/\n(?=用户：)/);
+  while (blocks.length && marker.length + blocks.join('\n').length > MAX_SUMMARY_LENGTH) blocks.shift();
+  return `${marker}${blocks.join('\n')}`;
 }

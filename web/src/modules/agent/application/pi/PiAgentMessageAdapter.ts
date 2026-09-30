@@ -14,6 +14,8 @@ import type {
   ThinkingContent as PiThinkingContent
 } from '@earendil-works/pi-ai';
 
+type BudgetedPiThinking = PiThinkingContent & Pick<ModelReasoningBlock, 'budgetTokens'>;
+
 export function toPiMessages(messages: readonly ModelMessage[]): PiAgentMessage[] {
   const toolNames = toolNamesByCallId(messages);
   return messages.map((message) => {
@@ -103,17 +105,21 @@ export function assistantText(message: PiAssistantMessage): string {
 /** Provider reasoning of an assistant turn, kept verbatim for replay; never user-visible. */
 export function assistantReasoning(message: PiAssistantMessage): ModelReasoningBlock[] {
   return message.content
-    .filter((part): part is PiThinkingContent => part.type === 'thinking')
-    .map((part) => part.redacted
+    .filter((part): part is BudgetedPiThinking => part.type === 'thinking')
+    .map((part): ModelReasoningBlock => ({ ...(part.redacted
       ? { type: 'redacted_thinking', data: part.thinkingSignature ?? '' }
-      : { type: 'thinking', thinking: part.thinking, ...(part.thinkingSignature ? { signature: part.thinkingSignature } : {}) });
+      : { type: 'thinking', thinking: part.thinking, ...(part.thinkingSignature ? { signature: part.thinkingSignature } : {}) }),
+      ...(part.budgetTokens !== undefined ? { budgetTokens: part.budgetTokens } : {})
+    }));
 }
 
 /** Pi keeps a redacted block's opaque payload in `thinkingSignature`. */
-export function toPiThinking(block: ModelReasoningBlock): PiThinkingContent {
-  return block.type === 'redacted_thinking'
+export function toPiThinking(block: ModelReasoningBlock): BudgetedPiThinking {
+  return { ...(block.type === 'redacted_thinking'
     ? { type: 'thinking', thinking: '', thinkingSignature: block.data ?? '', redacted: true }
-    : { type: 'thinking', thinking: block.thinking ?? '', ...(block.signature ? { thinkingSignature: block.signature } : {}) };
+    : { type: 'thinking', thinking: block.thinking ?? '', ...(block.signature ? { thinkingSignature: block.signature } : {}) }),
+    ...(block.budgetTokens !== undefined ? { budgetTokens: block.budgetTokens } : {})
+  };
 }
 
 export function assistantToolCalls(message: PiAssistantMessage): ModelToolCall[] {

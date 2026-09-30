@@ -27,7 +27,7 @@ function loadPiAgentLoopRuntime(): Promise<PiAgentLoopRuntimeModule> {
 }
 
 /**
- * Runs Pi by default and falls back only before any externally visible effect.
+ * Runs Pi by default and falls back only before model invocation or tool effects.
  * Failing to load the Pi chunk is such a failure: nothing has run yet.
  */
 export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
@@ -44,7 +44,15 @@ export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
     gateway: ProviderGateway,
     signal?: AbortSignal
   ): Promise<AgentLoopResult> {
-    const activity = { emittedText: false, startedTool: false };
+    const activity = { emittedText: false, startedTool: false, startedModel: false };
+    const invoker: AgentModelInvoker = {
+      invoke: (...args) => {
+        // Conservative boundary: an invoker can send a paid request before it
+        // throws (including while recording a text-free tool response).
+        activity.startedModel = true;
+        return this.modelInvoker.invoke(...args);
+      }
+    };
     const observer: AgentRuntimeObserver = {
       onEvent: async (event) => {
         if (event.type === 'text_delta' && event.text) activity.emittedText = true;
@@ -59,7 +67,7 @@ export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
     try {
       const { PiAgentLoopRuntime } = await loadPiAgentLoopRuntime();
       const runtime = new PiAgentLoopRuntime(
-        this.modelInvoker,
+        invoker,
         this.policy,
         this.executor,
         this.checkpoints,
@@ -86,9 +94,9 @@ export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
 function canFallbackToStableLoop(
   error: unknown,
   signal: AbortSignal | undefined,
-  activity: { readonly emittedText: boolean; readonly startedTool: boolean }
+  activity: { readonly emittedText: boolean; readonly startedTool: boolean; readonly startedModel: boolean }
 ): boolean {
-  if (signal?.aborted || activity.emittedText || activity.startedTool) return false;
+  if (signal?.aborted || activity.emittedText || activity.startedTool || activity.startedModel) return false;
   if (error instanceof ProviderGatewayError) return false;
   if (error instanceof DOMException && error.name === 'AbortError') return false;
   const name = error instanceof Error ? error.name : '';

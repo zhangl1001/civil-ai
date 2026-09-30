@@ -277,8 +277,17 @@ export function estimateAgentMessageTokens(messages: readonly ModelMessage[]): n
           sum + (part.type === 'text' ? estimateTextTokens(part.text) : IMAGE_CONTEXT_TOKENS)
         ), 0);
     const calls = message.toolCalls ? estimateTextTokens(stableJson(message.toolCalls)) : 0;
-    return total + contentTokens + calls;
+    return total + contentTokens + calls + estimateReasoningTokens(message);
   }, 0);
+}
+
+function estimateReasoningTokens(message: ModelMessage): number {
+  return (message.reasoning ?? []).reduce((sum, block) => sum + Math.max(
+    Number.isFinite(block.budgetTokens) ? Math.max(0, block.budgetTokens!) : 0,
+    // Opaque signatures may encode hidden thinking beyond the visible summary.
+    // One token per encoded character is deliberately conservative, not a tokenizer.
+    estimateTextTokens(block.thinking ?? '') + (block.signature?.length ?? 0) + (block.data?.length ?? 0)
+  ), 0);
 }
 
 function estimateTextTokens(text: string): number {
@@ -304,7 +313,7 @@ function clipMessageText(message: ModelMessage, maxTokens: number): ModelMessage
   const toolCallTokens = message.toolCalls
     ? estimateTextTokens(stableJson(message.toolCalls))
     : 0;
-  const contentBudget = Math.max(1, maxTokens - toolCallTokens);
+  const contentBudget = Math.max(1, maxTokens - toolCallTokens - estimateReasoningTokens(message));
   if (typeof message.content === 'string') {
     return { ...message, content: clipTextToTokens(message.content, contentBudget) };
   }

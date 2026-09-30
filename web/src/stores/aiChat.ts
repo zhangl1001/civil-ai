@@ -14,15 +14,17 @@ import { projectRepository } from '@/services/ProjectRepository';
 import type { ModelImageContentPart } from '@/capabilities/ai-runtime/public';
 import type { AgentWorkflowInvocation } from '@/modules/agent/public';
 
-let initializationPromise: Promise<void> | undefined;
+const initializations = new WeakMap<object, Promise<void>>();
 
-/** The latest request, so a retry can resend its workflow context and images. */
-let lastRequest: {
+interface ChatRequest {
   readonly sessionId: string;
   readonly text: string;
   readonly attachments?: readonly ModelImageContentPart[];
   readonly invocation?: AgentWorkflowInvocation;
-} | undefined;
+  readonly guidance: string[];
+}
+const activeRequests = new WeakMap<object, ChatRequest>();
+const retryRequests = new WeakMap<object, Map<string, ChatRequest>>();
 
 export interface AIChatState {
   isOpen: boolean;
@@ -42,6 +44,9 @@ export interface AIChatState {
   activeRequestText: string;
   activeSessionId: string;
   steeringCount: number;
+  sessionRevision: number;
+  messagesRevision: number;
+  sessionsRevision: number;
 }
 
 export const useAIChatStore = defineStore('aiChat', {
@@ -61,7 +66,10 @@ export const useAIChatStore = defineStore('aiChat', {
     thinkingEnabled: localStorage.getItem('ai-thinking-enabled') === '1',
     activeRequestText: '',
     activeSessionId: '',
-    steeringCount: 0
+    steeringCount: 0,
+    sessionRevision: 0,
+    messagesRevision: 0,
+    sessionsRevision: 0
   }),
 
   getters: {
@@ -90,50 +98,54 @@ export const useAIChatStore = defineStore('aiChat', {
 
     async init() {
       if (this.session) return;
+      const initializationPromise = initializations.get(this);
       if (initializationPromise) {
         await initializationPromise;
         return;
       }
+      const revision = ++this.sessionRevision;
       this.isLoading = true;
-      initializationPromise = (async () => {
+      const pending = (async () => {
         const project = await projectRepository.getActiveProject();
-        this.session = await aiChatRepository.getOrCreateSession(project.id);
-        this.sessions = await aiChatRepository.listSessions(project.id);
-        const page = await aiChatRepository.listMessagePage(this.session.id);
-        this.messages = [...page.messages];
-        this.hasOlderMessages = page.hasMore;
-        if (!this.initialized) {
-          this.initialized = true;
-          window.addEventListener(AI_MESSAGE_CHANGED_EVENT, (event) => {
-            const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
-            if (detail?.sessionId && detail.sessionId !== this.session?.id) return;
-            if (
-              this.isSending
-              && detail?.sessionId
-              && detail.sessionId === this.activeSessionId
-            ) {
-              void this.refreshSessions();
-              return;
-            }
-            void this.refreshMessages();
-            void this.refreshSessions();
-          });
-        }
+        if (revision !== this.sessionRevision) return;
+        const session = await aiChatRepository.getOrCreateSession(project.id);
+        if (revision !== this.sessionRevision) return;
+        this.applySession(session);
+        await this.refreshMessages();
+        await this.refreshSessions();
       })();
+      initializations.set(this, pending);
       try {
-        await initializationPromise;
+        await pending;
       } finally {
-        initializationPromise = undefined;
+        initializations.delete(this);
         this.isLoading = false;
+        this.observeMessages();
       }
+    },
+
+    observeMessages() {
+      if (this.initialized) return;
+      this.initialized = true;
+      window.addEventListener(AI_MESSAGE_CHANGED_EVENT, (event) => {
+        const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+        if (detail?.sessionId && detail.sessionId !== this.session?.id) return;
+        if (!this.isSending || detail?.sessionId !== this.activeSessionId) void this.refreshMessages();
+        void this.refreshSessions();
+      });
     },
 
     async refreshMessages() {
       if (!this.session) return;
+      const sessionId = this.session.id;
+      const revision = this.sessionRevision;
+      const request = ++this.messagesRevision;
+      this.isLoadingOlderMessages = false;
       const loadedCount = this.messages.filter(isPersistedMessage).length;
-      const page = await aiChatRepository.listMessagePage(this.session.id, {
+      const page = await aiChatRepository.listMessagePage(sessionId, {
         limit: Math.max(AI_CHAT_MESSAGE_PAGE_SIZE, loadedCount)
       });
+      if (this.session?.id !== sessionId || revision !== this.sessionRevision || request !== this.messagesRevision) return;
       const messages = [...page.messages];
       const isActiveSession = this.isSending && this.activeSessionId === this.session.id;
       if (isActiveSession && this.pendingAssistantMessageId) {
@@ -154,42 +166,66 @@ export const useAIChatStore = defineStore('aiChat', {
       if (!this.session || !this.hasOlderMessages || this.isLoadingOlderMessages) return 0;
       const first = this.messages.find(isPersistedMessage);
       if (!first) return 0;
+      const sessionId = this.session.id;
+      const revision = this.sessionRevision;
+      const request = ++this.messagesRevision;
       this.isLoadingOlderMessages = true;
       try {
-        const page = await aiChatRepository.listMessagePage(this.session.id, {
+        const page = await aiChatRepository.listMessagePage(sessionId, {
           beforeMessageId: first.id
         });
+        if (this.session?.id !== sessionId || revision !== this.sessionRevision || request !== this.messagesRevision) return 0;
         const existingIds = new Set(this.messages.map((message) => message.id));
         const older = page.messages.filter((message) => !existingIds.has(message.id));
         this.messages = [...older, ...this.messages];
         this.hasOlderMessages = page.hasMore;
         return older.length;
       } finally {
-        this.isLoadingOlderMessages = false;
+        if (revision === this.sessionRevision && request === this.messagesRevision) this.isLoadingOlderMessages = false;
       }
     },
 
     async refreshSessions() {
+      const request = ++this.sessionsRevision;
       const project = await projectRepository.getActiveProject();
-      this.sessions = await aiChatRepository.listSessions(project.id);
+      const sessions = await aiChatRepository.listSessions(project.id);
+      if (request === this.sessionsRevision) this.sessions = sessions;
     },
 
     async newSession(title = '新会话') {
+      const revision = this.beginSessionSelection();
       const project = await projectRepository.getActiveProject();
-      this.session = await aiChatRepository.createSession(project.id, title);
-      this.messages = [];
-      this.hasOlderMessages = false;
+      if (revision !== this.sessionRevision) return;
+      const session = await aiChatRepository.createSession(project.id, title);
+      if (revision !== this.sessionRevision) return;
+      this.applySession(session);
       await this.refreshSessions();
     },
 
     async switchSession(sessionId: string) {
+      const revision = this.beginSessionSelection();
       const session = await aiChatRepository.getSession(sessionId);
-      if (!session) return;
-      this.session = session;
-      const page = await aiChatRepository.listMessagePage(session.id);
-      this.messages = [...page.messages];
-      this.hasOlderMessages = page.hasMore;
+      if (!session || revision !== this.sessionRevision) return;
+      this.applySession(session);
+      await this.refreshMessages();
       await this.refreshSessions();
+    },
+
+    beginSessionSelection() {
+      this.sessionRevision += 1;
+      this.messagesRevision += 1;
+      this.isLoadingOlderMessages = false;
+      return this.sessionRevision;
+    },
+
+    applySession(session: AISession) {
+      this.session = session;
+      this.messagesRevision += 1;
+      this.messages = [];
+      this.hasOlderMessages = false;
+      this.isLoadingOlderMessages = false;
+      this.streamingMessageId = '';
+      this.provisionalMessageId = '';
     },
 
     async deleteOtherSessions() {
@@ -215,8 +251,18 @@ export const useAIChatStore = defineStore('aiChat', {
         || !this.session
         || this.session.id !== this.activeSessionId
       ) return false;
-      const message = await chatAgentService.steer(text, this.session);
+      const sessionId = this.session.id;
+      const revision = this.sessionRevision;
+      const request = activeRequests.get(this);
+      const guidanceIndex = request?.guidance.length ?? 0;
+      request?.guidance.push(text);
+      const message = await chatAgentService.steer(text, this.session).catch((error: unknown) => {
+        request?.guidance.splice(guidanceIndex, 1);
+        throw error;
+      });
+      if (!message) request?.guidance.splice(guidanceIndex, 1);
       if (!message) return false;
+      if (this.session?.id !== sessionId || revision !== this.sessionRevision) return true;
       this.steeringCount += 1;
       if (!this.messages.some((item) => item.id === message.id)) {
         this.messages.push(message);
@@ -227,13 +273,23 @@ export const useAIChatStore = defineStore('aiChat', {
     async send(
       content: string,
       attachments?: readonly ModelImageContentPart[],
-      invocation?: AgentWorkflowInvocation
+      invocation?: AgentWorkflowInvocation,
+      guidance: readonly string[] = []
     ) {
       const text = content.trim();
       if (!text || this.isSending) return;
       await this.init();
-      if (!this.session) return;
+      if (!this.session || this.isSending) return;
       const activeSession = this.session;
+      const revision = this.sessionRevision;
+      const request: ChatRequest = {
+        sessionId: activeSession.id, text,
+        attachments: attachments?.map((part) => ({ ...part })),
+        invocation: invocation ? { ...invocation, skillNames: invocation.skillNames ? [...invocation.skillNames] : undefined } : undefined,
+        guidance: [...guidance]
+      };
+      activeRequests.set(this, request);
+      const prompt = [text, ...guidance.map((item) => `【用户在执行中补充的引导】\n${item}`)].join('\n\n');
       const shouldRename = this.messages.length === 0
         && (!activeSession.title || ['AI 助手', '新会话'].includes(activeSession.title));
 
@@ -246,7 +302,7 @@ export const useAIChatStore = defineStore('aiChat', {
           id: optimisticUserId,
           sessionId: activeSession.id,
           role: 'user',
-          content: text,
+          content: prompt,
           createdAt: Date.now()
         },
         {
@@ -260,30 +316,40 @@ export const useAIChatStore = defineStore('aiChat', {
       this.streamingMessageId = this.pendingAssistantMessageId;
       this.activeRequestText = text;
       this.steeringCount = 0;
-      lastRequest = { sessionId: activeSession.id, text, attachments, invocation };
       let delivered = false;
       try {
         if (shouldRename) {
           const title = text.length > 14 ? `${text.slice(0, 14)}...` : text;
           await aiChatRepository.updateSessionTitle(activeSession.id, title);
-          if (this.session?.id === activeSession.id) this.session = { ...activeSession, title };
+          if (this.session?.id === activeSession.id && revision === this.sessionRevision) this.session = { ...activeSession, title };
           await this.refreshSessions();
         }
-        const routed = await chatAgentService.handle(text, activeSession, {
+        const routed = await chatAgentService.handle(prompt, activeSession, {
           thinkingEnabled: this.thinkingEnabled,
-          attachments,
-          invocation,
-          onAssistantStream: (update) => this.applyAssistantStream(update)
+          attachments: request.attachments,
+          invocation: request.invocation,
+          onAssistantStream: async (update) => {
+            if (update.status) {
+              const retries = retryRequests.get(this) ?? new Map<string, ChatRequest>();
+              retries.set(update.messageId, request);
+              retryRequests.set(this, retries);
+              await aiChatRepository.updateMessageMeta(activeSession.id, update.messageId, {
+                retryRequest: { text: request.text, invocation: request.invocation, guidance: [...request.guidance] }
+              });
+            }
+            this.applyAssistantStream(update);
+          }
         });
         if (!routed.handled) throw new Error('AI Agent 未接管当前消息');
         delivered = true;
-        await this.refreshMessages();
+        if (this.session?.id === activeSession.id) await this.refreshMessages();
         const refreshedSession = await aiChatRepository.getSession(activeSession.id);
-        if (refreshedSession && this.session?.id === activeSession.id) {
+        if (refreshedSession && this.session?.id === activeSession.id && revision === this.sessionRevision) {
           this.session = refreshedSession;
         }
         await this.refreshSessions();
       } finally {
+        activeRequests.delete(this);
         const pendingAssistantMessageId = this.pendingAssistantMessageId;
         this.isSending = false;
         this.streamingMessageId = '';
@@ -304,11 +370,23 @@ export const useAIChatStore = defineStore('aiChat', {
     async retry(messageId: string) {
       if (this.isSending) return;
       const index = this.messages.findIndex((message) => message.id === messageId);
-      const question = this.messages.slice(0, Math.max(0, index)).reverse().find((message) => message.role === 'user');
-      if (index < 0 || !question?.content.trim()) return;
-      const text = question.content.trim();
-      const previous = lastRequest?.sessionId === question.sessionId && lastRequest.text === text ? lastRequest : undefined;
-      await this.send(text, previous?.attachments, previous?.invocation);
+      const failed = this.messages[index];
+      if (!failed?.status || failed.sessionId !== this.session?.id) return;
+      const cached = retryRequests.get(this)?.get(messageId);
+      const previous = failed.retryRequest ?? cached;
+      if (previous) {
+        await this.send(previous.text, cached?.attachments, previous.invocation, previous.guidance);
+        return;
+      }
+      // Legacy rows lack metadata: keep consecutive guidance with the original question.
+      const revision = this.sessionRevision;
+      const history = await aiChatRepository.listMessages(failed.sessionId);
+      if (revision !== this.sessionRevision || this.session?.id !== failed.sessionId) return;
+      const questions: string[] = [];
+      for (let cursor = history.findIndex((item) => item.id === messageId) - 1; cursor >= 0 && history[cursor]?.role === 'user'; cursor -= 1) {
+        questions.unshift(history[cursor]!.content);
+      }
+      if (questions[0]?.trim()) await this.send(questions[0], undefined, undefined, questions.slice(1));
     },
 
     applyAssistantStream(update: ChatAssistantStreamUpdate) {
@@ -350,8 +428,9 @@ export const useAIChatStore = defineStore('aiChat', {
     },
 
     async updateSessionSummary(sessionId: string) {
+      const revision = this.sessionRevision;
       const session = await aiChatRepository.getSession(sessionId);
-      if (session && this.session?.id === sessionId) this.session = session;
+      if (session && this.session?.id === sessionId && revision === this.sessionRevision) this.session = session;
     }
   }
 });

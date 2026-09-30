@@ -4,10 +4,12 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
+import { verifyIndexedDbRaces } from './support/verify-indexeddb-races.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
 const server = await createServer({ root, configFile: false, resolve: { alias: { '@': path.join(root, 'src') } }, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
 try {
+  await verifyIndexedDbRaces(server);
   const agent = await server.ssrLoadModule('/src/modules/agent/public.ts');
   const conversation = await server.ssrLoadModule('/src/modules/conversation/public.ts');
   const ai = await server.ssrLoadModule('/src/capabilities/ai-runtime/public.ts');
@@ -1559,7 +1561,7 @@ try {
     indexedDbAgentRunStore(indexedDbAgentRuns, indexedDbUnitOfWork)
   ]);
 
-  assert.match(indexedDbSource, /AgentRunIdempotency:\s*'agent_run_idempotency'/);
+  assert.match(await readFile(path.join(root, 'src/capabilities/database/adapters/indexeddb/IndexedDbOperations.ts'), 'utf8'), /AgentRunIdempotency:\s*'agent_run_idempotency'/);
   assert.match(indexedRunSource, /type:\s*'add',\s*store:\s*TutorIndexedDbStore\.AgentRunIdempotency/);
   assert.match(indexedRunSource, /mutateStore<StoredRun,readonly AgentRunAggregate\[\]>/);
   console.log('Agent runtime verification passed.');
@@ -1952,14 +1954,25 @@ function memoryTutorIndexedDb() {
     return value[keyPath];
   };
   const apply = (operations) => {
-    for (const operation of operations) {
-      if (operation.type === 'add' && store(operation.store).has(keyOf(operation.store, operation.value))) {
-        throw new DOMException('Key already exists in the object store.', 'ConstraintError');
+    const before = structuredClone(stores);
+    try {
+      for (const operation of operations) {
+        const values = store(operation.store);
+        if (operation.type === 'check') { operation.check([...values.values()]); continue; }
+        if (operation.type === 'update') {
+          const value = operation.update(structuredClone(values.get(operation.key)));
+          values.set(keyOf(operation.store, value), structuredClone(value));
+        } else if (operation.type === 'delete') values.delete(operation.key);
+        else {
+          const key = keyOf(operation.store, operation.value);
+          if (operation.type === 'add' && values.has(key)) throw new DOMException('Key already exists in the object store.', 'ConstraintError');
+          values.set(key, structuredClone(operation.value));
+        }
       }
-    }
-    for (const operation of operations) {
-      if (operation.type === 'delete') store(operation.store).delete(operation.key);
-      else store(operation.store).set(keyOf(operation.store, operation.value), structuredClone(operation.value));
+    } catch (error) {
+      stores.clear();
+      before.forEach((value, key) => stores.set(key, value));
+      throw error;
     }
   };
   const database = {

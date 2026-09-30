@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
+import { IDBFactory } from 'fake-indexeddb';
 import {
   createMemoryConversationStore,
   createMemoryTutorIndexedDb,
@@ -44,6 +45,8 @@ try {
   const legacyBackup = await verifySqliteLegacyImport(modules);
   await verifyIndexedDbRoundTrip(modules, backup);
   await verifyIndexedDbLegacyImport(modules, legacyBackup);
+  await verifyImportFailureOrdering(modules, legacyBackup);
+  await verifyConversationImportIsolation();
   await verifyIndexedDbBatchIsAtomic();
   console.log('Data maintenance isolation, coverage and backup round-trip verification passed.');
 } finally {
@@ -310,8 +313,8 @@ async function verifySqliteImportGuards(modules, backup) {
   await assert.rejects(service.importBackup(variant((copy) => {
     copy.learning.records.learning_progress[0].status = 'started';
     copy.learning.records.question_sets[0].practice_status = 'in_progress';
-  })), /对话记录导入失败，学习数据已恢复到导入前的状态/);
-  unchanged('an import whose conversations fail after the learning data committed');
+  })), /导入失败，本地学习数据保持原样/);
+  unchanged('an import whose conversations fail before learning data can commit');
   assert.deepEqual(conversations.state.sessions, [conversationSession]);
 
   // Reference checks cover the restored cycle only: another cycle's broken link neither blocks nor gets rewritten.
@@ -577,30 +580,71 @@ function isolationBundle(examCycleId, questionSetId, questionId) {
  */
 async function verifyIndexedDbBatchIsAtomic() {
   const { TutorIndexedDb } = await server.ssrLoadModule('/src/capabilities/database/adapters/indexeddb/TutorIndexedDb.ts');
-  const calls = [];
-  let aborted = 0;
-  const transaction = {
-    objectStore: (name) => ({
-      add: (value) => {
-        if (value && value.uncloneable) throw new DOMException('#<Object> could not be cloned.', 'DataCloneError');
-        calls.push(`add:${name}`);
-      },
-      put: () => calls.push(`put:${name}`),
-      delete: () => calls.push(`delete:${name}`)
-    }),
-    abort: () => { aborted += 1; }
-  };
+  const original = globalThis.indexedDB;
+  globalThis.indexedDB = new IDBFactory();
   const database = new TutorIndexedDb();
-  database.database = { transaction: () => transaction };
-  database.open = async () => undefined;
+  try {
+  await database.writeBatch([{ type: 'add', store: 'learning_assets', value: { id: 'asset-1' } }]);
   await assert.rejects(
     () => database.writeBatch([
       { type: 'delete', store: 'learning_assets', key: 'asset-1' },
-      { type: 'add', store: 'learning_assets', value: { uncloneable: true } },
+      { type: 'add', store: 'learning_assets', value: { id: 'invalid', uncloneable: () => {} } },
       { type: 'add', store: 'learning_assets', value: { id: 'asset-2' } }
     ]),
     (error) => error.name === 'DataCloneError'
   );
-  assert.equal(aborted, 1, 'a synchronous request failure aborts the whole batch, so the delete ahead of it rolls back');
-  assert.deepEqual(calls, ['delete:learning_assets'], 'nothing after the failing request is queued');
+  assert.deepEqual(await database.getAll('learning_assets'), [{ id: 'asset-1' }], 'the earlier delete is rolled back and subsequent writes never commit');
+  } finally { database.close(); globalThis.indexedDB = original; }
+}
+
+async function verifyImportFailureOrdering(modules, legacy) {
+  for (const engine of ['sqlite', 'indexeddb']) {
+    const conversations = createMemoryConversationStore();
+    const db = engine === 'sqlite'
+      ? await migratedSqliteDatabase(modules, sqliteMetadataSql())
+      : createMemoryTutorIndexedDb(modules.indexedDbKeyPaths);
+    const runtime = engine === 'sqlite' ? sqliteRuntime(modules, db, conversations) : indexedDbRuntime(modules, db, conversations);
+    const service = new modules.DataBackupService(async () => runtime);
+    conversations.state.failNextReplace = true;
+    await assert.rejects(service.importBackup(legacy), /本地学习数据保持原样/);
+    assert.equal(await runtime.candidateRepository.findCurrentCycle(), undefined, `${engine}: failed first import cannot commit the cycle`);
+    assert(await service.importBackup(legacy) > 0, `${engine}: same v2 file retries directly`);
+    const sets = await runtime.contentRepository.listAllQuestionSets(cycleA);
+    assert(sets.every(bundle => !bundle.generationSpec.sourceAgentRunId), `${engine}: legacy generation cannot refer to a missing parent run`);
+    const backup = await service.exportActiveProject();
+    conversations.replaceProjectConversations = async () => {
+      await runtime.unitOfWork.run(ctx => runtime.learningAssetRepository.save({
+        id: 'concurrent-asset', examCycleId: cycleA, kind: 'profile_insight', businessKey: 'concurrent-asset',
+        title: 'Concurrent write', status: 'ready', payload: { value: 1 }, version: 1, createdAt: 3000, updatedAt: 3000
+      }, ctx));
+      throw new Error('injected conversation failure');
+    };
+    await assert.rejects(service.importBackup(backup), /本地学习数据保持原样/);
+    assert(await runtime.learningAssetRepository.find('concurrent-asset'), `${engine}: a conversation failure must not erase an independently committed row`);
+    if (engine === 'sqlite') db.raw.close();
+  }
+}
+
+async function verifyConversationImportIsolation() {
+  const { ConversationStore, ConversationMessageLog, ConversationSessionLog } = await server.ssrLoadModule('/src/modules/conversation/public.ts');
+  const data = new Map();
+  const storage = { async read(k) { return data.get(k) || ''; }, async replace(k, v) { data.set(k, v); }, async append(k, v) { data.set(k, (data.get(k) || '') + v + '\n'); }, async delete(k) { data.delete(k); } };
+  let id = 0;
+  const store = new ConversationStore(new ConversationSessionLog(storage), new ConversationMessageLog(storage), { now: () => 1 }, { next: () => `conversation:${++id}` }, { async forgetSession() {} });
+  const original = await store.createSession('project', 'Original');
+  await store.addMessage({ sessionId: original.id, role: 'user', content: 'Before import' });
+  let entered, release;
+  const started = new Promise(r => { entered = r; }), barrier = new Promise(r => { release = r; });
+  const replacement = store.replaceProjectConversations('project', [{ ...original, title: 'Imported' }], [], async () => {
+    entered(); await barrier; throw new Error('database commit failed');
+  });
+  const failure = assert.rejects(replacement, /database commit failed/);
+  await started;
+  let written = false;
+  const pendingWrite = store.addMessage({ sessionId: original.id, role: 'user', content: 'Written during import' }).then(() => { written = true; });
+  await new Promise(r => setImmediate(r));
+  assert.equal(written, false, 'chat writes wait for import commit/rollback');
+  release(); await failure; await pendingWrite;
+  assert.equal((await store.getSession(original.id)).title, 'Original');
+  assert.deepEqual((await store.listMessages(original.id)).map(m => m.content), ['Before import', 'Written during import']);
 }

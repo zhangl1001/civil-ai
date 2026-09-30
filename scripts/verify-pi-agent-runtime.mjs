@@ -25,10 +25,12 @@ try {
   await verifiesProviderFailureIdentity(agent, pi, ai);
   await verifiesNullFinalTextRecovery(agent, pi, ai);
   await verifiesSideEffectFreeStableFallback(agent, ai, server);
+  await verifiesNoFallbackAfterInvocation(ai, server);
   await verifiesFirstTurnStreaming(agent, pi, ai);
   await verifiesToolTurnTextIsProvisional(agent, pi, ai);
   await verifiesOutputLimitHandling(agent, pi, ai);
   await verifiesThinkingReplayThroughPi(pi, ai, server);
+  await verifiesBoundThinkingLoops(agent, pi, ai);
   console.log('Pi Agent runtime verification passed.');
 } finally {
   await server.close();
@@ -249,22 +251,124 @@ async function verifiesNullFinalTextRecovery(agent, pi, ai) {
 async function verifiesSideEffectFreeStableFallback(agent, ai, server) {
   const lazy = await server.ssrLoadModule('/src/modules/agent/application/LazyPiAgentLoopRuntime.ts');
   const invocations = [];
+  let starts = 0;
   const runtime = new lazy.LazyPiAgentLoopRuntime(
     {
       async invoke() {
         invocations.push(true);
-        if (invocations.length === 1) throw new TypeError('Pi adapter failed before provider effects');
         return { text: '稳定循环已接管。', usage: {} };
       }
     },
     allowPolicy(),
     { async execute() { return { content: '' }; } },
-    { async save() {} }
+    { async save() {} },
+    { onEvent(event) {
+      if (event.type === 'run_started' && ++starts === 1) throw new TypeError('Pi initialization failed before invocation');
+    } }
   );
   const result = await runtime.execute(command({ tools: [] }), gateway(ai));
   assert.equal(result.status, 'completed');
   assert.equal(result.text, '稳定循环已接管。');
-  assert.equal(invocations.length, 2, 'fallback must reuse the request exactly once');
+  assert.equal(invocations.length, 1, 'initialization fallback sends only one model request');
+}
+
+// R2: derived from fallback-ledger-probe; the audit evidence remains untouched.
+async function verifiesNoFallbackAfterInvocation(ai, server) {
+  const { LazyPiAgentLoopRuntime } = await server.ssrLoadModule('/src/modules/agent/application/LazyPiAgentLoopRuntime.ts');
+  const { InvokeAgentModel } = await server.ssrLoadModule('/src/modules/agent/application/InvokeAgentModel.ts');
+  const { TutorDatabaseBusyError } = await server.ssrLoadModule('/src/capabilities/database/public.ts');
+  for (const streaming of [false, true]) {
+    let providerCalls = 0, toolEffects = 0, resultWrites = 0, id = 0;
+    const failure = new TutorDatabaseBusyError('transaction.lock_wait');
+    const invoker = new InvokeAgentModel({ async run(fn) { return fn({}); }, async runAutocommit(fn) { return fn({}); } }, {
+      async findById() { return { run: { status: 'running' } }; },
+      async appendInvocation() {},
+      async updateInvocationResult() { resultWrites++; throw failure; },
+      async updateInvocationValidation() {}
+    }, { now() { return 1; }, monotonicNowMs() { return 1; } }, { next() { return `invocation:${++id}`; } });
+    const complete = async () => {
+      providerCalls++;
+      return { text: '', toolCalls: [{ id: 'call:1', name: 'practice_read', arguments: {} }], usage: {} };
+    };
+    const selected = { ...gateway(ai), complete, stream: complete };
+    const runtime = new LazyPiAgentLoopRuntime(invoker, allowPolicy(), {
+      async execute() { toolEffects++; return { content: '{}', madeProgress: true }; }
+    }, { async save() {} });
+    await assert.rejects(runtime.execute(command({ tools: [readTool('practice.read')], preferStream: streaming }), selected), error => error === failure);
+    assert.equal(providerCalls, 1, 'ledger failure after a paid response never replays the model through another engine');
+    assert.equal(resultWrites, 1);
+    assert.equal(toolEffects, 0);
+  }
+  let invocations = 0;
+  const failure = new TypeError('failure after request dispatch with no visible text');
+  const runtime = new LazyPiAgentLoopRuntime({ async invoke() { invocations++; throw failure; } },
+    allowPolicy(), { async execute() { assert.fail('unexpected tool'); } }, { async save() {} });
+  await assert.rejects(runtime.execute(command(), gateway(ai)), error => error === failure);
+  assert.equal(invocations, 1, 'absence of visible text does not prove invocation is safe to repeat');
+}
+
+// R1/R4: the original audit asserted failure; these tests require both engines to finish.
+async function verifiesBoundThinkingLoops(agent, pi, ai) {
+  const call = (name, id) => ({ type: 'tool_use', name, id, input: {} });
+  const answer = { type: 'text', text: 'Done' };
+  const selector = { ...readTool('skill.load'), role: 'skill_selector' };
+  const read = readTool('practice.read');
+  const write = { ...readTool('practice.generate'), risk: 'write' };
+  const verify = { ...readTool('task.verify'), role: 'completion_verifier' };
+  const scan = readTool('question_bank.scan');
+  const skill = { name: 'practice', version: '1', instructions: 'Read practice first.', allowedTools: [write.name, verify.name], validatorNames: ['agent.no-false-completion'], requiresOperationalTool: true, executionBudget: 'standard' };
+  for (const Runtime of [pi.PiAgentLoopRuntime, agent.RunAgentLoop]) {
+    async function run(tools, responses, executor, extras = {}) {
+      const bodies = [], bindings = new Map(), effects = [];
+      let mismatches = 0;
+      const prefix = (body, count) => JSON.stringify({ system: body.system, tools: body.tools ?? [], messages: body.messages.slice(0, count) });
+      const selected = new ai.AnthropicGateway({ apiKey: 'fake-test', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-fable-5-1' }, {
+        async send(request) {
+          const body = JSON.parse(request.body);
+          assert.equal(request.headers['anthropic-beta'], 'thinking-binding-controls-2026-08-01');
+          assert.equal(body.thinking.type, 'adaptive');
+          assert.equal(body.thinking.block_binding.prefix_mismatch_behavior, 'drop_block');
+          assert(!['tool', 'any'].includes(body.tool_choice?.type), 'always-thinking model must not receive forced tools');
+          body.messages.forEach((message, index) => message.content.forEach(block => {
+            if (block.type === 'thinking' && bindings.get(block.signature) !== prefix(body, index)) mismatches++;
+          }));
+          const next = responses[bodies.length];
+          assert(next, 'unexpected extra request');
+          bodies.push(body);
+          const signature = `bound-${bodies.length}`;
+          bindings.set(signature, prefix(body, body.messages.length));
+          return Response.json({ content: [{ type: 'thinking', thinking: 'mock', signature }, ...next], stop_reason: next.some(b => b.type === 'tool_use') ? 'tool_use' : 'end_turn', usage: { output_tokens: 12 } });
+        }
+      });
+      const runtime = new Runtime({ async invoke(invocation, selected) { return selected.complete({ ...invocation, requestId: `test-${bodies.length}` }); } },
+        allowPolicy(), { async execute(definition, invocation) { effects.push(invocation.name); return executor(definition, invocation); } }, { async save() {} });
+      const promise = runtime.execute(command({ tools, preferStream: false, ...extras }), selected);
+      return { promise, bodies, effects, mismatches: () => mismatches };
+    }
+    const fixed = await run([read], [[call('practice_read', 'read')], [answer]], () => ({ content: '{}', madeProgress: true }));
+    assert.equal((await fixed.promise).status, 'completed');
+    assert.equal(fixed.mismatches(), 0);
+    const dynamic = await run([selector], [[call('skill_load', 'load')], [answer]], () => ({
+      content: 'loaded', madeProgress: true, activateToolNames: [read.name], activateSkills: [{ ...skill, allowedTools: [read.name], validatorNames: [], requiresOperationalTool: false }]
+    }), { availableTools: [selector, read] });
+    assert.equal((await dynamic.promise).status, 'completed');
+    assert(dynamic.mismatches() > 0, 'fixture must exercise a real system/tools prefix edit');
+    assert.notEqual(dynamic.bodies[0].system, dynamic.bodies[1].system);
+    assert.equal(dynamic.bodies[1].tools.length, 2);
+    const finalization = await run([write, verify], [[call('practice_generate', 'write')], [call('task_verify', 'verify')], [answer]], (_, c) => c.name === write.name
+      ? { content: 'queued', madeProgress: true, completionExpectation: { resourceType: 'agent_run', resourceId: 'task', expectedTerminalState: 'completed' } }
+      : { content: 'complete', madeProgress: true, completionVerification: { resourceType: 'agent_run', resourceId: 'task', state: 'completed', terminal: true } }, { skills: [skill] });
+    assert.equal((await finalization.promise).status, 'completed');
+    assert(finalization.mismatches() > 0);
+    assert.equal(finalization.bodies.length, 3);
+    const forced = await run([scan], [[answer], [call('question_bank_scan', 'scan')], [answer]], () => ({ content: '{}', madeProgress: true }), { requiredToolName: scan.name });
+    assert.equal((await forced.promise).status, 'completed');
+    assert.deepEqual(forced.effects, [scan.name]);
+    assert(forced.bodies.every(body => body.tool_choice?.type === 'auto'));
+    const missing = await run([scan], [[answer], [answer], [answer]], () => assert.fail('unexpected tool'), { requiredToolName: scan.name });
+    await assert.rejects(missing.promise, /必要的真实工具调用/);
+    assert.deepEqual(missing.effects, [], 'auto downgrade must not count narration as actual tool use');
+  }
 }
 
 async function verifiesFirstTurnStreaming(agent, pi, ai) {

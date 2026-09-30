@@ -47,6 +47,8 @@ export interface ModelReasoningBlock {
   readonly signature?: string;
   /** Opaque payload of a `redacted_thinking` block. */
   readonly data?: string;
+  /** Conservative replay budget; may include the whole turn's reported output usage. Never sent on the wire. */
+  readonly budgetTokens?: number;
 }
 
 export interface ModelMessage {
@@ -118,6 +120,8 @@ export interface ProviderGateway {
   /** Protocol capability; a concrete model may still reject unsupported media. */
   readonly capabilities: {
     readonly multimodalInput: boolean;
+    /** False when named/required tool choice is unsupported; callers must validate actual tool use. */
+    readonly forcedToolChoice?: boolean;
   };
   complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse>;
   /**

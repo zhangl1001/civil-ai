@@ -39,10 +39,11 @@ export const objectiveMockExecutor: BusinessAgentExecutor = async (task, context
         review: false,
         capabilityIndex: batch.moduleBatchIndex,
         batchKey: mockBatchKey(batch, batchIndex)
-      }),
+      }, signal),
       batchIndex,
       signal
     );
+    signal.throwIfAborted();
     completedBatches += 1;
     await context.update(
       Math.min(88, 20 + Math.round((completedBatches / batches.length) * 66)),
@@ -52,6 +53,7 @@ export const objectiveMockExecutor: BusinessAgentExecutor = async (task, context
   });
   const date = asString(task.payload?.date) || new Date().toISOString().slice(0, 10);
   const actualCount = sections.reduce((sum, section) => sum + section.count, 0);
+  context.signal.throwIfAborted();
   const saved = await context.saveLearningAsset({
     kind: LearningAssetKind.MockManifest,
     businessKey: `mock:${date}:${task.id}`,
@@ -67,6 +69,7 @@ export const objectiveMockExecutor: BusinessAgentExecutor = async (task, context
       sections
     }
   });
+  context.signal.throwIfAborted();
   await context.setResult({
     resultRef: saved.id,
     payload: { assetId: saved.id, manifestId: saved.id, deliveryKind }

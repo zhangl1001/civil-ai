@@ -35,7 +35,8 @@
     "check:chat-context": "node scripts/verify-chat-context.mjs",
     "check:mastery-policy": "node scripts/verify-mastery-policy.mjs",
     "smoke:vue": "npm run web:build && npm run check:design && node scripts/smoke-vue-mobile.js",
-    "test": "npm run smoke:ios"
+    "test": "npm run smoke:ios",
+    "check:practice-session-ui": "node scripts/verify-practice-session-ui.mjs && node scripts/verify-mock-task-ui.mjs"
   },
   "keywords": [
     "adaptive-tutoring",
@@ -69,6 +70,7 @@
   },
   "homepage": "https://github.com/zhangl1001/civil-ai#readme",
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "patch-package": "^8.0.1"
   }
 }

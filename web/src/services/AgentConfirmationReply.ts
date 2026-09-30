@@ -8,12 +8,17 @@ const AFFIRMATIVE = [
 const ACTIONS = [
   '开始', '执行', '继续', '发布', '提交', '保存', '修改', '改', '导入', '发', '做', '生成', '创建', '更新', '去'
 ];
+const ACTIONS_BY_TOOL: Readonly<Record<string, readonly string[]>> = {
+  'question_bank.publish': ['发布', '发'],
+  'question_bank.confirm': [],
+};
+const EXECUTE_ACTIONS = new Set(['开始', '执行', '继续']);
 const NEGATIVE = [
   '取消', '确认取消', '算了', '不要', '不用', '不了', '不行', '不必', '不需要', '不执行', '不确认', '不同意', '不可以',
   '不对', '不', '否', '别', '停止', '停', '放弃', '拒绝', '先不', '暂不', '暂时不', '还是不', '撤销', 'no', 'n', 'nope'
 ];
 /** Particles and courtesy words that do not change the answer. */
-const FILLER = ['吧', '啊', '呀', '呢', '哦', '噢', '喔', '嘛', '啦', '哈', '哇', '了', '的', '请', '麻烦', '帮我', '你', '就', '那',
+const FILLER = ['吧', '啊', '呀', '哦', '噢', '喔', '啦', '哈', '哇', '了', '的', '请', '麻烦', '帮我', '你', '就', '那',
   '直接', '一下', '谢谢', '谢了', 'please', 'thanks'];
 
 type WordKind = 'affirm' | 'action' | 'negate' | 'filler';
@@ -33,13 +38,18 @@ const LONGEST_WORD = Math.max(...[...VOCABULARY.keys()].map((word) => word.lengt
  * a new request, a mixed answer — is ambiguous so the pending action is kept
  * and asked about again instead of being silently cancelled.
  */
-export function classifyAgentConfirmationReply(text: string): AgentConfirmationDecision {
+export function classifyAgentConfirmationReply(text: string, pendingToolName?: string): AgentConfirmationDecision {
+  // Questions and requests to revise the proposal never authorize its old parameters.
+  if (/[?？﹖⁇⁈⁉❓❔吗么呢嘛]|修改|改|更新/.test(text)) return 'ambiguous';
   const normalized = text.toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
   const words = segment(normalized);
   if (!words) return 'ambiguous';
   const kinds = new Set(words.map((word) => VOCABULARY.get(word)));
   if (kinds.has('negate')) return kinds.has('affirm') ? 'ambiguous' : 'reject';
-  return kinds.has('affirm') || kinds.has('action') ? 'confirm' : 'ambiguous';
+  const actions = words.filter((word) => VOCABULARY.get(word) === 'action');
+  if (actions.some((word) => !EXECUTE_ACTIONS.has(word)
+    && !ACTIONS_BY_TOOL[pendingToolName ?? '']?.includes(word))) return 'ambiguous';
+  return kinds.has('affirm') || (Boolean(pendingToolName) && actions.length > 0) ? 'confirm' : 'ambiguous';
 }
 
 export function isAgentConfirmation(text: string): boolean {

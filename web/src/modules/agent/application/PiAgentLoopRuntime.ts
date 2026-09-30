@@ -37,7 +37,7 @@ import {
 import {
   agentToolSignature,
   attemptedToolNames,
-  compactAgentLoopMessages,
+  compileAgentLoopTurnContext,
   completionVerificationInstruction,
   composeActiveSkillSystem,
   consumeAgentGuidance,
@@ -170,7 +170,7 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
       invoker: this.modelInvoker,
       toolChoice: () => finalizationOnly
         ? 'none'
-        : forceRequiredTool && requiredTool
+        : forceRequiredTool && requiredTool && gateway.capabilities.forcedToolChoice !== false
           ? { name: providerToolName(requiredTool.name) }
           : 'auto',
       onError: (error) => { providerFailure = error; }
@@ -183,10 +183,11 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
     const emittedMessages = await runAgentLoopContinue(latestContext, {
       model: createPiProviderModel(gateway, limits.maxContextTokens),
       convertToLlm: (messages) => messages.filter(isPiMessage),
-      transformContext: async (messages) => toPiMessages(compactAgentLoopMessages(
-        toModelMessages(messages),
-        limits.maxContextTokens - 4_096
-      )),
+      transformContext: async (messages) => toPiMessages(compileAgentLoopTurnContext({
+        system: composeActiveSkillSystem(command.system, [...activeSkills.values()]),
+        messages: toModelMessages(messages), tools: finalizationOnly ? [] : toolSet.providerTools,
+        maxContextTokens: limits.maxContextTokens, outputReserveTokens: 4_096
+      }).messages),
       toolExecution: 'parallel',
       beforeToolCall: async ({ toolCall }) => {
         const blocked = blockedToolCalls.get(toolCall.id);

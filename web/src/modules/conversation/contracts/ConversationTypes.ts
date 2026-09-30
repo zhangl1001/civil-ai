@@ -1,4 +1,5 @@
 import type { InstantMs } from '@/kernel/public';
+import type { AgentWorkflowInvocation } from '@/modules/agent/public';
 
 export type ConversationRole = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -32,7 +33,13 @@ export interface ConversationMessage {
   readonly errorCode?: string;
   /** User-facing explanation recorded when the turn ended. */
   readonly errorMessage?: string;
+  /** Original request of this failed/stopped turn. Images remain ephemeral. */
+  readonly retryRequest?: {
+    readonly text: string;
+    readonly invocation?: AgentWorkflowInvocation;
+    readonly guidance: readonly string[];
+  };
   readonly createdAt: InstantMs;
 }
 
-export type ConversationMessageOutcome = Pick<ConversationMessage, 'status' | 'errorCode' | 'errorMessage'>;
+export type ConversationMessageOutcome = Pick<ConversationMessage, 'status' | 'errorCode' | 'errorMessage' | 'retryRequest'>;

@@ -111,6 +111,15 @@ export function createMemoryTutorIndexedDb(keyPaths) {
   const apply = (target, operations) => {
     for (const operation of operations) {
       const records = table(target, operation.store);
+      if (operation.type === 'check') {
+        operation.check([...records.values()].map((value) => structuredClone(value)));
+        continue;
+      }
+      if (operation.type === 'update') {
+        const value = operation.update(structuredClone(records.get(JSON.stringify(operation.key))));
+        records.set(keyOf(operation.store, value), structuredClone(value));
+        continue;
+      }
       if (operation.type === 'delete') {
         records.delete(JSON.stringify(operation.key));
         continue;
@@ -181,13 +190,17 @@ export function createMemoryConversationStore(sessions = [], messages = []) {
     async listMessages(sessionId) {
       return state.messages.filter((message) => message.sessionId === sessionId);
     },
-    async replaceProjectConversations(projectId, nextSessions, nextMessages) {
+    async replaceProjectConversations(projectId, nextSessions, nextMessages, commit) {
       if (state.failNextReplace) {
         state.failNextReplace = false;
         throw new Error('conversation log unavailable');
       }
-      state.sessions = [...state.sessions.filter((session) => session.projectId !== projectId), ...nextSessions];
-      state.messages = [...nextMessages];
+      const before = { sessions: state.sessions, messages: state.messages };
+      try {
+        state.sessions = [...state.sessions.filter((session) => session.projectId !== projectId), ...nextSessions];
+        state.messages = [...nextMessages];
+        await commit?.();
+      } catch (error) { Object.assign(state, before); throw error; }
       return nextSessions.length + nextMessages.length;
     }
   };

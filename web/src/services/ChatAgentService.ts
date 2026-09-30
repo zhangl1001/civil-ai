@@ -135,7 +135,7 @@ export class ChatAgentService {
       if (waiting) {
         const waitingAggregate = await runtime.agentRunRepository.findById(waiting.id);
         const waitingCheckpoint = parseCheckpoint(waitingAggregate?.run.checkpoint.agentLoop);
-        const decision = classifyAgentConfirmationReply(text);
+        const decision = classifyAgentConfirmationReply(text, waitingCheckpoint?.pendingConfirmation?.name);
         if (waitingCheckpoint?.pauseReason === 'budget') {
           await this.addUserMessage(session, text, active);
           if (decision === 'reject') {

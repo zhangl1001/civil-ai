@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { IDBFactory } from 'fake-indexeddb';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -955,21 +956,308 @@ try {
     createWorkflow,
     runWorkflow,
     generationRepository,
+    contentRepository,
     outboxRepository,
     clock,
     ids
   });
 
   await verifiesMockBatchRetry();
+  await verifiesGenerationInterruptions({
+    content, ai, createWorkflow, runWorkflow, generationRepository, invocationRepository, contentRepository
+  });
+  await verifiesStructuredPracticeInterruptionCleanup();
 
   const cancellable = await createWorkflow.execute(generationCommand('generation:test:cancel'));
   const cancelled = await runWorkflow.cancel(cancellable.workflow.id);
   assert.equal(cancelled.status, content.GenerationWorkflowStatus.Cancelled);
   assert.equal((await getStatus.execute(cancellable.workflow.id)).workflow.status, content.GenerationWorkflowStatus.Cancelled);
+  await verifiesPersistedGenerationRecovery({ content, ai, curriculumBundle, cycle, clock, ids, compiler, registry });
   console.log('Generation foundation verification passed.');
 } finally {
   await server.close();
 }
+}
+
+/** Audit generation.mjs with correct assertions, using the real handler and storage chain. */
+async function verifiesPersistedGenerationRecovery(input) {
+  const globals = ['indexedDB', 'document', 'window', 'localStorage'].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]);
+  Object.assign(globalThis, {
+    indexedDB: new IDBFactory(),
+    document: Object.assign(new EventTarget(), { visibilityState: 'visible', hidden: false }),
+    window: Object.assign(new EventTarget(), { setTimeout, clearTimeout, setInterval, clearInterval })
+  });
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null, setItem() {}, removeItem() {} } });
+  let environment;
+  try {
+    environment = await persistedGenerationEnvironment(input);
+    const { agent, database, stores, runs, generation, createRun, claim, recover, batch } = environment;
+    const records = (store) => database.getAll(store);
+    const createMock = async (key, modules = ['判断推理']) => {
+      const created = await createRun.execute({ idempotencyKey: key, runType: agent.AgentRunType.TutorTurn,
+        examCycleId: input.cycle.examCycle.id, targetResourceType: agent.TaskTargetType.BusinessOperation,
+        inputSnapshot: { intent: 'mock', detail: 'generation recovery', payload: { questionCount: 5, modules } } });
+      const [claimed] = await claim.execute({ workerId: 'recovery-test', leaseExpiresAt: input.clock.now() + 60_000, limit: 1 });
+      assert.equal(claimed.run.id, created.run.id);
+      return claimed;
+    };
+    const response = (request) => {
+      const raw = validGeneratedContent(request.responseSchema.properties.questions.minItems);
+      const capability = JSON.stringify(request).match(/aptitude\.judgment\.[a-z_.]+/)?.[0];
+      for (const question of raw.questions) question.capabilityCode = capability;
+      return { text: JSON.stringify(raw), finishReason: 'end_turn', usage: {} };
+    };
+    for (const mode of ['suspended', 'lease-lost', 'user-cancelled']) {
+      const run = await createMock(`persisted:${mode}`);
+      const entered = Promise.withResolvers(), release = Promise.withResolvers();
+      const controller = new AbortController();
+      const beforeSets = (await records(stores.ContentQuestionSetBundles)).length;
+      const beforeAssets = (await records(stores.LearningAssets)).length;
+      const beforeWorkflows = (await records(stores.GenerationAggregates)).length;
+      let calls = 0;
+      const oldExecution = batch.executeRuns([run], { provider: 'anthropic', model: 'persisted-stub', complete: async (request, signal) => {
+        calls++; entered.resolve();
+        if (mode === 'lease-lost') { await release.promise; return response(request); }
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+      } }, controller.signal);
+      await entered.promise;
+      controller.abort(mode === 'suspended' ? new agent.AgentRunSuspendedError()
+        : mode === 'lease-lost' ? new agent.AgentRunLeaseLostError(run.run.id) : 'agent_run.cancelled');
+      if (mode !== 'lease-lost') await oldExecution;
+      const [workflow] = (await records(stores.GenerationAggregates)).filter((item) => item.aggregate.spec.sourceAgentRunId === run.run.id);
+      assert.equal(workflow.aggregate.workflow.status, mode === 'user-cancelled' ? 'cancelled' : 'running');
+      assert.equal((await runs.findById(run.run.id)).run.status, mode === 'user-cancelled' ? 'cancelled' : 'running');
+      if (mode === 'user-cancelled') {
+        // Legacy cancelled records have no reliable cause either; never resurrect them.
+        assert.equal(workflow.aggregate.workflow.errorCode, undefined);
+        assert.equal((await generation.execute(workflow.workflowId, { complete: () => assert.fail('cancelled generation was replayed') })).workflow.status, 'cancelled');
+        continue;
+      }
+      input.clock.value += 61_000;
+      await recover.execute();
+      const [next] = await claim.execute({ workerId: 'new-lease', leaseExpiresAt: input.clock.now() + 60_000, limit: 1 });
+      assert.equal(next.run.id, run.run.id);
+      assert.equal(next.run.attemptCount, 2);
+      const newEntered = Promise.withResolvers(), newRelease = Promise.withResolvers();
+      const newExecution = batch.executeRuns([next], { provider: 'anthropic', model: 'resumed-stub', complete: async (request) => {
+        calls++; newEntered.resolve(); await newRelease.promise; return response(request);
+      } }, new AbortController().signal);
+      await newEntered.promise;
+      const checkpoint = await records(stores.GenerationAggregates);
+      const currentRun = await runs.findById(run.run.id);
+      release.resolve();
+      await oldExecution;
+      assert.deepEqual(await records(stores.GenerationAggregates), checkpoint, 'the old lease cannot terminate the new generation');
+      assert.deepEqual(await runs.findById(run.run.id), currentRun, 'old cleanup cannot overwrite the current AgentRun');
+      assert.equal((await records(stores.ContentQuestionSetBundles)).length, beforeSets);
+      newRelease.resolve();
+      assert.equal((await newExecution).completed, 1);
+      assert.equal(calls, 2);
+      assert.equal((await records(stores.GenerationAggregates)).length, beforeWorkflows + 1);
+      assert.equal((await records(stores.ContentQuestionSetBundles)).length, beforeSets + 1);
+      assert.equal((await records(stores.LearningAssets)).length, beforeAssets + 1);
+    }
+    const run = await createMock('persisted:siblings', ['判断推理', '判断推理', '判断推理']);
+    const started = Promise.withResolvers(), aborted = Promise.withResolvers(), release = Promise.withResolvers();
+    const signals = [];
+    const beforeSets = (await records(stores.ContentQuestionSetBundles)).length;
+    const beforeAssets = (await records(stores.LearningAssets)).length;
+    const execution = batch.executeRuns([run], { provider: 'anthropic', model: 'siblings-stub', complete: async (request, signal) => {
+      const ordinal = signals.length;
+      signals.push(signal);
+      if (signals.length === 3) started.resolve();
+      await started.promise;
+      if (ordinal === 0) throw new Error('deterministic sibling failure');
+      signal.addEventListener('abort', () => aborted.resolve(), { once: true });
+      await release.promise;
+      return response(request);
+    } }, new AbortController().signal);
+    await aborted.promise;
+    assert.deepEqual(signals.slice(1).map((signal) => signal.aborted), [true, true]);
+    release.resolve();
+    assert.equal((await execution).failed, 1);
+    assert.equal((await records(stores.ContentQuestionSetBundles)).length, beforeSets);
+    assert.equal((await records(stores.LearningAssets)).length, beforeAssets);
+    console.log('Persisted generation lease recovery, cancellation and sibling abort checks passed.');
+  } finally {
+    environment?.database.close();
+    for (const [key, descriptor] of globals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  }
+}
+
+async function persistedGenerationEnvironment(input) {
+  const load = (name) => server.ssrLoadModule(`/src/${name}.ts`);
+  const [agent, teaching, idb, unit, runRepo, outboxRepo, generationRepo, contentRepo, candidateRepo,
+    invocationRepo, threadRepo, sourceRepo, assetRepo, handlers] = await Promise.all([
+    load('modules/agent/public'), load('modules/teaching/public'),
+    load('capabilities/database/adapters/indexeddb/TutorIndexedDb'), load('capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork'),
+    load('modules/agent/adapters/IndexedDbAgentRunRepository'), load('modules/task/adapters/IndexedDbOutboxRepository'),
+    load('modules/content/adapters/IndexedDbGenerationRepository'), load('modules/content/adapters/IndexedDbContentRepository'),
+    load('modules/candidate/adapters/IndexedDbCandidateRepository'), load('capabilities/ai-runtime/adapters/IndexedDbAIInvocationRepository'),
+    load('modules/teaching/adapters/IndexedDbLearningThreadRepository'), load('modules/content/adapters/IndexedDbQuestionSourceRepository'),
+    load('modules/content/adapters/IndexedDbLearningAssetRepository'), load('composition-root/agent/createTutorAgentHandlers')
+  ]);
+  const database = new idb.TutorIndexedDb();
+  await database.open();
+  const scope = new unit.IndexedDbTransactionScope(), uow = new unit.IndexedDbUnitOfWork(database, scope);
+  const runs = new runRepo.IndexedDbAgentRunRepository(database, scope), outbox = new outboxRepo.IndexedDbOutboxRepository(database, scope);
+  const generations = new generationRepo.IndexedDbGenerationRepository(database, scope), contents = new contentRepo.IndexedDbContentRepository(database, scope);
+  const candidates = new candidateRepo.IndexedDbCandidateRepository(database, scope), curriculums = { findBundle: async () => input.curriculumBundle };
+  const { content, clock, ids, ai } = input;
+  await uow.run(async (ctx) => { await candidates.createCycleBundle(input.cycle, ctx); await contents.installMetadata(content.createBundledContentMetadata(), ctx); });
+  const createGeneration = new content.CreateGenerationWorkflow(uow, generations, contents, outbox,
+    new content.GenerationContextCompiler(candidates, curriculums), { execute: async () => undefined }, ai.structuredObjectivePromptV2.versionId, clock, ids);
+  const generation = new content.RunStructuredObjectiveGenerationWorkflow(uow, generations, contents,
+    { findById: async () => ai.structuredObjectivePromptV2 }, new invocationRepo.IndexedDbAIInvocationRepository(database, scope), outbox,
+    { find: async () => undefined }, new sourceRepo.IndexedDbQuestionSourceRepository(database, scope), input.compiler, clock, ids);
+  const createThread = new teaching.CreateLearningThread(uow, new threadRepo.IndexedDbLearningThreadRepository(database, scope), candidates, curriculums, outbox, clock, ids);
+  const claim = new agent.ClaimAgentRuns(runs, clock, ids), transition = new agent.TransitionAgentRun(uow, runs, outbox, clock, ids);
+  const ownership = new agent.LockedAgentRunOwnership(null), recover = new agent.RecoverExpiredAgentRuns(runs, clock, ids, ownership);
+  const batch = new agent.RunTutorAgentBatch(claim, recover, transition, clock, handlers.createTutorAgentHandlers({
+    candidates, curriculums, promptCompiler: input.compiler, promptRegistry: input.registry,
+    transitionAgentRun: transition, updateAgentRunProgress: new agent.UpdateAgentRunProgress(uow, runs, outbox, clock, ids),
+    requestStructuredPractice: new teaching.RequestStructuredPractice(new teaching.StartStructuredTeaching(candidates, curriculums, createThread), createGeneration),
+    runStructuredObjectiveGenerationWorkflow: generation,
+    learningAssetStore: new content.LearningAssetStore(uow, new assetRepo.IndexedDbLearningAssetRepository(database, scope), clock, ids),
+    ensureQuestionSetEnrichment: { execute: async () => undefined }, contentRepository: contents
+  }), new agent.AgentRunExecutionRegistry(ownership));
+  return { agent, database, stores: idb.TutorIndexedDbStore, runs, generation, claim, recover, batch,
+    createRun: new agent.CreateAgentRun(uow, runs, outbox, clock, ids) };
+}
+
+async function verifiesGenerationInterruptions(input) {
+  const { ai, createWorkflow, runWorkflow, generationRepository, invocationRepository, contentRepository } = input;
+  const agent = await server.ssrLoadModule('/src/modules/agent/public.ts');
+  const goodGateway = () => new StubGateway(ai.ProviderCode.Anthropic, JSON.stringify(validGeneratedContent()));
+  const blocked = (entered) => ({
+    provider: ai.ProviderCode.Anthropic, model: 'interruption-stub',
+    complete: async (_request, signal) => {
+      entered.resolve(signal);
+      return new Promise((_resolve, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    }
+  });
+  for (const [name, reason, recoverable] of [
+    ['suspended', new agent.AgentRunSuspendedError(), true],
+    ['lease-lost', new agent.AgentRunLeaseLostError('run:interrupted'), true],
+    ['replaced', 'agent_run.replaced', true],
+    ['user-cancelled', 'agent_run.cancelled', false],
+    ['abort-cancelled', new DOMException('User cancelled', 'AbortError'), false]
+  ]) {
+    const aggregate = await createWorkflow.execute(generationCommand(`generation:interrupt:${name}`));
+    const entered = Promise.withResolvers();
+    const controller = new AbortController();
+    const execution = runWorkflow.execute(aggregate.workflow.id, blocked(entered), controller.signal);
+    const rejected = assert.rejects(execution, (error) => error === reason);
+    const modelSignal = await entered.promise;
+    controller.abort(reason);
+    await rejected;
+    assert.equal(modelSignal.reason, reason, 'the original interruption reason reaches the provider');
+    const checkpoint = await generationRepository.findByWorkflowId(aggregate.workflow.id);
+    assert.equal(checkpoint.workflow.status, recoverable ? 'running' : 'cancelled', name);
+    const invocation = (await invocationRepository.listByWorkflow(aggregate.workflow.id)).at(-1);
+    assert.equal(invocation.errorCode, recoverable ? 'generation.process_interrupted' : 'generation.cancelled');
+    const gateway = goodGateway();
+    const resumed = await runWorkflow.execute(aggregate.workflow.id, gateway);
+    assert.equal(resumed.workflow.status, recoverable ? 'committed' : 'cancelled');
+    assert.equal(gateway.callCount, recoverable ? 1 : 0, 'only system interruption resumes generation');
+    if (!recoverable) await assert.rejects(() => runWorkflow.retry(aggregate.workflow.id), /Only failed/);
+  }
+
+  // A staged answer survives suspension and resumes without another model call.
+  const staged = await createWorkflow.execute(generationCommand('generation:interrupt:staged'));
+  const stagedController = new AbortController();
+  const stagedGateway = goodGateway();
+  await assert.rejects(() => runWorkflow.execute(staged.workflow.id, stagedGateway, stagedController.signal, async (step) => {
+    if (step === 'committing_result') stagedController.abort(new agent.AgentRunSuspendedError());
+  }), (error) => agent.isAgentRunSuspended(error));
+  const stagedCheckpoint = await generationRepository.findByWorkflowId(staged.workflow.id);
+  assert.equal(stagedCheckpoint.workflow.status, 'staged');
+  assert.ok(stagedCheckpoint.workflow.stagedResult);
+  assert.equal((await runWorkflow.execute(staged.workflow.id, stagedGateway)).workflow.status, 'committed');
+  assert.equal(stagedGateway.callCount, 1, 'resuming a staged result must not regenerate it');
+
+  const { SiblingTaskFailedError } = await server.ssrLoadModule('/src/kernel/abortableConcurrency.ts');
+  for (const [name, reason, status] of [
+    ['user', 'agent_run.cancelled', 'cancelled'],
+    ['sibling', new SiblingTaskFailedError(new Error('another batch failed')), 'failed']
+  ]) {
+    const aggregate = await createWorkflow.execute(generationCommand(`generation:interrupt:before-commit:${name}`));
+    const controller = new AbortController();
+    const before = contentRepository.bundles.length;
+    await assert.rejects(() => runWorkflow.execute(aggregate.workflow.id, goodGateway(), controller.signal, async (step) => {
+      if (step === 'committing_result') controller.abort(reason);
+    }), (error) => error === reason);
+    assert.equal((await generationRepository.findByWorkflowId(aggregate.workflow.id)).workflow.status, status);
+    assert.equal(contentRepository.bundles.length, before, 'abort after model completion still prevents content writes');
+  }
+
+  // A provider may ignore abort and settle only after another lease starts.
+  // Failure cleanup must not terminate the newer attempt or invalidate its invocation.
+  for (const mode of ['lease-lost', 'stale-failure']) {
+    const aggregate = await createWorkflow.execute(generationCommand(`generation:interrupt:late:${mode}`));
+    const oldEntered = Promise.withResolvers(), oldRelease = Promise.withResolvers();
+    const newEntered = Promise.withResolvers(), newRelease = Promise.withResolvers();
+    const oldController = new AbortController();
+    const oldExecution = runWorkflow.execute(aggregate.workflow.id, {
+      ...blocked(oldEntered),
+      complete: async () => { oldEntered.resolve(); await oldRelease.promise; throw new Error('late provider failure'); }
+    }, oldController.signal);
+    const oldRejected = assert.rejects(oldExecution);
+    await oldEntered.promise;
+    if (mode === 'lease-lost') oldController.abort(new agent.AgentRunLeaseLostError('run:old'));
+    const healthy = goodGateway();
+    const newExecution = runWorkflow.execute(aggregate.workflow.id, {
+      provider: healthy.provider, model: healthy.model,
+      complete: async (request, signal) => { newEntered.resolve(); await newRelease.promise; return healthy.complete(request, signal); }
+    });
+    await newEntered.promise;
+    const ownedByNew = structuredClone(await generationRepository.findByWorkflowId(aggregate.workflow.id));
+    const newInvocation = (await invocationRepository.listByWorkflow(aggregate.workflow.id)).at(-1);
+    oldRelease.resolve();
+    await oldRejected;
+    assert.deepEqual(await generationRepository.findByWorkflowId(aggregate.workflow.id), ownedByNew, mode);
+    assert.equal((await invocationRepository.listByWorkflow(aggregate.workflow.id)).find((item) => item.id === newInvocation.id).validationStatus, 'pending');
+    const beforeCommit = contentRepository.bundles.length;
+    newRelease.resolve();
+    assert.equal((await newExecution).workflow.status, 'committed');
+    assert.equal(contentRepository.bundles.length, beforeCommit + 1);
+  }
+}
+
+async function verifiesStructuredPracticeInterruptionCleanup() {
+  const [agent, handlers] = await Promise.all([
+    server.ssrLoadModule('/src/modules/agent/public.ts'),
+    server.ssrLoadModule('/src/composition-root/agent/StructuredPracticeAgentHandler.ts')
+  ]);
+  for (const [reason, recoverable] of [
+    [new agent.AgentRunSuspendedError(), true],
+    [new agent.AgentRunLeaseLostError('run:structured'), true],
+    ['agent_run.cancelled', false]
+  ]) {
+    const controller = new AbortController();
+    const plans = [], reviews = [];
+    const handler = handlers.createStructuredPracticeAgentHandler({
+      requestPractice: { execute: async () => ({ workflow: { id: 'workflow:structured', status: 'running' } }) },
+      runGeneration: { execute: async () => { controller.abort(reason); throw reason; } },
+      updateProgress: { execute: async () => undefined },
+      updateDailyPlanItemStatus: { execute: async (value) => plans.push(value) },
+      masteryRepository: { findReview: async () => ({ status: 'scheduled' }) },
+      startReviewQueueItem: { execute: async () => undefined },
+      failReviewQueueItem: { execute: async (value) => reviews.push(value) }
+    });
+    await assert.rejects(() => handler.execute({ run: {
+      id: 'run:structured', targetResourceType: agent.TaskTargetType.StructuredPractice,
+      inputSnapshot: { dailyPlanItemId: 'plan:structured', reviewQueueItemId: 'review:structured', capabilityNodeId: 'capability:test', requestedCount: 1 }
+    } }, {}, controller.signal), (error) => error === reason);
+    assert.deepEqual(plans.map((item) => item.status), recoverable ? ['in_progress'] : ['in_progress', 'pending']);
+    assert.equal(reviews.length, recoverable ? 0 : 1, 'a replaced worker must not fail the new lease\'s review');
+  }
 }
 
 /**
@@ -1187,6 +1475,108 @@ async function verifiesMockExamBatches(input) {
     manifest.payload.sections.map((section) => section.questionSetId),
     'each replayed batch lands on its own earlier question set'
   );
+  await verifiesMockSiblingCancellation(input, { candidates, curriculums, requestStructuredPractice }, practice, objectiveMock);
+}
+
+async function verifiesMockSiblingCancellation(input, dependencies, practice, objectiveMock) {
+  const response = (request) => {
+    const raw = validGeneratedContent(request.responseSchema.properties.questions.minItems);
+    const capability = JSON.stringify(request).match(/aptitude\.judgment\.[a-z_.]+/)?.[0];
+    for (const question of raw.questions) question.capabilityCode = capability;
+    return { text: JSON.stringify(raw), finishReason: 'end_turn', usage: {} };
+  };
+  for (const keepCompleted of [false, true]) {
+    const before = input.generationRepository.byWorkflow.size;
+    const beforeSets = input.contentRepository.bundles.length;
+    const started = Promise.withResolvers(), firstCompleted = Promise.withResolvers();
+    const siblingsAborted = Promise.withResolvers(), release = Promise.withResolvers();
+    const signals = [], manifests = [];
+    const failure = new Error('deterministic mock batch failure');
+    let calls = 0;
+    const run = { run: { id: `run:siblings:${keepCompleted}`, rootAgentRunId: `run:siblings:${keepCompleted}` } };
+    const gateway = {
+      provider: input.ai.ProviderCode.Anthropic, model: 'sibling-stub',
+      complete: async (request, signal) => {
+        const ordinal = calls++;
+        signals.push(signal);
+        if (calls === 3) started.resolve();
+        await started.promise;
+        if (ordinal === (keepCompleted ? 1 : 0)) {
+          if (keepCompleted) await firstCompleted.promise;
+          throw failure;
+        }
+        if (!(keepCompleted && ordinal === 0)) {
+          signal.addEventListener('abort', () => siblingsAborted.resolve(), { once: true });
+          await release.promise; // Deliberately ignore cancellation at the provider boundary.
+        }
+        return response(request);
+      }
+    };
+    const execute = (model) => {
+      const signal = new AbortController().signal;
+      const update = async (_progress, message) => {
+        if (message?.startsWith('已完成 1/')) firstCompleted.resolve();
+      };
+      return objectiveMock.objectiveMockExecutor({ id: run.run.id, type: 'mock', payload: {
+        questionCount: 5, modules: ['判断推理', '判断推理', '判断推理']
+      } }, {
+        signal, update,
+        generatePractice: practice.createBusinessPracticeGenerator({
+          run, gateway: model, signal, update,
+          dependencies: { ...dependencies, runStructuredObjectiveGenerationWorkflow: input.runWorkflow,
+            ensureQuestionSetEnrichment: { execute: async () => undefined } }
+        }),
+        saveLearningAsset: async (asset) => { manifests.push(asset); return { id: 'asset:siblings', version: 1 }; },
+        setResult: async () => undefined
+      });
+    };
+    const rejected = assert.rejects(execute(gateway), (error) => error === failure);
+    let timeout;
+    try {
+      await Promise.race([siblingsAborted.promise, new Promise((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('sibling abort did not reach the provider')), 3000);
+      })]);
+      assert.ok(signals.slice(keepCompleted ? 2 : 1).every((signal) => signal.aborted));
+    } finally {
+      clearTimeout(timeout);
+      release.resolve();
+      await rejected;
+    }
+    const workflows = [...input.generationRepository.byWorkflow.values()].slice(before);
+    const completed = workflows.filter((item) => item.workflow.status === 'committed');
+    assert.equal(completed.length, keepCompleted ? 1 : 0);
+    assert.equal(input.contentRepository.bundles.length, beforeSets + completed.length, 'late sibling output must not commit');
+    assert.equal(manifests.length, 0);
+    assert.equal(workflows.filter((item) => item.workflow.errorCode === 'generation.sibling_failed').length, keepCompleted ? 1 : 2);
+    let recoveryCalls = 0;
+    await execute({ provider: gateway.provider, model: gateway.model,
+      complete: async (request) => { recoveryCalls++; return response(request); } });
+    assert.equal(recoveryCalls, 3 - completed.length, 'a retry must retain already committed batches');
+    assert.equal(manifests.length, 1);
+    assert.equal(input.generationRepository.byWorkflow.size, before + 3, 'recovery must reuse every batch key');
+    assert.equal(input.contentRepository.bundles.length, beforeSets + 3);
+  }
+
+  // Passing a batch signal must not replace the parent cancellation signal.
+  const parent = new AbortController(), batch = new AbortController();
+  const entered = Promise.withResolvers();
+  const generate = practice.createBusinessPracticeGenerator({
+    run: { run: { id: 'run:parent-and-batch', rootAgentRunId: 'run:parent-and-batch' } },
+    signal: parent.signal, update: async () => undefined,
+    gateway: { provider: input.ai.ProviderCode.Anthropic, model: 'parent-stub', complete: async (_request, signal) => {
+      entered.resolve(signal);
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    } },
+    dependencies: { ...dependencies, runStructuredObjectiveGenerationWorkflow: input.runWorkflow,
+      ensureQuestionSetEnrichment: { execute: async () => undefined } }
+  });
+  const rejected = assert.rejects(generate({ module: '判断推理', requestedCount: 1, difficultyMin: 0.35,
+    difficultyMax: 0.55, purpose: 'parent cancellation', review: false }, batch.signal), (error) => error === 'agent_run.cancelled');
+  const modelSignal = await entered.promise;
+  parent.abort('agent_run.cancelled');
+  await rejected;
+  assert.equal(modelSignal.aborted, true);
+  assert.equal(batch.signal.aborted, false);
 }
 
 class MemoryLearningThreadRepository {
@@ -1230,12 +1620,22 @@ class MemoryAgentRunIndexedDb {
     return outcome.result;
   }
   apply(operations) {
-    for (const operation of operations) {
-      const key = operation.value?.[this.keyPaths[operation.store]];
-      if (operation.type === 'add' && this.store(operation.store).has(key)) throw new Error('Key already exists in the object store.');
-    }
-    for (const operation of operations) {
-      this.store(operation.store).set(operation.value[this.keyPaths[operation.store]], structuredClone(operation.value));
+    const before = structuredClone(this.stores);
+    try {
+      for (const operation of operations) {
+        const values = this.store(operation.store);
+        if (operation.type === 'check') { operation.check([...values.values()]); continue; }
+        const value = operation.type === 'update' ? operation.update(structuredClone(values.get(operation.key))) : operation.value;
+        const key = value?.[this.keyPaths[operation.store]];
+        if (operation.type === 'delete') values.delete(operation.key);
+        else {
+          if (operation.type === 'add' && values.has(key)) throw new Error('Key already exists in the object store.');
+          values.set(key, structuredClone(value));
+        }
+      }
+    } catch (error) {
+      this.stores = before;
+      throw error;
     }
   }
 }

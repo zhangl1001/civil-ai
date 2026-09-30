@@ -33,6 +33,7 @@ export function parseOpenAIResponse(input: unknown): ProviderResponse {
 
 function readOpenAIToolCalls(input: unknown): ModelToolCall[] {
   if (!Array.isArray(input)) return [];
+  const scope = crypto.randomUUID();
   return input.flatMap((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
     const candidate = item as Record<string, unknown>;
@@ -41,7 +42,7 @@ function readOpenAIToolCalls(input: unknown): ModelToolCall[] {
     const name = readOptionalString(fn.name);
     if (!name) return [];
     return [{
-      id: readOptionalString(candidate.id) || `openai-tool-${index}`,
+      id: readOptionalString(candidate.id) || `openai-tool-${scope}-${index}`,
       name,
       arguments: parseToolArguments(fn.arguments)
     }];
@@ -59,7 +60,7 @@ export function parseAnthropicResponse(input: unknown): ProviderResponse {
   return {
     text: structuredInput === undefined ? readTextContent(root.content) : JSON.stringify(structuredInput),
     toolCalls: toolCalls.filter((call) => call.name !== 'submit_structured_result'),
-    ...(reasoning.length ? { reasoning } : {}),
+    ...(reasoning.length ? { reasoning: withReasoningBudget(reasoning, readOptionalNumber(usage?.output_tokens)) } : {}),
     finishReason: readOptionalString(root.stop_reason),
     providerRequestId: readOptionalString(root.id),
     usage: {
@@ -116,6 +117,7 @@ function isReasoningBlock(block: unknown): boolean {
 
 function readAnthropicToolCalls(input: unknown): ModelToolCall[] {
   if (!Array.isArray(input)) return [];
+  const scope = crypto.randomUUID();
   return input.flatMap((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
     const candidate = item as Record<string, unknown>;
@@ -123,7 +125,7 @@ function readAnthropicToolCalls(input: unknown): ModelToolCall[] {
     const name = readOptionalString(candidate.name);
     if (!name) return [];
     return [{
-      id: readOptionalString(candidate.id) || `anthropic-tool-${index}`,
+      id: readOptionalString(candidate.id) || `anthropic-tool-${scope}-${index}`,
       name,
       arguments: parseToolArguments(candidate.input)
     }];
@@ -153,6 +155,7 @@ interface StreamToolCallBuffer {
 }
 
 export class OpenAIStreamAccumulator {
+  private readonly toolCallScope = crypto.randomUUID();
   private text = '';
   private finishReason?: string;
   private providerRequestId?: string;
@@ -220,7 +223,7 @@ export class OpenAIStreamAccumulator {
       const raw = item as Record<string, unknown>;
       const index = typeof raw.index === 'number' ? raw.index : fallbackIndex;
       const current = this.toolCalls.get(index) ?? {
-        id: readOptionalString(raw.id) || `openai-stream-tool-${index}`,
+        id: readOptionalString(raw.id) || `openai-stream-tool-${this.toolCallScope}-${index}`,
         name: '',
         arguments: ''
       };
@@ -237,6 +240,7 @@ export class OpenAIStreamAccumulator {
 }
 
 export class AnthropicStreamAccumulator {
+  private readonly toolCallScope = crypto.randomUUID();
   private text = '';
   private finishReason?: string;
   private providerRequestId?: string;
@@ -283,7 +287,7 @@ export class AnthropicStreamAccumulator {
       }
       if (block?.type === 'tool_use') {
         this.toolCalls.set(index, {
-          id: readOptionalString(block.id) || `anthropic-stream-tool-${index}`,
+          id: readOptionalString(block.id) || `anthropic-stream-tool-${this.toolCallScope}-${index}`,
           name: readOptionalString(block.name),
           arguments: ''
         });
@@ -307,7 +311,7 @@ export class AnthropicStreamAccumulator {
     }
     if (delta?.type === 'input_json_delta') {
       const current = this.toolCalls.get(index) ?? {
-        id: `anthropic-stream-tool-${index}`,
+        id: `anthropic-stream-tool-${this.toolCallScope}-${index}`,
         name: '',
         arguments: ''
       };
@@ -334,7 +338,7 @@ export class AnthropicStreamAccumulator {
           name: call.name,
           arguments: parseToolArguments(call.arguments)
         }] : []),
-      ...(reasoning.length ? { reasoning } : {}),
+      ...(reasoning.length ? { reasoning: withReasoningBudget(reasoning, this.outputTokens) } : {}),
       finishReason: this.finishReason,
       providerRequestId: this.providerRequestId,
       usage: {
@@ -359,6 +363,11 @@ export class AnthropicStreamAccumulator {
       this.outputTokens = readOptionalNumber(usage?.output_tokens) ?? this.outputTokens;
     }
   }
+}
+
+/** Full reported output bounds hidden thinking better than its visible summary. */
+function withReasoningBudget(blocks: ModelReasoningBlock[], outputTokens?: number): ModelReasoningBlock[] {
+  return outputTokens ? blocks.map((block, index) => index === 0 ? { ...block, budgetTokens: outputTokens } : block) : blocks;
 }
 
 function readTextContent(input: unknown): string {

@@ -70,7 +70,9 @@ export function restoreLegacyLearningRecords(
       count += 1;
     }
     const generationSpecs = new Set<string>();
-    for (const bundle of learning.questionSets) {
+    for (const incoming of learning.questionSets) {
+      // v2 never contained Agent runs; keep neither storage linked to an absent parent.
+      const bundle = { ...incoming, generationSpec: { ...incoming.generationSpec, sourceAgentRunId: undefined } };
       if (!generationSpecs.has(bundle.generationSpec.id)) {
         generationSpecs.add(bundle.generationSpec.id);
         await runtime.generationRepository.create(

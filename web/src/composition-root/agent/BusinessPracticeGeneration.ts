@@ -42,12 +42,14 @@ export function createBusinessPracticeGenerator(input: {
   readonly update: BusinessAgentExecutionContext['update'];
   readonly dependencies: BusinessPracticeGenerationDependencies;
 }): GeneratePractice {
-  const { run, gateway, signal, update, dependencies } = input;
-  return async (request) => {
+  const { run, gateway, signal: parentSignal, update, dependencies } = input;
+  return async (request, batchSignal) => {
+    const signal = batchSignal ? AbortSignal.any([parentSignal, batchSignal]) : parentSignal;
     signal.throwIfAborted();
     const cycle = await dependencies.candidates.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
     const curriculum = await dependencies.curriculums.findBundle(cycle.examCycle.curriculumVersionId);
+    signal.throwIfAborted();
     // Objective practice targets whichever subjects this package answers with
     // questions, rather than the civil-service subject code: a track whose
     // subjects are named differently still generates.
@@ -61,6 +63,7 @@ export function createBusinessPracticeGenerator(input: {
     const capability = selectPracticeCapability(nodes, request);
     if (!capability) throw new Error('当前大纲没有可用的客观题能力节点。');
     await update(42, '调用 AI 生成结构化讲义和题目');
+    signal.throwIfAborted();
     const aggregate = await dependencies.requestStructuredPractice.execute({
       idempotencyKey: structuredPracticeIdempotencyKey(run.run.id, request.batchKey),
       sourceAgentRunId: run.run.rootAgentRunId,
@@ -77,8 +80,9 @@ export function createBusinessPracticeGenerator(input: {
         requestedBy: request.review ? 'wrongbook_review' : 'ai_or_practice_entry'
       }
     });
+    signal.throwIfAborted();
     if (aggregate.workflow.status === GenerationWorkflowStatus.Failed) {
-      await dependencies.runStructuredObjectiveGenerationWorkflow.retry(aggregate.workflow.id);
+      await dependencies.runStructuredObjectiveGenerationWorkflow.retry(aggregate.workflow.id, signal);
     }
     const result = await dependencies.runStructuredObjectiveGenerationWorkflow.execute(
       aggregate.workflow.id,

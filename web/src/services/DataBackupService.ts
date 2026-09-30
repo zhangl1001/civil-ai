@@ -41,11 +41,6 @@ interface RestoredLearning {
   readonly runtime: DataBackupRuntime;
   readonly current?: CandidateCycleBundle;
   readonly restored: number;
-  /** What the cycle held before, taken inside the restore transaction to compensate a later failure. */
-  readonly previous?: {
-    readonly learning: LearningDataSnapshot;
-    readonly conversations: ConversationBackup;
-  };
 }
 
 const legacyBackupWouldDropData = '这是旧版（v2）备份，只包含题组、作答和计划等部分记录；当前备考周期已有学习数据，'
@@ -74,41 +69,37 @@ export class DataBackupService {
     };
   }
 
-  /** Replaces the cycle's learning data with the backup in one maintenance transaction, then its conversations. */
+  /** Stage conversations first; their replacement rolls back if the learning transaction cannot commit. */
   async importBackup(input: unknown): Promise<number> {
     // A backup is JSON by definition. Re-reading it as plain data drops any
     // wrapper the caller put around it (a Vue ref makes it a reactive Proxy),
     // which IndexedDB cannot structured-clone.
     const backup = parseDataBackup(plainJson(input));
-    const { runtime, current, restored, previous } = await this.restoreLearning(backup)
-      .catch((error: unknown) => {
-        throw importFailure(error);
-      });
+    const runtime = await this.loadRuntime();
+    let learning: RestoredLearning | undefined;
+    let conversationCount: number;
+    try {
+      conversationCount = await runtime.conversationStore.replaceProjectConversations(
+        backup.project.id, backup.conversations.sessions, backup.conversations.messages,
+        async () => { learning = await this.restoreLearning(runtime, backup); }
+      );
+    } catch (error) {
+      if (error instanceof AggregateError) throw error;
+      throw importFailure(error);
+    }
+    if (!learning) throw new DataBackupError('备份恢复未提交，请重新导入');
+    const { current, restored } = learning;
     // A first import created the cycle, so point the runtime at its exam track as onboarding does.
     const activationError = current
       ? undefined
       : await runtime.activateExamPack().then(() => undefined, (error: unknown) => error);
-    let total: number;
-    try {
-      total = restored + await runtime.conversationStore.replaceProjectConversations(
-        backup.project.id,
-        backup.conversations.sessions,
-        backup.conversations.messages
-      );
-    } catch (error) {
-      if (!current || !previous) {
-        throw new DataBackupError(`学习记录已导入，但对话记录导入失败，请重新导入该备份${technicalDetail(error)}`, { cause: error });
-      }
-      await restorePrevious(runtime, current, previous, error);
-      throw new DataBackupError(`对话记录导入失败，学习数据已恢复到导入前的状态${technicalDetail(error)}`, { cause: error });
-    }
     if (activationError) {
       throw new DataBackupError(
         `备份已导入，但未能切换到该备份的考试类型，请重启应用${technicalDetail(activationError)}`,
         { cause: activationError }
       );
     }
-    return total;
+    return restored + conversationCount;
   }
 
   async getSummary(): Promise<DataSummary> {
@@ -141,13 +132,11 @@ export class DataBackupService {
     return runtime.dataMaintenance.clearLearningData(candidate.examCycle.id);
   }
 
-  private async restoreLearning(backup: ImportableDataBackup): Promise<RestoredLearning> {
-    const runtime = await this.loadRuntime();
+  private async restoreLearning(runtime: DataBackupRuntime, backup: ImportableDataBackup): Promise<RestoredLearning> {
     const current = await runtime.candidateRepository.findCurrentCycle();
     if (current && current.examCycle.id !== backup.candidate.examCycle.id) {
       throw new DataBackupError('备份属于另一个备考周期；当前版本不合并不同考生或考试周期');
     }
-    const conversations = current ? await collectConversations(runtime, current.project.id) : undefined;
     const examCycleId = backup.candidate.examCycle.id;
     return runtime.unitOfWork.run(async (context) => {
       let restored = 0;
@@ -165,33 +154,8 @@ export class DataBackupService {
       restored += backup.version === DATA_BACKUP_VERSION
         ? await runtime.dataMaintenance.restoreLearningData(examCycleId, backup.learning, context)
         : await restoreLegacyLearningRecords(runtime, examCycleId, backup.learning, context);
-      const previous = learning && conversations ? { learning, conversations } : undefined;
-      return { runtime, current, restored, previous };
+      return { runtime, current, restored };
     }, { workload: TransactionWorkload.Maintenance });
-  }
-}
-
-async function restorePrevious(
-  runtime: DataBackupRuntime,
-  current: CandidateCycleBundle,
-  previous: NonNullable<RestoredLearning['previous']>,
-  cause: unknown
-): Promise<void> {
-  try {
-    await runtime.unitOfWork.run(async (context) => {
-      await runtime.dataMaintenance.clearLearningData(current.examCycle.id, context);
-      await runtime.dataMaintenance.restoreLearningData(current.examCycle.id, previous.learning, context);
-    }, { workload: TransactionWorkload.Maintenance });
-    await runtime.conversationStore.replaceProjectConversations(
-      current.project.id,
-      previous.conversations.sessions,
-      previous.conversations.messages
-    );
-  } catch (rollbackError) {
-    throw new AggregateError(
-      [cause, rollbackError],
-      '数据导入失败，且自动恢复未能完整完成；请保留备份并重新启动应用'
-    );
   }
 }
 

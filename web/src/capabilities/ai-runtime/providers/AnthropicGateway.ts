@@ -24,6 +24,7 @@ import {
   parseAnthropicResponse
 } from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
+import { anthropicThinkingPolicy } from './AnthropicThinkingPolicy';
 import {
   hasRequiredStructuredRoot,
   StructuredOutputCapability,
@@ -46,13 +47,17 @@ export interface AnthropicGatewayConfig {
   readonly baseUrl: string;
   readonly model: string;
   readonly anthropicVersion?: string;
+  /** Opt a compatible proxy into native binding controls only when it supports the beta. */
+  readonly thinkingBindingControls?: boolean;
 }
 
 const STRUCTURED_RESULT_TOOL = 'submit_structured_result';
 
 export class AnthropicGateway implements ProviderGateway {
   readonly provider = ProviderCode.Anthropic;
-  readonly capabilities = { multimodalInput: true } as const;
+  get capabilities() {
+    return { multimodalInput: true, forcedToolChoice: this.modelCapabilities.forcedToolChoice };
+  }
   readonly model: string;
   private readonly config: AnthropicGatewayConfig;
   private readonly structuredOutput: StructuredOutputCapability;
@@ -81,6 +86,7 @@ export class AnthropicGateway implements ProviderGateway {
   }
 
   async prepareStructuredOutput(signal?: AbortSignal): Promise<void> {
+    if (!this.capabilities.forcedToolChoice) return;
     const request = structuredOutputProbeRequest();
     await this.structuredOutput.execute({
       invoke: (mode) => this.sendCompletion(request, mode, signal),
@@ -94,7 +100,7 @@ export class AnthropicGateway implements ProviderGateway {
     signal?: AbortSignal
   ): Promise<ProviderResponse> {
     if (!request.responseSchema) return this.sendCompletion(request, 'tool', signal);
-    if (request.structuredOutputMode === 'prompt') {
+    if (request.structuredOutputMode === 'prompt' || !this.capabilities.forcedToolChoice) {
       return this.sendCompletion(request, 'prompt', signal);
     }
     return this.structuredOutput.execute({
@@ -193,12 +199,13 @@ export class AnthropicGateway implements ProviderGateway {
         description: tool.description,
         input_schema: anthropicInputSchema(this.config.baseUrl, tool.inputSchema)
       })),
-      tool_choice: anthropicToolChoice(request.toolChoice)
+      tool_choice: anthropicToolChoice(request.toolChoice, this.capabilities.forcedToolChoice)
     } : {};
     const system = request.responseSchema && structuredMode === 'prompt'
       ? structuredJsonInstruction(request.system, request.responseSchema)
       : request.system;
     const thinkingCompatibility = this.disabledThinking(request);
+    const thinkingPolicy = anthropicThinkingPolicy(this.config.baseUrl, this.model, this.config.thinkingBindingControls);
     return {
       url: anthropicMessagesEndpoint(this.config.baseUrl),
       method: 'POST' as const,
@@ -206,17 +213,19 @@ export class AnthropicGateway implements ProviderGateway {
         'Content-Type': 'application/json',
         'x-api-key': this.config.apiKey,
         'anthropic-version': this.config.anthropicVersion ?? '2023-06-01',
+        ...thinkingPolicy.headers,
         'X-Client-Request-Id': request.requestId
       },
       body: JSON.stringify({
         model: this.config.model,
         system,
         // A disabled-thinking request (DeepSeek tool chains) replays no thinking blocks.
-        messages: toAnthropicMessages(request.messages, !thinkingCompatibility),
+        messages: toAnthropicMessages(request.messages, !thinkingCompatibility && thinkingPolicy.replayReasoning),
         max_tokens: request.maxOutputTokens,
         stream,
         ...this.modelCapabilities.samplingParameters(request.temperature),
         ...this.modelCapabilities.thinkingParameters(thinkingCompatibility),
+        ...(thinkingPolicy.thinking ? { thinking: thinkingPolicy.thinking } : {}),
         ...structuredOutput
       }),
       signal
@@ -228,9 +237,9 @@ export class AnthropicGateway implements ProviderGateway {
    * every later tool turn, so its tool chains stay thinking-free: thinking is
    * disabled for any request that belongs to a tool chain — including a
    * finalization turn that offers no tools but carries tool_use/tool_result
-   * history — for structured output, and on request. Claude models keep their
-   * default; their thinking blocks are replayed instead (see toAnthropicMessages),
-   * and Opus 5.5 / Fable 5.x never receive a disable they would reject.
+   * history — for structured output, and on request. Claude thinking blocks
+   * follow AnthropicThinkingPolicy; Opus 5.5 / Fable 5.x
+   * never receive a disable they would reject.
    */
   private disabledThinking(request: ProviderRequest): { readonly type: 'disabled' } | undefined {
     const toolChain = Boolean(request.tools?.length)
@@ -332,9 +341,10 @@ function toAnthropicContent(content: ProviderRequest['messages'][number]['conten
       });
 }
 
-function anthropicToolChoice(choice: ProviderRequest['toolChoice']): unknown {
+function anthropicToolChoice(choice: ProviderRequest['toolChoice'], canForce: boolean): unknown {
   if (!choice || choice === 'auto') return { type: 'auto' };
   if (choice === 'none') return { type: 'none' };
+  if (!canForce) return { type: 'auto' };
   if (choice === 'required') return { type: 'any' };
   return { type: 'tool', name: choice.name };
 }
