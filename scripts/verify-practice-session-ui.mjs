@@ -171,6 +171,51 @@ try {
   }), /different learning thread/);
   assert.equal(commits.length, mismatchCount);
 
+  // A committed paper whose draft cannot be retired is still submitted, and a
+  // manifest that never restores earlier reviews does not reopen that draft.
+  const manifests = { 'redo-1': { kind: content.LearningAssetKind.PracticeManifest, payload: { restorePrevious: false, sections: [
+    { questionSetId: 'set-A', learningThreadId: 'thread-A', questionIds: ['q-A'] },
+    { questionSetId: 'set-B', learningThreadId: 'thread-B', questionIds: ['q-B'] }
+  ] } } };
+  const normalRetire = assets.retireBusinessKey;
+  const normalIdempotency = sessions.findByIdempotencyKey;
+  assets.find = async id => manifests[id];
+  sessions.findByIdempotencyKey = async key => commits.find(c => c.session.idempotencyKey === key);
+  assets.retireBusinessKey = async () => { throw new Error('draft store busy'); };
+  await router.push({ path: '/vue/practice/objective-session', query: { manifestId: 'redo-1' } }); await turn();
+  assert.deepEqual(state.bundle.questions.map(q => q.id), ['q-A', 'q-B']);
+  state.answers = { 'q-A': [baseContent.correctOptionId], 'q-B': [baseContent.correctOptionId] };
+  const redoCommits = commits.length;
+  await state.submit(); await turn();
+  assert.equal(commits.length, redoCommits + 2, 'both sections commit');
+  assert.equal(state.error, '', 'a failed draft retirement is not a failed submission');
+  assert.equal(state.submissionPersisted, true);
+  assert.equal(state.submitted, true);
+  assert.ok(state.review);
+  assert.deepEqual(state.reviewSessionIds, commits.slice(redoCommits).map(c => c.session.id));
+  assert.equal(drafts.get('manifest:redo-1')?.status, 'draft', 'the probe really left a stale draft behind');
+  await state.submit(); await turn();
+  assert.equal(commits.length, redoCommits + 2, 'a submitted page cannot submit again');
+  const reopen = async () => { await go('A'); await turn(); await router.push({ path: '/vue/practice/objective-session', query: { manifestId: 'redo-1' } }); await turn(); };
+  await reopen();
+  assert.deepEqual(state.answers, {}, 'the stale draft is not restored while it still cannot be retired');
+  assert.equal(state.error, '');
+  assets.retireBusinessKey = normalRetire;
+  await reopen();
+  assert.equal(drafts.has('manifest:redo-1'), false, 'the next load retires the stale draft');
+  assert.deepEqual(state.answers, {});
+  assert.equal(commits.length, redoCommits + 2);
+  // An unfinished paper (only one section committed) keeps its draft answers.
+  manifests['redo-2'] = manifests['redo-1'];
+  commits.push({ session: { ...commits.at(-2).session, id: 'partial', idempotencyKey: 'practice:submit:redo-2:set-A:thread-A' }, attempts: [] });
+  drafts.set('manifest:redo-2', { status: 'draft', payload: { ...draftWrites.at(-1).payload, answers: { 'q-B': [baseContent.correctOptionId] } } });
+  await router.push({ path: '/vue/practice/objective-session', query: { manifestId: 'redo-2' } }); await turn();
+  assert.deepEqual(state.answers, { 'q-B': [baseContent.correctOptionId] });
+  assert.equal(drafts.has('manifest:redo-2'), true);
+  commits.pop();
+  sessions.findByIdempotencyKey = normalIdempotency;
+  delete assets.find;
+
   // Unmount cancels an outstanding read and never resurrects the departed view.
   gate = deferred();
   contentRepository.findQuestionSet = async () => gate.promise;

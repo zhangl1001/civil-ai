@@ -16,10 +16,15 @@ export interface SubmitPracticeBundleCommand {
   readonly dailyPlanItemId?: string;
 }
 
+/** One section of one practice page commits once; loading reuses it to find that commit. */
+export function practiceSubmissionKey(submissionScope: string, questionSetId: string, learningThreadId: string): string {
+  return `practice:submit:${submissionScope}:${questionSetId}:${learningThreadId}`;
+}
+
 export function submitPracticeBundle(command: SubmitPracticeBundleCommand) {
   const runtime = command.runtime;
   return runtime.submitObjectiveSession.execute({
-    idempotencyKey: `practice:submit:${command.submissionScope}:${command.bundle.questionSet.id}:${command.learningThreadId}`,
+    idempotencyKey: practiceSubmissionKey(command.submissionScope, command.bundle.questionSet.id, command.learningThreadId),
     learningThreadId: command.learningThreadId as Parameters<typeof runtime.submitObjectiveSession.execute>[0]['learningThreadId'],
     questionSetId: command.bundle.questionSet.id,
     questionIds: command.bundle.questions.map((item) => item.id),
