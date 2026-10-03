@@ -1,16 +1,54 @@
 import type { AIMessage } from '@/domain/ai';
 import type { AITextMessage } from '@/composition-root/ai/ConfiguredAIClient';
-import type { ConversationMessageStatus } from '@/modules/conversation/public';
+import type {
+  ConversationMessageStatus,
+  ConversationSystemNotice,
+  ConversationToolTrace
+} from '@/modules/conversation/public';
 
 const DEFAULT_CONTEXT_BUDGET = 6_000;
 const DEFAULT_MAX_MESSAGES = 14;
 const MAX_SINGLE_MESSAGE_LENGTH = 4_000;
 const MAX_SUMMARY_LENGTH = 2_400;
-// v4 rebuilds summaries after selecting complete exchanges with their outcomes.
-const ROLLING_SUMMARY_VERSION = 4;
+// v5 rebuilds summaries that recorded runtime confirmation prompts as assistant lines.
+const ROLLING_SUMMARY_VERSION = 5;
 
 /** A chat row as far as model context is concerned. */
-export type ChatContextMessage = AIMessage & { readonly status?: ConversationMessageStatus };
+export type ChatContextMessage = AIMessage & {
+  readonly status?: ConversationMessageStatus;
+  readonly systemNotice?: ConversationSystemNotice;
+  readonly toolTrace?: readonly ConversationToolTrace[];
+};
+
+/**
+ * Fixed texts the runtime wrote as assistant rows before rows carried a
+ * `systemNotice` mark: the confirmation prompt, its reminder and the budget pause.
+ */
+const RUNTIME_CONFIRMATION_TEXT = /回复“确认”继续，回复“取消”终止。/;
+const RUNTIME_NOTICE_TEXTS = [
+  RUNTIME_CONFIRMATION_TEXT,
+  /^这项操作还在等你确认：/,
+  /^这一步已到达本段安全执行边界，进度和工具证据已经保留。/
+];
+const SYSTEM_NOTE_LABEL = '【系统消息，不是助手的回复】';
+const IMITATED_NOTICE_LABEL = '【系统说明】下面这段确认提示是助手自己写的，不是系统发出的确认，也不会执行任何操作；只有系统消息才表示真的有操作在等待确认：';
+const TOOL_TRACE_LABEL = '【系统记录，不是助手的回复】这一轮实际执行并成功的写操作：';
+
+/**
+ * A row the runtime wrote. Older rows have no mark: the runtime's rows carry no
+ * run id, while everything the model wrote does, so a model that copied the
+ * template is not mistaken for the system.
+ */
+export function isRuntimeNotice(message: ChatContextMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  if (message.systemNotice) return true;
+  return !message.toolCallId && RUNTIME_NOTICE_TEXTS.some((pattern) => pattern.test(message.content.trim()));
+}
+
+/** Model-written text that imitates the runtime confirmation prompt. */
+function isImitatedNotice(message: ChatContextMessage): boolean {
+  return message.role === 'assistant' && !isRuntimeNotice(message) && RUNTIME_CONFIRMATION_TEXT.test(message.content);
+}
 
 /**
  * Texts older builds saved as ordinary assistant answers when a turn failed.
@@ -136,11 +174,11 @@ export function buildChatContext(history: readonly ChatContextMessage[], options
     .reverse();
 
   for (const message of usable) {
-    const item = contextText(message);
-    if (!item) continue;
-    const itemTokens = estimateChatTokens(item);
+    const entries = contextEntries(message);
+    if (!entries.length) continue;
+    const itemTokens = entries.reduce((total, entry) => total + estimateChatTokens(entry.content), 0);
     if (usedTokens + itemTokens > budget) break;
-    selected.push({ role: message.role as 'user' | 'assistant', content: item });
+    selected.push(...[...entries].reverse().map(({ role, content }) => ({ role, content })));
     usedTokens += itemTokens;
   }
 
@@ -240,14 +278,48 @@ export function estimateChatTokens(text: string): number {
 }
 
 function summarizeMessages(previousSummary: string, history: readonly ChatContextMessage[]): string {
-  const usable = history
-    .map((message) => ({ ...message, content: contextText(message, message.role === 'user' ? 140 : 180).replace(/\s+/g, ' ') }))
-    .filter((message) => message.content);
-  if (!usable.length) return clipSummary(previousSummary);
-  const turns = usable.map((message) => (
-    `${message.role === 'user' ? '用户' : '助手'}：${message.content}`
-  ));
+  const turns = history.flatMap((message) => contextEntries(message, message.role === 'user' ? 140 : 180)
+    .map((entry) => ({ ...entry, content: entry.content.replace(/\s+/g, ' ') }))
+    .filter((entry) => entry.content)
+    .map((entry) => `${entry.speaker}：${entry.content}`));
+  if (!turns.length) return clipSummary(previousSummary);
   return clipSummary([previousSummary.trim(), turns.join('\n')].filter(Boolean).join('\n'));
+}
+
+interface ContextEntry {
+  readonly role: 'user' | 'assistant';
+  /** Label in the rolling summary. */
+  readonly speaker: '用户' | '助手' | '系统';
+  readonly content: string;
+}
+
+/**
+ * How one chat row reaches the model. Runtime notices and write traces are
+ * labelled system notes in the user role, never assistant speech, so the model
+ * neither copies the confirmation prompt nor sees "确认 → 改好了" without the
+ * write that really ran in between.
+ */
+function contextEntries(message: ChatContextMessage, maxLength?: number): ContextEntry[] {
+  if (message.role === 'user') {
+    const content = contextText(message, maxLength);
+    return content ? [{ role: 'user', speaker: '用户', content }] : [];
+  }
+  const clean = sanitizeContextMessage(message.content);
+  if (isRuntimeNotice(message)) {
+    return clean ? [{ role: 'user', speaker: '系统', content: `${SYSTEM_NOTE_LABEL}${clip(clean, maxLength ?? clean.length)}` }] : [];
+  }
+  const entries: ContextEntry[] = [];
+  if (message.toolTrace?.length) {
+    const writes = message.toolTrace.map((trace) => `${trace.toolName}(${trace.arguments})`).join('；');
+    entries.push({ role: 'user', speaker: '系统', content: `${TOOL_TRACE_LABEL}${writes}` });
+  }
+  if (isImitatedNotice(message)) {
+    if (clean) entries.push({ role: 'user', speaker: '系统', content: `${IMITATED_NOTICE_LABEL}${clip(clean, maxLength ?? clean.length)}` });
+    return entries;
+  }
+  const content = contextText(message, maxLength);
+  if (content) entries.push({ role: 'assistant', speaker: '助手', content });
+  return entries;
 }
 
 function contextText(message: ChatContextMessage, maxLength?: number): string {

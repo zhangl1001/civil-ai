@@ -110,14 +110,17 @@ export class ChatAgentTurnWriter {
   }
 
   /** Keeps text the user saw before the run paused (confirmation or budget). */
-  async persist(content: string): Promise<AIChatMessage | undefined> {
+  async persist(content: string, marks: Pick<ConversationMessageOutcome, 'systemNotice' | 'toolTrace'> = {}): Promise<AIChatMessage | undefined> {
     if (!content.trim()) return undefined;
-    return this.write(content, {});
+    return this.write(content, marks);
   }
 
-  /** Saves the final answer, replacing the streaming bubble. */
-  async complete(content: string): Promise<AIChatMessage | undefined> {
-    const message = await this.persist(content);
+  /**
+   * Saves the final answer, replacing the streaming bubble. `systemNotice` marks
+   * text the runtime wrote; `toolTrace` records writes that really ran.
+   */
+  async complete(content: string, marks: Pick<ConversationMessageOutcome, 'systemNotice' | 'toolTrace'> = {}): Promise<AIChatMessage | undefined> {
+    const message = await this.persist(content, marks);
     this.completed = true;
     this.finished = true;
     return message;
@@ -197,7 +200,7 @@ export class ChatAgentTurnWriter {
   private async write(content: string, outcome: ConversationMessageOutcome): Promise<AIChatMessage | undefined> {
     this.dispose();
     if (this.persistedMessageId) {
-      if (content === this.persistedContent && !outcome.status) return undefined;
+      if (content === this.persistedContent && !outcome.status && !outcome.toolTrace?.length && !outcome.systemNotice) return undefined;
       const message = await this.options.repository.updateMessageMeta(
         this.options.sessionId,
         this.persistedMessageId,

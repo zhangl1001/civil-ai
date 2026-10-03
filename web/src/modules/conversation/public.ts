@@ -3,6 +3,8 @@ export type {
   ConversationMessageOutcome,
   ConversationMessageStatus,
   ConversationRole,
+  ConversationSystemNotice,
+  ConversationToolTrace,
   ConversationSession
 } from './contracts/ConversationTypes';
 export { ConversationMessageLog } from './application/ConversationMessageLog';

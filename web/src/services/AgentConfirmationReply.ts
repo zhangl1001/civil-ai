@@ -54,6 +54,14 @@ export function classifyAgentConfirmationReply(text: string, pendingToolName?: s
   return kinds.has('affirm') || (Boolean(pendingToolName) && actions.length > 0) ? 'confirm' : 'ambiguous';
 }
 
+/** Any pending tool: execute words such as "执行" also read as a yes. */
+const ANY_PENDING_TOOL = '*';
+
+/** True for a reply that would confirm a pending action, whichever it was. */
+export function isConfirmationLikeReply(text: string): boolean {
+  return classifyAgentConfirmationReply(text, ANY_PENDING_TOOL) === 'confirm';
+}
+
 export function isAgentConfirmation(text: string): boolean {
   return classifyAgentConfirmationReply(text) === 'confirm';
 }

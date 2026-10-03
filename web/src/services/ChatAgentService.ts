@@ -19,6 +19,7 @@ import {
   AgentRunType,
   AuthorizedAgentToolExecutor,
   AgentRunSuspendedError,
+  AgentToolRisk,
   CHAT_AGENT_LOOP_TOOL_NAME,
   isAgentRunSuspended,
   TaskCenterStep,
@@ -30,7 +31,7 @@ import {
 import { aiChatRepository } from './AIChatRepository';
 import { aiConfigService } from './AIConfigService';
 import { aiStudentContextService } from './AIStudentContextService';
-import { classifyAgentConfirmationReply } from './AgentConfirmationReply';
+import { classifyAgentConfirmationReply, isConfirmationLikeReply } from './AgentConfirmationReply';
 import { visibleAssistantText } from './AgentResponsePresentation';
 import { publishChatTaskMessage } from './ChatAgentTaskPresentation';
 import { compileChatAgentContext } from './ChatAgentContextCompiler';
@@ -47,13 +48,17 @@ import { ChatAgentToolAuthorization } from './ChatAgentToolAuthorization';
 import { agentConversationMemoryService } from './AgentConversationMemoryService';
 import {
   asJsonObject,
+  BUDGET_PAUSE_TEXT,
   budgetContinuationCheckpoint,
   compactText,
   confirmationText,
   findWaitingRun,
+  NO_PENDING_CONFIRMATION_FACT,
   parseCheckpoint,
-  pendingConfirmationReminder
+  pendingConfirmationReminder,
+  toolTraceEntry
 } from './ChatAgentRuntimeSupport';
+import type { ConversationToolTrace } from '@/modules/conversation/public';
 export interface ChatAgentResult {
   readonly handled: boolean;
 }
@@ -72,6 +77,10 @@ interface ActiveChatRun {
   readonly guidanceQueue: string[];
   readonly writer: ChatAgentTurnWriter;
   userMessagePersisted: boolean;
+  /** Write tools that succeeded in this turn, recorded on its reply for later context. */
+  readonly executedWrites: ConversationToolTrace[];
+  /** Trusted runtime facts for this turn's system context. */
+  readonly runtimeFacts: string[];
 }
 type RunId = Parameters<TutorDatabaseRuntime['agentRunRepository']['findById']>[0];
 export class ChatAgentService {
@@ -118,7 +127,9 @@ export class ChatAgentService {
         repository: aiChatRepository,
         publish: options.onAssistantStream
       }),
-      userMessagePersisted: false
+      userMessagePersisted: false,
+      executedWrites: [],
+      runtimeFacts: []
     };
     this.activeRuns.set(session.id, active);
     let runtime: TutorDatabaseRuntime | undefined;
@@ -162,7 +173,7 @@ export class ChatAgentService {
           // Neither yes nor no: keep the pending action and ask again rather
           // than cancelling it and letting the model re-ask in a loop.
           await this.addUserMessage(session, text, active);
-          await active.writer.complete(pendingConfirmationReminder(waitingCheckpoint.pendingConfirmation));
+          await active.writer.complete(pendingConfirmationReminder(waitingCheckpoint.pendingConfirmation), { systemNotice: 'confirmation' });
           return { handled: true };
         }
         await runtime.cancelAgentRun.execute({
@@ -170,6 +181,8 @@ export class ChatAgentService {
           reason: 'user_replaced_pending_agent_action'
         });
       }
+      // A yes with nothing waiting confirms nothing; the model must not act one out.
+      if (isConfirmationLikeReply(text)) active.runtimeFacts.push(NO_PENDING_CONFIRMATION_FACT);
       await this.addUserMessage(session, text, active);
       active.controller.signal.throwIfAborted();
       const cycle = await runtime.candidateRepository.findCurrentCycle();
@@ -316,10 +329,23 @@ export class ChatAgentService {
         studentContext,
         conversation: preparedContext,
         tools: exposure.tools,
+        runtimeFacts: active.runtimeFacts
       });
       const config = await aiConfigService.load();
       const gateway = await createConfiguredProviderGateway(config);
-      const result = await runtime.createAgentLoop(executor, createChatRunObserver(runtime, session.id, runId, writer)).execute({
+      const writeTools = new Set([...exposure.availableTools, ...exposure.tools]
+        .filter((tool) => tool.risk !== AgentToolRisk.Read)
+        .map((tool) => tool.name));
+      const chatObserver = createChatRunObserver(runtime, session.id, runId, writer);
+      const observer: typeof chatObserver = {
+        onEvent: async (event) => {
+          if (event.type === 'tool_call_succeeded' && writeTools.has(event.call.name)) {
+            active.executedWrites.push(toolTraceEntry(event.call));
+          }
+          await chatObserver.onEvent(event);
+        }
+      };
+      const result = await runtime.createAgentLoop(executor, observer).execute({
         agentRunId: runId,
         system: compiledContext.system,
         messages: compiledContext.messages,
@@ -367,7 +393,9 @@ export class ChatAgentService {
       await aiChatRepository.addMessage({
         sessionId: session.id,
         role: 'assistant',
-        content: waiting ? confirmationText(result.checkpoint.pendingConfirmation) : BUDGET_PAUSE_TEXT
+        content: waiting ? confirmationText(result.checkpoint.pendingConfirmation) : BUDGET_PAUSE_TEXT,
+        systemNotice: waiting ? 'confirmation' : 'budget_pause',
+        ...(active.executedWrites.length ? { toolTrace: [...active.executedWrites] } : {})
       });
       await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
       await runtime.transitionAgentRun.execute({
@@ -387,7 +415,7 @@ export class ChatAgentService {
     // The answer is the final turn only; preambles of tool-calling turns were provisional.
     const finalContent = visibleAssistantText(result.text) || writer.visibleText;
     controller.signal.throwIfAborted();
-    await writer.complete(finalContent);
+    await writer.complete(finalContent, active.executedWrites.length ? { toolTrace: [...active.executedWrites] } : {});
     await agentConversationMemoryService.refreshSessionSummary(runtime, session.id);
     const delegated = result.status === 'delegated';
     const completed = await runtime.transitionAgentRun.execute({
@@ -479,8 +507,6 @@ export class ChatAgentService {
     }));
   }
 }
-
-const BUDGET_PAUSE_TEXT = '这一步已到达本段安全执行边界，进度和工具证据已经保留。你可以直接补充要求或让我继续，我会从当前状态接着处理。';
 
 function shouldUseAgent(text: string): boolean {
   return Boolean(text.trim());

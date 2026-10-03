@@ -754,6 +754,7 @@ async function verifyChatAgentService() {
     await service.handle('好的，发布吧', confirming, { thinkingEnabled: false });
     assert.deepEqual(resumed, ['confirm'], 'a clear yes with particles and punctuation confirms the pending action');
     assert.equal((await harness.messages(confirming.id)).at(-1).content, '已发布为正式题组。');
+    await verifyRuntimeNoticesAndWriteTraces(serviceServer, service, harness);
     await verifyChatStore(serviceServer, harness);
 
     const failures = [
@@ -788,6 +789,100 @@ async function verifyChatAgentService() {
     await serviceServer.close();
     await rm(path.join(tmpdir(), `chat-service-harness-${process.pid}`), { recursive: true, force: true });
   }
+}
+
+/**
+ * Live P1: history kept only final texts, so "准备把…回复“确认”继续" looked like the
+ * assistant's own words and "确认 → 改好了" hid the write in between. The model then
+ * imitated both and reported a target change that never ran.
+ */
+async function verifyRuntimeNoticesAndWriteTraces(serviceServer, service, harness) {
+  const { buildChatContext, advanceConversationSummary } = await serviceServer.ssrLoadModule('/src/ai/ChatContextBuilder.ts');
+  const support = await serviceServer.ssrLoadModule('/src/services/ChatAgentRuntimeSupport.ts');
+  const call = { id: 'call:target', name: 'candidate.change_target', arguments: { subject: 'aptitude', targetScore: 75 } };
+  const session = await harness.session('目标分确认');
+  const commands = [];
+  harness.loop = async ({ command }) => {
+    commands.push(command);
+    return { status: 'waiting_user', text: '', checkpoint: { agentRunId: command.agentRunId, messages: [], turnCount: 1, toolCallCount: 1, pendingConfirmation: call } };
+  };
+  await service.handle('把行测目标分改成75', session, { thinkingEnabled: false });
+  const notice = (await harness.messages(session.id)).at(-1);
+  assert.equal(notice.systemNotice, 'confirmation', 'the runtime marks the confirmation prompt it writes');
+  assert.match(notice.content, /回复“确认”继续/);
+  const waitingRun = [...harness.runtime.runs.values()].find((run) => run.sessionId === session.id && run.status === 'waiting_user');
+  waitingRun.checkpoint = { agentLoop: { agentRunId: waitingRun.id, turnCount: 1, toolCallCount: 1, messages: [{ role: 'user', content: '把行测目标分改成75' }], pendingConfirmation: call } };
+
+  // A real confirmation resumes the run unchanged and records the write it executed.
+  harness.loop = async ({ command, observer }) => {
+    commands.push(command);
+    await observer.onEvent({ type: 'tool_call_started', agentRunId: command.agentRunId, call });
+    await observer.onEvent({ type: 'tool_call_succeeded', agentRunId: command.agentRunId, call });
+    return { status: 'completed', text: '改好了。行测目标分：80 → 75。', checkpoint: { agentRunId: command.agentRunId, messages: [] } };
+  };
+  await service.handle('确认', session, { thinkingEnabled: false });
+  assert.equal(commands.at(-1).confirmationDecision, 'confirm');
+  assert.doesNotMatch(commands.at(-1).system, /当前没有等待确认的操作/, 'a real pending confirmation gets no "nothing pending" fact');
+  const done = (await harness.messages(session.id)).at(-1);
+  assert.equal(done.content, '改好了。行测目标分：80 → 75。');
+  assert.deepEqual(done.toolTrace, [{ toolName: 'candidate.change_target', arguments: '{"subject":"aptitude","targetScore":75}' }]);
+
+  // The same yes with nothing waiting confirms nothing, and the model is told so.
+  harness.loop = async ({ command }) => {
+    commands.push(command);
+    return { status: 'completed', text: '目前没有待确认的操作。', checkpoint: { agentRunId: command.agentRunId, messages: [] } };
+  };
+  await service.handle('确认', session, { thinkingEnabled: false });
+  const unpaired = commands.at(-1);
+  assert.equal(unpaired.confirmationDecision, undefined);
+  assert.match(unpaired.system, /当前没有等待确认的操作[\s\S]*不得声称已经修改/);
+  await service.handle('执行', session, { thinkingEnabled: false });
+  assert.match(commands.at(-1).system, /当前没有等待确认的操作/, 'the execute word the model asked for is covered too');
+  await service.handle('行测现在目标多少分', session, { thinkingEnabled: false });
+  assert.doesNotMatch(commands.at(-1).system, /当前没有等待确认的操作/, 'ordinary questions get no confirmation fact');
+
+  const texts = unpaired.messages.map((message) => ({ role: message.role, content: typeof message.content === 'string' ? message.content : '' }));
+  assert(!texts.some((message) => message.role === 'assistant' && /回复“确认”继续/.test(message.content)), 'the runtime prompt is never assistant speech');
+  const noteIndex = texts.findIndex((message) => message.role === 'user' && message.content.startsWith('【系统消息，不是助手的回复】准备把'));
+  assert(noteIndex >= 0, 'the confirmation prompt reaches the model as a labelled system note');
+  const traceIndex = texts.findIndex((message) => message.role === 'user' && /【系统记录，不是助手的回复】.*candidate\.change_target\(\{"subject":"aptitude","targetScore":75\}\)/.test(message.content));
+  const answerIndex = texts.findIndex((message) => message.role === 'assistant' && message.content.startsWith('改好了'));
+  assert(traceIndex > noteIndex && answerIndex === traceIndex + 1, '"确认 → 改好了" carries the write that ran in between');
+
+  // Rows saved before the mark: the runtime's rows carry no run id; a model copy does.
+  const row = (id, role, content, extra = {}) => ({ id, sessionId: 's', role, content, createdAt: Number(id.slice(1)), ...extra });
+  const legacy = [
+    row('m1', 'user', '把行测目标分改成75'),
+    row('m2', 'assistant', support.confirmationText(call)),
+    row('m3', 'user', '嗯？'),
+    row('m4', 'assistant', support.pendingConfirmationReminder(call)),
+    row('m5', 'user', '继续'),
+    row('m6', 'assistant', support.BUDGET_PAUSE_TEXT),
+    row('m7', 'user', '还是改成72分吧'),
+    row('m8', 'assistant', '准备把行测目标分从 75 改为 72。回复“确认”继续，回复“取消”终止。', { toolCallId: 'AgentRunId:fake' }),
+    row('m9', 'user', '确认'),
+    row('m10', 'assistant', '好的')
+  ];
+  const legacyContext = buildChatContext(legacy, { currentPrompt: '下一步', budget: 10_000 });
+  for (const text of [support.confirmationText(call), support.pendingConfirmationReminder(call), support.BUDGET_PAUSE_TEXT]) {
+    assert(legacyContext.some((message) => message.role === 'user' && message.content === `【系统消息，不是助手的回复】${text}`), `old runtime row renders as a system note: ${text}`);
+    assert(!legacyContext.some((message) => message.role === 'assistant' && message.content.includes(text)));
+  }
+  const copied = legacyContext.find((message) => message.content.includes('从 75 改为 72'));
+  assert.equal(copied.role, 'user');
+  assert.match(copied.content, /^【系统说明】下面这段确认提示是助手自己写的，不是系统发出的确认/);
+  const marked = buildChatContext([row('m1', 'user', '改目标'), row('m2', 'assistant', '这项操作需要你确认。', { systemNotice: 'confirmation' }), row('m3', 'user', 'x')], { currentPrompt: 'x' });
+  assert.deepEqual(marked.map((message) => message.role), ['user', 'user'], 'a marked runtime row is a system note even with new wording');
+
+  // The rolling summary keeps them system lines, not assistant claims.
+  const long = [...legacy];
+  for (let index = 11; index < 41; index += 2) long.push(row(`m${index}`, 'user', `问题${index}`), row(`m${index + 1}`, 'assistant', `回答${index}`));
+  long.push(row('m41', 'user', '改成70'), row('m42', 'assistant', '改好了', { toolTrace: [support.toolTraceEntry({ ...call, arguments: { subject: 'aptitude', targetScore: 70 } })] }));
+  for (let index = 43; index < 73; index += 2) long.push(row(`m${index}`, 'user', `问题${index}`), row(`m${index + 1}`, 'assistant', `回答${index}`));
+  const summary = advanceConversationSummary(long, { summary: '助手：准备把行测目标分改为 75。回复“确认”继续，回复“取消”终止。', cursorMessageId: 'm10', version: 4 }).summary;
+  assert.doesNotMatch(summary, /助手：[^\n]*回复“确认”继续/, 'a v4 summary is rebuilt without assistant-voiced prompts');
+  assert.match(summary, /系统：【系统消息，不是助手的回复】准备把/);
+  assert.match(summary, /系统：【系统记录，不是助手的回复】[^\n]*"targetScore":70[^\n]*\n助手：改好了/);
 }
 
 async function verifyChatStore(serviceServer, harness) {

@@ -518,6 +518,7 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
         retryable: false,
         failureCode: 'agent.tool_rejected_by_user'
       };
+      await this.emit({ type: 'tool_call_failed', agentRunId: input.command.agentRunId, call: input.call, reasonCode: 'agent.tool_rejected_by_user' });
       return messages;
     }
     await this.emit({ type: 'tool_call_started', agentRunId: input.command.agentRunId, call: input.call });
@@ -534,6 +535,10 @@ export class PiAgentLoopRuntime implements AgentLoopRuntime {
     };
     if (madeProgress && definition.risk !== AgentToolRisk.Read) input.completedToolNames.add(definition.name);
     if (result.completionExpectation) input.completionTracker.expect([result.completionExpectation]);
+    // Same outcome events as a tool the model called this turn, as the stable loop emits.
+    await this.emit(result.isError
+      ? { type: 'tool_call_failed', agentRunId: input.command.agentRunId, call: input.call, reasonCode: result.failureCode || 'agent.tool_execution_error' }
+      : { type: 'tool_call_succeeded', agentRunId: input.command.agentRunId, call: input.call, resultRef: result.resultRef });
     messages.push({
       role: ModelMessageRole.Tool,
       toolCallId: input.call.id,

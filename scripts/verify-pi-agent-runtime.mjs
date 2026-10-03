@@ -133,6 +133,7 @@ async function verifiesConfirmationResume(agent, pi, ai) {
   assert.equal(executions, 0, 'confirmation-gated Tool must not execute before confirmation');
   assert.equal(first.checkpoint.pendingConfirmation?.name, 'content.publish');
 
+  const resumeEvents = [];
   const resumed = new pi.PiAgentLoopRuntime(
     sequenceInvoker([{ text: '已经发布。', usage: {} }]),
     allowPolicy(),
@@ -142,7 +143,8 @@ async function verifiesConfirmationResume(agent, pi, ai) {
         return { content: 'published', resultRef: 'content:1', madeProgress: true };
       }
     },
-    { async save(checkpoint) { checkpoints.push(checkpoint); } }
+    { async save(checkpoint) { checkpoints.push(checkpoint); } },
+    { onEvent(event) { resumeEvents.push(event); } }
   );
   const second = await resumed.execute(command({
     tools: [tool],
@@ -151,6 +153,9 @@ async function verifiesConfirmationResume(agent, pi, ai) {
   }), gateway(ai));
   assert.equal(second.status, 'completed');
   assert.equal(executions, 1, 'confirmed Tool executes exactly once');
+  // Chat records the executed write from this event; the stable loop emits it too.
+  const succeeded = resumeEvents.filter((event) => event.type === 'tool_call_succeeded');
+  assert.deepEqual(succeeded.map((event) => [event.call.name, event.resultRef]), [['content.publish', 'content:1']]);
 }
 
 async function verifiesConfirmationFreezesSiblingTools(agent, pi, ai) {

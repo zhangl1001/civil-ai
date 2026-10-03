@@ -14,6 +14,8 @@ export interface CompileChatAgentContextInput {
   readonly studentContext: string;
   readonly conversation: PreparedConversationContext;
   readonly tools: readonly ProviderToolDefinition[];
+  /** Trusted facts about this turn from the runtime itself, e.g. that nothing awaits confirmation. */
+  readonly runtimeFacts?: readonly string[];
 }
 
 export function compileChatAgentContext(
@@ -23,6 +25,9 @@ export function compileChatAgentContext(
     agentRunId: input.agentRunId,
     sections: [
       section('agent.system', input.system, 'system', 1_000, true, 9_000),
+      ...(input.runtimeFacts?.length
+        ? [section('runtime.turn_facts', input.runtimeFacts.join('\n\n'), 'system', 950, true, 600)]
+        : []),
       section('candidate.anchor', input.studentContext, 'data', 300, false, 1_200),
       section('conversation.memory', input.conversation.memoryContext, 'data', 200, false, 900),
       section('conversation.summary', input.conversation.sessionSummary, 'data', 100, false, 1_200)

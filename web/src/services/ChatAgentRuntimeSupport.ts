@@ -81,6 +81,24 @@ export function confirmationText(call?: ModelToolCall): string {
   return `准备执行“${toolLabel(call.name)}”。回复“确认”继续，回复“取消”终止。`;
 }
 
+export const BUDGET_PAUSE_TEXT = '这一步已到达本段安全执行边界，进度和工具证据已经保留。你可以直接补充要求或让我继续，我会从当前状态接着处理。';
+
+/**
+ * Added to a turn whose message reads as a yes while nothing waits for one:
+ * a bare "确认" must not let the model act out a confirmation or a completion.
+ */
+export const NO_PENDING_CONFIRMATION_FACT = [
+  '# 运行时事实：当前没有等待确认的操作',
+  '本会话此刻没有任何操作在等待用户确认，用户这条回复不会执行任何操作。',
+  '如果用户想修改数据，必须调用对应工具；系统会在调用后向用户展示确认。没有本轮工具的成功结果时，不得声称已经修改、保存或完成，也不得自己写出确认提示。'
+].join('\n');
+
+/** A write tool call compacted for the chat history trace. */
+export function toolTraceEntry(call: ModelToolCall): { readonly toolName: string; readonly arguments: string } {
+  const json = JSON.stringify(call.arguments ?? {});
+  return { toolName: call.name, arguments: json.length > 160 ? `${json.slice(0, 157)}...` : json };
+}
+
 /** Asked again when a reply to a pending confirmation was neither yes nor no. */
 export function pendingConfirmationReminder(call?: ModelToolCall): string {
   return `这项操作还在等你确认：${confirmationText(call)}如果想先调整要求或聊别的，请先回复“取消”。`;

@@ -226,6 +226,8 @@ function outcomeFields(input: ConversationMessageOutcome): ConversationMessageOu
     ...(input.status ? { status: input.status } : {}),
     ...(input.errorCode ? { errorCode: input.errorCode } : {}),
     ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
-    ...(input.retryRequest ? { retryRequest: input.retryRequest } : {})
+    ...(input.retryRequest ? { retryRequest: input.retryRequest } : {}),
+    ...(input.systemNotice ? { systemNotice: input.systemNotice } : {}),
+    ...(input.toolTrace?.length ? { toolTrace: input.toolTrace } : {})
   };
 }
