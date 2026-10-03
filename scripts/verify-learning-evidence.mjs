@@ -33,8 +33,14 @@ try {
   const evidenceRepository = new MemoryEvidenceRepository();
   const outboxRepository = new MemoryOutboxRepository();
   let questionSetPracticeStatus = 'not_started';
+  let boundThreadId;
   const contentRepository = {
-    findQuestionSet: async (id) => id === 'question-set:test' ? questionSet() : undefined,
+    findQuestionSet: async (id) => {
+      if (id === 'question-set:test') return questionSet();
+      if (id !== 'question-set:bound') return undefined;
+      const bundle = questionSet();
+      return { ...bundle, questionSet: { ...bundle.questionSet, id, learningThreadId: boundThreadId } };
+    },
     async updateQuestionSetPracticeStatus(id, status) {
       if (id === 'question-set:test') questionSetPracticeStatus = status;
     }
@@ -410,6 +416,40 @@ try {
   assert.equal(retentionFacts.session.sessionType, evidence.LearningSessionType.Retention);
   assert.equal(retentionFacts.attempts[0].questionId, 'question:test:2');
   assert.equal(outboxRepository.events.filter((item) => item.eventType === 'learning_session.objective_submitted').length, 2);
+
+  // Sessions written before submission enforced the set's thread can name another thread.
+  // Their wrong-book review is rebuilt under the set's own thread, so it submits again,
+  // while the stale pairing itself stays refused.
+  const { buildWrongBookReviewSections } = await server.ssrLoadModule('/src/features/wrongbook/WrongBookReviewSections.ts');
+  boundThreadId = thread.thread.id;
+  const otherCapability = curriculumBundle.capabilityNodes.find((node) => (
+    node.status === 'active' && node.id !== 'capability:aptitude:judgment:weaken'
+  ));
+  const staleThread = await createThread.execute({
+    idempotencyKey: 'thread:stale:create', examCycleId: 'cycle:test', capabilityNodeId: otherCapability.id,
+    originType: teaching.LearningThreadOrigin.Diagnosis, goal: 'another thread', gapSnapshot: {},
+    initialStage: teaching.LearningThreadStage.Diagnose, exitCriteria: {}
+  });
+  const wrongBookEntry = (questionSetId, learningThreadId, questionId) => ({
+    id: `entry:${questionId}`, module: '判断推理', session: { questionSetId, learningThreadId }, question: { id: questionId }
+  });
+  const sections = await buildWrongBookReviewSections([
+    wrongBookEntry('question-set:bound', staleThread.thread.id, 'question:test:1'),
+    wrongBookEntry('question-set:bound', thread.thread.id, 'question:test:2'),
+    wrongBookEntry('question-set:test', thread.thread.id, 'question:test:1')
+  ], contentRepository);
+  assert.deepEqual(sections, [
+    { questionSetId: 'question-set:bound', learningThreadId: thread.thread.id, module: '判断推理', questionIds: ['question:test:1', 'question:test:2'] },
+    { questionSetId: 'question-set:test', learningThreadId: thread.thread.id, module: '判断推理', questionIds: ['question:test:1'] }
+  ], 'a bound set is reviewed under its own thread; an unbound one keeps the session thread');
+  const reviewCommand = (learningThreadId) => ({
+    idempotencyKey: `session:wrongbook:${learningThreadId}`, learningThreadId, questionSetId: sections[0].questionSetId,
+    questionIds: sections[0].questionIds, assessmentRole: evidence.AssessmentRole.Retention,
+    startedAt: 1_784_016_030_000, elapsedMs: 30_000,
+    answers: sections[0].questionIds.map((questionId) => ({ questionId, optionIds: ['B'], elapsedMs: 15_000, answerChangeCount: 0 }))
+  });
+  await assert.rejects(submit.execute(reviewCommand(staleThread.thread.id)), /bound to a different learning thread/);
+  assert.equal((await submit.execute(reviewCommand(sections[0].learningThreadId))).total, 2);
   console.log('Learning evidence verification passed.');
 } finally {
   await server.close();
