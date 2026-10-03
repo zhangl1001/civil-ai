@@ -697,8 +697,11 @@ async function verifyChatAgentService() {
     const { classifyAgentConfirmationReply } = await serviceServer.ssrLoadModule('/src/services/AgentConfirmationReply.ts');
     const replies = {
       confirm: ['确认', '确认。', '确认！', '是的', '好的，发布吧', '嗯嗯', 'OK!', '可以，开始吧', '没问题', '确定要发布', '那就这样吧', '好的谢谢', '发吧'],
-      reject: ['取消', '算了', '算了吧', '不要发布', '不用了', '先不发了', '不', 'no', '别发布了', '确认取消', '不确认'],
-      ambiguous: ['发布？', '确认?', '发布❓', '可以嘛', '是的呢', '改一下', '好的，改一下', '好的，提交吧', '生成', '去', '做', '发布后还能修改吗？', '改成85分', '等一下', '为什么要发布', '好的，不过先别发布', '', '今天天气怎么样']
+      reject: ['取消', '算了', '算了吧', '不要发布', '不用了', '先不发了', '不', 'no', '别发布了', '确认取消', '不确认',
+        // A plain no stays a no when phrased as a question or naming the declined edit.
+        '取消吧？', '算了吧，不改了', '不用改了', '别更新了', '还要继续吗？不用了', '先别发'],
+      ambiguous: ['发布？', '确认?', '发布❓', '可以嘛', '是的呢', '改一下', '好的，改一下', '好的，提交吧', '生成', '去', '做', '发布后还能修改吗？', '改成85分', '等一下', '为什么要发布', '好的，不过先别发布', '', '今天天气怎么样',
+        '不改了，发布吧', '不发布吗？', '要不要取消？', '不确定', '嗯，不']
     };
     for (const [decision, texts] of Object.entries(replies)) {
       for (const text of texts) {
@@ -710,6 +713,10 @@ async function verifyChatAgentService() {
     assert.equal(classifyAgentConfirmationReply('是的'), 'confirm');
     assert.equal(classifyAgentConfirmationReply('确认'), 'confirm');
     assert.equal(classifyAgentConfirmationReply('修改一下', 'profile.update_target'), 'ambiguous');
+    // A budget pause has no pending tool and resumes on anything but a no.
+    for (const text of ['取消吧？', '算了吧，不改了', '还要继续吗？不用了', '先别继续']) {
+      assert.equal(classifyAgentConfirmationReply(text), 'reject', `"${text}" must stop a budget-paused run`);
+    }
     const confirming = await harness.session('待确认');
     const pendingCall = { id: 'call:publish', name: 'question_bank.publish', arguments: { draftId: 'draft:1', expectedVersion: 2 } };
     harness.runtime.runs.set('AgentRunId:waiting-publish', {

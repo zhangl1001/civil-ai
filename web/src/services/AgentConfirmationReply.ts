@@ -15,7 +15,7 @@ const ACTIONS_BY_TOOL: Readonly<Record<string, readonly string[]>> = {
 const EXECUTE_ACTIONS = new Set(['开始', '执行', '继续']);
 const NEGATIVE = [
   '取消', '确认取消', '算了', '不要', '不用', '不了', '不行', '不必', '不需要', '不执行', '不确认', '不同意', '不可以',
-  '不对', '不', '否', '别', '停止', '停', '放弃', '拒绝', '先不', '暂不', '暂时不', '还是不', '撤销', 'no', 'n', 'nope'
+  '不对', '不', '否', '别', '先别', '停止', '停', '放弃', '拒绝', '先不', '暂不', '暂时不', '还是不', '撤销', 'no', 'n', 'nope'
 ];
 /** Particles and courtesy words that do not change the answer. */
 const FILLER = ['吧', '啊', '呀', '哦', '噢', '喔', '啦', '哈', '哇', '了', '的', '请', '麻烦', '帮我', '你', '就', '那',
@@ -39,8 +39,10 @@ const LONGEST_WORD = Math.max(...[...VOCABULARY.keys()].map((word) => word.lengt
  * and asked about again instead of being silently cancelled.
  */
 export function classifyAgentConfirmationReply(text: string, pendingToolName?: string): AgentConfirmationDecision {
+  // A plain no stays a no even when it is phrased as a question or names the edit it declines.
+  if (isPureNegation(text)) return 'reject';
   // Questions and requests to revise the proposal never authorize its old parameters.
-  if (/[?？﹖⁇⁈⁉❓❔吗么呢嘛]|修改|改|更新/.test(text)) return 'ambiguous';
+  if (QUESTION_OR_REVISION.test(text)) return 'ambiguous';
   const normalized = text.toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
   const words = segment(normalized);
   if (!words) return 'ambiguous';
@@ -58,6 +60,37 @@ export function isAgentConfirmation(text: string): boolean {
 
 export function isAgentCancellation(text: string): boolean {
   return classifyAgentConfirmationReply(text) === 'reject';
+}
+
+const QUESTION_OR_REVISION = /[?？﹖⁇⁈⁉❓❔吗么呢嘛]|修改|改|更新/;
+const QUESTION_MARK = /[?？﹖⁇⁈⁉❓❔]/;
+
+/**
+ * True when every answering clause only declines ("取消吧？", "算了吧，不改了",
+ * "还要继续吗？不用了"): each clause is made of known words, at least one is a
+ * negation, and none affirms or names an action outside a negated clause.
+ * Leading clauses that restate the question are skipped when an answer follows.
+ */
+function isPureNegation(text: string): boolean {
+  const clauses: Array<{ readonly body: string; readonly question: boolean }> = [];
+  const parts = text.toLocaleLowerCase().split(/([\s\p{P}\p{S}]+)/u);
+  for (let index = 0; index < parts.length; index += 2) {
+    const body = parts[index] ?? '';
+    if (!body) continue;
+    clauses.push({ body, question: QUESTION_MARK.test(parts[index + 1] ?? '') || /[吗么呢嘛]$/.test(body) });
+  }
+  const firstAnswer = clauses.findIndex((clause) => !clause.question);
+  const answer = firstAnswer > 0 ? clauses.slice(firstAnswer) : clauses;
+  let negated = false;
+  for (const clause of answer) {
+    const words = segment(clause.body);
+    if (!words) return false;
+    const kinds = new Set(words.map((word) => VOCABULARY.get(word)));
+    if (kinds.has('affirm')) return false;
+    if (kinds.has('negate')) negated = true;
+    else if (kinds.has('action')) return false;
+  }
+  return negated;
 }
 
 /** Splits into known words using as few (so as long) words as possible, or nothing. */
