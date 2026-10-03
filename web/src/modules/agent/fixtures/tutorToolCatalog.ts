@@ -90,6 +90,12 @@ const questionImportCandidateSchema: JsonObject = {
   }
 };
 
+/**
+ * The runtime asks the user before these tools run. Asking in prose first made
+ * the user confirm the same change two to four times.
+ */
+const SYSTEM_CONFIRMED = '调用后系统会向用户展示确认并等待答复，未确认不会执行；用户意图和参数明确时直接调用，不要先用文字询问是否执行。';
+
 export const tutorToolCatalog: readonly AgentToolDefinition[] = [
   { name: 'student.read_profile', description: '读取当前考期、目标、时间约束和可信能力摘要。', inputSchema: emptyObjectSchema, risk: 'read', requiresConfirmation: false, enabledFor: ['tutor_turn', 'teaching_plan'] },
   {
@@ -260,7 +266,7 @@ export const tutorToolCatalog: readonly AgentToolDefinition[] = [
   },
   {
     name: 'question_bank.confirm',
-    description: '仅在用户明确确认扫描结果后确认题库导入草稿；可替换校验失败的候选题或拒绝无法确定的候选题。确认不会发布正式题组。',
+    description: `用户看过扫描结果并要求确认时，确认题库导入草稿；可替换校验失败的候选题或拒绝无法确定的候选题。确认不会发布正式题组。${SYSTEM_CONFIRMED}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -332,7 +338,7 @@ export const tutorToolCatalog: readonly AgentToolDefinition[] = [
   },
   {
     name: 'question_bank.publish',
-    description: '把已经确认且结构校验通过的导入草稿原子发布为正式题组。执行前必须再次获得用户确认。',
+    description: `把已经确认且结构校验通过的导入草稿原子发布为正式题组。${SYSTEM_CONFIRMED}`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -349,7 +355,7 @@ export const tutorToolCatalog: readonly AgentToolDefinition[] = [
   { name: 'teaching.request_practice', description: '为当前能力主线创建结构化练习生成任务。module 使用当前考试大纲的模块 code；填错会被拒绝并返回可用取值。', inputSchema: { type:'object', additionalProperties:false, required:['module'], properties:{ module:{type:'string',maxLength:40}, knowledgePoint:{type:'string'}, questionCount:{type:'number',minimum:1,maximum:25}, difficulty:{type:'string',enum:['基础','标准','进阶']} } }, risk: 'write', requiresConfirmation: false, enabledFor: ['tutor_turn', 'teaching_plan'] },
   { name: 'learning.review_session', description: '读取已完成练习的判分、错因候选和下一步建议。', inputSchema: { type:'object', additionalProperties:false, required:['sessionId'], properties:{sessionId:{type:'string'}} }, risk: 'read', requiresConfirmation: false, enabledFor: ['tutor_turn', 'review'] },
   { name: 'planning.propose_daily_plan', description: '根据到期复习、能力轨迹和可用时间生成本地计划提案。', inputSchema: emptyObjectSchema, risk: 'read', requiresConfirmation: false, enabledFor: ['tutor_turn', 'teaching_plan'] },
-  { name: 'candidate.change_target', description: '修改目标分数。subject 使用当前考试大纲的科目 code。执行前必须由用户明确确认。', inputSchema: { type:'object', additionalProperties:false, required:['subject','targetScore'], properties:{subject:{type:'string',maxLength:40},targetScore:{type:'number',minimum:0,maximum:100}} }, risk: 'write', requiresConfirmation: true, enabledFor: ['tutor_turn'] }
+  { name: 'candidate.change_target', description: `修改目标分数。subject 使用当前考试大纲的科目 code。${SYSTEM_CONFIRMED}`, inputSchema: { type:'object', additionalProperties:false, required:['subject','targetScore'], properties:{subject:{type:'string',maxLength:40},targetScore:{type:'number',minimum:0,maximum:100}} }, risk: 'write', requiresConfirmation: true, enabledFor: ['tutor_turn'] }
 ];
 
 const factualValidator = {
@@ -439,24 +445,24 @@ export const tutorSkillCatalog: readonly AgentSkillManifest[] = [
   }),
   defineSkill({
     name: 'tutor.goal_management',
-    description: '读取、讨论并在用户确认后修改备考目标分数。',
+    description: '读取、讨论并修改备考目标分数；写入前由系统向用户确认。',
     allowedTools: ['student.read_profile', 'candidate.change_target'],
     contextBudgetTokens: 700,
     workflow: {
       name: '目标调整',
-      description: '先读取当前目标，再解释影响，最后通过确认工具修改。',
+      description: '先读取当前目标，参数明确后直接发起修改，由系统向用户确认。',
       steps: [
         { name: '读取现状', description: '调用 student.read_profile 获取当前基线、目标和考试周期。' },
-        { name: '确认变更', description: '明确科目和目标分，并向用户说明对计划的影响。' },
-        { name: '执行修改', description: '用户确认后调用 candidate.change_target。' }
+        { name: '明确参数', description: '用户已说明科目和目标分时不再追问；只缺其一时才询问。可简要说明对计划的影响。' },
+        { name: '发起修改', description: '参数明确后直接调用 candidate.change_target；系统会向用户展示确认并等待答复，不要先用文字征求同意。' }
       ],
-      completionCriteria: ['只在工具成功后确认目标已修改；未确认时停留在建议或确认阶段。'],
-      failureRecovery: ['缺少当前考期时提示先建档。', '修改冲突时重新读取最新目标后再请求确认。']
+      completionCriteria: ['只在工具成功后确认目标已修改；等待系统确认时简短说明待确认，不重复询问。'],
+      failureRecovery: ['缺少当前考期时提示先建档。', '修改冲突时重新读取最新目标后重新发起修改。']
     },
     promptChapters: [{
       name: 'goal.change-policy',
       title: '目标调整规则',
-      content: '目标属于高影响业务事实，模型只能提出建议，最终写入必须经过用户明确确认。'
+      content: '目标属于高影响业务事实，最终写入必须经过系统确认流程由用户确认；该流程在调用工具后自动出现，调用前不要另行用文字征求同意。'
     }],
     validators: [factualValidator, completionValidator]
   }),
@@ -473,8 +479,8 @@ export const tutorSkillCatalog: readonly AgentSkillManifest[] = [
         { name: '读取来源', description: '文本文件按需调用 file.read_text；图片附件直接使用本轮多模态内容。' },
         { name: '扫描草稿', description: '调用 question_bank.scan 生成候选题和结构问题清单。' },
         { name: '自动修正', description: '扫描发现字段错位、题号边界或选项结构问题时，根据原文和问题清单调用 question_bank.repair；不要求用户手工改格式，也不把修正当成发布确认。' },
-        { name: '恢复或确认', description: '续办先调用 question_bank.resume；用户确认后调用 question_bank.confirm。' },
-        { name: '正式发布', description: '仅对已确认且校验通过的草稿调用 question_bank.publish。' }
+        { name: '恢复或确认', description: '续办先调用 question_bank.resume；用户看过扫描结果并要求确认时直接调用 question_bank.confirm，系统会展示确认。' },
+        { name: '正式发布', description: '仅对已确认且校验通过的草稿调用 question_bank.publish；用户要求发布时直接调用，系统会展示确认，不要先用文字征求同意。' }
       ],
       completionCriteria: ['扫描、确认、发布的状态分别来自对应工具结果；不得跨过用户确认；发布成功后才能说已入正式题库。'],
       failureRecovery: ['扫描出现字段错位、题号边界或选项结构问题时，先用 question_bank.repair 修复对应候选并重新观察结果。', '原文缺失答案或来源时保留为空并进入待确认，不得补造。', '草稿不存在时要求重新提供原文件。', '结构问题只修复失败候选，不虚构整套导入成功。']

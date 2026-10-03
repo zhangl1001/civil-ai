@@ -309,6 +309,15 @@ try {
   assert.match(composedSystem, /# 自主决策/);
   assert.match(composedSystem, /由你根据当前目标和每轮结果自主决定/);
   assert.match(composedSystem, /tutor\.daily_coaching/);
+  assert.match(composedSystem, /由系统展示确认，用户意图和参数明确时直接调用/, 'the runtime, not prose, asks for confirmation');
+  // Live "改成75" took four confirmations when tools and skills told the model to ask first.
+  for (const tool of agent.tutorToolCatalog.filter((candidate) => candidate.requiresConfirmation)) {
+    assert.match(tool.description, /系统会向用户展示确认.*直接调用/, `${tool.name} tells the model to call it directly`);
+    assert.doesNotMatch(tool.description, /执行前必须|再次获得用户确认|明确确认扫描结果后/, `${tool.name} must not ask for a prose confirmation first`);
+  }
+  const goalSkill = agent.tutorSkillCatalog.find((skill) => skill.name === 'tutor.goal_management');
+  assert.doesNotMatch(JSON.stringify(goalSkill), /用户确认后调用|未确认时停留在建议或确认阶段/);
+  assert.match(goalSkill.workflow.steps.at(-1).description, /直接调用 candidate\.change_target/);
   assert.doesNotMatch(composedSystem, /Recommended workflow:|Completion checks|Suggested recovery/);
   assert.doesNotMatch(composedSystem, /\"scope\"|\"entryMode\"/);
   assert.doesNotMatch(
