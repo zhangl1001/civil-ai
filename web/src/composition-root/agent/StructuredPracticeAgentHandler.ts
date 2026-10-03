@@ -154,7 +154,9 @@ async function executeStructuredPractice(
       },
       leaseToken: leaseTokenOf(run.run)
     });
-    signal?.throwIfAborted();
+    // Completion has committed: a cancellation arriving now must not reset the
+    // plan item or fail the review the finished run satisfied. Enrichment is
+    // best-effort, and the practice page schedules it again when it opens.
     await dependencies.ensureQuestionSetEnrichment.execute({
         questionSetId: result.questionSetId,
         parentAgentRunId: run.run.id,
