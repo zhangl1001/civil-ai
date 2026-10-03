@@ -1169,6 +1169,21 @@ async function verifiesGenerationInterruptions(input) {
     if (!recoverable) await assert.rejects(() => runWorkflow.retry(aggregate.workflow.id), /Only failed/);
   }
 
+  // An abort set before execution starts is recorded like one during it: a user
+  // cancellation leaves no queued workflow behind, a suspension leaves it resumable.
+  for (const [name, reason, status] of [
+    ['user', 'agent_run.cancelled', 'cancelled'],
+    ['suspended', new agent.AgentRunSuspendedError(), 'queued']
+  ]) {
+    const aggregate = await createWorkflow.execute(generationCommand(`generation:interrupt:pre-aborted:${name}`));
+    const controller = new AbortController();
+    controller.abort(reason);
+    const gateway = goodGateway();
+    await assert.rejects(() => runWorkflow.execute(aggregate.workflow.id, gateway, controller.signal), (error) => error === reason);
+    assert.equal(gateway.callCount, 0);
+    assert.equal((await generationRepository.findByWorkflowId(aggregate.workflow.id)).workflow.status, status, `pre-aborted ${name}`);
+  }
+
   // A staged answer survives suspension and resumes without another model call.
   const staged = await createWorkflow.execute(generationCommand('generation:interrupt:staged'));
   const stagedController = new AbortController();
@@ -1258,6 +1273,29 @@ async function verifiesStructuredPracticeInterruptionCleanup() {
     assert.deepEqual(plans.map((item) => item.status), recoverable ? ['in_progress'] : ['in_progress', 'pending']);
     assert.equal(reviews.length, recoverable ? 0 : 1, 'a replaced worker must not fail the new lease\'s review');
   }
+
+  // CancelAgentRun aborts the execution before its own transition, so a cancel can
+  // land while Complete commits. The finished run keeps its plan item and review.
+  const controller = new AbortController();
+  const plans = [], reviews = [], enrichments = [];
+  const handler = handlers.createStructuredPracticeAgentHandler({
+    requestPractice: { execute: async () => ({ workflow: { id: 'workflow:completed', status: 'running' }, spec: { learningThreadId: 'thread:completed' } }) },
+    runGeneration: { execute: async () => ({ workflow: { status: 'committed' }, questionSetId: 'set:completed' }) },
+    updateProgress: { execute: async () => undefined },
+    transition: { execute: async (command) => { controller.abort('agent_run.cancelled'); return command; } },
+    updateDailyPlanItemStatus: { execute: async (value) => plans.push(value) },
+    masteryRepository: { findReview: async () => ({ status: 'scheduled' }) },
+    startReviewQueueItem: { execute: async () => undefined },
+    failReviewQueueItem: { execute: async (value) => reviews.push(value) },
+    ensureQuestionSetEnrichment: { execute: async (value) => { enrichments.push(value); } }
+  });
+  await handler.execute({ run: {
+    id: 'run:completed', rootAgentRunId: 'run:completed', targetResourceType: agent.TaskTargetType.StructuredPractice, checkpoint: {},
+    inputSnapshot: { dailyPlanItemId: 'plan:completed', reviewQueueItemId: 'review:completed', capabilityNodeId: 'capability:test', requestedCount: 1 }
+  } }, {}, controller.signal);
+  assert.deepEqual(plans.map((item) => item.status), ['in_progress'], 'a cancel after completion must not reset the plan item');
+  assert.equal(reviews.length, 0, 'a cancel after completion must not fail the review');
+  assert.deepEqual(enrichments.map((item) => item.questionSetId), ['set:completed']);
 }
 
 /**

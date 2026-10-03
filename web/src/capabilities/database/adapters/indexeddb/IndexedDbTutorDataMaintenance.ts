@@ -2,6 +2,8 @@ import type { ExamCycleId } from '@/kernel/public';
 import type { TransactionContext } from '../../contracts/UnitOfWork';
 import type { IndexedDbTransactionScope } from './IndexedDbUnitOfWork';
 import {
+  holdsLearningRecords,
+  LearningDataPresentError,
   LearningDataStorage,
   type LearningDataRecord,
   type LearningDataSnapshot,
@@ -54,6 +56,26 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
       await this.database.writeBatch(operations);
     }
     return operations.length;
+  }
+
+  async requireNoLearningData(examCycleId: ExamCycleId, context: TransactionContext): Promise<void> {
+    if (holdsLearningRecords(learningRecordsOf(await this.readStores(learningRecordStores), examCycleId).values())) {
+      throw new LearningDataPresentError();
+    }
+    // The read above ran in its own transaction. Repeat it inside the commit, ahead of
+    // the caller's writes, so a record another writer adds in between still aborts it.
+    const rows = new Map<TutorIndexedDbStore, readonly LearningDataRecord[]>();
+    learningRecordStores.forEach((store, index) => this.scope.stage(context, {
+      type: 'check',
+      store,
+      check: (values) => {
+        rows.set(store, values as readonly LearningDataRecord[]);
+        if (index === learningRecordStores.length - 1
+          && holdsLearningRecords(learningRecordsOf(rows, examCycleId).values())) {
+          throw new LearningDataPresentError();
+        }
+      }
+    }));
   }
 
   async exportLearningData(examCycleId: ExamCycleId): Promise<LearningDataSnapshot> {

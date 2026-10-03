@@ -3,6 +3,7 @@ import type { TutorDatabaseRuntime } from '@/composition-root/public';
 import { AssessmentRole, type JsonObject } from '@/kernel/public';
 import { correctAnswerLabel, LearningAssetKind } from '@/modules/content/public';
 import { submittedAnswerLabel, type WrongBookEntry } from '@/modules/evidence/public';
+import { buildWrongBookReviewSections } from './WrongBookReviewSections';
 
 let cachedEntries: readonly WrongBookEntry[] | undefined;
 let pendingList: Promise<readonly WrongBookEntry[]> | undefined;
@@ -94,7 +95,7 @@ export class WrongBookFeature {
     if (uniqueEntries.length > 30) throw new Error('单次最多重做 30 道错题，请缩小筛选范围。');
     const cycle = await this.runtime.candidateRepository.findCurrentCycle();
     if (!cycle) throw new Error('请先完成备考档案。');
-    const sections = groupReviewSections(uniqueEntries);
+    const sections = await buildWrongBookReviewSections(uniqueEntries, this.runtime.contentRepository);
     const createdAt = Date.now();
     const manifest = await this.runtime.learningAssetStore.save({
       examCycleId: cycle.examCycle.id,
@@ -112,27 +113,6 @@ export class WrongBookFeature {
     });
     return manifest.id;
   }
-}
-
-function groupReviewSections(entries: readonly WrongBookEntry[]): JsonObject[] {
-  const groups = new Map<string, {
-    questionSetId: string;
-    learningThreadId: string;
-    module: string;
-    questionIds: string[];
-  }>();
-  entries.forEach((entry) => {
-    const key = `${entry.session.questionSetId}:${entry.session.learningThreadId}`;
-    const group = groups.get(key) ?? {
-      questionSetId: entry.session.questionSetId,
-      learningThreadId: entry.session.learningThreadId,
-      module: entry.module,
-      questionIds: []
-    };
-    group.questionIds.push(entry.question.id);
-    groups.set(key, group);
-  });
-  return [...groups.values()].map((group) => asJson(group));
 }
 
 function asJson(value: unknown): JsonObject {

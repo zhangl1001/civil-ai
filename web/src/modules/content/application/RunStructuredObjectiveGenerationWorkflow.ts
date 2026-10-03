@@ -121,9 +121,9 @@ export class RunStructuredObjectiveGenerationWorkflow {
     signal?: AbortSignal,
     onProgress?: GenerationWorkflowProgress
   ): Promise<GenerationWorkflowResult> {
-    signal?.throwIfAborted();
+    // An abort that is already set is checked inside the try below, so a user
+    // cancellation still records the workflow as cancelled instead of leaving it queued.
     let aggregate = await this.requireAggregate(workflowId);
-    signal?.throwIfAborted();
     if (aggregate.workflow.status === GenerationWorkflowStatus.Committed) {
       const committed = await this.contentRepository.findQuestionSetByGenerationSpec(aggregate.spec.id);
       return { workflow: aggregate.workflow, questionSetId: committed?.questionSet.id };
