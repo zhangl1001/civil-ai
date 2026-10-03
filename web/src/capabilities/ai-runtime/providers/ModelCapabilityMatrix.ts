@@ -62,11 +62,6 @@ export function rejectsSamplingParameters(model: string): boolean {
   return /claude-(?:(?:opus|sonnet|haiku|fable|mythos)-5|opus-4-[78])(?![0-9])/i.test(model);
 }
 
-/** Claude Opus 5.5, Fable 5.x and Mythos 5.x always think; `thinking: {type: 'disabled'}` is a 400. */
-export function rejectsDisabledThinking(model: string): boolean {
-  return /claude-(?:opus-5-5|fable-5|mythos-5)(?![0-9])/i.test(model);
-}
-
 /** https://platform.claude.com/docs/en/build-with-claude/thinking#response-prefill-and-forced-tool-use */
 function rejectsForcedToolChoice(model: string): boolean {
   return /claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?![0-9])/i.test(model);

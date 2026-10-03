@@ -32,7 +32,6 @@ import {
 } from './StructuredOutputCapability';
 import {
   ModelCapabilityMatrix,
-  rejectsDisabledThinking,
   type ModelRequestCapabilityOverrides
 } from './ModelCapabilityMatrix';
 import {
@@ -204,7 +203,9 @@ export class AnthropicGateway implements ProviderGateway {
     const system = request.responseSchema && structuredMode === 'prompt'
       ? structuredJsonInstruction(request.system, request.responseSchema)
       : request.system;
-    const thinkingCompatibility = this.disabledThinking(request);
+    // Once the endpoint refused the disable it is no longer sent, and thinking is back on.
+    const thinkingParameters = this.modelCapabilities.thinkingParameters(this.disabledThinking(request));
+    const thinkingDisabled = 'thinking' in thinkingParameters;
     const thinkingPolicy = anthropicThinkingPolicy(this.config.baseUrl, this.model, this.config.thinkingBindingControls);
     return {
       url: anthropicMessagesEndpoint(this.config.baseUrl),
@@ -220,11 +221,11 @@ export class AnthropicGateway implements ProviderGateway {
         model: this.config.model,
         system,
         // A disabled-thinking request (DeepSeek tool chains) replays no thinking blocks.
-        messages: toAnthropicMessages(request.messages, !thinkingCompatibility && thinkingPolicy.replayReasoning),
+        messages: toAnthropicMessages(request.messages, !thinkingDisabled && thinkingPolicy.replayReasoning),
         max_tokens: request.maxOutputTokens,
         stream,
         ...this.modelCapabilities.samplingParameters(request.temperature),
-        ...this.modelCapabilities.thinkingParameters(thinkingCompatibility),
+        ...thinkingParameters,
         ...(thinkingPolicy.thinking ? { thinking: thinkingPolicy.thinking } : {}),
         ...structuredOutput
       }),
@@ -237,19 +238,16 @@ export class AnthropicGateway implements ProviderGateway {
    * every later tool turn, so its tool chains stay thinking-free: thinking is
    * disabled for any request that belongs to a tool chain — including a
    * finalization turn that offers no tools but carries tool_use/tool_result
-   * history — for structured output, and on request. Claude thinking blocks
-   * follow AnthropicThinkingPolicy; Opus 5.5 / Fable 5.x
-   * never receive a disable they would reject.
+   * history — for structured output, and on request. This keys on the host,
+   * not the model name: DeepSeek maps Claude-style names (claude-opus-* to
+   * deepseek-v4-pro) onto its own models, which accept the disable. Native
+   * Claude never reaches this branch; its thinking follows AnthropicThinkingPolicy.
    */
   private disabledThinking(request: ProviderRequest): { readonly type: 'disabled' } | undefined {
     const toolChain = Boolean(request.tools?.length)
       || request.messages.some((message) => message.role === 'tool' || Boolean(message.toolCalls?.length));
     const wanted = toolChain || Boolean(request.responseSchema) || request.thinking === 'disabled';
-    return wanted
-      && requiresDisabledThinkingForToolUse(this.config.baseUrl)
-      && !rejectsDisabledThinking(this.model)
-      ? { type: 'disabled' }
-      : undefined;
+    return wanted && requiresDisabledThinkingForToolUse(this.config.baseUrl) ? { type: 'disabled' } : undefined;
   }
 
   private learnFromInvalidRequest(error: unknown, request: ProviderRequest): boolean {

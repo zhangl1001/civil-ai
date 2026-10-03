@@ -1353,8 +1353,38 @@ async function verifiesClaudeSamplingAndThinkingReplay(ai) {
   }
   assert.equal('temperature' in await bodyFor(ai.OpenAICompatibleGateway, 'claude-opus-5', 'https://proxy.test/v1'), false);
   assert.equal((await bodyFor(ai.AnthropicGateway, 'claude-opus-4-5')).temperature, 0, 'older models keep temperature');
-  const alwaysThinking = await bodyFor(ai.AnthropicGateway, 'claude-opus-5-5', 'https://api.deepseek.com/anthropic');
-  assert.equal('thinking' in alwaysThinking, false, 'a model that cannot disable thinking never receives {type:"disabled"}');
+  const deepSeekAlias = await bodyFor(ai.AnthropicGateway, 'claude-opus-5-5', 'https://api.deepseek.com/anthropic');
+  assert.equal('thinking' in deepSeekAlias, false, 'a plain DeepSeek turn keeps its default thinking');
+
+  // DeepSeek maps Claude-style names onto its own models, which need their thinking
+  // back in a tool chain: the host decides, so the chain runs with thinking disabled
+  // and, if DeepSeek refuses the disable, the reasoning is replayed instead of stripped.
+  for (const model of ['claude-opus-5-5', 'claude-fable-5-1']) {
+    const sent = [];
+    const aliasGateway = new ai.AnthropicGateway({ apiKey: 'test-key', baseUrl: 'https://api.deepseek.com/anthropic', model }, {
+      async send(request) {
+        sent.push({ body: JSON.parse(request.body), headers: request.headers });
+        if (sent.length === 2) return Response.json({ error: { type: 'invalid_request_error', message: 'thinking type disabled is not supported' } }, { status: 400 });
+        return Response.json({ id: 'ds', content: [{ type: 'text', text: '好' }], stop_reason: 'end_turn' });
+      }
+    });
+    const chain = {
+      ...request,
+      tools: [{ name: 'scan', description: 'scan', inputSchema: { type: 'object', properties: {} } }],
+      messages: [
+        { role: ai.ModelMessageRole.User, content: '开始' },
+        { role: ai.ModelMessageRole.Assistant, content: '', toolCalls: [{ id: 'call_1', name: 'scan', arguments: {} }], reasoning: [{ type: 'thinking', thinking: '先扫描', signature: 'ds-sig' }] },
+        { role: ai.ModelMessageRole.Tool, toolCallId: 'call_1', content: 'ok' }
+      ]
+    };
+    await aliasGateway.complete(chain);
+    assert.equal(sent[0].body.thinking.type, 'disabled', `${model} on DeepSeek runs its tool chain with thinking disabled`);
+    assert.equal(sent[0].headers['anthropic-beta'], undefined, 'DeepSeek never receives the Claude binding beta');
+    await aliasGateway.complete(chain);
+    assert.equal(sent.length, 3);
+    assert.equal('thinking' in sent[2].body, false, 'a refused disable is learned and not resent');
+    assert.deepEqual(sent[2].body.messages[1].content.map((block) => block.type), ['thinking', 'tool_use'], 'DeepSeek thinking is replayed, never stripped');
+  }
 
   // A streamed tool_use turn with thinking round-trips its blocks, signature included.
   const bodies = [];

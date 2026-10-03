@@ -42,7 +42,7 @@ export function anthropicInputSchema(baseUrl: string, schema: object): object {
   return { ...root, properties: inlined };
 }
 
-function isDeepSeekAnthropicBaseUrl(baseUrl: string): boolean {
+export function isDeepSeekAnthropicBaseUrl(baseUrl: string): boolean {
   try {
     return new URL(baseUrl).hostname.toLowerCase() === DEEPSEEK_ANTHROPIC_HOST;
   } catch {
