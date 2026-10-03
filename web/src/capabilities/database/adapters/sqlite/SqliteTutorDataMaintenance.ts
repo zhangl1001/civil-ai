@@ -3,7 +3,12 @@ import type { SqlTransactionScope } from '../sqlite/SqlTransactionScope';
 import type { SqlDatabase } from '../../contracts/SqlDatabase';
 import { TransactionWorkload } from '../../contracts/UnitOfWork';
 import type { TransactionContext } from '../../contracts/UnitOfWork';
-import type { LearningDataSnapshot, TutorDataMaintenance } from '../../contracts/TutorDataMaintenance';
+import {
+  holdsLearningRecords,
+  LearningDataPresentError,
+  type LearningDataSnapshot,
+  type TutorDataMaintenance
+} from '../../contracts/TutorDataMaintenance';
 import {
   readSqliteLearningData,
   releaseMissingLegacyReferences,
@@ -177,6 +182,12 @@ export class SqliteTutorDataMaintenance implements TutorDataMaintenance {
     return this.database.transaction(async (transaction) => {
       return this.clearWithTransaction(transaction, examCycleId);
     }, { workload: TransactionWorkload.Maintenance });
+  }
+
+  async requireNoLearningData(examCycleId: ExamCycleId, context: TransactionContext): Promise<void> {
+    // Read inside the caller's write transaction: no other write reaches the cycle before it commits.
+    const snapshot = await readSqliteLearningData(this.scope.resolve(context), examCycleId);
+    if (holdsLearningRecords(Object.values(snapshot.records))) throw new LearningDataPresentError();
   }
 
   async exportLearningData(examCycleId: ExamCycleId, context?: TransactionContext): Promise<LearningDataSnapshot> {

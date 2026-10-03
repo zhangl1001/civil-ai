@@ -4,7 +4,12 @@ export type {
   UnitOfWork,
   UnitOfWorkOptions
 } from './contracts/UnitOfWork';
-export { LearningDataSnapshotError, LearningDataStorage } from './contracts/TutorDataMaintenance';
+export {
+  holdsLearningRecords,
+  LearningDataPresentError,
+  LearningDataSnapshotError,
+  LearningDataStorage
+} from './contracts/TutorDataMaintenance';
 export type {
   LearningDataRecord,
   LearningDataSnapshot,

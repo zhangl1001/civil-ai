@@ -46,6 +46,7 @@ try {
   await verifyIndexedDbRoundTrip(modules, backup);
   await verifyIndexedDbLegacyImport(modules, legacyBackup);
   await verifyImportFailureOrdering(modules, legacyBackup);
+  await verifyRefusedImportKeepsConversations(modules, legacyBackup);
   await verifyConversationImportIsolation();
   await verifyIndexedDbBatchIsAtomic();
   console.log('Data maintenance isolation, coverage and backup round-trip verification passed.');
@@ -622,6 +623,105 @@ async function verifyImportFailureOrdering(modules, legacy) {
     await assert.rejects(service.importBackup(backup), /本地学习数据保持原样/);
     assert(await runtime.learningAssetRepository.find('concurrent-asset'), `${engine}: a conversation failure must not erase an independently committed row`);
     if (engine === 'sqlite') db.raw.close();
+  }
+}
+
+/**
+ * A file the current cycle refuses is refused before any conversation log is
+ * rewritten, and the learning transaction repeats the v2 empty-cycle check at
+ * commit. Before, a refused import replaced the conversations and rolled them
+ * back; a failed rollback left the refused backup's chats in their place.
+ */
+async function verifyRefusedImportKeepsConversations(modules, legacy) {
+  const { ConversationStore, ConversationMessageLog, ConversationSessionLog } = await server.ssrLoadModule('/src/modules/conversation/public.ts');
+  const Store = modules.TutorIndexedDbStore;
+  const asset = { id: 'concurrent-asset', examCycleId: cycleA, kind: 'profile_insight', businessKey: 'concurrent-asset',
+    title: 'Concurrent write', status: 'ready', payload: { value: 1 }, version: 1, createdAt: 3000, updatedAt: 3000 };
+  const setUp = async (engine) => {
+    const data = new Map();
+    const log = { writes: 0, refuse: undefined };
+    const write = (value) => {
+      log.writes += 1;
+      if (log.refuse && String(value).includes(log.refuse)) throw new Error('disk full');
+    };
+    const storage = {
+      async read(key) { return data.get(key) || ''; },
+      async replace(key, value) { write(value); data.set(key, value); },
+      async append(key, value) { write(value); data.set(key, `${data.get(key) || ''}${value}\n`); },
+      async delete(key) { write(''); data.delete(key); }
+    };
+    let id = 0;
+    const conversations = new ConversationStore(new ConversationSessionLog(storage), new ConversationMessageLog(storage),
+      { now: () => 1000 + id }, { next: (ns) => `${ns}:${++id}` }, { async forgetSession() {} });
+    const own = await conversations.createSession('project-1', 'Original');
+    await conversations.addMessage({ sessionId: own.id, role: 'user', content: 'original-chat' });
+    // The current cycle exists and holds no learning data, so a v2 file is acceptable.
+    const database = engine === 'sqlite'
+      ? await migratedSqliteDatabase(modules, `${sqliteMetadataSql()}\n${sqliteCandidateSql()}`)
+      : createMemoryTutorIndexedDb(modules.indexedDbKeyPaths);
+    if (engine === 'indexeddb') {
+      await database.writeBatch([{ type: 'put', store: Store.CandidateCycleBundles, value: { projectId: 'project-1', status: 'active', updatedAt: 1000, bundle: legacy.candidate } }]);
+    }
+    const runtime = engine === 'sqlite' ? sqliteRuntime(modules, database, conversations) : indexedDbRuntime(modules, database, conversations);
+    const ownMessages = async () => (await conversations.listMessages(own.id)).map((message) => message.content);
+    log.writes = 0;
+    return { database, runtime, conversations, log, ownMessages, service: new modules.DataBackupService(async () => runtime) };
+  };
+  const questionSetsOf = (runtime) => runtime.contentRepository.listAllQuestionSets(cycleA);
+
+  for (const engine of ['sqlite', 'indexeddb']) {
+    let world = await setUp(engine);
+    await world.runtime.unitOfWork.run((context) => world.runtime.learningAssetRepository.save(asset, context));
+    world.log.writes = 0;
+    await assert.rejects(world.service.importBackup(legacy), /旧版（v2）备份.*清空学习数据后导入/);
+    assert.equal(world.log.writes, 0, `${engine}: a v2 file refused for a non-empty cycle never touches the conversation logs`);
+    assert.deepEqual(await world.ownMessages(), ['original-chat']);
+
+    const otherCycle = JSON.parse(JSON.stringify(legacy));
+    otherCycle.candidate.examCycle.id = 'cycle-other';
+    for (const field of Object.keys(otherCycle.learning)) otherCycle.learning[field] = [];
+    await assert.rejects(world.service.importBackup(otherCycle), /备份属于另一个备考周期/);
+    assert.equal(world.log.writes, 0, `${engine}: a backup of another cycle never touches the conversation logs`);
+
+    // A learning record that lands after the up-front check still refuses the v2 file, inside the
+    // commit itself on IndexedDB, and the staged conversations roll back.
+    const concurrently = (target) => {
+      if (engine === 'sqlite') {
+        const replace = target.conversations.replaceProjectConversations.bind(target.conversations);
+        target.conversations.replaceProjectConversations = async (...args) => {
+          await target.runtime.unitOfWork.run((context) => target.runtime.learningAssetRepository.save(asset, context));
+          return replace(...args);
+        };
+        return;
+      }
+      const writeBatch = target.database.writeBatch.bind(target.database);
+      target.database.writeBatch = async (operations) => {
+        if (operations.some((operation) => operation.type === 'check')) {
+          target.database.writeBatch = writeBatch;
+          await writeBatch([{ type: 'add', store: Store.LearningAssets, value: asset }]);
+        }
+        return writeBatch(operations);
+      };
+    };
+    world = await setUp(engine);
+    concurrently(world);
+    await assert.rejects(world.service.importBackup(legacy), /旧版（v2）备份.*清空学习数据后导入/);
+    assert(await world.runtime.learningAssetRepository.find(asset.id), `${engine}: the concurrent record survives`);
+    assert.equal((await questionSetsOf(world.runtime)).length, 0, `${engine}: no v2 record is written next to it`);
+    assert.deepEqual(await world.ownMessages(), ['original-chat'], `${engine}: conversations roll back`);
+
+    world = await setUp(engine);
+    concurrently(world);
+    world.log.refuse = 'original-chat';
+    const failure = await world.service.importBackup(legacy).then(() => undefined, (error) => error);
+    assert.equal(failure?.name, 'DataBackupError', `${engine}: an incomplete conversation rollback is reported as a backup error`);
+    assert.match(failure.message, /^导入失败，学习数据保持原样，但对话记录未能完整恢复到导入前的状态；请保留备份并重新启动应用（原因：disk full）$/);
+    assert.equal((await questionSetsOf(world.runtime)).length, 0, `${engine}: learning data stays unchanged`);
+
+    world = await setUp(engine);
+    assert(await world.service.importBackup(legacy) > 0, `${engine}: the same v2 file imports into the empty cycle`);
+    assert.equal((await questionSetsOf(world.runtime)).length, 3);
+    if (engine === 'sqlite') world.database.raw.close();
   }
 }
 

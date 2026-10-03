@@ -34,8 +34,28 @@ export class LearningDataSnapshotError extends Error {
   }
 }
 
+/** The cycle holds learning records where the caller required none. */
+export class LearningDataPresentError extends Error {
+  constructor() {
+    super('The exam cycle already holds learning data');
+    this.name = 'LearningDataPresentError';
+  }
+}
+
+/** Whether any group of a snapshot (or of rows selected like one) holds a record. */
+export function holdsLearningRecords(groups: Iterable<readonly unknown[]>): boolean {
+  for (const rows of groups) if (rows.length > 0) return true;
+  return false;
+}
+
 export interface TutorDataMaintenance {
   clearLearningData(examCycleId: ExamCycleId, context?: TransactionContext): Promise<number>;
+  /**
+   * Fails the transaction with LearningDataPresentError while the cycle holds any
+   * record clearLearningData would remove. The check holds when the transaction
+   * commits: a record another writer adds after this call still fails it.
+   */
+  requireNoLearningData(examCycleId: ExamCycleId, context: TransactionContext): Promise<void>;
   /** Captures every record clearLearningData would remove, plus the shared rows those records cite. */
   exportLearningData(examCycleId: ExamCycleId, context?: TransactionContext): Promise<LearningDataSnapshot>;
   /**

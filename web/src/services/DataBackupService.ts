@@ -1,7 +1,8 @@
 import {
+  holdsLearningRecords,
+  LearningDataPresentError,
   LearningDataSnapshotError,
-  TransactionWorkload,
-  type LearningDataSnapshot
+  TransactionWorkload
 } from '@/capabilities/database/public';
 import type { TutorDatabaseRuntime } from '@/composition-root/database/TutorDatabaseRuntime';
 import type { CandidateCycleBundle } from '@/modules/candidate/public';
@@ -43,6 +44,8 @@ interface RestoredLearning {
   readonly restored: number;
 }
 
+const anotherCycle = '备份属于另一个备考周期；当前版本不合并不同考生或考试周期';
+
 const legacyBackupWouldDropData = '这是旧版（v2）备份，只包含题组、作答和计划等部分记录；当前备考周期已有学习数据，'
   + '直接导入会永久丢失错因确认、学习进度等旧备份没有的记录。请先导出一份新备份留存，'
   + '再在「数据管理」中清空学习数据后导入这份旧备份。';
@@ -69,13 +72,20 @@ export class DataBackupService {
     };
   }
 
-  /** Stage conversations first; their replacement rolls back if the learning transaction cannot commit. */
+  /**
+   * Checks that can refuse the file run before any conversation log is touched;
+   * then conversations are staged and roll back if the learning transaction,
+   * which repeats those checks, cannot commit.
+   */
   async importBackup(input: unknown): Promise<number> {
     // A backup is JSON by definition. Re-reading it as plain data drops any
     // wrapper the caller put around it (a Vue ref makes it a reactive Proxy),
     // which IndexedDB cannot structured-clone.
     const backup = parseDataBackup(plainJson(input));
     const runtime = await this.loadRuntime();
+    await assertRestorable(runtime, backup).catch((error: unknown) => {
+      throw importFailure(error);
+    });
     let learning: RestoredLearning | undefined;
     let conversationCount: number;
     try {
@@ -84,8 +94,7 @@ export class DataBackupService {
         async () => { learning = await this.restoreLearning(runtime, backup); }
       );
     } catch (error) {
-      if (error instanceof AggregateError) throw error;
-      throw importFailure(error);
+      throw error instanceof AggregateError ? conversationRollbackFailure(error) : importFailure(error);
     }
     if (!learning) throw new DataBackupError('备份恢复未提交，请重新导入');
     const { current, restored } = learning;
@@ -133,19 +142,14 @@ export class DataBackupService {
   }
 
   private async restoreLearning(runtime: DataBackupRuntime, backup: ImportableDataBackup): Promise<RestoredLearning> {
-    const current = await runtime.candidateRepository.findCurrentCycle();
-    if (current && current.examCycle.id !== backup.candidate.examCycle.id) {
-      throw new DataBackupError('备份属于另一个备考周期；当前版本不合并不同考生或考试周期');
-    }
+    // Read again: the cycle may have changed while conversations were staged.
+    const current = await currentCycleFor(runtime, backup);
     const examCycleId = backup.candidate.examCycle.id;
     return runtime.unitOfWork.run(async (context) => {
       let restored = 0;
-      let learning: LearningDataSnapshot | undefined;
       if (current) {
-        learning = await runtime.dataMaintenance.exportLearningData(examCycleId, context);
-        if (backup.version !== DATA_BACKUP_VERSION && holdsRecords(learning)) {
-          throw new DataBackupError(legacyBackupWouldDropData);
-        }
+        // Holds at commit, so learning data written since assertRestorable still refuses a v2 file.
+        if (backup.version !== DATA_BACKUP_VERSION) await runtime.dataMaintenance.requireNoLearningData(examCycleId, context);
         await runtime.dataMaintenance.clearLearningData(examCycleId, context);
       } else {
         await runtime.candidateRepository.createCycleBundle(backup.candidate, context);
@@ -155,8 +159,27 @@ export class DataBackupService {
         ? await runtime.dataMaintenance.restoreLearningData(examCycleId, backup.learning, context)
         : await restoreLegacyLearningRecords(runtime, examCycleId, backup.learning, context);
       return { runtime, current, restored };
-    }, { workload: TransactionWorkload.Maintenance });
+    }, { workload: TransactionWorkload.Maintenance }).catch((error: unknown) => {
+      throw error instanceof LearningDataPresentError ? new DataBackupError(legacyBackupWouldDropData, { cause: error }) : error;
+    });
   }
+}
+
+/** Refusals that need no write: they must leave conversations and learning data untouched. */
+async function assertRestorable(runtime: DataBackupRuntime, backup: ImportableDataBackup): Promise<void> {
+  const current = await currentCycleFor(runtime, backup);
+  if (!current || backup.version === DATA_BACKUP_VERSION) return;
+  const learning = await runtime.dataMaintenance.exportLearningData(current.examCycle.id);
+  if (holdsLearningRecords(Object.values(learning.records))) throw new DataBackupError(legacyBackupWouldDropData);
+}
+
+async function currentCycleFor(
+  runtime: DataBackupRuntime,
+  backup: ImportableDataBackup
+): Promise<CandidateCycleBundle | undefined> {
+  const current = await runtime.candidateRepository.findCurrentCycle();
+  if (current && current.examCycle.id !== backup.candidate.examCycle.id) throw new DataBackupError(anotherCycle);
+  return current;
 }
 
 async function requireCurrentCycle(runtime: DataBackupRuntime): Promise<CandidateCycleBundle> {
@@ -171,14 +194,18 @@ async function collectConversations(runtime: DataBackupRuntime, projectId: strin
   return { sessions: [...sessions], messages: groups.flatMap((items) => [...items]) };
 }
 
-function holdsRecords(snapshot: LearningDataSnapshot): boolean {
-  return Object.values(snapshot.records).some((rows) => rows.length > 0);
-}
-
 /** Internal invariant and storage errors are wrapped: the import rolled back, which is what the user needs to know. */
 function importFailure(error: unknown): Error {
   if (error instanceof DataBackupError || error instanceof LearningDataSnapshotError) return error;
   return new DataBackupError(`导入失败，本地学习数据保持原样${technicalDetail(error)}`, { cause: error });
+}
+
+/** Learning data never committed, but the conversation logs could not be put back as they were. */
+function conversationRollbackFailure(error: AggregateError): DataBackupError {
+  return new DataBackupError(
+    `导入失败，学习数据保持原样，但对话记录未能完整恢复到导入前的状态；请保留备份并重新启动应用${technicalDetail(error.errors[error.errors.length - 1] ?? error)}`,
+    { cause: error }
+  );
 }
 
 function technicalDetail(error: unknown): string {
