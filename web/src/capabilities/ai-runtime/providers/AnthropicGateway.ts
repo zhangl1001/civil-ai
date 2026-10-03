@@ -32,7 +32,6 @@ import {
 } from './StructuredOutputCapability';
 import {
   ModelCapabilityMatrix,
-  rejectsDisabledThinking,
   type ModelRequestCapabilityOverrides
 } from './ModelCapabilityMatrix';
 import {
@@ -204,7 +203,9 @@ export class AnthropicGateway implements ProviderGateway {
     const system = request.responseSchema && structuredMode === 'prompt'
       ? structuredJsonInstruction(request.system, request.responseSchema)
       : request.system;
-    const thinkingCompatibility = this.disabledThinking(request);
+    // Once the endpoint refused the disable it is no longer sent, and thinking is back on.
+    const thinkingParameters = this.modelCapabilities.thinkingParameters(this.disabledThinking(request));
+    const thinkingDisabled = 'thinking' in thinkingParameters;
     const thinkingPolicy = anthropicThinkingPolicy(this.config.baseUrl, this.model, this.config.thinkingBindingControls);
     return {
       url: anthropicMessagesEndpoint(this.config.baseUrl),
@@ -220,11 +221,11 @@ export class AnthropicGateway implements ProviderGateway {
         model: this.config.model,
         system,
         // A disabled-thinking request (DeepSeek tool chains) replays no thinking blocks.
-        messages: toAnthropicMessages(request.messages, !thinkingCompatibility && thinkingPolicy.replayReasoning),
+        messages: toAnthropicMessages(request.messages, !thinkingDisabled && thinkingPolicy.replayReasoning),
         max_tokens: request.maxOutputTokens,
         stream,
         ...this.modelCapabilities.samplingParameters(request.temperature),
-        ...this.modelCapabilities.thinkingParameters(thinkingCompatibility),
+        ...thinkingParameters,
         ...(thinkingPolicy.thinking ? { thinking: thinkingPolicy.thinking } : {}),
         ...structuredOutput
       }),
@@ -237,19 +238,16 @@ export class AnthropicGateway implements ProviderGateway {
    * every later tool turn, so its tool chains stay thinking-free: thinking is
    * disabled for any request that belongs to a tool chain — including a
    * finalization turn that offers no tools but carries tool_use/tool_result
-   * history — for structured output, and on request. Claude thinking blocks
-   * follow AnthropicThinkingPolicy; Opus 5.5 / Fable 5.x
-   * never receive a disable they would reject.
+   * history — for structured output, and on request. This keys on the host,
+   * not the model name: DeepSeek maps Claude-style names (claude-opus-* to
+   * deepseek-v4-pro) onto its own models, which accept the disable. Native
+   * Claude never reaches this branch; its thinking follows AnthropicThinkingPolicy.
    */
   private disabledThinking(request: ProviderRequest): { readonly type: 'disabled' } | undefined {
     const toolChain = Boolean(request.tools?.length)
       || request.messages.some((message) => message.role === 'tool' || Boolean(message.toolCalls?.length));
     const wanted = toolChain || Boolean(request.responseSchema) || request.thinking === 'disabled';
-    return wanted
-      && requiresDisabledThinkingForToolUse(this.config.baseUrl)
-      && !rejectsDisabledThinking(this.model)
-      ? { type: 'disabled' }
-      : undefined;
+    return wanted && requiresDisabledThinkingForToolUse(this.config.baseUrl) ? { type: 'disabled' } : undefined;
   }
 
   private learnFromInvalidRequest(error: unknown, request: ProviderRequest): boolean {
@@ -303,22 +301,45 @@ function toAnthropicMessages(
     }
     const reasoning = replayReasoning && message.role === 'assistant' ? message.reasoning ?? [] : [];
     if (message.role === 'assistant' && (message.toolCalls?.length || reasoning.length)) {
-      // Thinking blocks go back unchanged and first, ahead of the turn's text and tool_use.
-      const content: Array<Record<string, unknown>> = reasoning.map(toAnthropicReasoning);
-      content.push(...toAnthropicContent(message.content));
-      message.toolCalls?.forEach((call) => content.push({
+      const text = toAnthropicContent(message.content);
+      const calls = (message.toolCalls ?? []).map((call) => ({
         type: 'tool_use',
         id: call.id,
         name: call.name,
         input: call.arguments
       }));
-      result.push({ role: 'assistant', content });
+      result.push({ role: 'assistant', content: interleaveReasoning(reasoning, text, calls) });
     } else {
       result.push({ role: message.role, content: toAnthropicContent(message.content) });
     }
     index += 1;
   }
   return result;
+}
+
+/**
+ * Thinking blocks go back unchanged and where they were: a block is bound to
+ * everything before it, so a progress update keeps its place ahead of the
+ * tool_use it introduced. Blocks without a recorded placement (leading
+ * blocks, older records) go first, as they always did.
+ */
+function interleaveReasoning(
+  reasoning: readonly ModelReasoningBlock[],
+  text: readonly Record<string, unknown>[],
+  calls: readonly Record<string, unknown>[]
+): Array<Record<string, unknown>> {
+  const sequence = [...text, ...calls];
+  const slotOf = ({ placement }: ModelReasoningBlock): number => {
+    if (!placement) return 0;
+    const toolCallsBefore = Math.min(calls.length, Math.max(0, Math.floor(placement.toolCallsBefore) || 0));
+    return (placement.afterText || toolCallsBefore ? text.length : 0) + toolCallsBefore;
+  };
+  const content: Array<Record<string, unknown>> = [];
+  for (let slot = 0; slot <= sequence.length; slot += 1) {
+    reasoning.filter((block) => slotOf(block) === slot).forEach((block) => content.push(toAnthropicReasoning(block)));
+    if (slot < sequence.length) content.push(sequence[slot]!);
+  }
+  return content;
 }
 
 function toAnthropicReasoning(block: ModelReasoningBlock): Record<string, unknown> {

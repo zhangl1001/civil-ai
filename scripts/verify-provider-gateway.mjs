@@ -952,6 +952,7 @@ try {
   await verifiesProviderFailureClassification(ai);
   await verifiesDeepSeekThinkingAndStreamIntegrity(ai);
   await verifiesClaudeSamplingAndThinkingReplay(ai);
+  await verifiesThinkingPlacementReplay(ai);
   await verifiesBindingPolicyAndForcedTools(ai, server);
   verifiesResponseScopedToolIds(ai);
   await verifiesConnectionTestForThinkingModels(server);
@@ -1352,8 +1353,38 @@ async function verifiesClaudeSamplingAndThinkingReplay(ai) {
   }
   assert.equal('temperature' in await bodyFor(ai.OpenAICompatibleGateway, 'claude-opus-5', 'https://proxy.test/v1'), false);
   assert.equal((await bodyFor(ai.AnthropicGateway, 'claude-opus-4-5')).temperature, 0, 'older models keep temperature');
-  const alwaysThinking = await bodyFor(ai.AnthropicGateway, 'claude-opus-5-5', 'https://api.deepseek.com/anthropic');
-  assert.equal('thinking' in alwaysThinking, false, 'a model that cannot disable thinking never receives {type:"disabled"}');
+  const deepSeekAlias = await bodyFor(ai.AnthropicGateway, 'claude-opus-5-5', 'https://api.deepseek.com/anthropic');
+  assert.equal('thinking' in deepSeekAlias, false, 'a plain DeepSeek turn keeps its default thinking');
+
+  // DeepSeek maps Claude-style names onto its own models, which need their thinking
+  // back in a tool chain: the host decides, so the chain runs with thinking disabled
+  // and, if DeepSeek refuses the disable, the reasoning is replayed instead of stripped.
+  for (const model of ['claude-opus-5-5', 'claude-fable-5-1']) {
+    const sent = [];
+    const aliasGateway = new ai.AnthropicGateway({ apiKey: 'test-key', baseUrl: 'https://api.deepseek.com/anthropic', model }, {
+      async send(request) {
+        sent.push({ body: JSON.parse(request.body), headers: request.headers });
+        if (sent.length === 2) return Response.json({ error: { type: 'invalid_request_error', message: 'thinking type disabled is not supported' } }, { status: 400 });
+        return Response.json({ id: 'ds', content: [{ type: 'text', text: '好' }], stop_reason: 'end_turn' });
+      }
+    });
+    const chain = {
+      ...request,
+      tools: [{ name: 'scan', description: 'scan', inputSchema: { type: 'object', properties: {} } }],
+      messages: [
+        { role: ai.ModelMessageRole.User, content: '开始' },
+        { role: ai.ModelMessageRole.Assistant, content: '', toolCalls: [{ id: 'call_1', name: 'scan', arguments: {} }], reasoning: [{ type: 'thinking', thinking: '先扫描', signature: 'ds-sig' }] },
+        { role: ai.ModelMessageRole.Tool, toolCallId: 'call_1', content: 'ok' }
+      ]
+    };
+    await aliasGateway.complete(chain);
+    assert.equal(sent[0].body.thinking.type, 'disabled', `${model} on DeepSeek runs its tool chain with thinking disabled`);
+    assert.equal(sent[0].headers['anthropic-beta'], undefined, 'DeepSeek never receives the Claude binding beta');
+    await aliasGateway.complete(chain);
+    assert.equal(sent.length, 3);
+    assert.equal('thinking' in sent[2].body, false, 'a refused disable is learned and not resent');
+    assert.deepEqual(sent[2].body.messages[1].content.map((block) => block.type), ['thinking', 'tool_use'], 'DeepSeek thinking is replayed, never stripped');
+  }
 
   // A streamed tool_use turn with thinking round-trips its blocks, signature included.
   const bodies = [];
@@ -1443,6 +1474,58 @@ async function verifiesClaudeSamplingAndThinkingReplay(ai) {
   });
   assert.equal(deepSeekBody.thinking.type, 'disabled');
   assert.deepEqual(deepSeekBody.messages[1].content.map((block) => block.type), ['tool_use']);
+}
+
+async function verifiesThinkingPlacementReplay(ai) {
+  // Progress updates sit right before the tool_use they introduce; a block is bound
+  // to everything before it, so a replay must keep each one where it was.
+  const original = [
+    { type: 'thinking', thinking: '', signature: 'sig-lead' },
+    { type: 'text', text: '先查一下。' },
+    { type: 'thinking', thinking: '', signature: 'sig-progress-1' },
+    { type: 'tool_use', id: 'toolu_a', name: 'scan', input: {} },
+    { type: 'thinking', thinking: '', signature: 'sig-progress-2' },
+    { type: 'tool_use', id: 'toolu_b', name: 'read', input: {} }
+  ];
+  const order = (blocks) => blocks.map((block) => block.signature ?? block.id ?? block.type);
+  const tools = ['scan', 'read'].map((name) => ({ name, description: name, inputSchema: { type: 'object', properties: {} } }));
+  const replayBody = async (assistant) => {
+    let body;
+    await new ai.AnthropicGateway({ apiKey: 'test', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-fable-5-1' }, {
+      async send(sent) { body = JSON.parse(sent.body); return Response.json({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }); }
+    }).complete({
+      system: 's', temperature: 0, maxOutputTokens: 256, requestId: 'placement', tools,
+      messages: [
+        { role: ai.ModelMessageRole.User, content: '开始' },
+        { role: ai.ModelMessageRole.Assistant, ...assistant },
+        { role: ai.ModelMessageRole.Tool, toolCallId: 'toolu_a', content: 'a' },
+        { role: ai.ModelMessageRole.Tool, toolCallId: 'toolu_b', content: 'b' }
+      ]
+    });
+    return body.messages[1].content;
+  };
+  const parsed = ai.parseAnthropicResponse({ content: original, stop_reason: 'tool_use' });
+  assert.equal(parsed.reasoning[0].placement, undefined, 'a leading block records no placement');
+  const replayed = await replayBody({ content: parsed.text, toolCalls: parsed.toolCalls, reasoning: JSON.parse(JSON.stringify(parsed.reasoning)) });
+  assert.deepEqual(order(replayed), order(original), 'non-streamed thinking is replayed in its original position');
+  assert(!JSON.stringify(replayed).includes('placement'), 'placement is never sent on the wire');
+
+  const stream = new ai.AnthropicStreamAccumulator();
+  original.forEach((block, index) => {
+    const start = block.type === 'text' ? { type: 'text', text: '' } : block.type === 'tool_use' ? { type: 'tool_use', id: block.id, name: block.name } : { type: 'thinking', thinking: '', signature: '' };
+    stream.append({ type: 'content_block_start', index, content_block: start });
+    if (block.type === 'text') stream.append({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } });
+    if (block.type === 'thinking') stream.append({ type: 'content_block_delta', index, delta: { type: 'signature_delta', signature: block.signature } });
+    if (block.type === 'tool_use') stream.append({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: '{}' } });
+  });
+  stream.append({ type: 'message_delta', delta: { stop_reason: 'tool_use' } });
+  const streamed = stream.response();
+  assert.deepEqual(order(await replayBody({ content: streamed.text, toolCalls: streamed.toolCalls, reasoning: streamed.reasoning })), order(original), 'streamed thinking is replayed in its original position');
+
+  // Records saved before placements existed replay as they always did: thinking first.
+  const legacy = parsed.reasoning.map(({ placement, ...block }) => block);
+  assert.deepEqual(order(await replayBody({ content: parsed.text, toolCalls: parsed.toolCalls, reasoning: legacy })),
+    ['sig-lead', 'sig-progress-1', 'sig-progress-2', 'text', 'toolu_a', 'toolu_b']);
 }
 
 async function verifiesBindingPolicyAndForcedTools(ai, server) {

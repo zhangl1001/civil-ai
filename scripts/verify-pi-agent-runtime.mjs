@@ -560,6 +560,15 @@ async function verifiesThinkingReplayThroughPi(pi, ai, server) {
     { type: 'thinking', thinking: '', signature: 'sig-x' },
     { type: 'redacted_thinking', data: 'opaque' }
   ], 'checkpoint messages convert to Pi and back without touching reasoning');
+  const placed = adapter.toModelMessages(adapter.toPiMessages([{
+    role: ai.ModelMessageRole.Assistant,
+    content: '先查一下。',
+    toolCalls: [{ id: 'toolu_p', name: 'practice_read', arguments: {} }],
+    reasoning: [{ type: 'thinking', thinking: '', signature: 'sig-progress', budgetTokens: 12, placement: { afterText: true, toolCallsBefore: 0 } }]
+  }]));
+  assert.deepEqual(placed[0].reasoning, [
+    { type: 'thinking', thinking: '', signature: 'sig-progress', budgetTokens: 12, placement: { afterText: true, toolCallsBefore: 0 } }
+  ], 'a thinking block keeps its replay position through Pi messages and checkpoints');
 }
 
 async function waitFor(predicate, timeoutMs = 1_000) {

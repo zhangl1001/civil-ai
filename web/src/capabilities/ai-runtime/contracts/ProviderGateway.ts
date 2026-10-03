@@ -49,6 +49,19 @@ export interface ModelReasoningBlock {
   readonly data?: string;
   /** Conservative replay budget; may include the whole turn's reported output usage. Never sent on the wire. */
   readonly budgetTokens?: number;
+  /**
+   * Where the block sat among the turn's text and tool_use blocks, so a replay
+   * keeps the original order. Absent for a leading block and on older records,
+   * which replay ahead of the turn's text. Never sent on the wire.
+   */
+  readonly placement?: ModelReasoningPlacement;
+}
+
+export interface ModelReasoningPlacement {
+  /** A text block came before this thinking block. */
+  readonly afterText: boolean;
+  /** Number of the turn's tool_use blocks that came before it. */
+  readonly toolCallsBefore: number;
 }
 
 export interface ModelMessage {
