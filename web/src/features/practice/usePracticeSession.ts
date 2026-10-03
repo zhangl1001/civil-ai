@@ -7,12 +7,53 @@ import { findQuestionSetEnrichmentNeeds, hasQuestionSetEnrichmentNeeds, type Com
 import { submittedOptionIds, type ObjectiveSessionReview } from '@/modules/evidence/public';
 import { applyCompletedQuestionSets, PracticeSessionFeature, type PracticeManifestSection } from './PracticeSessionFeature';
 import { PracticeSessionDraftService, type PracticeSessionDraftIdentity } from './PracticeSessionDraftService';
-import { submitPracticeBundle } from './SubmitPracticeBundle';
+import { practiceSubmissionKey, submitPracticeBundle } from './SubmitPracticeBundle';
+
+type TutorRuntime = Awaited<ReturnType<typeof initializeTutorRuntime>>;
 
 interface SessionIdentity extends PracticeSessionDraftIdentity {
   readonly learningThreadId?: string;
   readonly dailyPlanItemId?: string;
   readonly reviewQueueItemId?: string;
+}
+
+function submissionScopeOf(identity: SessionIdentity, bundle: CommittedQuestionSetBundle): string {
+  return identity.manifestId || identity.questionSetId || bundle.questionSet.id;
+}
+
+function submissionTargetsOf(
+  identity: SessionIdentity,
+  bundle: CommittedQuestionSetBundle,
+  sections: readonly PracticeManifestSection[]
+): PracticeManifestSection[] {
+  if (sections.length) return [...sections];
+  const learningThreadId = identity.learningThreadId || bundle.questionSet.learningThreadId;
+  return learningThreadId ? [{ bundle, learningThreadId, module: bundle.questionSet.module }] : [];
+}
+
+/**
+ * Whether every section of this page already committed. A manifest that does
+ * not restore earlier reviews (wrong-book redo, true-question practice) has
+ * no other way to tell that its leftover draft belongs to a finished paper.
+ * An unreadable answer keeps the draft: restoring answers is the safe side.
+ */
+async function hasCommittedSubmission(
+  runtime: TutorRuntime,
+  identity: SessionIdentity,
+  bundle: CommittedQuestionSetBundle,
+  sections: readonly PracticeManifestSection[]
+): Promise<boolean> {
+  const targets = submissionTargetsOf(identity, bundle, sections);
+  if (!targets.length) return false;
+  const scope = submissionScopeOf(identity, bundle);
+  try {
+    const committed = await Promise.all(targets.map((target) => runtime.learningSessionRepository.findByIdempotencyKey(
+      practiceSubmissionKey(scope, target.bundle.questionSet.id, target.learningThreadId)
+    )));
+    return committed.every(Boolean);
+  } catch {
+    return false;
+  }
 }
 
 export function mergePracticeReviews(values: readonly (ObjectiveSessionReview | undefined)[]): ObjectiveSessionReview | undefined {
@@ -100,7 +141,14 @@ export function usePracticeSession() {
         ? loaded.manifestSections.map((section) => section.bundle.questionSet.id)
         : [loaded.bundle.questionSet.id]);
       const persisted = loaded.previousReviews.length === targetSetIds.size;
-      const draft = persisted ? undefined : await draftService.load(runtime, nextIdentity, loaded.bundle);
+      let draft = persisted ? undefined : await draftService.load(runtime, nextIdentity, loaded.bundle);
+      signal.throwIfAborted();
+      // A draft whose retirement failed after its paper committed is stale:
+      // retire it again instead of reopening that paper as unanswered work.
+      if (draft && await hasCommittedSubmission(runtime, nextIdentity, loaded.bundle, loaded.manifestSections)) {
+        draft = undefined;
+        await draftService.clear(runtime, nextIdentity).catch(() => undefined);
+      }
       signal.throwIfAborted();
       identity = nextIdentity;
       bundle.value = loaded.bundle;
@@ -122,7 +170,8 @@ export function usePracticeSession() {
       questionStartedAt.value = Date.now() - (draft?.currentQuestionElapsedMs ?? 0);
       index.value = Math.max(0, loaded.bundle.questions.findIndex((item) => item.id === draft?.currentQuestionId));
       remainingSeconds.value = persisted ? 0 : draft?.remainingSeconds ?? Math.round(loaded.durationMinutes * 60);
-      if (persisted) await draftService.clear(runtime, nextIdentity);
+      // A persisted page never restores its draft, so retiring it is best effort.
+      if (persisted) await draftService.clear(runtime, nextIdentity).catch(() => undefined);
       signal.throwIfAborted();
       agentWorkerCoordinator.start(runtime);
       const sets = loaded.manifestSections.length ? loaded.manifestSections.map((section) => section.bundle) : [loaded.bundle];
@@ -179,12 +228,10 @@ export function usePracticeSession() {
     if (!bundle.value || !identity || submitting.value || submitted.value) return Promise.resolve();
     const signal = controller.signal;
     const savedIdentity = identity;
-    const defaultThreadId = savedIdentity.learningThreadId || bundle.value.questionSet.learningThreadId;
     const isManifest = manifestSections.value.length > 0;
-    const targets = isManifest ? [...manifestSections.value] : defaultThreadId
-      ? [{ bundle: bundle.value, learningThreadId: defaultThreadId, module: bundle.value.questionSet.module }] : [];
+    const targets = submissionTargetsOf(savedIdentity, bundle.value, manifestSections.value);
     const snapshot = {
-      submissionScope: savedIdentity.manifestId || savedIdentity.questionSetId || bundle.value.questionSet.id,
+      submissionScope: submissionScopeOf(savedIdentity, bundle.value),
       startedAt, answers: Object.fromEntries(Object.entries(answers.value).map(([id, options]) => [id, [...options]])),
       elapsedByQuestion: { ...elapsedByQuestion.value }, answerChanges: { ...answerChanges.value },
       assessmentRoleOverride: assessmentRoleOverride.value,
@@ -209,7 +256,10 @@ export function usePracticeSession() {
         }
         // Submission already accepted by the user finishes with its captured
         // identity even if the page changes; only its UI updates are cancelled.
-        await draftService.clear(runtime, savedIdentity);
+        // Awaited so a reload of this identity never reads the draft first; a
+        // failed retirement must not report the committed paper as unsubmitted,
+        // and the next load retires the leftover draft (hasCommittedSubmission).
+        await draftService.clear(runtime, savedIdentity).catch(() => undefined);
         agentWorkerCoordinator.start(runtime);
         objectiveSubmissionRecoveryCoordinator.start();
         if (signal.aborted) return;
