@@ -9,6 +9,7 @@ export {
   type ModelMessage,
   type ModelMessageContent,
   type ModelReasoningBlock,
+  type ModelReasoningPlacement,
   type ModelTextContentPart,
   type ModelToolCall,
   type ProviderGateway,

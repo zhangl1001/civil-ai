@@ -54,9 +54,7 @@ export function parseAnthropicResponse(input: unknown): ProviderResponse {
   const usage = root.usage ? asRecord(root.usage, 'Anthropic response usage') : undefined;
   const toolCalls = readAnthropicToolCalls(root.content);
   const structuredInput = toolCalls.find((call) => call.name === 'submit_structured_result')?.arguments;
-  const reasoning = Array.isArray(root.content)
-    ? root.content.flatMap((block) => anthropicReasoningBlock(block) ?? [])
-    : [];
+  const reasoning = Array.isArray(root.content) ? readAnthropicReasoning(root.content) : [];
   return {
     text: structuredInput === undefined ? readTextContent(root.content) : JSON.stringify(structuredInput),
     toolCalls: toolCalls.filter((call) => call.name !== 'submit_structured_result'),
@@ -95,6 +93,30 @@ function streamFailure(payload: unknown): ProviderGatewayError {
     undefined,
     failure.code
   );
+}
+
+/** Thinking blocks in order, each with its position among the turn's text and tool_use blocks. */
+function readAnthropicReasoning(content: readonly unknown[]): ModelReasoningBlock[] {
+  let afterText = false;
+  let toolCallsBefore = 0;
+  return content.flatMap((block) => {
+    const reasoning = anthropicReasoningBlock(block);
+    if (reasoning) return [withPlacement(reasoning, afterText, toolCallsBefore)];
+    const source = block && typeof block === 'object' && !Array.isArray(block) ? block as Record<string, unknown> : {};
+    if (source.type === 'text' && readOptionalString(source.text)) afterText = true;
+    if (isReplayedToolUse(source)) toolCallsBefore += 1;
+    return [];
+  });
+}
+
+/** The tool_use blocks a replay sends back: named, and not the structured-output carrier. */
+function isReplayedToolUse(block: Record<string, unknown>): boolean {
+  const name = readOptionalString(block.name);
+  return block.type === 'tool_use' && Boolean(name) && name !== 'submit_structured_result';
+}
+
+function withPlacement(block: ModelReasoningBlock, afterText: boolean, toolCallsBefore: number): ModelReasoningBlock {
+  return afterText || toolCallsBefore ? { ...block, placement: { afterText, toolCallsBefore } } : block;
 }
 
 /** Keeps a thinking/redacted_thinking block exactly as the provider sent it. */
@@ -249,6 +271,8 @@ export class AnthropicStreamAccumulator {
   private stopped = false;
   private reasoning = false;
   private readonly toolCalls = new Map<number, StreamToolCallBuffer>();
+  /** Indexes of text blocks that carried text, to place thinking blocks on replay. */
+  private readonly textBlocks = new Set<number>();
   private readonly reasoningBlocks = new Map<number, {
     type: 'thinking' | 'redacted_thinking';
     thinking: string;
@@ -298,6 +322,7 @@ export class AnthropicStreamAccumulator {
     const delta = root.delta ? asRecord(root.delta, 'Anthropic stream delta') : undefined;
     if (delta?.type === 'text_delta') {
       const text = readOptionalString(delta.text);
+      if (text) this.textBlocks.add(index);
       this.text += text;
       return text;
     }
@@ -326,9 +351,11 @@ export class AnthropicStreamAccumulator {
   response(): ProviderResponse {
     const reasoning = Array.from(this.reasoningBlocks.entries())
       .sort(([left], [right]) => left - right)
-      .map(([, block]): ModelReasoningBlock => block.type === 'redacted_thinking'
+      .map(([index, block]): ModelReasoningBlock => withPlacement(block.type === 'redacted_thinking'
         ? { type: 'redacted_thinking', data: block.data ?? '' }
-        : { type: 'thinking', thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) });
+        : { type: 'thinking', thinking: block.thinking, ...(block.signature ? { signature: block.signature } : {}) },
+      [...this.textBlocks].some((text) => text < index),
+      [...this.toolCalls.entries()].filter(([call, buffer]) => call < index && isReplayedToolUse({ type: 'tool_use', name: buffer.name })).length));
     return {
       text: this.text,
       toolCalls: Array.from(this.toolCalls.entries())

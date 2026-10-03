@@ -14,7 +14,8 @@ import type {
   ThinkingContent as PiThinkingContent
 } from '@earendil-works/pi-ai';
 
-type BudgetedPiThinking = PiThinkingContent & Pick<ModelReasoningBlock, 'budgetTokens'>;
+/** Pi thinking content carrying the provider-side replay metadata that Pi itself ignores. */
+type BudgetedPiThinking = PiThinkingContent & Pick<ModelReasoningBlock, 'budgetTokens' | 'placement'>;
 
 export function toPiMessages(messages: readonly ModelMessage[]): PiAgentMessage[] {
   const toolNames = toolNamesByCallId(messages);
@@ -109,7 +110,8 @@ export function assistantReasoning(message: PiAssistantMessage): ModelReasoningB
     .map((part): ModelReasoningBlock => ({ ...(part.redacted
       ? { type: 'redacted_thinking', data: part.thinkingSignature ?? '' }
       : { type: 'thinking', thinking: part.thinking, ...(part.thinkingSignature ? { signature: part.thinkingSignature } : {}) }),
-      ...(part.budgetTokens !== undefined ? { budgetTokens: part.budgetTokens } : {})
+      ...(part.budgetTokens !== undefined ? { budgetTokens: part.budgetTokens } : {}),
+      ...(part.placement ? { placement: part.placement } : {})
     }));
 }
 
@@ -118,7 +120,8 @@ export function toPiThinking(block: ModelReasoningBlock): BudgetedPiThinking {
   return { ...(block.type === 'redacted_thinking'
     ? { type: 'thinking', thinking: '', thinkingSignature: block.data ?? '', redacted: true }
     : { type: 'thinking', thinking: block.thinking ?? '', ...(block.signature ? { thinkingSignature: block.signature } : {}) }),
-    ...(block.budgetTokens !== undefined ? { budgetTokens: block.budgetTokens } : {})
+    ...(block.budgetTokens !== undefined ? { budgetTokens: block.budgetTokens } : {}),
+    ...(block.placement ? { placement: block.placement } : {})
   };
 }
 

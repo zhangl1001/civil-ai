@@ -303,22 +303,45 @@ function toAnthropicMessages(
     }
     const reasoning = replayReasoning && message.role === 'assistant' ? message.reasoning ?? [] : [];
     if (message.role === 'assistant' && (message.toolCalls?.length || reasoning.length)) {
-      // Thinking blocks go back unchanged and first, ahead of the turn's text and tool_use.
-      const content: Array<Record<string, unknown>> = reasoning.map(toAnthropicReasoning);
-      content.push(...toAnthropicContent(message.content));
-      message.toolCalls?.forEach((call) => content.push({
+      const text = toAnthropicContent(message.content);
+      const calls = (message.toolCalls ?? []).map((call) => ({
         type: 'tool_use',
         id: call.id,
         name: call.name,
         input: call.arguments
       }));
-      result.push({ role: 'assistant', content });
+      result.push({ role: 'assistant', content: interleaveReasoning(reasoning, text, calls) });
     } else {
       result.push({ role: message.role, content: toAnthropicContent(message.content) });
     }
     index += 1;
   }
   return result;
+}
+
+/**
+ * Thinking blocks go back unchanged and where they were: a block is bound to
+ * everything before it, so a progress update keeps its place ahead of the
+ * tool_use it introduced. Blocks without a recorded placement (leading
+ * blocks, older records) go first, as they always did.
+ */
+function interleaveReasoning(
+  reasoning: readonly ModelReasoningBlock[],
+  text: readonly Record<string, unknown>[],
+  calls: readonly Record<string, unknown>[]
+): Array<Record<string, unknown>> {
+  const sequence = [...text, ...calls];
+  const slotOf = ({ placement }: ModelReasoningBlock): number => {
+    if (!placement) return 0;
+    const toolCallsBefore = Math.min(calls.length, Math.max(0, Math.floor(placement.toolCallsBefore) || 0));
+    return (placement.afterText || toolCallsBefore ? text.length : 0) + toolCallsBefore;
+  };
+  const content: Array<Record<string, unknown>> = [];
+  for (let slot = 0; slot <= sequence.length; slot += 1) {
+    reasoning.filter((block) => slotOf(block) === slot).forEach((block) => content.push(toAnthropicReasoning(block)));
+    if (slot < sequence.length) content.push(sequence[slot]!);
+  }
+  return content;
 }
 
 function toAnthropicReasoning(block: ModelReasoningBlock): Record<string, unknown> {
