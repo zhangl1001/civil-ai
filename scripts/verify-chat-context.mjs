@@ -937,6 +937,45 @@ async function verifyChatStore(serviceServer, harness) {
     runRelease.resolve(); await active;
     assert(paging.messages.every((row) => row.sessionId === b.id), 'completion of A also leaves B intact');
 
+    // A -> B -> A while A streams: its partial reply and streaming state come back at once.
+    await paging.switchSession(a.id);
+    const streamEntered = deferred(), streamRelease = deferred();
+    harness.loop = async ({ command, observer }) => {
+      await observer.onEvent({ type: 'text_delta', agentRunId: command.agentRunId, text: '正在流式输出的回答' });
+      streamEntered.resolve(); await streamRelease.promise; return completed;
+    };
+    const streaming = paging.send('流式时切换会话');
+    await streamEntered.promise;
+    await paging.switchSession(b.id);
+    assert(paging.messages.every((row) => row.sessionId === b.id));
+    await paging.switchSession(a.id);
+    const restored = paging.messages.at(-1);
+    assert.equal(restored.content, '正在流式输出的回答', 'switching back restores the reply in flight');
+    assert.equal(paging.streamingMessageId, restored.id, 'and keeps showing it as streaming');
+    streamRelease.resolve(); await streaming;
+    assert.equal(paging.messages.at(-1).content, '本地模拟已完成');
+    assert(!paging.messages.some((row) => row.content === '正在流式输出的回答'), 'the restored stream row is replaced by the answer');
+    await paging.switchSession(b.id);
+
+    // Older builds saved a failed turn as notice text without a status; it stays retryable.
+    const legacy = await harness.session('旧版失败');
+    await add(legacy, 'user', '旧版问题');
+    await add(legacy, 'user', '旧版补充引导');
+    const legacyFailure = await add(legacy, 'assistant', 'AI 回复未能正常完成，请重试。');
+    const legacyStore = storeFor(legacy);
+    await legacyStore.refreshMessages();
+    let legacyRetry;
+    harness.loop = async ({ command }) => { legacyRetry = command; return completed; };
+    await legacyStore.retry(legacyFailure.id);
+    assert(legacyRetry, 'a legacy failure notice is retried');
+    assert.match(legacyRetry.messages.at(-1).content, /^旧版问题/);
+    assert.match(legacyRetry.messages.at(-1).content, /【用户在执行中补充的引导】\n旧版补充引导/);
+    const plainAnswer = await add(legacy, 'assistant', '普通回答');
+    await legacyStore.refreshMessages();
+    legacyRetry = undefined;
+    await legacyStore.retry(plainAnswer.id);
+    assert.equal(legacyRetry, undefined, 'a normal answer is not a retry target');
+
     const createEntered = deferred(), createRelease = deferred();
     repository.createSession = async function (...args) {
       const created = await originals.create.apply(this, args);

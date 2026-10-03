@@ -6,6 +6,7 @@ import {
   type AIChatMessage
 } from '@/services/AIChatRepository';
 import { AI_CHAT_MESSAGE_PAGE_SIZE } from '@/ai/ChatMessagePagination';
+import { isLegacyFailurePlaceholder } from '@/ai/ChatContextBuilder';
 import {
   chatAgentService,
   type ChatAssistantStreamUpdate
@@ -22,6 +23,8 @@ interface ChatRequest {
   readonly attachments?: readonly ModelImageContentPart[];
   readonly invocation?: AgentWorkflowInvocation;
   readonly guidance: string[];
+  /** Latest reply of this request as streamed, kept while another session is on screen. */
+  stream?: { readonly message: AIChatMessage; readonly provisional: boolean };
 }
 const activeRequests = new WeakMap<object, ChatRequest>();
 const retryRequests = new WeakMap<object, Map<string, ChatRequest>>();
@@ -148,7 +151,13 @@ export const useAIChatStore = defineStore('aiChat', {
       if (this.session?.id !== sessionId || revision !== this.sessionRevision || request !== this.messagesRevision) return;
       const messages = [...page.messages];
       const isActiveSession = this.isSending && this.activeSessionId === this.session.id;
-      if (isActiveSession && this.pendingAssistantMessageId) {
+      const stream = isActiveSession ? activeRequests.get(this)?.stream : undefined;
+      if (stream) {
+        // The reply in flight is not persisted until it ends: put it back as last streamed.
+        if (!messages.some((message) => message.id === stream.message.id)) messages.push({ ...stream.message });
+        this.pendingAssistantMessageId = '';
+        this.provisionalMessageId = stream.provisional ? stream.message.id : '';
+      } else if (isActiveSession && this.pendingAssistantMessageId) {
         messages.push({
           id: this.pendingAssistantMessageId,
           sessionId: this.session.id,
@@ -159,7 +168,7 @@ export const useAIChatStore = defineStore('aiChat', {
       }
       this.messages = messages;
       this.hasOlderMessages = page.hasMore;
-      this.streamingMessageId = isActiveSession ? this.pendingAssistantMessageId : '';
+      this.streamingMessageId = stream?.message.id ?? (isActiveSession ? this.pendingAssistantMessageId : '');
     },
 
     async loadOlderMessages(): Promise<number> {
@@ -337,6 +346,7 @@ export const useAIChatStore = defineStore('aiChat', {
                 retryRequest: { text: request.text, invocation: request.invocation, guidance: [...request.guidance] }
               });
             }
+            request.stream = streamSnapshot(request.stream, update);
             this.applyAssistantStream(update);
           }
         });
@@ -371,7 +381,9 @@ export const useAIChatStore = defineStore('aiChat', {
       if (this.isSending) return;
       const index = this.messages.findIndex((message) => message.id === messageId);
       const failed = this.messages[index];
-      if (!failed?.status || failed.sessionId !== this.session?.id) return;
+      if (!failed || failed.role !== 'assistant' || failed.sessionId !== this.session?.id) return;
+      // Older builds saved a failed turn as plain notice text without a status.
+      if (!failed.status && !isLegacyFailurePlaceholder(failed.content)) return;
       const cached = retryRequests.get(this)?.get(messageId);
       const previous = failed.retryRequest ?? cached;
       if (previous) {
@@ -434,6 +446,25 @@ export const useAIChatStore = defineStore('aiChat', {
     }
   }
 });
+
+function streamSnapshot(
+  previous: ChatRequest['stream'],
+  update: ChatAssistantStreamUpdate
+): NonNullable<ChatRequest['stream']> {
+  return {
+    message: {
+      id: update.messageId,
+      sessionId: update.sessionId,
+      role: 'assistant',
+      content: update.content,
+      ...(update.status ? { status: update.status } : {}),
+      ...(update.errorCode ? { errorCode: update.errorCode } : {}),
+      ...(update.errorMessage ? { errorMessage: update.errorMessage } : {}),
+      createdAt: previous?.message.createdAt ?? Date.now()
+    },
+    provisional: Boolean(update.provisional)
+  };
+}
 
 function isPersistedMessage(message: AIChatMessage): boolean {
   return !message.id.startsWith('optimistic-user:') && !message.id.startsWith('pending-assistant:');
