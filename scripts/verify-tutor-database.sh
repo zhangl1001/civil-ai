@@ -427,6 +427,17 @@ SQL
 expect_count "SELECT lease_epoch FROM tutor_agent_runs WHERE id='agent-run-lease-test';" "2" "lease epoch after reclaim"
 expect_count "SELECT COUNT(*) FROM tutor_agent_runs WHERE id='agent-run-lease-test' AND lease_owner='worker-b' AND checkpoint_json='{}';" "1" "stale worker fenced from write"
 
+# The cleanup below must also remove an official question: before 044 its
+# delete guard had no maintenance exemption, so the cascade from question_sets
+# aborted clearing and backup restore for anyone who imported true questions.
+sqlite3 "$database_file" "UPDATE questions SET is_official = 1 WHERE id = 'question-1';"
+official_delete_error="$(sqlite3 "$database_file" "PRAGMA foreign_keys=OFF; DELETE FROM questions WHERE id = 'question-1';" 2>&1 || true)"
+if [[ "$official_delete_error" != *"official question cannot be deleted"* ]]; then
+  printf 'Expected the official question delete guard outside maintenance, got: %s\n' "$official_delete_error" >&2
+  exit 1
+fi
+expect_count "SELECT COUNT(*) FROM questions WHERE id = 'question-1' AND is_official = 1;" "1" "official question kept outside maintenance"
+
 sqlite3 "$database_file" <<'SQL'
 .bail on
 PRAGMA foreign_keys = ON;
@@ -490,6 +501,7 @@ COMMIT;
 SQL
 
 expect_count "SELECT COUNT(*) FROM questions WHERE exam_cycle_id='cycle-1';" "0" "questions after learning-data cleanup"
+expect_count "SELECT COUNT(*) FROM questions WHERE id='question-1';" "0" "official question removed by learning-data cleanup"
 expect_count "SELECT COUNT(*) FROM learning_sessions WHERE exam_cycle_id='cycle-1';" "0" "sessions after learning-data cleanup"
 expect_count "SELECT COUNT(*) FROM question_import_drafts WHERE exam_cycle_id='cycle-1';" "0" "import drafts after learning-data cleanup"
 expect_count "SELECT COUNT(*) FROM question_source_links WHERE question_id='question-1';" "0" "source links after learning-data cleanup"

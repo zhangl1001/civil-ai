@@ -1,5 +1,5 @@
 import { Capacitor } from '@capacitor/core';
-import { tutorDatabaseConfig } from '@/capabilities/database/public';
+import { isTutorDatabaseBusy, tutorDatabaseConfig } from '@/capabilities/database/public';
 import {
   appLifecycleAdapter,
   type AppLifecycleEvent
@@ -73,7 +73,12 @@ export class TutorDatabaseLifecycleCoordinator {
   }
 
   private handle(event: AppLifecycleEvent): void {
-    if (event.state !== 'active') {
+    // iOS reports `inactive` for Control Center, the notification shade, call
+    // banners and permission prompts while the app keeps running. Recovering
+    // after those would replace the connection under a chat that kept
+    // streaming and writing, so only a real move to the background counts.
+    if (event.state === 'inactive') return;
+    if (event.state === 'background') {
       this.interrupted = true;
       this.clearHealthCheck();
       return;
@@ -120,6 +125,12 @@ export class TutorDatabaseLifecycleCoordinator {
       await this.runtime.databaseLifecycle.healthCheck();
       this.scheduleHealthCheck();
     } catch (error) {
+      // Busy means another operation still holds the connection inside its own
+      // deadline; recovering now would roll that work back.
+      if (isTutorDatabaseBusy(error)) {
+        this.scheduleHealthCheck();
+        return;
+      }
       this.dependencies.logger.warn('[TutorDatabaseLifecycle] health check failed', error);
       this.startRecovery('health_check_failed');
     }

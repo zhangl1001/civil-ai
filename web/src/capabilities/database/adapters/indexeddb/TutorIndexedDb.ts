@@ -1,69 +1,16 @@
 import { TUTOR_DATABASE_NAME } from '../../config/TutorDatabaseConfig';
+import { enqueueIndexedDbOperations, writeIndexedDbBatch } from './IndexedDbBatchWriter';
 
 export const TUTOR_INDEXEDDB_NAME = `${TUTOR_DATABASE_NAME}-web`;
 export const TUTOR_INDEXEDDB_VERSION = 32;
 
-export const TutorIndexedDbStore = {
-  CandidateCycleBundles: 'candidate_cycle_bundles',
-  CurriculumBundles: 'curriculum_bundles',
-  DomainOutbox: 'domain_outbox',
-  OnboardingDrafts: 'onboarding_drafts',
-  CommandReceipts: 'command_receipts',
-  ContentMetadataBundles: 'content_metadata_bundles',
-  ContentQuestionSetBundles: 'content_question_set_bundles',
-  PromptBundles: 'prompt_bundles',
-  AIInvocations: 'ai_invocations',
-  GenerationAggregates: 'generation_aggregates',
-  LearningThreadAggregates: 'learning_thread_aggregates',
-  LearningSessionFacts: 'learning_session_facts',
-  ErrorDiagnoses: 'error_diagnoses',
-  ErrorDiagnosisConfirmations: 'error_diagnosis_confirmations',
-  ErrorDiagnosisProjections: 'error_diagnosis_projections',
-  AgentRunAggregates: 'agent_run_aggregates',
-  AgentRunIdempotency: 'agent_run_idempotency',
-  AgentToolReceipts: 'agent_tool_receipts',
-  MasteryTracks: 'mastery_tracks',
-  MasterySnapshots: 'mastery_snapshots',
-  ReviewQueue: 'review_queue',
-  DailyPlanAggregates: 'daily_plan_aggregates',
-  LearningEvidenceAggregates: 'learning_evidence_aggregates',
-  SystemMessages: 'system_messages',
-  ProactiveSignals: 'proactive_signals',
-  LearningProgress: 'learning_progress',
-  LearningAssets: 'learning_assets',
-  QuestionSources: 'question_sources',
-  QuestionSourceLinks: 'question_source_links',
-  QuestionLineages: 'question_lineages',
-  QuestionSourceImportReceipts: 'question_source_import_receipts',
-  QuestionImportDrafts: 'question_import_drafts',
-  QuestionImportCandidates: 'question_import_candidates',
-  QuestionImportPublishReceipts: 'question_import_publish_receipts',
-  QuestionReferencePacks: 'question_reference_packs',
-  TutorCycleConclusions: 'tutor_cycle_conclusions',
-  AbilityCalibrationSnapshots: 'ability_calibration_snapshots'
-} as const;
-
-export type TutorIndexedDbStore = typeof TutorIndexedDbStore[keyof typeof TutorIndexedDbStore];
-
-export interface IndexedDbWriteOperation {
-  readonly type: 'add' | 'put' | 'delete';
-  readonly store: TutorIndexedDbStore;
-  readonly value?: unknown;
-  readonly key?: IDBValidKey;
-}
+import { TutorIndexedDbStore, type IndexedDbWriteOperation } from './IndexedDbOperations';
+export { TutorIndexedDbStore, type IndexedDbWriteOperation } from './IndexedDbOperations';
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error('Tutor IndexedDB request failed'));
-  });
-}
-
-function transactionCompletion(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error('Tutor IndexedDB transaction failed'));
-    transaction.onabort = () => reject(transaction.error ?? new Error('Tutor IndexedDB transaction aborted'));
   });
 }
 
@@ -123,15 +70,7 @@ export class TutorIndexedDb {
   async writeBatch(operations: readonly IndexedDbWriteOperation[]): Promise<void> {
     if (operations.length === 0) return;
     await this.open();
-    const storeNames = [...new Set(operations.map((operation) => operation.store))];
-    const transaction = this.requireDatabase().transaction(storeNames, 'readwrite');
-    for (const operation of operations) {
-      const store = transaction.objectStore(operation.store);
-      if (operation.type === 'add') store.add(operation.value);
-      if (operation.type === 'put') store.put(operation.value);
-      if (operation.type === 'delete' && operation.key !== undefined) store.delete(operation.key);
-    }
-    await transactionCompletion(transaction);
+    await writeIndexedDbBatch(this.requireDatabase(), operations);
   }
 
   async mutateStore<Value, Result>(
@@ -151,10 +90,8 @@ export class TutorIndexedDb {
           const outcome = mutation(request.result as Value[]);
           for (const operation of outcome.operations) {
             if (operation.store !== storeName) throw new Error('IndexedDB mutation cannot write another store');
-            if (operation.type === 'add') store.add(operation.value);
-            if (operation.type === 'put') store.put(operation.value);
-            if (operation.type === 'delete' && operation.key !== undefined) store.delete(operation.key);
           }
+          enqueueIndexedDbOperations(transaction, outcome.operations, (error) => { transaction.abort(); reject(error); });
           mutationResult = outcome.result;
           hasResult = true;
         } catch (error) {
@@ -200,11 +137,8 @@ export class TutorIndexedDb {
             if (!storeNames.includes(operation.store)) {
               throw new Error('IndexedDB mutation cannot write an unopened store');
             }
-            const store = transaction.objectStore(operation.store);
-            if (operation.type === 'add') store.add(operation.value);
-            if (operation.type === 'put') store.put(operation.value);
-            if (operation.type === 'delete' && operation.key !== undefined) store.delete(operation.key);
           }
+          enqueueIndexedDbOperations(transaction, outcome.operations, (error) => { transaction.abort(); rejectOnce(error); });
           mutationResult = outcome.result;
           hasResult = true;
         } catch (error) {

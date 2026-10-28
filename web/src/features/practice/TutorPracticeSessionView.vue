@@ -141,8 +141,7 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { BookOpenIcon, Clock3Icon, ListChecksIcon, LoaderCircleIcon, MessageCircleMoreIcon } from 'lucide-vue-next';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import CenterDialog from '@/components/layout/CenterDialog.vue';
@@ -155,42 +154,23 @@ import ErrorDiagnosisInsight from '@/components/learning/ErrorDiagnosisInsight.v
 import { agentWorkerCoordinator, initializeTutorRuntime } from '@/composition-root/public';
 import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evidence/ObjectiveSubmissionRecoveryCoordinator';
 import { practiceModuleLabel } from '@/domain/labels';
-import type { AssessmentRole } from '@/kernel/public';
-import { correctOptionIdsOf, hasCompleteExplanation, isMultiAnswerChoice, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle, type CommittedQuestionSetBundle, type QuestionSetSourceSummary } from '@/modules/content/public';
-import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, isMistakenAttempt, submittedOptionIds, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord, type ObjectiveSessionReview } from '@/modules/evidence/public';
+import { correctOptionIdsOf, hasCompleteExplanation, isMultiAnswerChoice, resolveQuestionPresentation, questionOriginLabel, questionSourceTitle } from '@/modules/content/public';
+import { ErrorCauseCode, ErrorDiagnosisConfirmationAction, errorCauseLabel, isMistakenAttempt, type ErrorDiagnosisCurrentProjection, type ErrorDiagnosisRecord } from '@/modules/evidence/public';
 import { useAIChatStore } from '@/stores/aiChat';
-import { PracticeSessionFeature } from './PracticeSessionFeature';
-import { PracticeSessionDraftService, type PracticeSessionDraftIdentity } from './PracticeSessionDraftService';
 import { resolveQuestionSwipe } from './QuestionSwipeNavigation';
-import { submitPracticeBundle } from './SubmitPracticeBundle';
 import { practiceQuestionChatContext } from './PracticeQuestionChatContext';
-import { usePracticeContentCompletion } from './usePracticeContentCompletion';
-const route = useRoute();
+import { usePracticeSession, mergePracticeReviews as mergeReviews } from './usePracticeSession';
 const chat = useAIChatStore();
-const bundle = ref<CommittedQuestionSetBundle>();
-const manifestSections = ref<Array<{
-  bundle: CommittedQuestionSetBundle;
-  learningThreadId: string;
-  module: string;
-}>>([]);
-const error = ref(''); const index = ref(0); const answers = ref<Record<string, readonly string[]>>({});
+const { bundle, answers, elapsedByQuestion, answerChanges, error, index, remainingSeconds,
+  capabilityName, sourceMetadata, review, reviewSessionIds, submitted, submitting, submissionPersisted,
+  contentCompleting, questionStartedAt, sessionSignal, persistDraft, submit: submitSession } = usePracticeSession();
 const activeTab = ref<'lecture' | 'questions'>('questions');
-const submitted = ref(false); const submitting = ref(false); const showAnswerCard = ref(false); const showSubmitConfirm = ref(false);
-const diagnosing = ref(false); const review = ref<ObjectiveSessionReview>();
-const reviewSessionIds = ref<string[]>([]);
+const showAnswerCard = ref(false); const showSubmitConfirm = ref(false);
+const diagnosing = ref(false);
 const isConfirming = ref(false); const showCorrectionDialog = ref(false); const correctionTarget = ref<ErrorDiagnosisRecord>();
 const correctedCauseCode = ref(''); const correctedDetail = ref('');
-const elapsedByQuestion = ref<Record<string, number>>({}); const answerChanges = ref<Record<string, number>>({});
-const capabilityName = ref('');
-const assessmentRoleOverride = ref<AssessmentRole>();
-const sourceMetadata = ref<QuestionSetSourceSummary>();
 const askingAi = ref(false);
-const remainingSeconds = ref(0);
 const questionScroll = ref<HTMLElement>();
-let sessionFeaturePromise: Promise<PracticeSessionFeature> | undefined;
-const draftService = new PracticeSessionDraftService();
-let startedAt = 0;
-let questionStartedAt = 0;
 let countdownTimer: number | undefined;
 let autoAdvanceTimer: number | undefined;
 let draftSaveTimer: number | undefined;
@@ -200,17 +180,17 @@ let touchCurrentX = 0;
 let touchCurrentY = 0;
 let touchStartedAt = 0;
 let horizontalTouch = false;
-const { contentCompleting, submissionPersisted, needsCompletion: loadedContentNeedsCompletion,
-  completeBeforeReview, refreshInBackground: refreshContentInBackground } = usePracticeContentCompletion({
-  sessionFeature,
-  applyCompletedContent: (completed) => {
-    const byId = new Map(completed.map((item) => [item.questionSet.id, item]));
-    if (bundle.value) bundle.value = byId.get(bundle.value.questionSet.id) || bundle.value;
-    manifestSections.value = manifestSections.value.map((item) => ({
-      ...item, bundle: byId.get(item.bundle.questionSet.id) || item.bundle
-    }));
-  }
-});
+watch(sessionSignal, () => {
+  if (autoAdvanceTimer) window.clearTimeout(autoAdvanceTimer);
+  if (draftSaveTimer) window.clearTimeout(draftSaveTimer);
+  autoAdvanceTimer = draftSaveTimer = undefined;
+  activeTab.value = 'questions';
+  showAnswerCard.value = showSubmitConfirm.value = showCorrectionDialog.value = false;
+  diagnosing.value = isConfirming.value = askingAi.value = false;
+  correctionTarget.value = undefined;
+  correctedCauseCode.value = correctedDetail.value = '';
+  resetQuestionTouch();
+}, { flush: 'sync' });
 const question = computed(() => bundle.value?.questions[index.value]);
 const currentExplanationPending = computed(() => Boolean(question.value && !hasCompleteExplanation(
   question.value.content.explanation, question.value.content.options.map((option) => option.id)
@@ -266,7 +246,6 @@ const cardQuestions = computed<AnswerCardQuestionItem[]>(() =>
 const submissionProgressText = computed(() => contentCompleting.value ? '正在整理解析...' : '提交中...');
 
 onMounted(() => {
-  void load();
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('pagehide', handlePageHide);
   countdownTimer = window.setInterval(() => {
@@ -282,70 +261,7 @@ onBeforeUnmount(() => {
   if (draftSaveTimer) window.clearTimeout(draftSaveTimer);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   window.removeEventListener('pagehide', handlePageHide);
-  void persistDraft();
 });
-async function load() {
-  try {
-    const manifestId = String(route.query.manifestId || '');
-    const id = String(route.query.questionSetId || '');
-    const loaded = await (await sessionFeature()).load({ questionSetId: id || undefined, manifestId: manifestId || undefined });
-    const value = loaded.bundle;
-    const needsContentCompletion = loadedContentNeedsCompletion(loaded);
-    manifestSections.value = [...loaded.manifestSections];
-    bundle.value = value;
-    capabilityName.value = loaded.capabilityName;
-    assessmentRoleOverride.value = loaded.assessmentRoleOverride;
-    sourceMetadata.value = loaded.sourceMetadata;
-    startedAt = Date.now();
-    questionStartedAt = startedAt;
-    remainingSeconds.value = Math.round(loaded.durationMinutes * 60);
-    const targetSetIds = manifestSections.value.length
-      ? new Set(manifestSections.value.map((item) => item.bundle.questionSet.id))
-      : new Set([value.questionSet.id]);
-    if (loaded.previousReviews.length) {
-      answers.value = Object.fromEntries(loaded.previousReviews.flatMap((previous) => previous.items).flatMap(({ attempt }) => {
-        const optionIds = submittedOptionIds(attempt.answer);
-        return optionIds.length ? [[attempt.questionId, optionIds]] : [];
-      }));
-      const previousAttempts = loaded.previousReviews.flatMap((previous) => previous.items.map((item) => item.attempt));
-      elapsedByQuestion.value = Object.fromEntries(previousAttempts.map((attempt) => [attempt.questionId, attempt.elapsedMs || 0]));
-      answerChanges.value = Object.fromEntries(previousAttempts.map((attempt) => [attempt.questionId, attempt.answerChangeCount]));
-      reviewSessionIds.value = loaded.previousReviews.map((previous) => previous.session.id);
-      review.value = mergeReviews(loaded.previousReviews);
-      submissionPersisted.value = loaded.previousReviews.length === targetSetIds.size;
-      submitted.value = submissionPersisted.value;
-      if (submitted.value) remainingSeconds.value = 0;
-    }
-    const runtime = await initializeTutorRuntime();
-    if (submitted.value) {
-      await draftService.clear(runtime, draftIdentity());
-    } else {
-      const draft = await draftService.load(runtime, draftIdentity(), value);
-      if (draft) {
-        answers.value = { ...draft.answers, ...answers.value };
-        elapsedByQuestion.value = { ...draft.elapsedByQuestion, ...elapsedByQuestion.value };
-        answerChanges.value = { ...draft.answerChanges, ...answerChanges.value };
-        const restoredIndex = value.questions.findIndex((item) => item.id === draft.currentQuestionId);
-        index.value = restoredIndex >= 0 ? restoredIndex : 0;
-        startedAt = Date.now() - draft.elapsedMs;
-        questionStartedAt = Date.now() - draft.currentQuestionElapsedMs;
-        remainingSeconds.value = draft.remainingSeconds;
-      }
-    }
-    agentWorkerCoordinator.start(runtime);
-    if (needsContentCompletion) {
-      if (submissionPersisted.value) {
-        void completeBeforeReview([...targetSetIds]).catch((cause: unknown) => {
-          error.value = cause instanceof Error ? cause.message : '逐题解析暂未补全';
-        });
-      } else {
-        void refreshContentInBackground([...targetSetIds]);
-      }
-    }
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '读取题组失败';
-  }
-}
 function selectOption(optionId: string) {
   const current = question.value;
   if (!current || submitted.value || submitting.value || submissionPersisted.value) return;
@@ -363,7 +279,7 @@ function selectOption(optionId: string) {
     answerChanges.value[questionId] = (answerChanges.value[questionId] || 0) + 1;
   }
   if (elapsedByQuestion.value[questionId] === undefined) {
-    elapsedByQuestion.value[questionId] = Math.max(0, Date.now() - questionStartedAt);
+    elapsedByQuestion.value[questionId] = Math.max(0, Date.now() - questionStartedAt.value);
   }
   answers.value[questionId] = next;
   scheduleDraftSave();
@@ -391,7 +307,7 @@ function changeQuestion(next: number) {
   if (autoAdvanceTimer) window.clearTimeout(autoAdvanceTimer);
   autoAdvanceTimer = undefined;
   index.value = next;
-  questionStartedAt = Date.now();
+  questionStartedAt.value = Date.now();
   questionScroll.value?.scrollTo({ top: 0, behavior: 'auto' });
   scheduleDraftSave();
 }
@@ -440,65 +356,14 @@ function requestSubmit() {
   showSubmitConfirm.value = true;
 }
 async function submit() {
-  if (!bundle.value || submitting.value) return;
   showSubmitConfirm.value = false;
-  submitting.value = true;
   if (draftSaveTimer) window.clearTimeout(draftSaveTimer);
   draftSaveTimer = undefined;
-  try {
-    const runtime = await initializeTutorRuntime();
-    const reviewQueueItemId = String(route.query.reviewQueueItemId || '') || undefined;
-    const dailyPlanItemId = String(route.query.dailyPlanItemId || '') || undefined;
-    const defaultThreadId = String(route.query.learningThreadId || bundle.value.questionSet.learningThreadId || '');
-    const targets = manifestSections.value.length
-      ? manifestSections.value
-      : defaultThreadId
-        ? [{ bundle: bundle.value, learningThreadId: defaultThreadId, module: bundle.value.questionSet.module }]
-        : [];
-    if (!targets.length) throw new Error('学习主线参数缺失。');
-    const results = [];
-    const submissionScope = String(route.query.manifestId || route.query.questionSetId || bundle.value.questionSet.id);
-    if (!submissionPersisted.value) {
-      for (const target of targets) {
-        results.push(await submitPracticeBundle({
-          runtime, bundle: target.bundle, learningThreadId: target.learningThreadId, submissionScope,
-          startedAt, answers: answers.value, elapsedByQuestion: elapsedByQuestion.value,
-          answerChanges: answerChanges.value, assessmentRoleOverride: assessmentRoleOverride.value,
-          reviewQueueItemId: manifestSections.value.length ? undefined : reviewQueueItemId,
-          dailyPlanItemId: manifestSections.value.length ? undefined : dailyPlanItemId
-        }));
-      }
-      reviewSessionIds.value = results.map((result) => result.sessionId);
-      submissionPersisted.value = true;
-    }
-    agentWorkerCoordinator.start(runtime);
-    review.value = mergeReviews(await Promise.all(
-      reviewSessionIds.value.map((sessionId) => runtime.getObjectiveSessionReview.execute(
-        sessionId as Parameters<typeof runtime.getObjectiveSessionReview.execute>[0]
-      ))
-    ));
-    submitted.value = true;
-    index.value = 0;
-    error.value = '';
-    void completeBeforeReview(targets.map((target) => target.bundle.questionSet.id))
-      .catch((cause: unknown) => {
-        error.value = cause instanceof Error ? cause.message : '逐题解析暂未补全';
-      });
-    void draftService.clear(runtime, draftIdentity()).catch(() => undefined);
-    objectiveSubmissionRecoveryCoordinator.start();
-    if (review.value?.items.some((item) => isMistakenAttempt(item.grading.result))) {
-      void watchDiagnoses(reviewSessionIds.value);
-    }
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '提交失败';
-  } finally {
-    submitting.value = false;
+  const signal = sessionSignal.value;
+  await submitSession();
+  if (!signal.aborted && submitted.value && review.value?.items.some((item) => isMistakenAttempt(item.grading.result))) {
+    void watchDiagnoses([...reviewSessionIds.value]);
   }
-}
-function draftIdentity(): PracticeSessionDraftIdentity {
-  const manifestId = String(route.query.manifestId || '').trim();
-  const questionSetId = String(route.query.questionSetId || bundle.value?.questionSet.id || '').trim();
-  return manifestId ? { manifestId } : { questionSetId };
 }
 function scheduleDraftSave() {
   if (!bundle.value || submitted.value || submitting.value) return;
@@ -508,24 +373,6 @@ function scheduleDraftSave() {
     void persistDraft();
   }, 180);
 }
-async function persistDraft(existingRuntime?: Awaited<ReturnType<typeof initializeTutorRuntime>>) {
-  if (!bundle.value || submitted.value) return;
-  try {
-    const runtime = existingRuntime ?? await initializeTutorRuntime();
-    await draftService.save(runtime, draftIdentity(), {
-      answers: answers.value,
-      elapsedByQuestion: elapsedByQuestion.value,
-      answerChanges: answerChanges.value,
-      currentQuestionId: question.value?.id,
-      elapsedMs: Math.max(0, Date.now() - startedAt),
-      currentQuestionElapsedMs: Math.max(0, Date.now() - questionStartedAt),
-      remainingSeconds: remainingSeconds.value,
-      updatedAt: Date.now()
-    });
-  } catch {
-    if (!error.value) error.value = '答题进度暂时无法自动保存，请先不要退出页面。';
-  }
-}
 function handleVisibilityChange() {
   if (document.visibilityState === 'hidden') void persistDraft();
 }
@@ -533,15 +380,18 @@ function handlePageHide() {
   void persistDraft();
 }
 async function watchDiagnoses(sessionIds: readonly string[]) {
+  const signal = sessionSignal.value;
   diagnosing.value = true;
   try {
     const runtime = await initializeTutorRuntime();
     objectiveSubmissionRecoveryCoordinator.start();
+    if (signal.aborted) return;
     let terminalRuns: Awaited<ReturnType<typeof runtime.getAgentRunViews.execute>> = [];
     for (let poll = 0; poll < 180; poll += 1) {
       const nextReview = mergeReviews(await Promise.all(sessionIds.map((sessionId) => (
         runtime.getObjectiveSessionReview.execute(sessionId as Parameters<typeof runtime.getObjectiveSessionReview.execute>[0])
       ))));
+      if (signal.aborted) return;
       if (nextReview) review.value = nextReview;
       const incorrectItems = nextReview?.items.filter((item) => isMistakenAttempt(item.grading.result)) ?? [];
       if (
@@ -552,6 +402,7 @@ async function watchDiagnoses(sessionIds: readonly string[]) {
       }
 
       const views = await runtime.getAgentRunViews.execute({ limit: 50 });
+      if (signal.aborted) return;
       const targetSessions = new Set(sessionIds);
       terminalRuns = views.filter((run) => (
         run.targetResourceType === 'error_diagnosis_batch'
@@ -571,17 +422,23 @@ async function watchDiagnoses(sessionIds: readonly string[]) {
       ))) {
         agentWorkerCoordinator.start(runtime);
       }
-      await wait(800);
+      await wait(800, signal);
+      if (signal.aborted) return;
     }
     throw new Error('分析仍在后台执行，可稍后在本题查看结果');
   } catch (cause) {
-    error.value = cause instanceof Error ? `错因分析稍后重试：${cause.message}` : '错因分析稍后重试';
+    if (!signal.aborted) error.value = cause instanceof Error ? `错因分析稍后重试：${cause.message}` : '错因分析稍后重试';
   } finally {
-    diagnosing.value = false;
+    if (!signal.aborted) diagnosing.value = false;
   }
 }
-function wait(durationMs: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, durationMs));
+function wait(durationMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { window.clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
+    const timer = window.setTimeout(done, durationMs);
+    signal.addEventListener('abort', done, { once: true });
+    if (signal.aborted) done();
+  });
 }
 function effectiveDiagnosisFor(questionId: string): { record: ErrorDiagnosisRecord; projection?: ErrorDiagnosisCurrentProjection; causeCode: keyof typeof errorCauseLabel; detail: string; confirmationStatus: string } | undefined {
   const item = review.value?.items.find((value) => value.question.id === questionId);
@@ -616,6 +473,7 @@ function isIncorrect(questionId: string): boolean {
   return result !== undefined && isMistakenAttempt(result);
 }
 async function askAIAboutCurrentQuestion() {
+  const signal = sessionSignal.value;
   const current = question.value;
   if (!current || askingAi.value || chat.isSending) return;
   askingAi.value = true;
@@ -630,29 +488,33 @@ async function askAIAboutCurrentQuestion() {
       diagnosisText: diagnosis ? `${errorCauseLabel[diagnosis.causeCode]}，${diagnosis.detail}` : undefined
     });
     await chat.init();
+    if (signal.aborted) return;
     await chat.newSession(`${title} · 深度学习`);
+    if (signal.aborted) return;
     await chat.open(context);
   } catch (cause) {
-    error.value = cause instanceof Error ? `打开 AI 深度讲解失败：${cause.message}` : '打开 AI 深度讲解失败';
+    if (!signal.aborted) error.value = cause instanceof Error ? `打开 AI 深度讲解失败：${cause.message}` : '打开 AI 深度讲解失败';
   } finally {
-    askingAi.value = false;
+    if (!signal.aborted) askingAi.value = false;
   }
 }
 async function confirmDiagnosis(questionId: string) {
+  const signal = sessionSignal.value;
   const diagnosis = effectiveDiagnosisFor(questionId);
   if (!diagnosis || isConfirming.value) return;
   isConfirming.value = true;
   try {
     const runtime = await initializeTutorRuntime();
+    if (signal.aborted) return;
     await runtime.confirmErrorDiagnosis.execute({
       idempotencyKey: `diagnosis:${diagnosis.record.id}:confirm`,
       diagnosisId: diagnosis.record.id,
       action: ErrorDiagnosisConfirmationAction.Confirm,
       actorType: 'user'
     });
-    await refreshReview(runtime);
+    if (!signal.aborted) await refreshReview(runtime);
   } finally {
-    isConfirming.value = false;
+    if (!signal.aborted) isConfirming.value = false;
   }
 }
 function openCorrection(questionId: string) {
@@ -664,10 +526,12 @@ function openCorrection(questionId: string) {
   showCorrectionDialog.value = true;
 }
 async function submitCorrection() {
+  const signal = sessionSignal.value;
   if (!correctionTarget.value || !correctedCauseCode.value || !correctedDetail.value.trim() || isConfirming.value) return;
   isConfirming.value = true;
   try {
     const runtime = await initializeTutorRuntime();
+    if (signal.aborted) return;
     await runtime.confirmErrorDiagnosis.execute({
       idempotencyKey: `diagnosis:${correctionTarget.value.id}:correct:${correctedCauseCode.value}:${correctedDetail.value.trim()}`,
       diagnosisId: correctionTarget.value.id,
@@ -676,21 +540,26 @@ async function submitCorrection() {
       correctedCauseCode: correctedCauseCode.value as Parameters<typeof runtime.confirmErrorDiagnosis.execute>[0]['correctedCauseCode'],
       correctedDetail: correctedDetail.value
     });
+    if (signal.aborted) return;
     showCorrectionDialog.value = false;
     await refreshReview(runtime);
   } finally {
-    isConfirming.value = false;
+    if (!signal.aborted) isConfirming.value = false;
   }
 }
 async function refreshReview(runtime?: Awaited<ReturnType<typeof initializeTutorRuntime>>) {
-  const resolvedRuntime = runtime ?? await initializeTutorRuntime();
+  const signal = sessionSignal.value;
   const sessionIds = reviewSessionIds.value.length
-    ? reviewSessionIds.value
+    ? [...reviewSessionIds.value]
     : review.value?.session.id ? [review.value.session.id] : [];
+  const resolvedRuntime = runtime ?? await initializeTutorRuntime();
+  if (signal.aborted) return;
   if (!sessionIds.length) return;
-  review.value = mergeReviews(await Promise.all(sessionIds.map((sessionId) => (
+  const nextReview = mergeReviews(await Promise.all(sessionIds.map((sessionId) => (
     resolvedRuntime.getObjectiveSessionReview.execute(sessionId as Parameters<typeof resolvedRuntime.getObjectiveSessionReview.execute>[0])
   ))));
+  if (signal.aborted) return;
+  review.value = nextReview;
   const capabilities = new Map(
     (review.value?.items || []).map((item) => [item.attempt.capabilityNodeId, item.attempt.examCycleId])
   );
@@ -698,16 +567,7 @@ async function refreshReview(runtime?: Awaited<ReturnType<typeof initializeTutor
     resolvedRuntime.refreshMasteryTrack.execute({ examCycleId, capabilityNodeId })
   )));
 }
-function mergeReviews(values: readonly (ObjectiveSessionReview | undefined)[]): ObjectiveSessionReview | undefined {
-  const available = values.filter((value): value is ObjectiveSessionReview => Boolean(value));
-  const first = available[0];
-  return first ? { session: first.session, items: available.flatMap((value) => value.items) } : undefined;
-}
 const moduleLabel = practiceModuleLabel;
-function sessionFeature(): Promise<PracticeSessionFeature> {
-  sessionFeaturePromise ??= initializeTutorRuntime().then((runtime) => new PracticeSessionFeature(runtime));
-  return sessionFeaturePromise;
-}
 </script>
 
 <style scoped>

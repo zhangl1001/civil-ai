@@ -22,7 +22,11 @@ import {
   QuestionSetStatus,
   type QuestionTemplateCode
 } from '../domain/ContentCodes';
-import { assertCommittedQuestionSetBundle, assertQuestionSetQueryLimit } from '../domain/ContentBundlePolicy';
+import {
+  assertCommittedQuestionSetBundle,
+  assertQuestionSetQueryLimit,
+  assertRestorableQuestionSetBundle
+} from '../domain/ContentBundlePolicy';
 import { resolveQuestionSetEntryMode } from '../domain/QuestionSetEntryModePolicy';
 import {
   QuestionCalibrationRole,
@@ -86,16 +90,12 @@ export class IndexedDbContentRepository implements ContentRepository {
 
   async commitQuestionSet(bundle: CommittedQuestionSetBundle, context: TransactionContext): Promise<void> {
     assertCommittedQuestionSetBundle(bundle);
-    this.transactionScope.stage(context, {
-      type: 'add',
-      store: TutorIndexedDbStore.ContentQuestionSetBundles,
-      value: {
-        questionSetId: bundle.questionSet.id,
-        examCycleId: bundle.questionSet.examCycleId,
-        createdAt: bundle.questionSet.createdAt,
-        bundle
-      } satisfies StoredQuestionSetBundle
-    });
+    this.stageBundle(bundle, context);
+  }
+
+  async restoreQuestionSet(bundle: CommittedQuestionSetBundle, context: TransactionContext): Promise<void> {
+    assertRestorableQuestionSetBundle(bundle);
+    this.stageBundle(bundle, context);
   }
 
   async findQuestionSet(questionSetId: QuestionSetId): Promise<CommittedQuestionSetBundle | undefined> {
@@ -269,6 +269,19 @@ export class IndexedDbContentRepository implements ContentRepository {
       } satisfies StoredQuestionSetBundle
     });
     return true;
+  }
+
+  private stageBundle(bundle: CommittedQuestionSetBundle, context: TransactionContext): void {
+    this.transactionScope.stage(context, {
+      type: 'add',
+      store: TutorIndexedDbStore.ContentQuestionSetBundles,
+      value: {
+        questionSetId: bundle.questionSet.id,
+        examCycleId: bundle.questionSet.examCycleId,
+        createdAt: bundle.questionSet.createdAt,
+        bundle
+      } satisfies StoredQuestionSetBundle
+    });
   }
 }
 

@@ -9,8 +9,19 @@ import {
   type ProviderTextDelta
 } from '../contracts/ProviderGateway';
 import { FetchHttpTransport, type HttpTransport } from '../contracts/HttpTransport';
-import { assertNonEmptyProviderResult, assertProviderResponse } from './ProviderHttpSupport';
-import { OpenAIStreamAccumulator, parseOpenAIResponse } from './ProviderResponseParser';
+import {
+  assertNonEmptyProviderResult,
+  assertProviderResponse,
+  interruptedProviderStream,
+  isHtmlResponse,
+  isStreamPayloadError,
+  unreadableProviderResponse
+} from './ProviderHttpSupport';
+import {
+  OpenAIStreamAccumulator,
+  openAIResponseHasReasoning,
+  parseOpenAIResponse
+} from './ProviderResponseParser';
 import { readServerSentEvents } from './SseReader';
 import {
   hasRequiredStructuredRoot,
@@ -32,7 +43,9 @@ const STRUCTURED_RESULT_TOOL = 'submit_structured_result';
 
 export class OpenAICompatibleGateway implements ProviderGateway {
   readonly provider = ProviderCode.OpenAICompatible;
-  readonly capabilities = { multimodalInput: true } as const;
+  get capabilities() {
+    return { multimodalInput: true, forcedToolChoice: this.modelCapabilities.forcedToolChoice };
+  }
   readonly model: string;
   private readonly structuredOutput: StructuredOutputCapability;
   private readonly modelCapabilities: ModelCapabilityMatrix;
@@ -46,7 +59,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     this.structuredOutput = new StructuredOutputCapability(
       `openai-compatible:${normalizedCapabilityEndpoint(config.baseUrl)}:${this.model}`
     );
-    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides);
+    this.modelCapabilities = new ModelCapabilityMatrix(capabilityOverrides, this.model);
   }
 
   async complete(request: ProviderRequest, signal?: AbortSignal): Promise<ProviderResponse> {
@@ -59,6 +72,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
   }
 
   async prepareStructuredOutput(signal?: AbortSignal): Promise<void> {
+    if (!this.capabilities.forcedToolChoice) return;
     const request = structuredOutputProbeRequest();
     await this.structuredOutput.execute({
       invoke: (mode) => this.sendCompletion(request, mode, signal),
@@ -72,7 +86,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     signal?: AbortSignal
   ): Promise<ProviderResponse> {
     if (!request.responseSchema) return this.sendCompletion(request, 'tool', signal);
-    if (request.structuredOutputMode === 'prompt') {
+    if (request.structuredOutputMode === 'prompt' || !this.capabilities.forcedToolChoice) {
       return this.sendCompletion(request, 'prompt', signal);
     }
     return this.structuredOutput.execute({
@@ -101,10 +115,16 @@ export class OpenAICompatibleGateway implements ProviderGateway {
       return this.stream(request, onEvent, signal);
     }
     if (!response.body) return this.complete(request, signal);
+    if (isHtmlResponse(response)) throw unreadableProviderResponse(response, 'OpenAI 兼容');
     const accumulator = new OpenAIStreamAccumulator();
+    let events = 0;
     try {
       await readServerSentEvents(response.body, async (data) => {
-        if (data === '[DONE]') return;
+        events += 1;
+        if (data === '[DONE]') {
+          accumulator.markDone();
+          return;
+        }
         const delta = accumulator.append(JSON.parse(data) as unknown);
         if (!delta) return;
         await onEvent({ type: 'text_delta', text: delta });
@@ -112,9 +132,15 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
-      throw new ProviderGatewayError('OpenAI-compatible stream protocol is invalid', ProviderErrorKind.Protocol);
+      if (!isStreamPayloadError(error)) throw interruptedProviderStream(error instanceof Error ? error.message : undefined);
+      throw new ProviderGatewayError('OpenAI 兼容接口的流式响应格式无法识别', ProviderErrorKind.Protocol);
     }
-    return assertNonEmptyProviderResult(accumulator.response());
+    // A body that ends before [DONE] or a finish_reason is a broken stream, not a short answer.
+    if (!accumulator.isComplete) {
+      if (!events) throw new ProviderGatewayError('OpenAI 兼容接口没有返回流式模型响应', ProviderErrorKind.Protocol);
+      throw interruptedProviderStream();
+    }
+    return assertNonEmptyProviderResult(accumulator.response(), accumulator.sawReasoning);
   }
 
   private async sendCompletion(
@@ -125,14 +151,12 @@ export class OpenAICompatibleGateway implements ProviderGateway {
     const response = await this.transport.send(this.httpRequest(request, false, structuredMode, signal));
     await assertProviderResponse(response);
     try {
-      return assertNonEmptyProviderResult(parseOpenAIResponse(await response.json()));
+      const payload: unknown = await response.json();
+      return assertNonEmptyProviderResult(parseOpenAIResponse(payload), openAIResponseHasReasoning(payload));
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof ProviderGatewayError) throw error;
-      throw new ProviderGatewayError(
-        'OpenAI-compatible provider returned an invalid response format',
-        ProviderErrorKind.Protocol
-      );
+      throw unreadableProviderResponse(response, 'OpenAI 兼容');
     }
   }
 
@@ -180,7 +204,7 @@ export class OpenAICompatibleGateway implements ProviderGateway {
           parameters: tool.inputSchema
         }
       }));
-      body.tool_choice = openAIToolChoice(request.toolChoice);
+      body.tool_choice = openAIToolChoice(request.toolChoice, this.capabilities.forcedToolChoice);
     }
     return {
       url: providerEndpoint(this.config.baseUrl, 'chat/completions'),
@@ -248,7 +272,8 @@ function toOpenAIContent(content: ProviderRequest['messages'][number]['content']
       });
 }
 
-function openAIToolChoice(choice: ProviderRequest['toolChoice']): unknown {
+function openAIToolChoice(choice: ProviderRequest['toolChoice'], canForce: boolean): unknown {
+  if (!canForce && choice !== 'none') return 'auto';
   if (!choice || choice === 'auto' || choice === 'none' || choice === 'required') return choice ?? 'auto';
   return { type: 'function', function: { name: choice.name } };
 }

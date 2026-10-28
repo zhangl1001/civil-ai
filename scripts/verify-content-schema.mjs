@@ -458,6 +458,8 @@ try {
     content.QuestionPresentationCode.DataMaterialChoice
   );
 
+  await verifySvgPresentationPolicy();
+
   console.log('Content schema verification passed.');
 } finally {
   await server.close();
@@ -480,4 +482,123 @@ function authoringExplanation(correctOptionId, knowledgePoint, conclusion) {
     })),
     pitfalls: ['不要只看选项与材料是否相关，要比较它是否真正作用于题干结论。']
   };
+}
+
+/**
+ * SVG figures come from model output and imported packs and are rendered with
+ * v-html, so the sanitizer configuration itself is asserted here: DOMPurify
+ * cannot run without a DOM in this script, and a profile option silently
+ * replaces every allow-list it is combined with.
+ */
+async function verifySvgPresentationPolicy() {
+  const [svg, html] = await Promise.all([
+    server.ssrLoadModule('/src/capabilities/content-rendering/security/SvgPresentationPolicy.ts'),
+    server.ssrLoadModule('/src/capabilities/content-rendering/security/HtmlPolicy.ts')
+  ]);
+  const lower = (values) => values.map((value) => value.toLowerCase());
+  const svgConfig = html.svgSanitizeConfig();
+  const htmlConfig = html.htmlSanitizeConfig();
+  for (const [label, config] of [['svg', svgConfig], ['html', htmlConfig]]) {
+    assert.equal('USE_PROFILES' in config, false, `${label} sanitizer must not combine allow-lists with USE_PROFILES`);
+    const allowedTags = lower(config.ALLOWED_TAGS);
+    const forbiddenTags = lower(config.FORBID_TAGS);
+    for (const tag of ['style', 'script', 'foreignobject', 'use', 'image', 'animate', 'animatetransform', 'animatemotion', 'set', 'iframe']) {
+      assert.equal(allowedTags.includes(tag), false, `${label} allow-list must not contain <${tag}>`);
+      assert.ok(forbiddenTags.includes(tag), `${label} sanitizer must forbid <${tag}>`);
+    }
+    assert.equal(config.ALLOW_UNKNOWN_PROTOCOLS, false);
+    assert.equal(lower(config.ALLOWED_ATTR).some((name) => /^on/.test(name)), false, `${label} allow-list must not contain event handlers`);
+    assert.equal(lower(config.ALLOWED_ATTR).includes('xlink:href'), false);
+    assert.equal(lower(config.ALLOWED_ATTR).includes('src'), false);
+  }
+  assert.deepEqual(
+    lower(svgConfig.ALLOWED_TAGS).sort(),
+    ['circle', 'clippath', 'defs', 'desc', 'ellipse', 'g', 'line', 'lineargradient', 'marker', 'mask', 'path',
+      'pattern', 'polygon', 'polyline', 'radialgradient', 'rect', 'stop', 'svg', 'text', 'title', 'tspan']
+  );
+  for (const attribute of ['href', 'xlink:href', 'class']) {
+    assert.equal(lower(svgConfig.ALLOWED_ATTR).includes(attribute), false, `svg must not keep ${attribute}`);
+    assert.ok(lower(svgConfig.FORBID_ATTR).includes(attribute), `svg must forbid ${attribute}`);
+  }
+  assert.ok(lower(svgConfig.ADD_FORBID_CONTENTS).includes('symbol'), 'unused symbol templates must not be hoisted into view');
+  assert.equal(svgConfig.ALLOW_DATA_ATTR, false);
+  assert.equal(svgConfig.ALLOW_ARIA_ATTR, false);
+  for (const attribute of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'style', 'id', 'viewbox', 'd', 'points', 'transform']) {
+    assert.ok(lower(svgConfig.ALLOWED_ATTR).includes(attribute), `svg must keep ${attribute}`);
+  }
+  // KaTeX draws radicals and stretchy arrows with inline SVG and positions every
+  // span with inline style; the Markdown path must keep both.
+  for (const tag of ['svg', 'path', 'line', 'math', 'semantics', 'annotation', 'mfrac', 'span', 'img', 'input']) {
+    assert.ok(lower(htmlConfig.ALLOWED_TAGS).includes(tag), `markdown must keep <${tag}>`);
+  }
+  assert.ok(htmlConfig.ALLOWED_ATTR.includes('style'));
+  assert.ok(htmlConfig.ALLOWED_ATTR.includes('data-app-image-src'));
+
+  const scope = 'svg1-abc';
+  // Presentation survives: a hollow shape must not turn into a solid one.
+  assert.equal(svg.sanitizeSvgStyle('fill:none;stroke:#000', scope), 'fill:none;stroke:#000');
+  assert.equal(
+    svg.sanitizeSvgStyle('stroke-width: 2px; stroke-dasharray: 4 2; stroke-linecap: round; stroke-linejoin: round; opacity: .5; fill-opacity: 0.2; stroke-opacity: 1', scope),
+    'stroke-width:2px;stroke-dasharray:4 2;stroke-linecap:round;stroke-linejoin:round;opacity:.5;fill-opacity:0.2;stroke-opacity:1'
+  );
+  assert.equal(
+    svg.sanitizeSvgStyle('font-size:14px;font-weight:bold;text-anchor:middle;dominant-baseline:central;font-family:"Microsoft YaHei",微软雅黑,sans-serif', scope),
+    'font-size:14px;font-weight:bold;text-anchor:middle;dominant-baseline:central;font-family:"Microsoft YaHei",微软雅黑,sans-serif'
+  );
+  assert.equal(svg.sanitizeSvgStyle('fill:rgb(0, 0, 0);transform:rotate(45deg);transform-origin:center', scope), 'fill:rgb(0, 0, 0);transform:rotate(45deg);transform-origin:center');
+  assert.equal(svg.sanitizeSvgStyle('fill:red !important;fill:blue', scope), 'fill:blue');
+  // Same-figure references are scoped; everything that can load or escape is dropped.
+  assert.equal(svg.sanitizeSvgStyle("fill:url(#hatch);stroke:url('#edge') black", scope), `fill:url(#${scope}-hatch);stroke:url(#${scope}-edge) black`);
+  for (const style of [
+    'fill:url(https://example.com/x.svg#a)',
+    'fill:url(x.svg#a)',
+    'fill:url(data:image/svg+xml,abc)',
+    'fill:u\\72l(https://example.com)',
+    'fill:expression(alert(1))',
+    'fill:var(--brand)',
+    'fill:attr(data-x)',
+    'background:url(https://example.com/x.png)',
+    'behavior:url(x.htc)',
+    'display:none',
+    'position:fixed',
+    'font-family:@import',
+    'mask:url(#a) , url(https://example.com/m.svg)',
+    'transform:url(#a)'
+  ]) {
+    assert.equal(svg.sanitizeSvgStyle(style, scope), '', `unsafe style must be dropped: ${style}`);
+  }
+  // A style attribute cannot open a rule block; the injected tail is simply not a declaration.
+  assert.equal(svg.sanitizeSvgStyle('stroke:red;}body{display:none', scope), 'stroke:red');
+  assert.equal(svg.sanitizeSvgAttribute('fill', 'url(#grad)', scope), `url(#${scope}-grad)`);
+  assert.equal(svg.sanitizeSvgAttribute('marker-end', 'url(#arrow)', scope), `url(#${scope}-arrow)`);
+  assert.equal(svg.sanitizeSvgAttribute('fill', 'url(https://example.com/p.svg#x)', scope), undefined);
+  assert.equal(svg.sanitizeSvgAttribute('id', 'arrow', scope), `${scope}-arrow`);
+  assert.equal(svg.sanitizeSvgAttribute('id', 'bad id', scope), undefined);
+  assert.equal(svg.sanitizeSvgAttribute('d', 'M10,10 L20,20 a5 5 0 1 0 -1e-3 0Z', scope), 'M10,10 L20,20 a5 5 0 1 0 -1e-3 0Z');
+  assert.equal(svg.sanitizeSvgAttribute('transform', 'translate(10 20) rotate(45, 50, 50)', scope), 'translate(10 20) rotate(45, 50, 50)');
+  assert.equal(svg.sanitizeSvgAttribute('viewBox', '0 0 100 100', scope), '0 0 100 100');
+  for (const [name, value] of [
+    ['transform', 'url(#a)'], ['stroke-width', 'url(#a)'], ['onclick', 'alert(1)'], ['onload', 'x'],
+    ['href', '#a'], ['xlink:href', '#a'], ['src', 'x.png'], ['class', 'shape'], ['fill', 'javascript:alert(1)'],
+    ['width', 'expression(1)'], ['font-family', 'x;y']
+  ]) {
+    assert.equal(svg.sanitizeSvgAttribute(name, value, scope), undefined, `${name}="${value}" must be dropped`);
+  }
+
+  // The figure's own stylesheet is honoured through simple selectors only.
+  const rules = svg.parseSvgStyleSheet([
+    '/* shapes */ .shape{fill:none;stroke:#000} @import url(https://example.com/x.css);',
+    'rect.filled{fill:#333}',
+    '@media (prefers-color-scheme: dark){.shape{stroke:#fff}}',
+    '.a .b{fill:red} .shape:hover{fill:red} #x{fill:red}',
+    '*{stroke-width:2} text{font-size:12px;fill:#222}'
+  ].join('\n'));
+  assert.deepEqual(rules.map((rule) => [rule.tag ?? '', rule.classes.join('.')]), [
+    ['', 'shape'], ['rect', 'filled'], ['', ''], ['text', '']
+  ]);
+  const shape = svg.matchSvgStyleRules(rules, 'rect', 'shape filled');
+  assert.deepEqual(shape, [['stroke-width', '2'], ['stroke', '#000'], ['fill', '#333']]);
+  assert.equal(svg.mergeSvgStyle(shape, 'fill:red'), 'stroke-width:2;stroke:#000;fill:red');
+  assert.deepEqual(svg.matchSvgStyleRules(rules, 'circle', 'shape'), [['stroke-width', '2'], ['fill', 'none'], ['stroke', '#000']]);
+  assert.deepEqual(svg.matchSvgStyleRules(rules, 'path', ''), [['stroke-width', '2']]);
 }

@@ -1,16 +1,14 @@
 /**
- * iOS @capacitor-community/sqlite execute() strips every newline from SQL that
- * contains DELETE FROM, then hands the result to sqlite3_exec. A leading `--`
- * comment then runs to end of input, so the whole migration becomes a no-op
- * while schema_migrations still advances. Strip line comments here so the
- * remaining statements stay executable after that newline collapse.
+ * iOS @capacitor-community/sqlite execute() first trims each line, then — when
+ * the SQL contains DELETE FROM — deletes every newline without inserting a
+ * space. A leading `--` comment then covers the rest of the file, and
+ * `INSERT INTO t\\nSELECT` becomes `tSELECT`, which SQLite reports as
+ * `near "id": syntax error`. Collapse comments and whitespace here so the
+ * statements stay executable after that rewrite.
  */
 export function prepareMigrationSql(sql: string): string {
-  const prepared = sql
-    .split('\n')
-    .map(stripLineComment)
-    .join('\n')
-    .trim();
+  const withoutComments = sql.split('\n').map(stripLineComment).join('\n');
+  const prepared = withoutComments.replace(/\s+/g, ' ').trim();
   if (!prepared) throw new Error('Migration SQL is empty after stripping comments');
   return prepared;
 }

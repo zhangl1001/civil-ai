@@ -23,11 +23,11 @@ Every claim below is enforced by the build gate on each push and reproducible lo
 
 | | Enforced state |
 | --- | --- |
-| **Build gate** | 39 repository checks, then `vue-tsc`, then the production bundle — any failure blocks the build |
-| **Executable checks** | 32 of those 39 boot the real modules through Vite's SSR loader and assert on observed behaviour, not on mocks |
+| **Build gate** | 40 repository checks, then `vue-tsc`, then the production bundle — any failure blocks the build |
+| **Executable checks** | Checks exercise real modules through Vite's SSR loader, using isolated storage and controlled provider responses |
 | **Portability** | 2 bundled examination packages; the second is installed headlessly and driven end to end, so curricula, subjects, grading, routing, and prompts are data rather than code |
-| **Schema integrity** | 43 numbered migrations, each checksummed and re-verified against the applied history on startup |
-| **Type discipline** | explicit `any`, `@ts-ignore`, and `@ts-nocheck` rejected outright across 611 TypeScript and Vue source files |
+| **Schema integrity** | 44 numbered migrations, each checksummed and re-verified against the applied history on startup |
+| **Type discipline** | explicit `any`, `@ts-ignore`, and `@ts-nocheck` rejected outright across all TypeScript and Vue source files |
 | **Size discipline** | every source file carries a line budget — 600 by default, 16 recorded legacy allowances — so an oversized file must be decomposed, never annotated |
 
 Full detail in [what the gate enforces](#what-the-gate-enforces).
@@ -171,11 +171,11 @@ The CI workflow installs locked dependencies, audits production dependencies, an
 
 ### What the gate enforces
 
-The application build chain is the real gate: **39 repository checks**, then `vue-tsc` type checking, then the production bundle. Thirty-two of those checks load the actual modules through Vite's SSR loader and assert on observed behaviour rather than on mocks, so each one is an executable claim about the system and a regression fails the build instead of reaching a release.
+The application build chain is the real gate: **40 repository checks**, then `vue-tsc` type checking, then the production bundle. The checks load actual modules through Vite's SSR loader, using isolated storage and controlled provider responses. They include IndexedDB commit races, backup failure recovery, route reuse during submission and mock-exam task navigation.
 
 - **Portability across examination domains.** A second, unrelated examination package — teacher recruitment, with different subjects, modules, score bands, a different partial-credit rule, and a subjective written subject — is installed headlessly and driven through curriculum activation, grading, planning, capability routing, and prompt resolution. This check found a real regression: content generation had hardcoded the civil-service subject code. It demonstrates portability across examinations; portability across learning domains remains unvalidated.
-- **Schema integrity.** 43 numbered SQL migrations, each recorded with a checksum in `schema_migrations` and re-verified against the applied history on startup. An edited migration is rejected rather than silently reapplied.
-- **Structural budgets.** Explicit `any`, `@ts-ignore`, and `@ts-nocheck` are rejected outright. Every source file carries a line budget — 600 by default, with 16 files holding a recorded legacy allowance — so an oversized file must be decomposed instead of annotated. The 611 TypeScript and Vue source files are all covered.
+- **Schema integrity.** 44 numbered SQL migrations, each recorded with a checksum in `schema_migrations` and re-verified against the applied history on startup. An edited migration is rejected rather than silently reapplied.
+- **Structural budgets.** Explicit `any`, `@ts-ignore`, and `@ts-nocheck` are rejected outright. Every source file carries a line budget — 600 by default, with 16 files holding a recorded legacy allowance — so an oversized file must be decomposed instead of annotated. All TypeScript and Vue source files are covered.
 - **Boundary enforcement.** Module public surfaces, layering direction, prompt and schema and curriculum versioning, agent-run recovery, and the provider gateway each have a dedicated check, so crossing an architectural boundary is a build failure rather than a review comment.
 
 ## iOS build and installation

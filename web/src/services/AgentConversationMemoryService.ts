@@ -1,11 +1,12 @@
 import {
   advanceConversationSummary,
   buildChatContext,
-  estimateChatTokens
+  estimateChatTokens,
+  sanitizeConversationSummary,
+  type ChatContextMessage
 } from '@/ai/ChatContextBuilder';
 import { ModelMessageRole, type ModelMessage } from '@/capabilities/ai-runtime/public';
 import type { TutorDatabaseRuntime } from '@/composition-root/public';
-import type { AIMessage } from '@/domain/ai';
 import type { InstantMs } from '@/kernel/public';
 import {
   AgentMemoryLayer,
@@ -60,15 +61,18 @@ export class AgentConversationMemoryService {
       limit: 24,
       now: nowInstant()
     });
-    const summary = session?.summary?.trim()
-      || summaryFromMemory(memories)
-      || '';
+    // Summaries written before failed turns were excluded may still quote them.
+    const summary = sanitizeConversationSummary(advanceConversationSummary(history as readonly ChatContextMessage[], {
+      summary: session?.summary ?? summaryFromMemory(memories),
+      cursorMessageId: session?.summaryCursorMessageId,
+      version: session?.summaryVersion
+    }).summary);
     const recalled = memories
       .filter((memory) => SUPPORTED_CONTEXT_MEMORY_CODES.has(memory.memoryCode))
       .filter((memory) => memory.memoryCode !== SESSION_SUMMARY_CODE)
       .sort(compareMemoryPriority)
       .slice(0, MAX_RECALLED_MEMORIES);
-    const recent = buildChatContext(history as readonly AIMessage[], {
+    const recent = buildChatContext(history as readonly ChatContextMessage[], {
       currentPrompt,
       budget: 6_000,
       maxMessages: 14
@@ -103,11 +107,15 @@ export class AgentConversationMemoryService {
       runtime.conversationStore.listMessages(sessionId)
     ]);
     if (!session) return;
-    const next = advanceConversationSummary(history as readonly AIMessage[], session);
+    const next = advanceConversationSummary(history as readonly ChatContextMessage[], {
+      summary: session.summary,
+      cursorMessageId: session.summaryCursorMessageId,
+      version: session.summaryVersion
+    });
     if (!next.changed) return;
     await runtime.conversationStore.updateSession(sessionId, {
       summary: next.summary,
-      summaryCursorMessageId: next.cursorMessageId,
+      summaryCursorMessageId: next.cursorMessageId ?? '',
       summaryVersion: next.version
     });
     if (!next.summary || !next.cursorMessageId) return;

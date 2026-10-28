@@ -1,11 +1,157 @@
 import type { AIMessage } from '@/domain/ai';
 import type { AITextMessage } from '@/composition-root/ai/ConfiguredAIClient';
+import type {
+  ConversationMessageStatus,
+  ConversationSystemNotice,
+  ConversationToolTrace
+} from '@/modules/conversation/public';
 
 const DEFAULT_CONTEXT_BUDGET = 6_000;
 const DEFAULT_MAX_MESSAGES = 14;
 const MAX_SINGLE_MESSAGE_LENGTH = 4_000;
 const MAX_SUMMARY_LENGTH = 2_400;
-const ROLLING_SUMMARY_VERSION = 2;
+// v5 rebuilds summaries that recorded runtime confirmation prompts as assistant lines.
+const ROLLING_SUMMARY_VERSION = 5;
+
+/** A chat row as far as model context is concerned. */
+export type ChatContextMessage = AIMessage & {
+  readonly status?: ConversationMessageStatus;
+  readonly systemNotice?: ConversationSystemNotice;
+  readonly toolTrace?: readonly ConversationToolTrace[];
+};
+
+/**
+ * Fixed texts the runtime wrote as assistant rows before rows carried a
+ * `systemNotice` mark: the confirmation prompt, its reminder and the budget pause.
+ */
+const RUNTIME_CONFIRMATION_TEXT = /回复“确认”继续，回复“取消”终止。/;
+const RUNTIME_NOTICE_TEXTS = [
+  RUNTIME_CONFIRMATION_TEXT,
+  /^这项操作还在等你确认：/,
+  /^这一步已到达本段安全执行边界，进度和工具证据已经保留。/
+];
+const SYSTEM_NOTE_LABEL = '【系统消息，不是助手的回复】';
+const IMITATED_NOTICE_LABEL = '【系统说明】下面这段确认提示是助手自己写的，不是系统发出的确认，也不会执行任何操作；只有系统消息才表示真的有操作在等待确认：';
+const TOOL_TRACE_LABEL = '【系统记录，不是助手的回复】这一轮实际执行并成功的写操作：';
+
+/**
+ * A row the runtime wrote. Older rows have no mark: the runtime's rows carry no
+ * run id, while everything the model wrote does, so a model that copied the
+ * template is not mistaken for the system.
+ */
+export function isRuntimeNotice(message: ChatContextMessage): boolean {
+  if (message.role !== 'assistant') return false;
+  if (message.systemNotice) return true;
+  return !message.toolCallId && RUNTIME_NOTICE_TEXTS.some((pattern) => pattern.test(message.content.trim()));
+}
+
+/** Model-written text that imitates the runtime confirmation prompt. */
+function isImitatedNotice(message: ChatContextMessage): boolean {
+  return message.role === 'assistant' && !isRuntimeNotice(message) && RUNTIME_CONFIRMATION_TEXT.test(message.content);
+}
+
+/**
+ * Texts older builds saved as ordinary assistant answers when a turn failed.
+ * Replaying them taught the model that it had failed ("这条我回复失败了").
+ */
+const LEGACY_FAILURE_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  'AI 回复未能正常完成，请重试。',
+  '模型服务鉴权失败，请检查 AI 配置中的接口地址和密钥。',
+  '当前模型不支持本次请求，请检查模型配置或更换兼容模型。',
+  '当前模型不支持图片理解，请在 AI 配置中换用支持视觉输入的模型后重试。',
+  '模型服务暂时没有响应，请稍后重试。',
+  '本地数据正在忙，请稍后重试。'
+]);
+const LEGACY_FAILURE_MARKERS = ['我已经完成前面的处理，但在整理结果时遇到问题：', '[[ZH_AI_STOPPED]]'];
+
+/** True when an older build saved nothing but a failure notice as the answer. */
+export function isLegacyFailureNotice(content: string): boolean {
+  const text = content.trim();
+  return LEGACY_FAILURE_PLACEHOLDERS.has(text) || /^回复失败：/.test(text);
+}
+
+/** True for the text of a failed or interrupted turn saved by an older build. */
+export function isLegacyFailurePlaceholder(content: string): boolean {
+  return isLegacyFailureNotice(content)
+    || LEGACY_FAILURE_MARKERS.some((marker) => content.includes(marker));
+}
+
+/**
+ * Only completed exchanges are replayed to the model. Failed and stopped
+ * turns stay visible in the chat but never become something the model said.
+ */
+export function isModelContextMessage(message: ChatContextMessage): boolean {
+  if (message.role !== 'user' && message.role !== 'assistant') return false;
+  if (message.role === 'user') return Boolean(message.content.trim());
+  return !message.status && !isLegacyFailurePlaceholder(message.content);
+}
+
+const INTERRUPTED_REPLY_NOTE = '（这条回复被用户中断，没有完成。除非用户再次要求，不要继续或重答这个问题。）';
+
+/**
+ * The exchanges the model may see, decided per question and its reply. A failed
+ * turn is dropped together with its question, so the model never picks it up
+ * again on its own (重试 resends it). A stopped turn keeps its question and the
+ * part of the answer that was on screen, marked as interrupted: follow-ups such
+ * as "换个角度" keep their context, but the model does not resume or re-answer
+ * a request the learner stopped.
+ */
+export function modelContextMessages(history: readonly ChatContextMessage[]): ChatContextMessage[] {
+  const exchanges: ChatContextMessage[] = [];
+  // The stopped reply that may follow, i.e. the direct reply of a question that was kept.
+  let pendingReply: ChatContextMessage | undefined;
+  history.forEach((message, index) => {
+    if (message.role === 'user') {
+      pendingReply = undefined;
+      if (!message.content.trim()) return;
+      const reply = replyTo(history, index);
+      if (reply && (replyOutcome(reply) === 'failed' || (replyOutcome(reply) === 'stopped' && !stoppedText(reply)))) return;
+      exchanges.push(message);
+      pendingReply = reply;
+      return;
+    }
+    if (message.role !== 'assistant') return;
+    const outcome = replyOutcome(message);
+    const answersKeptQuestion = message === pendingReply;
+    pendingReply = undefined;
+    if (outcome === 'completed') exchanges.push(message);
+    else if (outcome === 'stopped' && answersKeptQuestion) {
+      exchanges.push({ ...message, status: 'stopped' });
+    }
+  });
+  return exchanges;
+}
+
+/** Consecutive user rows include guidance for the same pending answer. */
+function replyTo(history: readonly ChatContextMessage[], index: number): ChatContextMessage | undefined {
+  for (let next = index + 1; next < history.length; next += 1) {
+    const candidate = history[next];
+    if (candidate?.role === 'assistant') return candidate;
+  }
+  return undefined;
+}
+
+function replyOutcome(message: ChatContextMessage): 'completed' | 'failed' | 'stopped' {
+  if (message.status === 'failed') return 'failed';
+  if (message.status === 'stopped' || message.content.includes('[[ZH_AI_STOPPED]]')) return 'stopped';
+  return isLegacyFailurePlaceholder(message.content) ? 'failed' : 'completed';
+}
+
+function stoppedText(message: ChatContextMessage): string {
+  return sanitizeContextMessage(message.content);
+}
+
+/** Drops summary lines that only recorded a failed assistant turn. */
+export function sanitizeConversationSummary(summary: string): string {
+  return summary
+    .split('\n')
+    .filter((line) => {
+      const match = line.match(/^助手：(.*)$/);
+      return !match || !isLegacyFailurePlaceholder(match[1].replace(/\.\.\.$/, ''));
+    })
+    .join('\n')
+    .trim();
+}
 
 export interface BuildChatContextOptions {
   readonly currentPrompt: string;
@@ -13,28 +159,46 @@ export interface BuildChatContextOptions {
   readonly maxMessages?: number;
 }
 
-export function buildChatContext(history: readonly AIMessage[], options: BuildChatContextOptions): AITextMessage[] {
+export function buildChatContext(history: readonly ChatContextMessage[], options: BuildChatContextOptions): AITextMessage[] {
   const budget = options.budget ?? DEFAULT_CONTEXT_BUDGET;
   const maxMessages = options.maxMessages ?? DEFAULT_MAX_MESSAGES;
   const selected: AITextMessage[] = [];
   let usedTokens = 0;
   const currentPrompt = options.currentPrompt.trim();
-  const usable = history
-    .filter((message) => message.role === 'user' || message.role === 'assistant')
-    .filter((message, index, items) => !(index === items.length - 1 && message.role === 'user' && message.content.trim() === currentPrompt))
+  const conversational = modelContextMessages(history);
+  if (conversational.at(-1)?.role === 'user' && conversational.at(-1)?.content.trim() === currentPrompt) {
+    conversational.pop();
+  }
+  const usable = withoutRepeatedQuestions(conversational, currentPrompt)
     .slice(-maxMessages)
     .reverse();
 
   for (const message of usable) {
-    const item = sanitizeContextMessage(message.content);
-    if (!item) continue;
-    const itemTokens = estimateChatTokens(item);
+    const entries = contextEntries(message);
+    if (!entries.length) continue;
+    const itemTokens = entries.reduce((total, entry) => total + estimateChatTokens(entry.content), 0);
     if (usedTokens + itemTokens > budget) break;
-    selected.push({ role: message.role as 'user' | 'assistant', content: item });
+    selected.push(...[...entries].reverse().map(({ role, content }) => ({ role, content })));
     usedTokens += itemTokens;
   }
 
   return selected.reverse();
+}
+
+/**
+ * A question sent again after its failed turn would otherwise reach the model
+ * twice in a row; keep only the latest copy.
+ */
+function withoutRepeatedQuestions(
+  messages: readonly ChatContextMessage[],
+  currentPrompt: string
+): ChatContextMessage[] {
+  return messages.filter((message, index) => {
+    if (message.role !== 'user') return true;
+    const next = messages[index + 1];
+    const nextQuestion = next ? (next.role === 'user' ? next.content.trim() : undefined) : currentPrompt;
+    return nextQuestion !== message.content.trim();
+  });
 }
 
 export function sanitizeContextMessage(content: string): string {
@@ -46,8 +210,8 @@ export function sanitizeContextMessage(content: string): string {
   return clean.length > MAX_SINGLE_MESSAGE_LENGTH ? `${clean.slice(0, MAX_SINGLE_MESSAGE_LENGTH)}\n（以上为较长回复截断摘要）` : clean;
 }
 
-export function buildConversationSummary(history: readonly AIMessage[]): string {
-  return summarizeMessages('', history);
+export function buildConversationSummary(history: readonly ChatContextMessage[]): string {
+  return summarizeMessages('', modelContextMessages(history));
 }
 
 export interface RollingConversationSummary {
@@ -62,7 +226,7 @@ export interface RollingConversationSummary {
  * The cursor prevents repeatedly summarizing the same messages.
  */
 export function advanceConversationSummary(
-  history: readonly AIMessage[],
+  history: readonly ChatContextMessage[],
   previous: {
     readonly summary?: string;
     readonly cursorMessageId?: string;
@@ -70,21 +234,24 @@ export function advanceConversationSummary(
   },
   recentMessageCount = DEFAULT_MAX_MESSAGES
 ): RollingConversationSummary {
-  const usable = history.filter(isUsableConversationMessage);
-  const eligible = usable.slice(0, Math.max(0, usable.length - recentMessageCount));
+  const usable = modelContextMessages(history).filter((message) => Boolean(sanitizeContextMessage(message.content)));
+  let end = Math.max(0, usable.length - recentMessageCount);
+  // Do not move a question to the summary before its answer is eligible too.
+  while (end > 0 && usable[end - 1]?.role === 'user') end -= 1;
+  const eligible = usable.slice(0, end);
+  const needsVersionUpgrade = previous.version !== ROLLING_SUMMARY_VERSION;
   if (!eligible.length) {
     return {
-      summary: previous.summary?.trim() || '',
-      cursorMessageId: previous.cursorMessageId,
+      summary: '',
+      cursorMessageId: undefined,
       version: ROLLING_SUMMARY_VERSION,
-      changed: false
+      changed: needsVersionUpgrade || Boolean(previous.summary || previous.cursorMessageId)
     };
   }
   const previousCursorIndex = previous.cursorMessageId
     ? eligible.findIndex((message) => message.id === previous.cursorMessageId)
     : -1;
   const unseen = eligible.slice(previousCursorIndex + 1);
-  const needsVersionUpgrade = previous.version !== ROLLING_SUMMARY_VERSION;
   if (!unseen.length && !needsVersionUpgrade) {
     return {
       summary: previous.summary?.trim() || '',
@@ -93,8 +260,9 @@ export function advanceConversationSummary(
       changed: false
     };
   }
-  const source = needsVersionUpgrade ? eligible : unseen;
-  const base = needsVersionUpgrade ? '' : previous.summary?.trim() || '';
+  const rebuild = needsVersionUpgrade || previousCursorIndex < 0;
+  const source = rebuild ? eligible : unseen;
+  const base = rebuild ? '' : previous.summary?.trim() || '';
   return {
     summary: summarizeMessages(base, source),
     cursorMessageId: eligible.at(-1)?.id,
@@ -109,21 +277,56 @@ export function estimateChatTokens(text: string): number {
   return Math.max(1, Math.ceil(ascii / 4 + nonAscii / 1.6));
 }
 
-function summarizeMessages(previousSummary: string, history: readonly AIMessage[]): string {
-  const usable = history
-    .filter((message) => message.role === 'user' || message.role === 'assistant')
-    .map((message) => ({ ...message, content: sanitizeContextMessage(message.content).replace(/\s+/g, ' ') }))
-    .filter((message) => message.content);
-  if (!usable.length) return clipSummary(previousSummary);
-  const turns = usable.map((message) => (
-    `${message.role === 'user' ? '用户' : '助手'}：${clip(message.content, message.role === 'user' ? 140 : 180)}`
-  ));
+function summarizeMessages(previousSummary: string, history: readonly ChatContextMessage[]): string {
+  const turns = history.flatMap((message) => contextEntries(message, message.role === 'user' ? 140 : 180)
+    .map((entry) => ({ ...entry, content: entry.content.replace(/\s+/g, ' ') }))
+    .filter((entry) => entry.content)
+    .map((entry) => `${entry.speaker}：${entry.content}`));
+  if (!turns.length) return clipSummary(previousSummary);
   return clipSummary([previousSummary.trim(), turns.join('\n')].filter(Boolean).join('\n'));
 }
 
-function isUsableConversationMessage(message: AIMessage): boolean {
-  return (message.role === 'user' || message.role === 'assistant')
-    && Boolean(sanitizeContextMessage(message.content));
+interface ContextEntry {
+  readonly role: 'user' | 'assistant';
+  /** Label in the rolling summary. */
+  readonly speaker: '用户' | '助手' | '系统';
+  readonly content: string;
+}
+
+/**
+ * How one chat row reaches the model. Runtime notices and write traces are
+ * labelled system notes in the user role, never assistant speech, so the model
+ * neither copies the confirmation prompt nor sees "确认 → 改好了" without the
+ * write that really ran in between.
+ */
+function contextEntries(message: ChatContextMessage, maxLength?: number): ContextEntry[] {
+  if (message.role === 'user') {
+    const content = contextText(message, maxLength);
+    return content ? [{ role: 'user', speaker: '用户', content }] : [];
+  }
+  const clean = sanitizeContextMessage(message.content);
+  if (isRuntimeNotice(message)) {
+    return clean ? [{ role: 'user', speaker: '系统', content: `${SYSTEM_NOTE_LABEL}${clip(clean, maxLength ?? clean.length)}` }] : [];
+  }
+  const entries: ContextEntry[] = [];
+  if (message.toolTrace?.length) {
+    const writes = message.toolTrace.map((trace) => `${trace.toolName}(${trace.arguments})`).join('；');
+    entries.push({ role: 'user', speaker: '系统', content: `${TOOL_TRACE_LABEL}${writes}` });
+  }
+  if (isImitatedNotice(message)) {
+    if (clean) entries.push({ role: 'user', speaker: '系统', content: `${IMITATED_NOTICE_LABEL}${clip(clean, maxLength ?? clean.length)}` });
+    return entries;
+  }
+  const content = contextText(message, maxLength);
+  if (content) entries.push({ role: 'assistant', speaker: '助手', content });
+  return entries;
+}
+
+function contextText(message: ChatContextMessage, maxLength?: number): string {
+  const clean = sanitizeContextMessage(message.content);
+  const body = maxLength === undefined ? clean : clip(clean, maxLength);
+  // Outcome is appended after every body truncation, including the summary's tighter limit.
+  return body && message.role === 'assistant' && replyOutcome(message) === 'stopped' ? `${body}\n\n${INTERRUPTED_REPLY_NOTE}` : body;
 }
 
 function clip(value: string, max: number): string {
@@ -132,8 +335,8 @@ function clip(value: string, max: number): string {
 
 function clipSummary(value: string): string {
   if (value.length <= MAX_SUMMARY_LENGTH) return value;
-  const marker = '\n...[较早会话摘要已压缩]...\n';
-  const headLength = Math.floor((MAX_SUMMARY_LENGTH - marker.length) * 0.34);
-  const tailLength = MAX_SUMMARY_LENGTH - marker.length - headLength;
-  return `${value.slice(0, headLength)}${marker}${value.slice(-tailLength)}`;
+  const marker = '...[较早会话摘要已压缩]...\n';
+  const blocks = value.replace(/^\.\.\.\[较早会话摘要已压缩\]\.\.\.\n/, '').split(/\n(?=用户：)/);
+  while (blocks.length && marker.length + blocks.join('\n').length > MAX_SUMMARY_LENGTH) blocks.shift();
+  return `${marker}${blocks.join('\n')}`;
 }

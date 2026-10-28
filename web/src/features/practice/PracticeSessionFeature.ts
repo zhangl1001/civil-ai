@@ -30,7 +30,8 @@ export interface PracticeSessionLoadResult {
 export class PracticeSessionFeature {
   constructor(private readonly runtime: TutorDatabaseRuntime) {}
 
-  async load(input: { readonly questionSetId?: string; readonly manifestId?: string }): Promise<PracticeSessionLoadResult> {
+  async load(input: { readonly questionSetId?: string; readonly manifestId?: string }, signal?: AbortSignal): Promise<PracticeSessionLoadResult> {
+    signal?.throwIfAborted();
     if (!input.questionSetId && !input.manifestId) throw new Error('题组参数缺失。');
     const manifest = input.manifestId
       ? await this.loadManifest(input.manifestId)
@@ -54,6 +55,7 @@ export class PracticeSessionFeature {
     const curriculum = cycle
       ? await this.runtime.curriculumRepository.findBundle(cycle.examCycle.curriculumVersionId)
       : undefined;
+    signal?.throwIfAborted();
     const targetSetIds = manifest
       ? manifest.sections.map((section) => section.bundle.questionSet.id)
       : [bundle.questionSet.id];
@@ -73,6 +75,7 @@ export class PracticeSessionFeature {
     const previousReviews = (await Promise.all(
       previousSessions.map((previous) => this.runtime.getObjectiveSessionReview.execute(previous.session.id))
     )).filter((review): review is ObjectiveSessionReview => Boolean(review));
+    signal?.throwIfAborted();
 
     return {
       bundle,
@@ -121,6 +124,7 @@ export class PracticeSessionFeature {
           id as Parameters<TutorDatabaseRuntime['contentRepository']['findQuestionSet']>[0]
         )
       )));
+      options.signal?.throwIfAborted();
       if (bundles.some((item) => !item)) throw new Error('题组在解析补全过程中不可用。');
       const available = bundles.filter((item): item is CommittedQuestionSetBundle => Boolean(item));
       const contentVersion = available
@@ -130,6 +134,7 @@ export class PracticeSessionFeature {
         lastContentVersion = contentVersion;
         options.onUpdate?.(available);
       }
+      options.signal?.throwIfAborted();
       if (available.every((item) => !hasQuestionSetEnrichmentNeeds(
         findQuestionSetEnrichmentNeeds(item)
       ))) {
@@ -231,6 +236,37 @@ function selectQuestionSubset(
     capabilityLinks: bundle.capabilityLinks.filter((link) => requested.has(String(link.questionId))),
     questionSet: { ...bundle.questionSet, questionCount: questions.length }
   };
+}
+
+/**
+ * Swaps question sets whose explanations just finished into an open session.
+ * A manifest paper (a mock, a redo) merges several sets under its first set's
+ * id, so it is rebuilt from its completed sections: swapping by id replaced
+ * the whole paper with that first set the moment its explanations landed,
+ * which turned a freshly generated 60-question mock into a 12-question set.
+ */
+export function applyCompletedQuestionSets<Section extends { readonly bundle: CommittedQuestionSetBundle }>(
+  current: { readonly bundle?: CommittedQuestionSetBundle; readonly sections: readonly Section[] },
+  completed: readonly CommittedQuestionSetBundle[]
+): { bundle?: CommittedQuestionSetBundle; sections: Section[] } {
+  const byId = new Map(completed.map((item) => [item.questionSet.id, item]));
+  const replaceSelected = (bundle: CommittedQuestionSetBundle) => {
+    const next = byId.get(bundle.questionSet.id);
+    if (!next) return bundle;
+    const ids = bundle.questions.map((question) => String(question.id));
+    return next.questions.length === ids.length && next.questions.every((question, index) => question.id === ids[index])
+      ? next
+      : selectQuestionSubset(next, ids);
+  };
+  const sections = current.sections.map((section) => ({
+    ...section,
+    bundle: replaceSelected(section.bundle)
+  }));
+  if (!current.bundle) return { bundle: current.bundle, sections };
+  const bundle = sections.length
+    ? mergeQuestionBundles(sections.map((section) => section.bundle), current.bundle.questionSet.module)
+    : replaceSelected(current.bundle);
+  return { bundle, sections };
 }
 
 function mergeQuestionBundles(

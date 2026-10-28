@@ -13,8 +13,7 @@ import {
   generationExecutionBudgetMs,
   InvocationValidationStatus,
   ModelMessageRole,
-  parseStructuredJson,
-  ProviderGatewayError
+  parseStructuredJson
 } from '@/capabilities/ai-runtime/public';
 import type { UnitOfWork } from '@/capabilities/database/public';
 import {
@@ -43,6 +42,11 @@ import { GeneratedContentCommitBuilder } from './GeneratedContentCommitBuilder';
 import type { QuestionSetGradingPolicy } from '../domain/QuestionSetGradingPolicy';
 import { GeneratedContentParseError, GeneratedContentParser, type GeneratedLectureQuestionSet } from './GeneratedContentParser';
 import { GenerationModelInvoker } from './GenerationModelInvoker';
+import {
+  GenerationWorkflowFailureRecorder,
+  isTerminalGeneration,
+  type GenerationExecutionCheckpoint
+} from './GenerationWorkflowFailure';
 import {
   createPracticeGenerationPlan,
   coreGenerationTokenBudget,
@@ -77,6 +81,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
   private readonly commitBuilder: GeneratedContentCommitBuilder;
   private readonly modelInvoker: GenerationModelInvoker;
   private readonly shardedGenerator: ShardedObjectiveGenerator;
+  private readonly failureRecorder: GenerationWorkflowFailureRecorder;
 
   constructor(
     private readonly unitOfWork: UnitOfWork,
@@ -94,6 +99,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
     gradingPolicy: (capabilityNodeId: string) => QuestionSetGradingPolicy | undefined = () => undefined
   ) {
     this.commitBuilder = new GeneratedContentCommitBuilder(clock, ids, gradingPolicy);
+    this.failureRecorder = new GenerationWorkflowFailureRecorder(unitOfWork, generationRepository, invocationRepository, clock);
     this.modelInvoker = new GenerationModelInvoker(
       unitOfWork,
       invocationRepository,
@@ -115,6 +121,8 @@ export class RunStructuredObjectiveGenerationWorkflow {
     signal?: AbortSignal,
     onProgress?: GenerationWorkflowProgress
   ): Promise<GenerationWorkflowResult> {
+    // An abort that is already set is checked inside the try below, so a user
+    // cancellation still records the workflow as cancelled instead of leaving it queued.
     let aggregate = await this.requireAggregate(workflowId);
     if (aggregate.workflow.status === GenerationWorkflowStatus.Committed) {
       const committed = await this.contentRepository.findQuestionSetByGenerationSpec(aggregate.spec.id);
@@ -123,12 +131,12 @@ export class RunStructuredObjectiveGenerationWorkflow {
     if (aggregate.workflow.status === GenerationWorkflowStatus.Failed || aggregate.workflow.status === GenerationWorkflowStatus.Cancelled) {
       return { workflow: aggregate.workflow };
     }
-    let invocation: AIInvocation | undefined;
     const deadline = createProviderExecutionDeadline(
       signal,
       generationExecutionBudgetMs(aggregate.spec.requestedCount ?? 0),
       '结构化生题'
     );
+    const execution: GenerationExecutionCheckpoint = { workflow: aggregate.workflow, signal: deadline.signal };
     try {
       deadline.signal.throwIfAborted();
       const promptBundle = await this.promptRepository.findById(aggregate.spec.promptVersionId);
@@ -144,21 +152,25 @@ export class RunStructuredObjectiveGenerationWorkflow {
         output = this.parser.parseObject(aggregate.workflow.stagedResult, capabilityCode(aggregate));
       } else {
         await onProgress?.('compiling_prompt', '正在按能力节点组装题目核心结构与质检规则');
-        aggregate = await this.advanceToInvocation(aggregate);
+        aggregate = await this.advanceToInvocation(aggregate, execution);
         if (aggregate.workflow.currentStep !== GenerationWorkflowStep.InvokeModel) {
           throw new Error(`Generation checkpoint has no staged result at ${aggregate.workflow.currentStep}`);
         }
-        const interrupted = await this.pendingInvocation(workflowId);
+        const interrupted = await this.pendingInvocations(workflowId);
         const attemptedWorkflow = this.machine.startAttempt(aggregate.workflow, this.clock.now());
         await this.unitOfWork.run(async (context) => {
-          if (interrupted) await this.invocationRepository.updateValidation(
-            interrupted.id,
+          deadline.signal.throwIfAborted();
+          for (const invocation of interrupted) await this.invocationRepository.updateValidation(
+            invocation.id,
             InvocationValidationStatus.Invalid,
             'generation.process_interrupted',
             context
           );
+          deadline.signal.throwIfAborted();
           await this.generationRepository.replaceWorkflow(attemptedWorkflow, aggregate.workflow.version, context);
+          deadline.signal.throwIfAborted();
         });
+        execution.workflow = attemptedWorkflow;
         aggregate = { spec: aggregate.spec, workflow: attemptedWorkflow };
         const plan = createPracticeGenerationPlan(
           aggregate.spec.requestedCount ?? 0,
@@ -192,10 +204,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
           this.clock.now(),
           { stagedResult: output.raw }
         );
-        await this.unitOfWork.run(async (context) => {
-          deadline.signal.throwIfAborted();
-          await this.generationRepository.replaceWorkflow(parsedWorkflow, aggregate.workflow.version, context);
-        });
+        await this.persistWorkflow(aggregate, parsedWorkflow, execution);
         aggregate = { spec: aggregate.spec, workflow: parsedWorkflow };
       }
 
@@ -206,9 +215,9 @@ export class RunStructuredObjectiveGenerationWorkflow {
       };
       await onProgress?.('validating_content', '正在校验题量、选项、答案与材料结构');
       deadline.signal.throwIfAborted();
-      aggregate = await this.finishValidationSteps(aggregate, output, difference.metrics);
-      aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.StageResult, GenerationWorkflowStep.CommitResult);
-      aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.CommitResult, GenerationWorkflowStep.PublishOutbox);
+      aggregate = await this.finishValidationSteps(aggregate, output, difference.metrics, execution);
+      aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.StageResult, GenerationWorkflowStep.CommitResult, execution);
+      aggregate = await this.advanceIfAt(aggregate, GenerationWorkflowStep.CommitResult, GenerationWorkflowStep.PublishOutbox, execution);
       if (aggregate.workflow.currentStep !== GenerationWorkflowStep.PublishOutbox) {
         throw new Error(`Generation cannot commit from step ${aggregate.workflow.currentStep}`);
       }
@@ -231,9 +240,12 @@ export class RunStructuredObjectiveGenerationWorkflow {
       deadline.signal.throwIfAborted();
       await this.unitOfWork.run(async (context) => {
         deadline.signal.throwIfAborted();
-        await this.contentRepository.commitQuestionSet(bundle, context);
-        await this.questionSourceRepository.saveLineages(commit.lineages, context);
         await this.generationRepository.replaceWorkflow(completedWorkflow, aggregate.workflow.version, context);
+        deadline.signal.throwIfAborted();
+        await this.contentRepository.commitQuestionSet(bundle, context);
+        deadline.signal.throwIfAborted();
+        await this.questionSourceRepository.saveLineages(commit.lineages, context);
+        deadline.signal.throwIfAborted();
         await this.outboxRepository.append({
           id: this.ids.next('OutboxEventId'),
           aggregateType: ContentResourceType.QuestionSet,
@@ -249,10 +261,11 @@ export class RunStructuredObjectiveGenerationWorkflow {
           attemptCount: 0,
           idempotencyKey: `${completedWorkflow.id}:question-set-committed`
         }, context);
+        deadline.signal.throwIfAborted();
       });
       return { workflow: completedWorkflow, questionSetId: bundle.questionSet.id };
     } catch (error) {
-      await this.recordFailure(workflowId, invocation, error, signal?.aborted === true);
+      await this.failureRecorder.record(execution.workflow, error, signal);
       throw error;
     } finally {
       deadline.dispose();
@@ -261,7 +274,7 @@ export class RunStructuredObjectiveGenerationWorkflow {
 
   async cancel(workflowId: WorkflowId): Promise<GenerationWorkflowRecord> {
     const aggregate = await this.requireAggregate(workflowId);
-    if (isTerminal(aggregate.workflow)) return aggregate.workflow;
+    if (isTerminalGeneration(aggregate.workflow)) return aggregate.workflow;
     const cancelled = this.machine.cancel(aggregate.workflow, this.clock.now());
     const pending = await this.pendingInvocations(workflowId);
     await this.unitOfWork.run(async (context) => {
@@ -275,25 +288,28 @@ export class RunStructuredObjectiveGenerationWorkflow {
     return cancelled;
   }
 
-  async retry(workflowId: WorkflowId): Promise<GenerationWorkflowRecord> {
+  async retry(workflowId: WorkflowId, signal?: AbortSignal): Promise<GenerationWorkflowRecord> {
+    signal?.throwIfAborted();
     const aggregate = await this.requireAggregate(workflowId);
     const retried = this.machine.retry(aggregate.workflow, this.clock.now());
-    await this.unitOfWork.runAutocommit((context) => (
-      this.generationRepository.replaceWorkflow(retried, aggregate.workflow.version, context)
-    ));
+    await this.unitOfWork.run(async (context) => {
+      signal?.throwIfAborted();
+      await this.generationRepository.replaceWorkflow(retried, aggregate.workflow.version, context);
+      signal?.throwIfAborted();
+    });
     return retried;
   }
 
-  private async advanceToInvocation(aggregate: GenerationAggregate): Promise<GenerationAggregate> {
+  private async advanceToInvocation(aggregate: GenerationAggregate, execution: GenerationExecutionCheckpoint): Promise<GenerationAggregate> {
     let current = aggregate;
-    current = await this.advanceIfAt(current, GenerationWorkflowStep.PrepareContext, GenerationWorkflowStep.CompilePrompt);
+    current = await this.advanceIfAt(current, GenerationWorkflowStep.PrepareContext, GenerationWorkflowStep.CompilePrompt, execution);
     if (current.workflow.currentStep === GenerationWorkflowStep.CompilePrompt) {
       const next = this.machine.advance(
         current.workflow,
         GenerationWorkflowStep.InvokeModel,
         this.clock.now()
       );
-      await this.persistWorkflow(current, next);
+      await this.persistWorkflow(current, next, execution);
       current = { spec: current.spec, workflow: next };
     }
     return current;
@@ -514,12 +530,14 @@ export class RunStructuredObjectiveGenerationWorkflow {
   private async finishValidationSteps(
     aggregate: GenerationAggregate,
     output: GeneratedLectureQuestionSet,
-    referenceDifference: JsonObject
+    referenceDifference: JsonObject,
+    execution: GenerationExecutionCheckpoint
   ): Promise<GenerationAggregate> {
     let current = await this.advanceIfAt(
       aggregate,
       GenerationWorkflowStep.ParseStructure,
-      GenerationWorkflowStep.ValidateSchema
+      GenerationWorkflowStep.ValidateSchema,
+      execution
     );
     if (current.workflow.currentStep === GenerationWorkflowStep.ValidateSchema) {
       const report = this.qualityValidator.validate(
@@ -539,79 +557,53 @@ export class RunStructuredObjectiveGenerationWorkflow {
           validation: { schema: 'valid', domain: 'valid', quality: report.metrics, readiness: report.readiness, pendingEnrichment: toJson(report.pendingIssues), trueQuestionDifference: referenceDifference }
         }
       );
-      await this.persistWorkflow(current, next);
+      await this.persistWorkflow(current, next, execution);
       current = { spec: current.spec, workflow: next };
     }
     if (current.workflow.currentStep === GenerationWorkflowStep.ValidateDomain) {
       const next = this.machine.advance(current.workflow, GenerationWorkflowStep.QualityReview, this.clock.now());
       const pending = await this.pendingInvocations(current.workflow.id);
       await this.unitOfWork.run(async (context) => {
+        execution.signal.throwIfAborted();
         await this.generationRepository.replaceWorkflow(next, current.workflow.version, context);
         for (const invocation of pending) {
+          execution.signal.throwIfAborted();
           await this.invocationRepository.updateValidation(
             invocation.id, InvocationValidationStatus.Valid, undefined, context
           );
         }
+        execution.signal.throwIfAborted();
       });
+      execution.workflow = next;
       current = { spec: current.spec, workflow: next };
     }
-    current = await this.advanceIfAt(current, GenerationWorkflowStep.QualityReview, GenerationWorkflowStep.StageResult);
+    current = await this.advanceIfAt(current, GenerationWorkflowStep.QualityReview, GenerationWorkflowStep.StageResult, execution);
     return current;
   }
 
   private async advanceIfAt(
     aggregate: GenerationAggregate,
     currentStep: GenerationWorkflowRecord['currentStep'],
-    nextStep: GenerationWorkflowRecord['currentStep']
+    nextStep: GenerationWorkflowRecord['currentStep'],
+    execution: GenerationExecutionCheckpoint
   ): Promise<GenerationAggregate> {
     if (aggregate.workflow.currentStep !== currentStep) return aggregate;
     const next = this.machine.advance(aggregate.workflow, nextStep, this.clock.now());
-    await this.persistWorkflow(aggregate, next);
+    await this.persistWorkflow(aggregate, next, execution);
     return { spec: aggregate.spec, workflow: next };
   }
 
-  private persistWorkflow(aggregate: GenerationAggregate, next: GenerationWorkflowRecord): Promise<void> {
-    return this.unitOfWork.runAutocommit((context) => (
-      this.generationRepository.replaceWorkflow(next, aggregate.workflow.version, context)
-    ));
-  }
-
-  private async recordFailure(
-    workflowId: WorkflowId,
-    invocation: AIInvocation | undefined,
-    error: unknown,
-    cancelled: boolean
+  private async persistWorkflow(
+    aggregate: GenerationAggregate,
+    next: GenerationWorkflowRecord,
+    execution: GenerationExecutionCheckpoint
   ): Promise<void> {
-    const aggregate = await this.generationRepository.findByWorkflowId(workflowId);
-    if (!aggregate || isTerminal(aggregate.workflow)) return;
-    const code = errorCode(error, cancelled);
-    const terminal = cancelled
-      ? this.machine.cancel(aggregate.workflow, this.clock.now())
-      : this.machine.fail(aggregate.workflow, code, this.clock.now());
-    const pending = invocation ? [] : await this.pendingInvocations(workflowId);
     await this.unitOfWork.run(async (context) => {
-      if (invocation) {
-        await this.invocationRepository.append({
-          ...invocation,
-          validationStatus: cancelled ? InvocationValidationStatus.Cancelled : InvocationValidationStatus.Invalid,
-          errorCode: code
-        }, context);
-      } else {
-        for (const pendingInvocation of pending) {
-          await this.invocationRepository.updateValidation(
-            pendingInvocation.id,
-            cancelled ? InvocationValidationStatus.Cancelled : InvocationValidationStatus.Invalid,
-            code,
-            context
-          );
-        }
-      }
-      await this.generationRepository.replaceWorkflow(terminal, aggregate.workflow.version, context);
+      execution.signal.throwIfAborted();
+      await this.generationRepository.replaceWorkflow(next, aggregate.workflow.version, context);
+      execution.signal.throwIfAborted();
     });
-  }
-
-  private async pendingInvocation(workflowId: WorkflowId): Promise<AIInvocation | undefined> {
-    return (await this.pendingInvocations(workflowId)).at(-1);
+    execution.workflow = next;
   }
 
   private async pendingInvocations(workflowId: WorkflowId): Promise<readonly AIInvocation[]> {
@@ -894,24 +886,6 @@ function structuredRepairMessages(
       ].join('\n')
     }
   ] as const;
-}
-
-function isTerminal(workflow: GenerationWorkflowRecord): boolean {
-  return workflow.status === GenerationWorkflowStatus.Committed
-    || workflow.status === GenerationWorkflowStatus.Failed
-    || workflow.status === GenerationWorkflowStatus.Cancelled;
-}
-
-function errorCode(error: unknown, cancelled: boolean): string {
-  if (cancelled) return 'generation.cancelled';
-  if (isAbortError(error)) return 'generation.process_interrupted';
-  if (error instanceof GeneratedContentParseError) return error.code;
-  if (error instanceof ProviderGatewayError) return `provider.${error.kind}`;
-  return 'generation.unexpected_failure';
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
 }
 
 function toJson(value: unknown): JsonValue {

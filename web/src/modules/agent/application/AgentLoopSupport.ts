@@ -7,6 +7,23 @@ import {
 import type { AgentCompletionExpectation } from '../contracts/AgentRuntimePorts';
 import type { AgentSkillActivation } from '../domain/AgentSkillRegistry';
 
+/** The request cannot fit the model context even after compaction. */
+export class AgentContextBudgetError extends Error {
+  readonly code = 'agent.context_budget_exceeded';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'AgentContextBudgetError';
+  }
+}
+
+/** Shown under an answer that hit the output limit, so a cut-off never looks complete. */
+export const OUTPUT_LIMIT_NOTICE = '（已达长度上限，回复可能不完整。可以回复“继续”让我接着写。）';
+
+export function withOutputLimitNotice(text: string, truncated: boolean): string {
+  return truncated && text.trim() ? `${text.trimEnd()}\n\n${OUTPUT_LIMIT_NOTICE}` : text;
+}
+
 export type AgentGuidanceConsumer = () => readonly ModelMessage[] | Promise<readonly ModelMessage[]>;
 
 export interface AgentLoopLimitOptions {
@@ -47,7 +64,7 @@ export function compileAgentLoopTurnContext(input: {
   const toolTokens = estimateTextTokens(stableJson(input.tools));
   const fixedTokens = systemTokens + toolTokens + input.outputReserveTokens;
   if (fixedTokens >= input.maxContextTokens) {
-    throw new Error('Agent system, tools and output reserve exceed the model context budget');
+    throw new AgentContextBudgetError('Agent system, tools and output reserve exceed the model context budget');
   }
   const messages = compactAgentLoopMessages(
     input.messages,
@@ -55,7 +72,7 @@ export function compileAgentLoopTurnContext(input: {
   );
   const estimatedTokens = fixedTokens + estimateAgentMessageTokens(messages);
   if (estimatedTokens > input.maxContextTokens) {
-    throw new Error('Agent execution evidence exceeds the model context budget');
+    throw new AgentContextBudgetError('Agent execution evidence exceeds the model context budget');
   }
   return {
     system: input.system,
@@ -202,7 +219,7 @@ export function compactAgentLoopMessages(
   ));
   const retainedTokens = estimateAgentMessageTokens(retained);
   if (retainedTokens >= maxTokens) {
-    throw new Error('Latest Agent tool exchange exceeds the model context budget');
+    throw new AgentContextBudgetError('Latest Agent tool exchange exceeds the model context budget');
   }
   const summaryLines = removed.map(summarizeLoopMessage).filter(Boolean);
   const summary: ModelMessage = {
@@ -260,8 +277,17 @@ export function estimateAgentMessageTokens(messages: readonly ModelMessage[]): n
           sum + (part.type === 'text' ? estimateTextTokens(part.text) : IMAGE_CONTEXT_TOKENS)
         ), 0);
     const calls = message.toolCalls ? estimateTextTokens(stableJson(message.toolCalls)) : 0;
-    return total + contentTokens + calls;
+    return total + contentTokens + calls + estimateReasoningTokens(message);
   }, 0);
+}
+
+function estimateReasoningTokens(message: ModelMessage): number {
+  return (message.reasoning ?? []).reduce((sum, block) => sum + Math.max(
+    Number.isFinite(block.budgetTokens) ? Math.max(0, block.budgetTokens!) : 0,
+    // Opaque signatures may encode hidden thinking beyond the visible summary.
+    // One token per encoded character is deliberately conservative, not a tokenizer.
+    estimateTextTokens(block.thinking ?? '') + (block.signature?.length ?? 0) + (block.data?.length ?? 0)
+  ), 0);
 }
 
 function estimateTextTokens(text: string): number {
@@ -287,14 +313,14 @@ function clipMessageText(message: ModelMessage, maxTokens: number): ModelMessage
   const toolCallTokens = message.toolCalls
     ? estimateTextTokens(stableJson(message.toolCalls))
     : 0;
-  const contentBudget = Math.max(1, maxTokens - toolCallTokens);
+  const contentBudget = Math.max(1, maxTokens - toolCallTokens - estimateReasoningTokens(message));
   if (typeof message.content === 'string') {
     return { ...message, content: clipTextToTokens(message.content, contentBudget) };
   }
   const imageTokens = message.content.filter((part) => part.type === 'image').length
     * IMAGE_CONTEXT_TOKENS;
   if (imageTokens >= contentBudget) {
-    throw new Error('Agent media attachments exceed the model context budget');
+    throw new AgentContextBudgetError('Agent media attachments exceed the model context budget');
   }
   const textParts = message.content.filter((part) => part.type === 'text');
   const perTextBudget = Math.max(1, Math.floor(

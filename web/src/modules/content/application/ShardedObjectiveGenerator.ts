@@ -99,11 +99,14 @@ export class ShardedObjectiveGenerator {
         return job(signal);
       }
     );
+    const lectureOutcome = invocationOutcomes[0];
+    if (lectureOutcome?.status !== 'fulfilled') {
+      throw asError(lectureOutcome?.reason, 'Lecture generation invocation is missing');
+    }
+    const lectureInvocation = lectureOutcome.value;
     const rawInvocations = invocationOutcomes.flatMap((outcome) => (
       outcome.status === 'fulfilled' ? [outcome.value] : []
     ));
-    const lectureInvocation = rawInvocations.find((item) => item.kind === 'lecture');
-    if (!lectureInvocation) throw new Error('Lecture generation invocation is missing');
     const lectureRoot = await this.parseLectureOrRepair(
       lectureInvocation,
       input,
@@ -565,6 +568,10 @@ function mergeAuthorRoots(roots: readonly JsonObject[]): JsonObject {
       Array.isArray(root.questions) ? root.questions : []
     ))
   };
+}
+
+function asError(reason: unknown, fallback: string): Error {
+  return reason instanceof Error ? reason : new Error(reason == null ? fallback : String(reason));
 }
 
 function capabilityCode(aggregate: GenerationAggregate): string {

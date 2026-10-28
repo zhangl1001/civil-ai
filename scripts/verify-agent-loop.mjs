@@ -309,6 +309,16 @@ try {
   assert.match(composedSystem, /# 自主决策/);
   assert.match(composedSystem, /由你根据当前目标和每轮结果自主决定/);
   assert.match(composedSystem, /tutor\.daily_coaching/);
+  assert.match(composedSystem, /由系统展示确认，用户意图和参数明确时直接调用/, 'the runtime, not prose, asks for confirmation');
+  assert.match(composedSystem, /确认提示只由系统发出[^\n]*不得声称数据已经修改/, 'the model never writes the confirmation prompt or a completion without a tool result');
+  // Live "改成75" took four confirmations when tools and skills told the model to ask first.
+  for (const tool of agent.tutorToolCatalog.filter((candidate) => candidate.requiresConfirmation)) {
+    assert.match(tool.description, /系统会向用户展示确认.*直接调用/, `${tool.name} tells the model to call it directly`);
+    assert.doesNotMatch(tool.description, /执行前必须|再次获得用户确认|明确确认扫描结果后/, `${tool.name} must not ask for a prose confirmation first`);
+  }
+  const goalSkill = agent.tutorSkillCatalog.find((skill) => skill.name === 'tutor.goal_management');
+  assert.doesNotMatch(JSON.stringify(goalSkill), /用户确认后调用|未确认时停留在建议或确认阶段/);
+  assert.match(goalSkill.workflow.steps.at(-1).description, /直接调用 candidate\.change_target/);
   assert.doesNotMatch(composedSystem, /Recommended workflow:|Completion checks|Suggested recovery/);
   assert.doesNotMatch(composedSystem, /\"scope\"|\"entryMode\"/);
   assert.doesNotMatch(
@@ -1404,7 +1414,302 @@ try {
   });
   assert.equal(subAgents.get('tutor.aptitude_specialist').maxTurns, 4);
 
+  const stableStreamEvents = [];
+  let stableDeltasObservedDuringTurn = 0;
+  const stableStreamingLoop = new agent.RunAgentLoop(
+    {
+      async invoke(invocation) {
+        if (stableStreamEvents.filter((event) => event.type === 'model_turn_started').length === 1) {
+          assert(invocation.tools.length > 0, 'the first chat turn offers tools');
+          for (const piece of ['我先看看', '你的档案。']) {
+            await invocation.onDelta?.(piece);
+            if (stableStreamEvents.some((event) => event.type === 'text_delta' && event.text === piece)) {
+              stableDeltasObservedDuringTurn += 1;
+            }
+          }
+          return {
+            text: '我先看看你的档案。',
+            toolCalls: [{ id: 'stable-read', name: 'student_read_profile', arguments: {} }],
+            usage: {}
+          };
+        }
+        await invocation.onDelta?.('## 今日建议');
+        await invocation.onDelta?.('\n先做判断推理。');
+        return { text: '## 今日建议\n先做判断推理。', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { return { content: '{"targetScore":80}', madeProgress: true }; } },
+    { async save() {} },
+    { onEvent(event) { stableStreamEvents.push(event); } }
+  );
+  const stableStreamResult = await stableStreamingLoop.execute({
+    agentRunId: 'agent-run-stable-streaming',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天怎么安排' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-stable-streaming' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'test-model' });
+  assert.equal(stableDeltasObservedDuringTurn, 2, 'the stable loop streams the first turn while the model is writing');
+  assert.equal(stableStreamResult.text, '## 今日建议\n先做判断推理。', 'the stable loop result is the final turn only');
+  assert.deepEqual(
+    stableStreamEvents
+      .filter((event) => ['model_turn_started', 'text_delta', 'tool_call_requested'].includes(event.type))
+      .map((event) => event.type === 'text_delta' ? `text:${event.text}` : event.type),
+    [
+      'model_turn_started',
+      'text:我先看看',
+      'text:你的档案。',
+      'tool_call_requested',
+      'model_turn_started',
+      'text:## 今日建议',
+      'text:\n先做判断推理。'
+    ],
+    'both loops expose the same turn boundaries to the chat'
+  );
+
+  // Thinking-only answers are billed once: no stream->complete fallback, no retries.
+  const invocationLedger = [];
+  const invokeModel = new agent.InvokeAgentModel(
+    {
+      async run(operation) { return operation({}); },
+      async runAutocommit(operation) { return operation({}); }
+    },
+    {
+      async findById(id) { return { run: { id, status: 'running' }, events: [] }; },
+      async hasActiveLease() { return true; },
+      async appendInvocation(invocation) { invocationLedger.push(invocation); },
+      async updateInvocationResult() {},
+      async updateInvocationValidation(id, status, code) { invocationLedger.push({ id, status, code }); }
+    },
+    { now() { return 3_000; }, monotonicNowMs() { return 3_000; } },
+    { next() { return `AiInvocationId:${invocationLedger.length + 1}`; } }
+  );
+  let thinkingOnlySends = 0;
+  const thinkingOnlyGateway = new ai.AnthropicGateway({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-v4-flash'
+  }, {
+    async send(request) {
+      thinkingOnlySends += 1;
+      if (JSON.parse(request.body).stream) {
+        return new Response([
+          { type: 'message_start', message: { id: 'thinking-stream' } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '……' } },
+          { type: 'message_delta', delta: { stop_reason: 'max_tokens' } },
+          { type: 'message_stop' }
+        ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' }
+        });
+      }
+      return new Response(JSON.stringify({ id: 't', content: [{ type: 'thinking', thinking: '……' }], stop_reason: 'max_tokens' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+  });
+  await assert.rejects(invokeModel.execute({
+    agentRunId: 'AgentRunId:thinking-only',
+    modelRole: 'agent.tutor_turn',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    preferStream: true,
+    onDelta() {}
+  }, thinkingOnlyGateway), (error) => {
+    assert.equal(error.kind, ai.ProviderErrorKind.OutputLimit);
+    assert.equal(error.code, 'provider.thinking_only');
+    return true;
+  });
+  assert.equal(thinkingOnlySends, 1, 'a thinking-only answer is one provider call, not a fallback plus retries');
+  assert.equal(invocationLedger.at(-1).code, 'provider.thinking_only', 'the invocation ledger keeps the precise code');
+
+  let emptySends = 0;
+  await assert.rejects(invokeModel.execute({
+    agentRunId: 'AgentRunId:empty',
+    modelRole: 'agent.tutor_turn',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '你好' }],
+    preferStream: true,
+    onDelta() {}
+  }, {
+    provider: ai.ProviderCode.Anthropic,
+    model: 'test-model',
+    async complete() {
+      emptySends += 1;
+      throw new ai.ProviderGatewayError('empty', ai.ProviderErrorKind.EmptyResponse);
+    },
+    async stream() {
+      emptySends += 1;
+      throw new ai.ProviderGatewayError('empty', ai.ProviderErrorKind.EmptyResponse);
+    }
+  }), (error) => error.kind === ai.ProviderErrorKind.EmptyResponse);
+  assert.equal(emptySends, 4, 'an empty answer gets one retry (stream + fallback twice), not four');
+
+  // The stable loop never executes tool calls cut off by the output limit, and marks truncated answers.
+  const truncatedExecutions = [];
+  let truncatedTurn = 0;
+  const truncatedLoop = new agent.RunAgentLoop(
+    {
+      async invoke() {
+        truncatedTurn += 1;
+        if (truncatedTurn === 1) {
+          return {
+            text: '',
+            toolCalls: [{ id: 'cut-call', name: 'student_read_profile', arguments: { scope: 'cur' } }],
+            finishReason: 'max_tokens',
+            usage: {}
+          };
+        }
+        return { text: '先练判断推理，再', finishReason: 'max_tokens', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute(definition) { truncatedExecutions.push(definition.name); return { content: '{}' }; } },
+    { async save() {} }
+  );
+  const truncatedResult = await truncatedLoop.execute({
+    agentRunId: 'agent-run-truncated',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天练什么' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-truncated' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'test-model' });
+  assert.deepEqual(truncatedExecutions, [], 'truncated tool arguments are never executed');
+  assert.match(truncatedResult.text, /^先练判断推理，再/);
+  assert.match(truncatedResult.text, /已达长度上限/, 'a truncated answer tells the user it was cut off');
+
+  const stableReasoning = [{ type: 'thinking', thinking: '先读档案。', signature: 'sig-stable' }];
+  let stableSecondTurn;
+  const reasoningLoop = new agent.RunAgentLoop(
+    {
+      async invoke(invocation) {
+        if (!stableSecondTurn && !invocation.messages.some((message) => message.role === ai.ModelMessageRole.Tool)) {
+          return {
+            text: '',
+            toolCalls: [{ id: 'toolu_stable', name: 'student_read_profile', arguments: {} }],
+            reasoning: stableReasoning,
+            usage: {}
+          };
+        }
+        stableSecondTurn = invocation.messages;
+        return { text: '今天先练判断推理。', usage: {} };
+      }
+    },
+    { async evaluate() { return { decision: agent.AgentToolPolicyDecision.Allow, reasonCode: 'policy.read_allowed' }; } },
+    { async execute() { return { content: '{"targetScore":80}', madeProgress: true }; } },
+    { async save() {} }
+  );
+  await reasoningLoop.execute({
+    agentRunId: 'agent-run-stable-reasoning',
+    system: 'system',
+    messages: [{ role: ai.ModelMessageRole.User, content: '今天练什么' }],
+    tools: [agent.tutorToolCatalog.find((tool) => tool.name === 'student.read_profile')],
+    executionContext: { agentRunId: 'agent-run-stable-reasoning' }
+  }, { provider: ai.ProviderCode.Anthropic, model: 'claude-opus-5' });
+  assert.deepEqual(
+    stableSecondTurn.find((message) => message.toolCalls?.length)?.reasoning,
+    stableReasoning,
+    'the stable loop keeps a tool turn reasoning for replay too'
+  );
+
+  await verifiesReasoningBudget(agent, ai, server);
+  await verifiesMissingToolIdDurableReplay(agent, ai, server);
   console.log('Agent loop verification passed.');
 } finally {
   await server.close();
+}
+
+async function verifiesReasoningBudget(agent, ai, server) {
+  const support = await server.ssrLoadModule('/src/modules/agent/application/AgentLoopSupport.ts');
+  const { PiAgentLoopRuntime } = await server.ssrLoadModule('/src/modules/agent/application/PiAgentLoopRuntime.ts');
+  const adapter = await server.ssrLoadModule('/src/modules/agent/application/pi/PiAgentMessageAdapter.ts');
+  const visible = { role: 'assistant', content: 'Done' };
+  const long = { ...visible, reasoning: [{ type: 'thinking', thinking: '推理'.repeat(20000), signature: 'sig' }] };
+  assert(support.estimateAgentMessageTokens([long]) > 25000, 'R3: 40,000 thinking characters are charged to the input budget');
+  assert.throws(() => support.compactAgentLoopMessages([long], 100), support.AgentContextBudgetError);
+  for (const block of [
+    { type: 'thinking', thinking: 'short', signature: 'x'.repeat(12000) },
+    { type: 'redacted_thinking', data: 'x'.repeat(12000) },
+    { type: 'thinking', thinking: 'short', signature: 'opaque', budgetTokens: 12000 }
+  ]) {
+    const message = { ...visible, reasoning: [block] };
+    const roundTrip = adapter.toModelMessages(adapter.toPiMessages(JSON.parse(JSON.stringify([message]))));
+    assert.deepEqual(roundTrip[0].reasoning, message.reasoning, 'budget and opaque payload survive checkpoint/Pi round trips');
+    assert(support.estimateAgentMessageTokens(roundTrip) >= 12000, 'opaque thinking uses a conservative budget');
+    for (const Runtime of [agent.RunAgentLoop, PiAgentLoopRuntime]) {
+      let calls = 0;
+      const runtime = new Runtime({ async invoke() { calls++; throw new Error('should not send'); } },
+        { async evaluate() { assert.fail('unexpected policy'); } }, { async execute() { assert.fail('unexpected tool'); } }, { async save() {} });
+      await assert.rejects(runtime.execute({
+        agentRunId: 'budget', system: 'system', messages: [
+          { role: 'user', content: 'question' },
+          { ...message, toolCalls: [{ id: 'budget-call', name: 'read', arguments: {} }] },
+          { role: 'tool', toolCallId: 'budget-call', content: 'latest evidence' }
+        ], tools: [],
+        maxContextTokens: 6000, executionContext: { agentRunId: 'budget' }
+      }, { provider: 'anthropic', model: 'test', capabilities: { multimodalInput: true } }), support.AgentContextBudgetError);
+      assert.equal(calls, 0, 'both engines enforce reasoning budget before any model invocation');
+    }
+  }
+  const parsed = ai.parseAnthropicResponse({ content: [{ type: 'thinking', thinking: 'short', signature: 'opaque' }, { type: 'text', text: 'Done' }], usage: { output_tokens: 16000 } });
+  assert.equal(parsed.reasoning[0].budgetTokens, 16000, 'reported output bounds hidden thinking beyond the summary');
+  assert(support.estimateAgentMessageTokens([{ ...visible, reasoning: parsed.reasoning }]) >= 16000);
+  const compacted = support.compactAgentLoopMessages([long, ...Array.from({ length: 18 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'old '.repeat(500) })), { role: 'user', content: 'latest' }], 1500);
+  assert(support.estimateAgentMessageTokens(compacted) <= 1500);
+  assert(!JSON.stringify(compacted).includes('推理'), 'compaction never exposes hidden thinking in its summary');
+}
+
+// R21: real durable executor, with a minimal receipt store; no database or model API.
+async function verifiesMissingToolIdDurableReplay(agent, ai, server) {
+  const { buildAgentLoopCheckpoint } = await server.ssrLoadModule('/src/modules/agent/application/AgentLoopCheckpointing.ts');
+  const parsers = [
+    score => ai.parseOpenAIResponse({ choices: [{ message: { tool_calls: [{ type: 'function', function: { name: 'change', arguments: JSON.stringify({ score }) } }] } }] }),
+    score => ai.parseAnthropicResponse({ content: [{ type: 'tool_use', name: 'change', input: { score } }] }),
+    score => {
+      const acc = new ai.OpenAIStreamAccumulator();
+      acc.append({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'change', arguments: JSON.stringify({ score }) } }] } }] });
+      return acc.response();
+    },
+    score => {
+      const acc = new ai.AnthropicStreamAccumulator();
+      acc.append({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', name: 'change' } });
+      acc.append({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ score }) } });
+      return acc.response();
+    }
+  ];
+  for (const parse of parsers) {
+    const rows = new Map();
+    const receipts = {
+      async claim(receipt) {
+        if (!rows.has(receipt.toolCallId)) rows.set(receipt.toolCallId, receipt);
+        return rows.get(receipt.toolCallId);
+      },
+      async replace(receipt, expected) {
+        assert.equal(rows.get(receipt.toolCallId).version, expected);
+        rows.set(receipt.toolCallId, receipt);
+      }
+    };
+    let score = 0, writes = 0;
+    const executor = new agent.DurableAgentToolExecutor({ async execute(_definition, call) {
+      score = call.arguments.score; writes++; return { content: `score=${score}`, madeProgress: true };
+    } }, receipts, { now: () => 1 });
+    const definition = { name: 'change', description: 'change score', risk: 'write', requiresConfirmation: false, enabledFor: ['tutor_turn'], inputSchema: { type: 'object', properties: { score: { type: 'number' } }, required: ['score'] } };
+    const first = parse(85).toolCalls[0], second = parse(90).toolCalls[0];
+    await executor.execute(definition, first, { agentRunId: 'id-test' });
+    await executor.execute(definition, second, { agentRunId: 'id-test' });
+    assert.equal(score, 90, 'a missing provider ID must not collide with the earlier turn receipt');
+    const checkpoint = JSON.parse(JSON.stringify(buildAgentLoopCheckpoint({
+      agentRunId: 'id-test', turnCount: 2, toolCallCount: 2,
+      messages: [{ role: 'assistant', content: '', toolCalls: [second] }], signatures: {}, toolAttempts: {},
+      state: { pendingConfirmation: second, activeSkills: [], activeToolNames: ['change'], completedToolNames: [], skillWorkflowState: 'waiting_user', awaitingCompletionVerification: false, pendingCompletionExpectations: [] }
+    })));
+    assert.equal(checkpoint.messages[0].toolCalls[0].id, second.id);
+    assert.equal(checkpoint.pendingConfirmation.id, second.id);
+    const replayed = await executor.execute(definition, checkpoint.pendingConfirmation, { agentRunId: 'id-test' });
+    assert.equal(replayed.content, 'score=90');
+    assert.equal(writes, 2, 'restoring the checkpoint replays the receipt without repeating a business write');
+  }
 }

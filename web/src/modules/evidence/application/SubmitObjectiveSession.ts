@@ -128,6 +128,9 @@ export class SubmitObjectiveSession {
     if (!thread) throw new Error(`Learning thread does not exist: ${command.learningThreadId}`);
     if (thread.thread.status !== 'active') throw new Error(`Learning thread is not active: ${thread.thread.status}`);
     if (!questionSet || questionSet.questionSet.status !== 'ready') throw new Error(`Question set is unavailable: ${command.questionSetId}`);
+    if (questionSet.questionSet.learningThreadId && questionSet.questionSet.learningThreadId !== command.learningThreadId) {
+      throw new Error('Question set is bound to a different learning thread');
+    }
     if (questionSet.questionSet.examCycleId !== thread.thread.examCycleId) throw new Error('Question set and learning thread belong to different exam cycles');
     if (questionSet.questionSet.capabilityNodeId !== thread.thread.primaryCapabilityNodeId) {
       throw new Error('Reference slice only accepts question sets bound to the learning thread primary capability');

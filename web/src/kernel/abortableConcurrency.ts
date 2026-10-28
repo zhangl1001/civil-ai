@@ -1,3 +1,13 @@
+/** A sibling failed; unfinished work may be retried with its parent operation. */
+export class SiblingTaskFailedError extends Error {
+  readonly code = 'execution.sibling_failed';
+
+  constructor(cause: unknown) {
+    super('A sibling task failed.', { cause });
+    this.name = 'SiblingTaskFailedError';
+  }
+}
+
 export async function mapWithAbortableConcurrency<Input, Output>(
   items: readonly Input[],
   concurrency: number,
@@ -20,7 +30,7 @@ export async function mapWithAbortableConcurrency<Input, Output>(
           results[index] = await work(items[index]!, index, signal);
         } catch (error) {
           firstError ??= error;
-          siblingController.abort(error);
+          siblingController.abort(new SiblingTaskFailedError(error));
           throw error;
         }
       }

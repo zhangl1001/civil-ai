@@ -18,6 +18,14 @@ export class IndexedDbGenerationRepository implements GenerationRepository {
 
   async create(aggregate: GenerationAggregate, context: TransactionContext): Promise<void> {
     this.transactionScope.stage(context, {
+      type: 'check', store: TutorIndexedDbStore.GenerationAggregates,
+      check: (values) => {
+        if ((values as readonly StoredGenerationAggregate[]).some((value) => value.idempotencyKey === aggregate.workflow.idempotencyKey)) {
+          throw new Error(`Generation idempotency key already exists: ${aggregate.workflow.idempotencyKey}`);
+        }
+      }
+    });
+    this.transactionScope.stage(context, {
       type: 'add',
       store: TutorIndexedDbStore.GenerationAggregates,
       value: toStored(aggregate)
@@ -29,15 +37,16 @@ export class IndexedDbGenerationRepository implements GenerationRepository {
     expectedVersion: number,
     context: TransactionContext
   ): Promise<void> {
-    const current = await this.findByWorkflowId(workflow.id);
-    if (!current || current.workflow.version !== expectedVersion) {
-      throw new Error(`Generation workflow version conflict: ${workflow.id}`);
-    }
     if (workflow.version !== expectedVersion + 1) throw new Error('Generation workflow version must advance by one');
     this.transactionScope.stage(context, {
-      type: 'put',
+      type: 'update',
       store: TutorIndexedDbStore.GenerationAggregates,
-      value: toStored({ spec: current.spec, workflow })
+      key: workflow.id,
+      update: (value) => {
+        const current = (value as StoredGenerationAggregate | undefined)?.aggregate;
+        if (!current || current.workflow.version !== expectedVersion) throw new Error(`Generation workflow version conflict: ${workflow.id}`);
+        return toStored({ spec: current.spec, workflow });
+      }
     });
   }
 

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from '../web/node_modules/vite/dist/node/index.js';
 import { Marked, marked } from '../web/node_modules/marked/lib/marked.esm.js';
-import markedKatex from '../web/node_modules/marked-katex-extension/src/index.js';
+import markedKatex from '../web/node_modules/marked-katex-extension/lib/index.esm.js';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '..');

@@ -1,45 +1,39 @@
 import type { ExamCycleId } from '@/kernel/public';
 import type { TransactionContext } from '../../contracts/UnitOfWork';
 import type { IndexedDbTransactionScope } from './IndexedDbUnitOfWork';
-import type { TutorDataMaintenance } from '../../contracts/TutorDataMaintenance';
 import {
+  holdsLearningRecords,
+  LearningDataPresentError,
+  LearningDataStorage,
+  type LearningDataRecord,
+  type LearningDataSnapshot,
+  type TutorDataMaintenance
+} from '../../contracts/TutorDataMaintenance';
+import {
+  assertSnapshotFits,
+  foreignRecordsError,
+  snapshotRows,
+  sourceIdentityConflictError
+} from '../../internal/LearningDataSnapshotPolicy';
+import {
+  citedQuestionSourceIds,
+  keyOf,
+  learningRecordStores,
+  learningRecordsOf,
+  text,
+  type RowsByStore
+} from './IndexedDbLearningRecords';
+import {
+  TUTOR_INDEXEDDB_VERSION,
   TutorIndexedDb,
   TutorIndexedDbStore,
   type IndexedDbWriteOperation
 } from './TutorIndexedDb';
 
-type Row = Record<string, unknown>;
-
-const cycleStores = [
-  TutorIndexedDbStore.ContentQuestionSetBundles,
-  TutorIndexedDbStore.GenerationAggregates,
-  TutorIndexedDbStore.LearningThreadAggregates,
-  TutorIndexedDbStore.LearningSessionFacts,
-  TutorIndexedDbStore.ErrorDiagnoses,
-  TutorIndexedDbStore.ErrorDiagnosisConfirmations,
-  TutorIndexedDbStore.AgentRunAggregates,
-  TutorIndexedDbStore.MasteryTracks,
-  TutorIndexedDbStore.MasterySnapshots,
-  TutorIndexedDbStore.ReviewQueue,
-  TutorIndexedDbStore.DailyPlanAggregates,
-  TutorIndexedDbStore.LearningEvidenceAggregates,
-  TutorIndexedDbStore.ProactiveSignals,
-  TutorIndexedDbStore.LearningProgress,
-  TutorIndexedDbStore.LearningAssets,
-  TutorIndexedDbStore.QuestionImportDrafts,
-  TutorIndexedDbStore.QuestionReferencePacks,
-  TutorIndexedDbStore.TutorCycleConclusions,
-  TutorIndexedDbStore.AbilityCalibrationSnapshots
-] as const;
-
-const linkedStores = [
-  TutorIndexedDbStore.AgentToolReceipts,
-  TutorIndexedDbStore.QuestionSourceLinks,
-  TutorIndexedDbStore.QuestionLineages,
-  TutorIndexedDbStore.QuestionSourceImportReceipts,
-  TutorIndexedDbStore.QuestionImportCandidates,
-  TutorIndexedDbStore.QuestionImportPublishReceipts
-] as const;
+const snapshotGroups = {
+  records: new Set<string>(learningRecordStores),
+  references: new Set<string>([TutorIndexedDbStore.QuestionSources])
+};
 
 export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
   constructor(
@@ -48,93 +42,14 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
   ) {}
 
   async clearLearningData(examCycleId: ExamCycleId, context?: TransactionContext): Promise<number> {
-    const rowsByStore = new Map<TutorIndexedDbStore, readonly Row[]>();
-    for (const store of cycleStores) {
-      rowsByStore.set(store, await this.database.getAll<Row>(store));
-    }
-    const diagnosisIds = idsMatching(rowsByStore, TutorIndexedDbStore.ErrorDiagnoses, examCycleId, 'id');
-    const workflowIds = idsMatching(rowsByStore, TutorIndexedDbStore.GenerationAggregates, examCycleId, 'workflowId');
-    const questionSetIds = idsMatching(
-      rowsByStore,
-      TutorIndexedDbStore.ContentQuestionSetBundles,
-      examCycleId,
-      'questionSetId'
-    );
-    const agentRunIds = idsMatching(rowsByStore, TutorIndexedDbStore.AgentRunAggregates, examCycleId, 'runId');
-    const learningThreadIds = idsMatching(rowsByStore, TutorIndexedDbStore.LearningThreadAggregates, examCycleId, 'threadId');
-    const learningSessionIds = idsMatching(rowsByStore, TutorIndexedDbStore.LearningSessionFacts, examCycleId, 'sessionId');
-    const learningEvidenceIds = idsMatching(rowsByStore, TutorIndexedDbStore.LearningEvidenceAggregates, examCycleId, 'evidenceId');
-    const dailyPlanIds = ownedKeysMatching(rowsByStore, TutorIndexedDbStore.DailyPlanAggregates, examCycleId);
-    const reviewQueueIds = ownedKeysMatching(rowsByStore, TutorIndexedDbStore.ReviewQueue, examCycleId);
-    const draftIds = idsMatching(rowsByStore, TutorIndexedDbStore.QuestionImportDrafts, examCycleId, 'id');
-    const questionIds = questionIdsMatching(rowsByStore, examCycleId);
-    const linkedRows = new Map<TutorIndexedDbStore, readonly Row[]>();
-    for (const store of linkedStores) linkedRows.set(store, await this.database.getAll<Row>(store));
-    const sourceIds = linkedSourceIds(linkedRows, questionIds, draftIds);
+    const records = learningRecordsOf(await this.readStores(learningRecordStores), examCycleId);
     const operations: IndexedDbWriteOperation[] = [];
-
-    for (const [store, rows] of rowsByStore) {
-      rows.filter((row) => matchesCycle(row, examCycleId)).forEach((row) => {
+    for (const [store, rows] of records) {
+      rows.forEach((row) => {
         const key = keyOf(store, row);
         if (key) operations.push({ type: 'delete', store, key });
-        if (store === TutorIndexedDbStore.AgentRunAggregates) {
-          const idempotencyKey = text(row.idempotencyKey);
-          if (idempotencyKey) {
-            operations.push({
-              type: 'delete',
-              store: TutorIndexedDbStore.AgentRunIdempotency,
-              key: idempotencyKey
-            });
-          }
-        }
       });
     }
-    await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.ErrorDiagnosisProjections, (row) => (
-      diagnosisIds.has(text(row.diagnosisId))
-    ));
-    await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.AIInvocations, (row) => (
-      workflowIds.has(text(row.workflowId))
-    ));
-    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.AgentToolReceipts, (row) => (
-      agentRunIds.has(text(row.agentRunId))
-    ));
-    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionSourceImportReceipts, (row) => (
-      sourceIds.has(text(row.sourceId))
-    ));
-    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionImportPublishReceipts, (row) => (
-      draftIds.has(text(row.draftId))
-    ));
-    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionImportCandidates, (row) => (
-      draftIds.has(text(row.draftId))
-    ));
-    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionSourceLinks, (row) => (
-      questionIds.has(text(row.questionId))
-    ));
-    appendMatchingDeletes(linkedRows, operations, TutorIndexedDbStore.QuestionLineages, (row) => (
-      questionIds.has(text(row.questionId)) || questionIds.has(text(row.parentQuestionId))
-    ));
-    await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.DomainOutbox, (row) => {
-      const aggregateId = text(row.aggregateId);
-      const aggregateType = text(row.aggregateType);
-      if (aggregateType === 'learning_thread') return learningThreadIds.has(aggregateId);
-      if (aggregateType === 'tutor_agent_run') return agentRunIds.has(aggregateId);
-      if (aggregateType === 'error_diagnosis') return diagnosisIds.has(aggregateId);
-      if (aggregateType === 'learning_session') return learningSessionIds.has(aggregateId);
-      if (aggregateType === 'learning_evidence') return learningEvidenceIds.has(aggregateId);
-      if (aggregateType === 'generation_workflow') return workflowIds.has(aggregateId);
-      if (aggregateType === 'question_set') return questionSetIds.has(aggregateId);
-      return false;
-    });
-    await appendLinkedDeletes(this.database, operations, TutorIndexedDbStore.SystemMessages, (row) => {
-      const sourceId = text(row.sourceId);
-      const sourceType = text(row.sourceType);
-      if (sourceType === 'exam_cycle') return sourceId === examCycleId;
-      if (sourceType === 'agent_run') return agentRunIds.has(sourceId);
-      if (sourceType === 'daily_plan') return dailyPlanIds.has(sourceId);
-      if (sourceType === 'review_queue') return reviewQueueIds.has(sourceId);
-      if (sourceType === 'learning_session') return learningSessionIds.has(sourceId);
-      return false;
-    });
     if (context) {
       operations.forEach((operation) => this.scope.stage(context, operation));
     } else {
@@ -143,129 +58,85 @@ export class IndexedDbTutorDataMaintenance implements TutorDataMaintenance {
     return operations.length;
   }
 
-}
-
-function questionIdsMatching(
-  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
-  examCycleId: string
-): ReadonlySet<string> {
-  const ids = new Set<string>();
-  (rowsByStore.get(TutorIndexedDbStore.ContentQuestionSetBundles) || [])
-    .filter((row) => matchesCycle(row, examCycleId))
-    .forEach((row) => {
-      const bundle = record(row.bundle);
-      array(bundle.questions).forEach((question) => {
-        const id = text(record(question).id);
-        if (id) ids.add(id);
-      });
-    });
-  return ids;
-}
-
-function linkedSourceIds(
-  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
-  questionIds: ReadonlySet<string>,
-  draftIds: ReadonlySet<string>
-): ReadonlySet<string> {
-  const ids = new Set<string>();
-  (rowsByStore.get(TutorIndexedDbStore.QuestionSourceLinks) || []).forEach((row) => {
-    if (!questionIds.has(text(row.questionId))) return;
-    const sourceId = text(row.sourceId);
-    if (sourceId) ids.add(sourceId);
-  });
-  (rowsByStore.get(TutorIndexedDbStore.QuestionImportPublishReceipts) || []).forEach((row) => {
-    if (!draftIds.has(text(row.draftId))) return;
-    const sourceId = text(row.sourceId);
-    if (sourceId) ids.add(sourceId);
-  });
-  return ids;
-}
-
-function appendMatchingDeletes(
-  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
-  operations: IndexedDbWriteOperation[],
-  store: TutorIndexedDbStore,
-  matches: (row: Row) => boolean
-): void {
-  (rowsByStore.get(store) || []).filter(matches).forEach((row) => {
-    const key = keyOf(store, row);
-    if (key !== undefined) operations.push({ type: 'delete', store, key });
-  });
-}
-
-function idsMatching(
-  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
-  store: TutorIndexedDbStore,
-  examCycleId: string,
-  key: string
-): ReadonlySet<string> {
-  return new Set((rowsByStore.get(store) || [])
-    .filter((row) => matchesCycle(row, examCycleId))
-    .map((row) => text(row[key]))
-    .filter(Boolean));
-}
-
-function ownedKeysMatching(
-  rowsByStore: ReadonlyMap<TutorIndexedDbStore, readonly Row[]>,
-  store: TutorIndexedDbStore,
-  examCycleId: string
-): ReadonlySet<string> {
-  return new Set((rowsByStore.get(store) || [])
-    .filter((row) => matchesCycle(row, examCycleId))
-    .map((row) => keyOf(store, row))
-    .filter((key): key is string => typeof key === 'string' && Boolean(key)));
-}
-
-async function appendLinkedDeletes(
-  database: TutorIndexedDb,
-  operations: IndexedDbWriteOperation[],
-  store: TutorIndexedDbStore,
-  matches: (row: Row) => boolean
-): Promise<void> {
-  const rows = await database.getAll<Row>(store);
-  rows.filter(matches).forEach((row) => {
-    const key = keyOf(store, row);
-    if (key) operations.push({ type: 'delete', store, key });
-  });
-}
-
-function matchesCycle(row: Row, examCycleId: string): boolean {
-  if (text(row.examCycleId) === examCycleId || text(row.examCycleKey) === examCycleId) return true;
-  return ['aggregate', 'run', 'plan', 'spec', 'session', 'asset', 'bundle']
-    .some((key) => {
-      const nested = record(row[key]);
-      return text(nested.examCycleId) === examCycleId
-        || text(record(nested.spec).examCycleId) === examCycleId
-        || text(record(nested.questionSet).examCycleId) === examCycleId;
-    });
-}
-
-function keyOf(store: TutorIndexedDbStore, row: Row): IDBValidKey | undefined {
-  if (store === TutorIndexedDbStore.DomainOutbox || store === TutorIndexedDbStore.SystemMessages) return text(row.id);
-  if (store === TutorIndexedDbStore.ContentQuestionSetBundles) return text(row.questionSetId);
-  if (store === TutorIndexedDbStore.GenerationAggregates) return text(row.workflowId);
-  if (store === TutorIndexedDbStore.LearningThreadAggregates) return text(row.threadId);
-  if (store === TutorIndexedDbStore.LearningSessionFacts) return text(row.sessionId);
-  if (store === TutorIndexedDbStore.ErrorDiagnosisProjections) return text(row.diagnosisId);
-  if (store === TutorIndexedDbStore.AgentRunAggregates) return text(row.runId);
-  if (store === TutorIndexedDbStore.DailyPlanAggregates) return text(record(row.plan).id);
-  if (store === TutorIndexedDbStore.LearningEvidenceAggregates) return text(row.evidenceId);
-  if (store === TutorIndexedDbStore.AgentToolReceipts) {
-    const agentRunId = text(row.agentRunId);
-    const toolCallId = text(row.toolCallId);
-    return agentRunId && toolCallId ? [agentRunId, toolCallId] : undefined;
+  async requireNoLearningData(examCycleId: ExamCycleId, context: TransactionContext): Promise<void> {
+    if (holdsLearningRecords(learningRecordsOf(await this.readStores(learningRecordStores), examCycleId).values())) {
+      throw new LearningDataPresentError();
+    }
+    // The read above ran in its own transaction. Repeat it inside the commit, ahead of
+    // the caller's writes, so a record another writer adds in between still aborts it.
+    const rows = new Map<TutorIndexedDbStore, readonly LearningDataRecord[]>();
+    learningRecordStores.forEach((store, index) => this.scope.stage(context, {
+      type: 'check',
+      store,
+      check: (values) => {
+        rows.set(store, values as readonly LearningDataRecord[]);
+        if (index === learningRecordStores.length - 1
+          && holdsLearningRecords(learningRecordsOf(rows, examCycleId).values())) {
+          throw new LearningDataPresentError();
+        }
+      }
+    }));
   }
-  return text(row.id);
-}
 
-function array(value: unknown): readonly unknown[] {
-  return Array.isArray(value) ? value : [];
-}
+  async exportLearningData(examCycleId: ExamCycleId): Promise<LearningDataSnapshot> {
+    const rows = await this.readStores([...learningRecordStores, TutorIndexedDbStore.QuestionSources]);
+    const records = learningRecordsOf(rows, examCycleId);
+    const sourceIds = citedQuestionSourceIds(records);
+    return {
+      storage: LearningDataStorage.IndexedDb,
+      schemaVersion: TUTOR_INDEXEDDB_VERSION,
+      records: Object.fromEntries(learningRecordStores.map((store) => [store, records.get(store) ?? []])),
+      references: {
+        [TutorIndexedDbStore.QuestionSources]: (rows.get(TutorIndexedDbStore.QuestionSources) ?? [])
+          .filter((row) => sourceIds.has(text(row.id)))
+      }
+    };
+  }
 
-function record(value: unknown): Row {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
-}
+  async restoreLearningData(
+    examCycleId: ExamCycleId,
+    snapshot: LearningDataSnapshot,
+    context: TransactionContext
+  ): Promise<number> {
+    assertSnapshotFits(snapshot, LearningDataStorage.IndexedDb, TUTOR_INDEXEDDB_VERSION, snapshotGroups);
+    const provided = new Map(learningRecordStores.map((store) => [store, snapshotRows(snapshot.records, store)]));
+    // The same selection clearLearningData uses must claim every record, or the file mixes in another cycle.
+    const owned = learningRecordsOf(provided, examCycleId);
+    for (const store of learningRecordStores) {
+      if ((owned.get(store)?.length ?? 0) !== (provided.get(store)?.length ?? 0)) throw foreignRecordsError(store);
+    }
+    const sources = await this.database.getAll<LearningDataRecord>(TutorIndexedDbStore.QuestionSources);
+    const existingSources = new Set(sources.map((row) => text(row.id)));
+    // `add` runs after the cleanup's deletes in the same batch; a key another cycle still owns aborts it.
+    let restored = 0;
+    for (const [store, rows] of provided) {
+      rows.forEach((value) => this.scope.stage(context, { type: 'add', store, value }));
+      restored += rows.length;
+    }
+    for (const source of snapshotRows(snapshot.references, TutorIndexedDbStore.QuestionSources)) {
+      if (existingSources.has(text(source.id))) continue;
+      // Ids are per device: the same source imported again here has another id and the unique hash indexes.
+      const twin = sources.find((row) => (
+        (text(row.identityHash) && row.identityHash === source.identityHash)
+        || (text(row.contentHash) && row.contentHash === source.contentHash)
+      ));
+      if (twin) throw sourceIdentityConflictError(text(source.paperName) || text(source.provider) || text(source.id));
+      this.scope.stage(context, { type: 'add', store: TutorIndexedDbStore.QuestionSources, value: source });
+    }
+    return restored;
+  }
 
-function text(value: unknown): string {
-  return typeof value === 'string' ? value : '';
+  restoreLegacyRecords<T>(
+    _examCycleId: ExamCycleId,
+    _context: TransactionContext,
+    write: () => Promise<T>
+  ): Promise<T> {
+    // IndexedDB keeps no foreign keys, so legacy records need no deferred checks.
+    return write();
+  }
+
+  private async readStores(stores: readonly TutorIndexedDbStore[]): Promise<RowsByStore> {
+    const rows = await Promise.all(stores.map((store) => this.database.getAll<LearningDataRecord>(store)));
+    return new Map(stores.map((store, index) => [store, rows[index]]));
+  }
 }

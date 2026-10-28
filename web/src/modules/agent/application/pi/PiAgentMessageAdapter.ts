@@ -2,6 +2,7 @@ import {
   ModelMessageRole,
   type ModelMessage,
   type ModelMessageContent,
+  type ModelReasoningBlock,
   type ModelToolCall
 } from '@/capabilities/ai-runtime/public';
 import type {
@@ -9,8 +10,12 @@ import type {
 } from '@earendil-works/pi-agent-core';
 import type {
   AssistantMessage as PiAssistantMessage,
-  Message as PiMessage
+  Message as PiMessage,
+  ThinkingContent as PiThinkingContent
 } from '@earendil-works/pi-ai';
+
+/** Pi thinking content carrying the provider-side replay metadata that Pi itself ignores. */
+type BudgetedPiThinking = PiThinkingContent & Pick<ModelReasoningBlock, 'budgetTokens' | 'placement'>;
 
 export function toPiMessages(messages: readonly ModelMessage[]): PiAgentMessage[] {
   const toolNames = toolNamesByCallId(messages);
@@ -35,6 +40,7 @@ export function toPiMessages(messages: readonly ModelMessage[]): PiAgentMessage[
     return {
       role: 'assistant',
       content: [
+        ...(message.reasoning ?? []).map(toPiThinking),
         ...(contentText(message.content)
           ? [{ type: 'text' as const, text: contentText(message.content) }]
           : []),
@@ -75,10 +81,12 @@ export function toModelMessages(
       });
       return;
     }
+    const reasoning = assistantReasoning(message);
     result.push({
       role: ModelMessageRole.Assistant,
       content: assistantText(message),
-      toolCalls: assistantToolCalls(message)
+      toolCalls: assistantToolCalls(message),
+      ...(reasoning.length ? { reasoning } : {})
     });
   });
   return result;
@@ -93,6 +101,28 @@ export function assistantText(message: PiAssistantMessage): string {
     .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
     .join('');
+}
+
+/** Provider reasoning of an assistant turn, kept verbatim for replay; never user-visible. */
+export function assistantReasoning(message: PiAssistantMessage): ModelReasoningBlock[] {
+  return message.content
+    .filter((part): part is BudgetedPiThinking => part.type === 'thinking')
+    .map((part): ModelReasoningBlock => ({ ...(part.redacted
+      ? { type: 'redacted_thinking', data: part.thinkingSignature ?? '' }
+      : { type: 'thinking', thinking: part.thinking, ...(part.thinkingSignature ? { signature: part.thinkingSignature } : {}) }),
+      ...(part.budgetTokens !== undefined ? { budgetTokens: part.budgetTokens } : {}),
+      ...(part.placement ? { placement: part.placement } : {})
+    }));
+}
+
+/** Pi keeps a redacted block's opaque payload in `thinkingSignature`. */
+export function toPiThinking(block: ModelReasoningBlock): BudgetedPiThinking {
+  return { ...(block.type === 'redacted_thinking'
+    ? { type: 'thinking', thinking: '', thinkingSignature: block.data ?? '', redacted: true }
+    : { type: 'thinking', thinking: block.thinking ?? '', ...(block.signature ? { thinkingSignature: block.signature } : {}) }),
+    ...(block.budgetTokens !== undefined ? { budgetTokens: block.budgetTokens } : {}),
+    ...(block.placement ? { placement: block.placement } : {})
+  };
 }
 
 export function assistantToolCalls(message: PiAssistantMessage): ModelToolCall[] {

@@ -7,10 +7,29 @@ import type {
   AgentToolPolicy
 } from '../contracts/AgentRuntimePorts';
 import type { AgentLoopResult, AgentLoopRuntime, RunAgentLoopCommand } from './AgentLoopContracts';
-import { PiAgentLoopRuntime } from './PiAgentLoopRuntime';
 import { RunAgentLoop } from './RunAgentLoop';
 
-/** Runs Pi by default and falls back only before any externally visible effect. */
+type PiAgentLoopRuntimeModule = typeof import('./PiAgentLoopRuntime');
+
+let piRuntimeModule: Promise<PiAgentLoopRuntimeModule> | undefined;
+
+/**
+ * Pi and its provider, schema and diff dependencies load with the first Agent
+ * turn instead of the app shell. A failed chunk load is forgotten so the next
+ * turn fetches it again rather than replaying the same rejection.
+ */
+function loadPiAgentLoopRuntime(): Promise<PiAgentLoopRuntimeModule> {
+  piRuntimeModule ??= import('./PiAgentLoopRuntime').catch((error: unknown) => {
+    piRuntimeModule = undefined;
+    throw error;
+  });
+  return piRuntimeModule;
+}
+
+/**
+ * Runs Pi by default and falls back only before model invocation or tool effects.
+ * Failing to load the Pi chunk is such a failure: nothing has run yet.
+ */
 export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
   constructor(
     private readonly modelInvoker: AgentModelInvoker,
@@ -25,7 +44,15 @@ export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
     gateway: ProviderGateway,
     signal?: AbortSignal
   ): Promise<AgentLoopResult> {
-    const activity = { emittedText: false, startedTool: false };
+    const activity = { emittedText: false, startedTool: false, startedModel: false };
+    const invoker: AgentModelInvoker = {
+      invoke: (...args) => {
+        // Conservative boundary: an invoker can send a paid request before it
+        // throws (including while recording a text-free tool response).
+        activity.startedModel = true;
+        return this.modelInvoker.invoke(...args);
+      }
+    };
     const observer: AgentRuntimeObserver = {
       onEvent: async (event) => {
         if (event.type === 'text_delta' && event.text) activity.emittedText = true;
@@ -37,14 +64,15 @@ export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
         await this.observer?.onEvent(event);
       }
     };
-    const runtime = new PiAgentLoopRuntime(
-      this.modelInvoker,
-      this.policy,
-      this.executor,
-      this.checkpoints,
-      observer
-    );
     try {
+      const { PiAgentLoopRuntime } = await loadPiAgentLoopRuntime();
+      const runtime = new PiAgentLoopRuntime(
+        invoker,
+        this.policy,
+        this.executor,
+        this.checkpoints,
+        observer
+      );
       return await runtime.execute(command, gateway, signal);
     } catch (error) {
       if (!canFallbackToStableLoop(error, signal, activity)) throw error;
@@ -66,9 +94,9 @@ export class LazyPiAgentLoopRuntime implements AgentLoopRuntime {
 function canFallbackToStableLoop(
   error: unknown,
   signal: AbortSignal | undefined,
-  activity: { readonly emittedText: boolean; readonly startedTool: boolean }
+  activity: { readonly emittedText: boolean; readonly startedTool: boolean; readonly startedModel: boolean }
 ): boolean {
-  if (signal?.aborted || activity.emittedText || activity.startedTool) return false;
+  if (signal?.aborted || activity.emittedText || activity.startedTool || activity.startedModel) return false;
   if (error instanceof ProviderGatewayError) return false;
   if (error instanceof DOMException && error.name === 'AbortError') return false;
   const name = error instanceof Error ? error.name : '';

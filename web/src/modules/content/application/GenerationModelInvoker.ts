@@ -18,6 +18,7 @@ import {
 } from '@/kernel/public';
 import type { GenerationAggregate } from '../contracts/GenerationRepository';
 import { generationRequestScheduler } from './GenerationRequestScheduler';
+import { generationFailureCode } from './GenerationWorkflowFailure';
 
 export class GenerationModelInvoker {
   constructor(
@@ -82,26 +83,33 @@ export class GenerationModelInvoker {
       validationStatus: InvocationValidationStatus.Pending,
       createdAt: this.clock.now()
     };
-    await this.unitOfWork.runAutocommit((context) => (
-      this.invocationRepository.append(invocation, context)
-    ));
+    await this.unitOfWork.run(async (context) => {
+      signal.throwIfAborted();
+      await this.invocationRepository.append(invocation, context);
+      signal.throwIfAborted();
+    });
     const started = Number(this.clock.monotonicNowMs());
     try {
       const response = await generationRequestScheduler.run(
         () => gateway.complete({ ...effectiveRequest, requestId: invocationId }, signal),
         signal
       );
-      await this.unitOfWork.runAutocommit((context) => this.invocationRepository.updateResult(
-        invocationId,
-        {
-          providerRequestId: response.providerRequestId,
-          inputTokens: response.usage.inputTokens,
-          outputTokens: response.usage.outputTokens,
-          latencyMs: Math.max(0, Number(this.clock.monotonicNowMs()) - started),
-          finishReason: response.finishReason
-        },
-        context
-      ));
+      signal.throwIfAborted();
+      await this.unitOfWork.run(async (context) => {
+        signal.throwIfAborted();
+        await this.invocationRepository.updateResult(
+          invocationId,
+          {
+            providerRequestId: response.providerRequestId,
+            inputTokens: response.usage.inputTokens,
+            outputTokens: response.usage.outputTokens,
+            latencyMs: Math.max(0, Number(this.clock.monotonicNowMs()) - started),
+            finishReason: response.finishReason
+          },
+          context
+        );
+        signal.throwIfAborted();
+      });
       if (import.meta.env.DEV && typeof window !== 'undefined') {
         console.info('[GenerationInvocation]', JSON.stringify({
           role: modelRole,
@@ -119,7 +127,7 @@ export class GenerationModelInvoker {
           error: error instanceof Error ? error.message : String(error)
         }));
       }
-      await this.markInvalid(invocationId, invocationErrorCode(error, signal.aborted));
+      await this.markInvalid(invocationId, generationFailureCode(error, signal));
       throw error;
     }
   }
@@ -128,7 +136,7 @@ export class GenerationModelInvoker {
     return this.unitOfWork.runAutocommit((context) => (
       this.invocationRepository.updateValidation(
         invocationId,
-        InvocationValidationStatus.Invalid,
+        code === 'generation.cancelled' ? InvocationValidationStatus.Cancelled : InvocationValidationStatus.Invalid,
         code,
         context
       )
@@ -153,15 +161,6 @@ function retryDelayMs(error: unknown, failedAttempt: number): number {
     return Math.max(250, Math.min(12_000, providerDelay));
   }
   return Math.min(4_000, 750 * 2 ** Math.max(0, failedAttempt - 1));
-}
-
-function invocationErrorCode(error: unknown, cancelled: boolean): string {
-  if (cancelled) return 'generation.cancelled';
-  if (error instanceof Error && error.name === 'AbortError') {
-    return 'generation.process_interrupted';
-  }
-  if (error instanceof ProviderGatewayError) return `provider.${error.kind}`;
-  return 'generation.unexpected_failure';
 }
 
 function toJson(value: unknown): JsonValue {

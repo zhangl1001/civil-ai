@@ -12,6 +12,26 @@ export function assertCommittedQuestionSetBundle(bundle: CommittedQuestionSetBun
   if (questionSet.practiceStatus !== QuestionSetPracticeStatus.NotStarted) {
     throw new Error('A newly committed question set must not have practice progress');
   }
+  assertQuestionSetBundleStructure(bundle);
+}
+
+/**
+ * A backed-up set keeps the lifecycle it reached: practised or retired sets are
+ * restored as they were, while the structure a commit guarantees still holds.
+ */
+export function assertRestorableQuestionSetBundle(bundle: CommittedQuestionSetBundle): void {
+  const questionSet = bundle.questionSet;
+  if (questionSet.status !== QuestionSetStatus.Ready && questionSet.status !== QuestionSetStatus.Retired) {
+    throw new Error('A restored question set must be ready or retired');
+  }
+  if (!Object.values(QuestionSetPracticeStatus).includes(questionSet.practiceStatus)) {
+    throw new Error('A restored question set must carry a known practice status');
+  }
+  assertQuestionSetBundleStructure(bundle);
+}
+
+function assertQuestionSetBundleStructure(bundle: CommittedQuestionSetBundle): void {
+  const questionSet = bundle.questionSet;
   if (questionSet.questionCount !== bundle.questions.length || bundle.questions.length === 0) {
     throw new Error('Question set count must match a non-empty question collection');
   }

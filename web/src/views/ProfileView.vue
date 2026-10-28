@@ -147,8 +147,8 @@
               </div>
 
               <div v-else-if="activeSheet === 'reminder'" class="sheet-body">
-                <label>
-                  <span>私教主动程度</span>
+                <div class="sheet-field" role="group" :aria-labelledby="`${fieldId}-proactive`">
+                  <span :id="`${fieldId}-proactive`">私教主动程度</span>
                   <div class="option-group">
                     <button
                       v-for="item in proactiveOptions"
@@ -160,7 +160,7 @@
                       {{ item.label }}
                     </button>
                   </div>
-                </label>
+                </div>
                 <button class="toggle-row toggle-button" type="button" @click="reminderForm.enabled = !reminderForm.enabled">
                   <span>开启每日提醒</span>
                   <i :class="['switch-control', { active: reminderForm.enabled }]" aria-hidden="true"></i>
@@ -236,67 +236,7 @@
                 <p v-if="dataMessage" class="config-message">{{ dataMessage }}</p>
               </div>
 
-              <div v-else class="sheet-body">
-                <label>
-                  <span>服务商</span>
-                  <div class="option-group provider-options">
-                    <button v-for="item in aiProviderOptions" :key="item.value" type="button" :class="{ active: aiForm.provider === item.value }" @click="aiForm.provider = item.value">
-                      {{ item.label }}
-                    </button>
-                  </div>
-                </label>
-                <label>
-                  <span>Base URL</span>
-                  <input v-model="aiForm.baseUrl" placeholder="https://api.openai.com/v1" />
-                </label>
-                <label>
-                  <span>模型</span>
-                  <input v-model="aiForm.model" placeholder="gpt-4o-mini" />
-                </label>
-                <label>
-                  <span>API Key</span>
-                  <input v-model="aiForm.apiKey" type="password" placeholder="sk-..." autocomplete="off" />
-                </label>
-                <button class="toggle-row toggle-button" type="button" @click="aiForm.streamingEnabled = !aiForm.streamingEnabled">
-                  <span>流式输出</span>
-                  <i :class="['switch-control', { active: aiForm.streamingEnabled !== false }]" aria-hidden="true"></i>
-                </button>
-                <label>
-                  <span>并发任务</span>
-                  <div class="option-group concurrency-options">
-                    <button
-                      v-for="count in AI_TASK_CONCURRENCY_OPTIONS"
-                      :key="count"
-                      type="button"
-                      :class="{ active: aiForm.maxConcurrentTasks === count }"
-                      @click="aiForm.maxConcurrentTasks = count"
-                    >
-                      {{ count }}
-                    </button>
-                  </div>
-                  <small>同时最多执行 {{ aiForm.maxConcurrentTasks }} 个 AI 任务，遇到限流会自动降速</small>
-                </label>
-                <WebResearchSettingsFields
-                  v-model:enabled="webResearchForm.enabled"
-                  v-model:provider="webResearchForm.provider"
-                  v-model:api-key="webResearchForm.apiKey"
-                  v-model:jina-api-key="webResearchForm.jinaApiKey"
-                  v-model:brave-api-key="webResearchForm.braveApiKey"
-                  v-model:firecrawl-api-key="webResearchForm.firecrawlApiKey"
-                  v-model:searxng-base-url="webResearchForm.searxngBaseUrl"
-                  :provider-options="webSearchProviderOptions"
-                />
-                <div class="config-actions">
-                  <button type="button" @click="saveAIConfig" :disabled="isSavingConfig">
-                    {{ isSavingConfig ? '保存中...' : '保存配置' }}
-                  </button>
-                  <button class="ghost" type="button" @click="testAIConfig" :disabled="isSavingConfig || isTestingConfig">
-                    {{ isTestingConfig ? '测试中' : '测试' }}
-                  </button>
-                  <button class="ghost" type="button" @click="clearAIConfig">清空</button>
-                </div>
-                <p v-if="configMessage" class="config-message">{{ configMessage }}</p>
-              </div>
+              <AIModelSettingsPanel v-else :settings="aiSettings" />
     </BottomSheet>
 
     <ConfirmDialog
@@ -307,15 +247,25 @@
       tone="danger"
       @confirm="confirmClearLearningData"
     />
+
+    <ConfirmDialog
+      v-model="showImportConfirm"
+      title="导入备份数据"
+      :description="`将用「${pendingBackup?.fileName || '备份文件'}」替换当前工程的学习数据：题目、练习、错题、学习记录、学习计划和 AI 对话，当前内容不会保留。建议先导出一份当前数据。`"
+      confirm-text="确认导入"
+      tone="danger"
+      @confirm="confirmImportLocalData"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onActivated, onDeactivated, onMounted, reactive, ref, useId, watch, shallowRef } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import { useCachedViewRefresh } from '@/components/layout/useCachedViewRefresh';
-import WebResearchSettingsFields from '@/components/settings/WebResearchSettingsFields.vue';
+import AIModelSettingsPanel from '@/components/settings/AIModelSettingsPanel.vue';
+import { useAIModelSettings } from '@/components/settings/useAIModelSettings';
 import BottomSheet from '@/components/layout/BottomSheet.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import AppearanceSettings from '@/components/settings/AppearanceSettings.vue';
@@ -337,20 +287,7 @@ import {
   Trash2Icon,
   UploadIcon
 } from 'lucide-vue-next';
-import {
-  AI_TASK_CONCURRENCY_OPTIONS,
-  type AIConfig,
-  type AIProviderType
-} from '@/domain/ai';
-import {
-  WebSearchFreshness,
-  WebSearchProvider,
-  type WebSearchProviderCode
-} from '@/capabilities/web-research/public';
-import { configuredAIClient } from '@/composition-root/public';
 import { aiConfigService } from '@/services/AIConfigService';
-import { webResearchConfigService } from '@/services/WebResearchConfigService';
-import { webResearchService } from '@/services/WebResearchService';
 import { learningNotificationAdapter, type LearningNotificationStatus } from '@/platform/LearningNotificationAdapter';
 import { dataManagementService, type DataSummary } from '@/services/DataManagementService';
 import { THEME_PRESETS, themeService, type ThemeSettings } from '@/services/ThemeService';
@@ -370,16 +307,22 @@ import {
 // Named so App.vue can hold this tab root in its <KeepAlive> whitelist.
 defineOptions({ name: 'ProfileView' });
 
+const route = useRoute();
 const router = useRouter();
+const fieldId = useId();
 let candidateProfileFeaturePromise: Promise<CandidateProfileFeature> | undefined;
 const cachedCandidateSnapshot = peekCandidateProfileSnapshot();
-const isSavingConfig = ref(false);
-const isTestingConfig = ref(false);
+const aiSettings = useAIModelSettings();
 const isSavingReminder = ref(false);
 const isSavingTargets = ref(false);
 const isDataBusy = ref(false);
 const showClearLearningConfirm = ref(false);
-const configMessage = ref('');
+// Shallow: a parsed backup can be megabytes and must stay plain data for storage.
+const pendingBackup = shallowRef<{ readonly fileName: string; readonly data: unknown } | null>(null);
+const showImportConfirm = computed({
+  get: () => Boolean(pendingBackup.value),
+  set: (open: boolean) => { if (!open) pendingBackup.value = null; }
+});
 const reminderMessage = ref('');
 const profileMessage = ref('');
 const dataMessage = ref('');
@@ -393,35 +336,6 @@ const targetEditSubject = ref<SubjectCode | null>(null);
 const profileStats = ref<Awaited<ReturnType<typeof profileStatsRepository.getStats>> | null>(null);
 const activeSheet = ref<'profile' | 'reminder' | 'ai' | 'data' | 'appearance' | null>(null);
 const appearanceSettings = ref<ThemeSettings>(themeService.getCurrent());
-const aiProviderOptions: Array<{ value: AIProviderType; label: string }> = [
-  { value: 'openai', label: 'OpenAI 兼容协议' },
-  { value: 'anthropic', label: 'Anthropic 原生协议' }
-];
-const webSearchProviderOptions: Array<{ value: WebSearchProviderCode; label: string }> = [
-  { value: WebSearchProvider.Auto, label: '智能自动' },
-  { value: WebSearchProvider.Jina, label: 'Jina Search' },
-  { value: WebSearchProvider.Brave, label: 'Brave Search' },
-  { value: WebSearchProvider.Firecrawl, label: 'Firecrawl' },
-  { value: WebSearchProvider.SearXNG, label: 'SearXNG' }
-];
-const aiForm = reactive<Omit<AIConfig, 'updatedAt'>>({
-  provider: 'openai',
-  apiKey: '',
-  baseUrl: 'https://api.openai.com/v1',
-  model: 'gpt-4o-mini',
-  streamingEnabled: true,
-  maxConcurrentTasks: 3
-});
-const webResearchForm = reactive({
-  enabled: true,
-  provider: WebSearchProvider.Auto as WebSearchProviderCode,
-  apiKey: '',
-  jinaApiKey: '',
-  braveApiKey: '',
-  firecrawlApiKey: '',
-  firecrawlBaseUrl: 'https://api.firecrawl.dev',
-  searxngBaseUrl: ''
-});
 const reminderForm = reactive(learningNotificationAdapter.loadSettings());
 const proactiveLevel = ref<typeof ProactiveLevel[keyof typeof ProactiveLevel]>(
   cachedCandidateSnapshot?.proactiveLevel || ProactiveLevel.Balanced
@@ -443,7 +357,7 @@ const profileHeaderMeta = computed(() => {
     ? `${candidateHome.value.examName} · ${candidateHome.value.examDate}`
     : candidateHomeLoaded.value ? '尚未建立备考档案' : '目标、进度与学习设置';
 });
-const aiCardLabel = computed(() => aiForm.apiKey ? `${aiForm.provider} · ${aiForm.model || '未填模型'}` : '未配置');
+const aiCardLabel = aiSettings.summaryLabel;
 const reminderStatusLabel = computed(() => {
   if (!learningNotificationAdapter.isNative()) return '仅真机可用';
   if (!reminderStatus.value) return '读取中';
@@ -487,9 +401,39 @@ const sheetSubtitle = computed(() => {
 
 onMounted(() => {
   void loadCandidateHome();
-  void loadAIConfig();
+  void aiSettings.load();
   void loadReminderStatus();
   void loadProfileStats();
+  void openRequestedSheet();
+});
+
+/**
+ * `/vue/profile?sheet=ai` opens the model settings, e.g. from the chat sheet.
+ * The request is honoured on first mount, when the cached page is re-activated
+ * with it, and when it arrives while the page is already showing; it is then
+ * removed from the URL so going back or refreshing does not reopen the sheet.
+ */
+let sheetRequestPending = false;
+async function openRequestedSheet(): Promise<void> {
+  if (sheetRequestPending || route.name !== 'VueProfile' || route.query.sheet !== 'ai') return;
+  sheetRequestPending = true;
+  openAISheet();
+  const { sheet: _sheet, ...query } = route.query;
+  try {
+    await router.replace({ query });
+  } finally {
+    sheetRequestPending = false;
+  }
+}
+onActivated(() => void openRequestedSheet());
+watch(() => route.query.sheet, () => void openRequestedSheet());
+
+// Sheets and dialogs are teleported to <body>. This page stays mounted in the
+// tab cache, so one left open would keep covering whatever route comes next.
+onDeactivated(() => {
+  closeSheet();
+  showClearLearningConfirm.value = false;
+  showImportConfirm.value = false;
 });
 
 /**
@@ -532,118 +476,8 @@ function subjectLabel(subject: SubjectCode): string {
   return subject === 'aptitude' ? '行测' : subject === 'essay' ? '申论' : subject;
 }
 
-async function loadAIConfig() {
-  const [config, webConfig] = await Promise.all([
-    aiConfigService.load(),
-    webResearchConfigService.load()
-  ]);
-  aiForm.provider = config.provider as AIProviderType;
-  aiForm.apiKey = config.apiKey;
-  aiForm.baseUrl = config.baseUrl || '';
-  aiForm.model = config.model;
-  aiForm.streamingEnabled = config.streamingEnabled !== false;
-  aiForm.maxConcurrentTasks = config.maxConcurrentTasks;
-  webResearchForm.enabled = webConfig.enabled;
-  webResearchForm.provider = webConfig.provider;
-  webResearchForm.apiKey = webConfig.apiKey;
-  webResearchForm.jinaApiKey = webConfig.jinaApiKey || '';
-  webResearchForm.braveApiKey = webConfig.braveApiKey || '';
-  webResearchForm.firecrawlApiKey = webConfig.firecrawlApiKey || '';
-  webResearchForm.firecrawlBaseUrl = webConfig.firecrawlBaseUrl || 'https://api.firecrawl.dev';
-  webResearchForm.searxngBaseUrl = webConfig.searxngBaseUrl || '';
-}
-
-async function saveAIConfig() {
-  if (isSavingConfig.value) return;
-  isSavingConfig.value = true;
-  configMessage.value = '';
-  try {
-    await Promise.all([
-      aiConfigService.save({
-        provider: aiForm.provider,
-        apiKey: aiForm.apiKey.trim(),
-        baseUrl: aiForm.baseUrl?.trim(),
-        model: aiForm.model.trim(),
-        streamingEnabled: aiForm.streamingEnabled !== false,
-        maxConcurrentTasks: aiForm.maxConcurrentTasks
-      }),
-      webResearchConfigService.save({
-        enabled: webResearchForm.enabled,
-        provider: webResearchForm.provider,
-        apiKey: webResearchForm.apiKey.trim(),
-        jinaApiKey: webResearchForm.jinaApiKey.trim(),
-        braveApiKey: webResearchForm.braveApiKey.trim(),
-        firecrawlApiKey: webResearchForm.firecrawlApiKey.trim(),
-        firecrawlBaseUrl: webResearchForm.firecrawlBaseUrl.trim(),
-        searxngBaseUrl: webResearchForm.searxngBaseUrl.trim()
-      })
-    ]);
-    configMessage.value = aiConfigService.isNativeSecure() ? '已保存到 iOS Keychain' : '已保存到本地开发存储';
-  } finally {
-    isSavingConfig.value = false;
-  }
-}
-
-async function testAIConfig() {
-  if (isTestingConfig.value) return;
-  isTestingConfig.value = true;
-  configMessage.value = '';
-  try {
-    await Promise.all([
-      aiConfigService.save({
-        provider: aiForm.provider,
-        apiKey: aiForm.apiKey.trim(),
-        baseUrl: aiForm.baseUrl?.trim(),
-        model: aiForm.model.trim(),
-        streamingEnabled: aiForm.streamingEnabled !== false,
-        maxConcurrentTasks: aiForm.maxConcurrentTasks
-      }),
-      webResearchConfigService.save({
-        enabled: webResearchForm.enabled,
-        provider: webResearchForm.provider,
-        apiKey: webResearchForm.apiKey.trim(),
-        jinaApiKey: webResearchForm.jinaApiKey.trim(),
-        braveApiKey: webResearchForm.braveApiKey.trim(),
-        firecrawlApiKey: webResearchForm.firecrawlApiKey.trim(),
-        firecrawlBaseUrl: webResearchForm.firecrawlBaseUrl.trim(),
-        searxngBaseUrl: webResearchForm.searxngBaseUrl.trim()
-      })
-    ]);
-    const result = await configuredAIClient.testConnection();
-    await configuredAIClient.testStructuredOutput();
-    if (webResearchForm.enabled) {
-      const search = await webResearchService.search({
-        query: '中国 公务员考试 时政',
-        freshness: WebSearchFreshness.Month,
-        limit: 1
-      });
-      configMessage.value = `模型与网络搜索正常：${result.slice(0, 18)} · ${search.hits.length} 条来源`;
-    } else {
-      configMessage.value = `连接正常：${result.slice(0, 24)}`;
-    }
-  } catch (error) {
-    configMessage.value = error instanceof Error ? error.message : '连接测试失败';
-  } finally {
-    isTestingConfig.value = false;
-  }
-}
-
-async function clearAIConfig() {
-  await Promise.all([aiConfigService.clear(), webResearchConfigService.clear()]);
-  aiForm.apiKey = '';
-  webResearchForm.enabled = true;
-  webResearchForm.provider = WebSearchProvider.Auto;
-  webResearchForm.apiKey = '';
-  webResearchForm.jinaApiKey = '';
-  webResearchForm.braveApiKey = '';
-  webResearchForm.firecrawlApiKey = '';
-  webResearchForm.firecrawlBaseUrl = 'https://api.firecrawl.dev';
-  webResearchForm.searxngBaseUrl = '';
-  configMessage.value = '已清空 AI 配置';
-}
-
 function openAISheet() {
-  configMessage.value = '';
+  aiSettings.status.message = '';
   activeSheet.value = 'ai';
 }
 
@@ -808,6 +642,7 @@ async function exportLocalData() {
   }
 }
 
+/** Reads the chosen backup first; nothing is replaced until the confirmation names it. */
 function importLocalData() {
   if (isDataBusy.value) return;
   const input = document.createElement('input');
@@ -816,20 +651,31 @@ function importLocalData() {
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
-    isDataBusy.value = true;
     dataMessage.value = '';
     try {
-      const backup = JSON.parse(await file.text());
-      const count = await dataManagementService.importBackup(backup);
-      dataMessage.value = `导入完成：${count} 条记录`;
-      await Promise.all([loadCandidateHome(), loadDataSummary()]);
-    } catch (error) {
-      dataMessage.value = error instanceof Error ? error.message : '导入失败';
-    } finally {
-      isDataBusy.value = false;
+      pendingBackup.value = { fileName: file.name, data: JSON.parse(await file.text()) };
+    } catch {
+      dataMessage.value = '无法读取该备份文件，请选择从这里导出的 JSON 备份';
     }
   };
   input.click();
+}
+
+async function confirmImportLocalData() {
+  const backup = pendingBackup.value;
+  pendingBackup.value = null;
+  if (!backup || isDataBusy.value) return;
+  isDataBusy.value = true;
+  dataMessage.value = '';
+  try {
+    const count = await dataManagementService.importBackup(backup.data);
+    dataMessage.value = `导入完成：${count} 条记录`;
+    await Promise.all([loadCandidateHome(), loadDataSummary()]);
+  } catch (error) {
+    dataMessage.value = error instanceof Error ? error.message : '导入失败';
+  } finally {
+    isDataBusy.value = false;
+  }
 }
 
 async function clearLearningData() {

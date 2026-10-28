@@ -1,10 +1,10 @@
+import { modelContextMessages } from '@/ai/ChatContextBuilder';
 import { buildCompanionChatPrompt } from '@/ai/prompts';
 import { buildEssayRepairPrompt, validateEssayQuestion } from '@/ai/QuestionValidation';
 import { BusinessTutorPromptCode, parseStructuredJson } from '@/capabilities/ai-runtime/public';
 import { normalizeMarkdownSource } from '@/capabilities/content-rendering/public';
 import { practiceModuleLabel } from '@/domain/labels';
 import { studyLectureBusinessKey } from '@/domain/studyLecture';
-import { abortableDelay, mapWithAbortableConcurrency } from '@/kernel/public';
 import type { DigestTab } from '@/domain/digest';
 import { aiChatRepository } from '@/services/AIChatRepository';
 import { buildDailyDigestRequest } from '@/services/DailyDigestGenerationPolicy';
@@ -23,6 +23,7 @@ import {
 import { AgentRunInputIncompatibleError } from '@/modules/agent/public';
 import { ExamDeliveryKind, parseExamDeliveryKind } from '@/modules/curriculum/public';
 import { completeFreshGeneratedContent, learningAssetReferences } from './FreshGeneratedContent';
+import { objectiveMockExecutor } from './ObjectiveMockExecutor';
 import type {
   BusinessAgentExecutionContext,
   BusinessAgentExecutor
@@ -169,8 +170,9 @@ function buildChatContext(history: Awaited<ReturnType<typeof aiChatRepository.li
   const budget = 12000;
   const selected: AITextMessage[] = [];
   let used = 0;
-  const usable = history
-    .filter((message) => message.role === 'user' || message.role === 'assistant')
+  // Failed and stopped turns stay visible in the chat but are never replayed
+  // to the model as something it said.
+  const usable = modelContextMessages(history)
     .filter((message, index, items) => !(index === items.length - 1 && message.role === 'user' && message.content.trim() === prompt.trim()))
     .slice(-24)
     .reverse();
@@ -381,7 +383,6 @@ function clamp01(value: number): number {
 
 export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
   const deliveryKind = parseExamDeliveryKind(task.payload?.deliveryKind) ?? ExamDeliveryKind.Objective;
-  const subjectName = asString(task.payload?.subjectName) || '模考';
   if (deliveryKind === ExamDeliveryKind.Subjective) {
     const essayTopic = asString(task.payload?.essayTopic) || '申论模考';
     const essayType = asString(task.payload?.essayType) === 'long' ? 'long' : 'short';
@@ -431,96 +432,8 @@ export const mockExecutor: BusinessAgentExecutor = async (task, context) => {
     await context.update(94, '申论模考题已写入');
     return;
   }
-
-  const requestedCount = Math.max(5, Math.min(135, Math.round(Number(task.payload?.questionCount || 120))));
-  const modules = Array.isArray(task.payload?.modules)
-    ? task.payload.modules.map(String).filter(Boolean)
-    : ['资料分析', '判断推理', '言语理解', '数量关系', '常识判断'];
-  const focusTags = Array.isArray(task.payload?.focusTags) ? task.payload.focusTags.map(String).filter(Boolean) : ['高频考点'];
-  const batches = buildMockBatches(modules, requestedCount);
-  await context.update(18, `拆分 ${batches.length} 个稳定题组`);
-  const sections = await mapWithAbortableConcurrency(batches, 3, context.signal, async (batch, batchIndex, signal) => {
-    const result = await retryTransiently(() => context.generatePractice({
-        module: batch.module,
-        requestedCount: batch.count,
-        difficultyMin: 0.38,
-        difficultyMax: 0.78,
-        purpose: `行测模考 · ${focusTags.join('、')} · ${batch.module}`,
-        review: false,
-        capabilityIndex: batch.moduleBatchIndex
-      }),
-      batchIndex,
-      signal
-    );
-    await context.update(
-      Math.min(88, 20 + Math.round(((batchIndex + 1) / batches.length) * 66)),
-      `已完成 ${batchIndex + 1}/${batches.length} 个题组`
-    );
-    return { ...batch, ...result };
-  });
-  const date = asString(task.payload?.date) || new Date().toISOString().slice(0, 10);
-  const saved = await context.saveLearningAsset({
-    kind: LearningAssetKind.MockManifest,
-    businessKey: `mock:${date}:${task.id}`,
-    title: `${subjectName} · ${date}`,
-    payload: {
-      subjectName,
-      deliveryKind,
-      date,
-      durationMinutes: Number(task.payload?.durationMinutes || 120),
-      requestedCount,
-      actualCount: sections.reduce((sum, section) => sum + section.count, 0),
-      focusTags,
-      sections
-    }
-  });
-  await context.setResult({
-    resultRef: saved.id,
-    payload: { assetId: saved.id, manifestId: saved.id, deliveryKind }
-  });
-  await context.update(94, `已写入 ${sections.reduce((sum, section) => sum + section.count, 0)} 道模考题`);
+  await objectiveMockExecutor(task, context);
 };
-
-interface MockBatch {
-  readonly module: string;
-  readonly count: number;
-  readonly moduleBatchIndex: number;
-}
-
-function buildMockBatches(modules: readonly string[], total: number): MockBatch[] {
-  const selected = modules.length ? modules : ['判断推理'];
-  const base = Math.floor(total / selected.length);
-  let remainder = total % selected.length;
-  return selected.flatMap((module) => {
-    const moduleCount = base + (remainder-- > 0 ? 1 : 0);
-    const batches: MockBatch[] = [];
-    let remaining = moduleCount;
-    let moduleBatchIndex = 0;
-    while (remaining > 0) {
-      const count = Math.min(20, remaining);
-      batches.push({ module, count, moduleBatchIndex });
-      remaining -= count;
-      moduleBatchIndex += 1;
-    }
-    return batches;
-  });
-}
-
-async function retryTransiently<Output>(
-  work: () => Promise<Output>,
-  ordinal: number,
-  signal: AbortSignal
-): Promise<Output> {
-  try {
-    return await work();
-  } catch (error) {
-    signal.throwIfAborted();
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/429|rate|limit|限流|timeout|network|transient|暂时|网络/i.test(message)) throw error;
-    await abortableDelay(1200 + (ordinal % 3) * 700, signal);
-    return work();
-  }
-}
 
 export const digestExecutor: BusinessAgentExecutor = async (task, context) => {
   if (task.payload?.digestScope === 'monthly') {

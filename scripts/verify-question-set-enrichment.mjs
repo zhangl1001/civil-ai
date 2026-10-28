@@ -216,6 +216,8 @@ try {
   cancellationController.abort(new Error('user cancelled'));
   await assert.rejects(cancelled, /user cancelled/);
   assert.equal(appliedAfterCancellation, 0, 'cancelled enrichment must not commit late shard results');
+  await verifiesManifestPaperSurvivesCompletion();
+  await verifiesManifestSelectionSurvivesCompletion();
   console.log('Question-set enrichment verification passed (8 questions, 3 compact requests, peak concurrency 3).');
 } finally {
   await server.close();
@@ -338,4 +340,96 @@ function abortableDelay(ms, signal) {
       reject(signal.reason);
     }, { once: true });
   });
+}
+
+/**
+ * Explanations finish per question set while a merged paper (mock, redo) is
+ * open. The paper carries its first set's id, so swapping completed sets in by
+ * id used to replace the whole 60-question paper with that first set.
+ */
+async function verifiesManifestPaperSurvivesCompletion() {
+  const { applyCompletedQuestionSets } = await server.ssrLoadModule('/src/features/practice/PracticeSessionFeature.ts');
+  const set = (id, questionIds, explained = false) => ({
+    questionSet: { id, module: `module:${id}`, questionCount: questionIds.length },
+    questions: questionIds.map((questionId) => ({ id: questionId, content: { explanation: explained ? `解析 ${questionId}` : '' } })),
+    documents: [{ id: `document:${id}` }],
+    lectures: [{ id: `lecture:${id}` }],
+    lectureLinks: [],
+    capabilityLinks: []
+  });
+  const first = set('set:first', ['q1', 'q2']);
+  const second = set('set:second', ['q3', 'q4']);
+  const paper = {
+    ...first,
+    documents: [],
+    lectures: [],
+    questions: [...first.questions, ...second.questions],
+    questionSet: { ...first.questionSet, module: '行测模考', questionCount: 4 }
+  };
+  const sections = [
+    { bundle: first, learningThreadId: 'thread:first', module: '判断推理' },
+    { bundle: second, learningThreadId: 'thread:second', module: '言语理解' }
+  ];
+  const completedFirst = set('set:first', ['q1', 'q2'], true);
+  const next = applyCompletedQuestionSets({ bundle: paper, sections }, [completedFirst]);
+  assert.equal(next.bundle.questions.length, 4, 'the merged paper keeps every section after its first set completes');
+  assert.equal(next.bundle.questionSet.module, '行测模考', 'the paper keeps its own title');
+  assert.equal(next.bundle.lectures.length, 0, 'a merged paper never gains a single set lecture tab');
+  assert.equal(next.bundle.questions[0].content.explanation, '解析 q1', 'completed explanations reach the paper');
+  assert.equal(next.sections[0].bundle, completedFirst);
+  assert.equal(next.sections[1].bundle, second);
+  const single = applyCompletedQuestionSets({ bundle: first, sections: [] }, [completedFirst]);
+  assert.equal(single.bundle, completedFirst, 'a single set session still takes its completed bundle');
+}
+
+// R14 / ui-second-pass: enrichment may update content, never widen or reorder a selection.
+async function verifiesManifestSelectionSurvivesCompletion() {
+  const { PracticeSessionFeature, applyCompletedQuestionSets } = await server.ssrLoadModule('/src/features/practice/PracticeSessionFeature.ts');
+  const { submitPracticeBundle } = await server.ssrLoadModule('/src/features/practice/SubmitPracticeBundle.ts');
+  const { LearningAssetKind } = await server.ssrLoadModule('/src/modules/content/public.ts');
+  const makeSet = (id, count) => {
+    const value = questionSetBundle(count);
+    return { ...value, capabilityLinks: [], questionSet: { ...value.questionSet, id, status: 'ready' },
+      generationSpec: { ...value.generationSpec, constraints: {} },
+      questions: value.questions.map((question, index) => ({ ...question, id: `${id}-q${index}` })) };
+  };
+  const sets = { setA: makeSet('setA', 12), setB: makeSet('setB', 20) };
+  const selectedIds = ['setA-q7', 'setA-q3', 'setB-q1'];
+  const sections = [
+    { questionSetId: 'setA', learningThreadId: 'tA', questionIds: selectedIds.slice(0, 2) },
+    { questionSetId: 'setB', learningThreadId: 'tB', questionIds: selectedIds.slice(2) }
+  ];
+  const feature = new PracticeSessionFeature({
+    learningAssetStore: { find: async () => ({ kind: LearningAssetKind.PracticeManifest, payload: { sections, restorePrevious: false } }) },
+    contentRepository: { findQuestionSet: async id => sets[id] },
+    candidateRepository: { findCurrentCycle: async () => undefined },
+    ensureQuestionSetEnrichment: { execute: async () => {} }, questionSourceRepository: {}
+  });
+  const loaded = await feature.load({ manifestId: 'subset-manifest' });
+  assert.deepEqual(loaded.bundle.questions.map(q => q.id), selectedIds);
+  let next = { bundle: loaded.bundle, sections: loaded.manifestSections };
+  const controller = new AbortController();
+  await assert.rejects(feature.waitForCompleteContent(['setA', 'setB'], {
+    signal: controller.signal, onUpdate: complete => {
+      next = applyCompletedQuestionSets(next, complete);
+      controller.abort(new Error('verified first poll'));
+    }
+  }), /verified first poll/);
+  assert.deepEqual(next.bundle.questions.map(q => q.id), selectedIds);
+  assert.deepEqual(next.sections.map(s => s.bundle.questionSet.questionCount), [2, 1]);
+  next = applyCompletedQuestionSets(next, [sets.setB, sets.setA]);
+  assert.deepEqual(next.bundle.questions.map(q => q.id), selectedIds, 'repeated completion preserves manifest order');
+  const submitted = [];
+  for (const section of next.sections) await submitPracticeBundle({
+    runtime: { submitObjectiveSession: { execute: async command => submitted.push(command) } },
+    bundle: section.bundle, learningThreadId: section.learningThreadId, submissionScope: 'subset',
+    startedAt: Date.now(), answers: {}, elapsedByQuestion: {}, answerChanges: {}
+  });
+  assert.deepEqual(submitted.flatMap(command => command.questionIds), selectedIds);
+  assert.throws(() => applyCompletedQuestionSets(next, [{ ...sets.setA, questions: sets.setA.questions.filter(q => q.id !== 'setA-q7') }]), /部分题目已不可用/);
+  const repeatedSource = { bundle: next.bundle, sections: [next.sections[0], { ...next.sections[0], bundle: { ...next.sections[0].bundle, questions: [sets.setA.questions[1]] } }] };
+  assert.deepEqual(applyCompletedQuestionSets(repeatedSource, [sets.setA]).bundle.questions.map(q => q.id), ['setA-q7', 'setA-q3', 'setA-q1']);
+  sections[0].questionIds = ['setA-q7', 'setA-q7'];
+  await assert.rejects(feature.load({ manifestId: 'duplicate-manifest' }), /重复题目/);
+  console.log('R14 passed: 12+20 source questions retain the selected 3 in manifest order through polling and submission.');
 }

@@ -1,3 +1,7 @@
+import type { LocationQuery } from 'vue-router';
+
+export const PRACTICE_CENTER_PATH = '/vue/practice';
+
 export interface PracticeDetailTarget {
   readonly mode: 'tutor' | 'self';
   readonly subject?: 'aptitude' | 'essay';
@@ -13,7 +17,7 @@ export interface PracticeDetailTarget {
 export function practiceDetailLocation(target: PracticeDetailTarget) {
   const { autoStart, count, ...identity } = target;
   return {
-    path: '/vue/practice',
+    path: PRACTICE_CENTER_PATH,
     query: Object.fromEntries(
       Object.entries({
         ...identity,
@@ -35,4 +39,14 @@ export function objectivePracticeLocation(target: {
       ...(target.learningThreadId?.trim() ? { learningThreadId: target.learningThreadId } : {})
     }
   };
+}
+
+/**
+ * `start=1` asks the practice centre to create a task once. It is removed as
+ * soon as the request is satisfied, so the history entry left behind replays
+ * as a plain visit: returning from the session must not generate again.
+ */
+export function withoutAutoStart(query: LocationQuery): LocationQuery {
+  const { start: _start, ...rest } = query;
+  return rest;
 }

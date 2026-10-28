@@ -153,6 +153,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { completedMockTaskLocation, useMockTaskFollow } from '@/features/exam/useMockTaskFollow';
 import { useRouter } from 'vue-router';
 import {
   BookOpenIcon,
@@ -225,6 +226,10 @@ const startButtonText = computed(() => {
   return subject.value ? mockStartLabel(subject.value) : '生成模考';
 });
 onMounted(loadDashboard);
+const mockFollow = useMockTaskFollow(
+  async (task, signal) => { const to = completedMockTaskLocation(task); if (!signal.aborted && to) await router.push(to); },
+  (task) => { notice.value = task.detail || '模考生成失败，请重新生成'; }
+);
 async function loadDashboard(subjectCode?: ExamSubjectView['code']) {
   isLoading.value = true;
   notice.value = '';
@@ -299,6 +304,7 @@ async function startExam() {
   try {
     const result = await examFlowService.startMock(context);
     notice.value = result.reused ? '已有相同模考任务在执行，可在任务栏查看进度。' : '模考任务已加入执行队列。';
+    mockFollow.follow(result.task);
   } catch (error) {
     notice.value = error instanceof Error ? error.message : '模考任务派发失败';
   } finally {

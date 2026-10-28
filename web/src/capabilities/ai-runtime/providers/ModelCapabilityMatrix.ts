@@ -6,6 +6,7 @@ import {
 export interface ModelRequestCapabilityOverrides {
   readonly temperature?: boolean;
   readonly thinking?: boolean;
+  readonly forcedToolChoice?: boolean;
 }
 
 /**
@@ -15,10 +16,13 @@ export interface ModelRequestCapabilityOverrides {
 export class ModelCapabilityMatrix {
   private temperatureSupported: boolean;
   private thinkingSupported: boolean;
+  readonly forcedToolChoice: boolean;
 
-  constructor(overrides: ModelRequestCapabilityOverrides = {}) {
-    this.temperatureSupported = overrides.temperature !== false;
+  constructor(overrides: ModelRequestCapabilityOverrides = {}, model = '') {
+    // Known up front, so no request is spent on a 400 to learn it.
+    this.temperatureSupported = overrides.temperature ?? !rejectsSamplingParameters(model);
     this.thinkingSupported = overrides.thinking !== false;
+    this.forcedToolChoice = overrides.forcedToolChoice ?? !rejectsForcedToolChoice(model);
   }
 
   samplingParameters(temperature: number): Readonly<Record<string, unknown>> {
@@ -31,17 +35,36 @@ export class ModelCapabilityMatrix {
     return thinking && this.thinkingSupported ? { thinking } : {};
   }
 
-  learnFromInvalidRequest(error: unknown): boolean {
+  /**
+   * Learns only from a rejection of a field the request actually carried;
+   * otherwise the retry would repeat the same request.
+   */
+  learnFromInvalidRequest(error: unknown, sent: { readonly thinking?: boolean } = {}): boolean {
     if (this.temperatureSupported && isUnsupportedTemperature(error)) {
       this.temperatureSupported = false;
       return true;
     }
-    if (this.thinkingSupported && isUnsupportedThinking(error)) {
+    if (this.thinkingSupported && sent.thinking && isUnsupportedThinking(error)) {
       this.thinkingSupported = false;
       return true;
     }
     return false;
   }
+}
+
+/**
+ * Claude Opus 4.7/4.8 and every 5.x Claude (Opus, Sonnet, Haiku, Fable,
+ * Mythos, Opus 5.5) removed temperature/top_p/top_k; sending one is a 400. Matching
+ * on the model name also covers gateway spellings such as
+ * `us.anthropic.claude-sonnet-5-v1:0` and OpenAI-compatible proxies.
+ */
+export function rejectsSamplingParameters(model: string): boolean {
+  return /claude-(?:(?:opus|sonnet|haiku|fable|mythos)-5|opus-4-[78])(?![0-9])/i.test(model);
+}
+
+/** https://platform.claude.com/docs/en/build-with-claude/thinking#response-prefill-and-forced-tool-use */
+function rejectsForcedToolChoice(model: string): boolean {
+  return /claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?![0-9])/i.test(model);
 }
 
 function isUnsupportedTemperature(error: unknown): boolean {
@@ -53,5 +76,9 @@ function isUnsupportedTemperature(error: unknown): boolean {
 function isUnsupportedThinking(error: unknown): boolean {
   return error instanceof ProviderGatewayError
     && error.kind === ProviderErrorKind.InvalidRequest
-    && /thinking|reasoning(?:_effort)?|extended thinking/i.test(error.message);
+    && /thinking|reasoning(?:_effort)?|extended thinking/i.test(error.message)
+    // "content[].thinking must be passed back" and "must start with a thinking
+    // block" prove thinking is supported and active; dropping the disable flag
+    // would make every later tool turn fail the same way.
+    && !/passed back|must be (?:passed|returned|included)|content\[\]\.thinking|thinking block/i.test(error.message);
 }

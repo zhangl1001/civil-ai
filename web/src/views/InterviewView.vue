@@ -211,7 +211,7 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import ConfirmDialog from '@/components/layout/ConfirmDialog.vue';
 import { AppStateView, SectionHeading, SegmentedControl } from '@/capabilities/design-system/public';
 import { goBackOrHome } from '@/router/navigation';
-import { speechRecognitionAdapter } from '@/platform/SpeechRecognitionAdapter';
+import { speechRecognitionAdapter, type SpeechUnavailableReason } from '@/platform/SpeechRecognitionAdapter';
 import { INTERVIEW_QUESTION_TYPES, interviewRepository } from '@/services/InterviewRepository';
 
 type InterviewStage = 'setup' | 'session' | 'result';
@@ -237,6 +237,7 @@ const answerText = ref('');
 const speechTranscript = ref('');
 const speechMetrics = ref<InterviewAnswer['speechMetrics']>();
 const speechAvailable = ref(false);
+const speechUnavailableReason = ref<SpeechUnavailableReason | undefined>();
 const isRecording = ref(false);
 const isSpeechBusy = ref(false);
 const speechError = ref('');
@@ -283,7 +284,11 @@ const speechButtonText = computed(() => {
 });
 const speechHint = computed(() => {
   if (speechError.value) return speechError.value;
-  if (!speechAvailable.value) return '当前环境仅支持文本输入';
+  if (!speechAvailable.value) {
+    return speechUnavailableReason.value === 'on_device_unsupported'
+      ? '当前设备不支持本地语音识别，请用文本作答'
+      : '当前环境仅支持文本输入';
+  }
   if (isRecording.value) return '正在识别，结束后自动转写';
   if (speechMetrics.value) return `${speechMetrics.value.durationSeconds} 秒 · ${speechMetrics.value.wordsPerMinute} 字/分`;
   return '使用 iOS 本地语音识别，不上传音频';
@@ -291,7 +296,9 @@ const speechHint = computed(() => {
 
 onMounted(async () => {
   await loadStats();
-  speechAvailable.value = await speechRecognitionAdapter.isAvailable();
+  const availability = await speechRecognitionAdapter.availability();
+  speechAvailable.value = availability.available;
+  speechUnavailableReason.value = availability.reason;
   restoreDraft();
   document.addEventListener('visibilitychange', handleVisibilityChange);
   reviewPollId = window.setInterval(() => void refreshReviewTask(), 900);

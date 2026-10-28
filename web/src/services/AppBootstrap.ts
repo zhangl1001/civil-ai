@@ -9,6 +9,7 @@ import { objectiveSubmissionRecoveryCoordinator } from '@/composition-root/evide
 import { tutorDatabaseLifecycleCoordinator } from '@/composition-root/database/TutorDatabaseLifecycleCoordinator';
 import { projectRepository } from './ProjectRepository';
 import { chatAgentService } from './ChatAgentService';
+import { installForegroundChatInterruption } from './ChatAgentLifecyclePolicy';
 
 let chatLifecycleInstalled = false;
 
@@ -29,9 +30,7 @@ export async function bootstrapLocalApp(): Promise<void> {
   appLifecycleAdapter.init();
   if (!chatLifecycleInstalled) {
     chatLifecycleInstalled = true;
-    appLifecycleAdapter.onChange((event) => {
-      if (event.state !== 'active') chatAgentService.cancel(undefined, 'lifecycle');
-    });
+    installForegroundChatInterruption(appLifecycleAdapter, chatAgentService);
   }
   statusBarAdapter.init();
   installWebViewRepaintGuard();

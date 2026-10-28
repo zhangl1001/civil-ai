@@ -9,6 +9,7 @@ import type {
   AgentRunEventRecord,
   AgentRunLeaseToken,
   AgentRunMutationGuard,
+  AgentRunOrphanRecovery,
   AgentRunRecord,
   AgentRunRecoveryOptions,
   AgentRunRepository
@@ -20,7 +21,8 @@ import {
   resolveAgentWorkPool,
   type AgentWorkPool as AgentWorkPoolValue
 } from '../domain/AgentRunCodes';
-import { AgentRunLeaseLostError } from '../domain/AgentRunInterruption';
+import { AgentRunLeaseLostError, AgentRunVersionConflictError } from '../domain/AgentRunInterruption';
+import { isChatAgentLoopRun } from '../domain/ForegroundAgentRuns';
 
 interface StoredRun extends AgentRunAggregate { readonly runId: string; readonly idempotencyKey: string; readonly invocations: readonly AgentInvocationRecord[]; }
 interface StoredRunIdempotency { readonly idempotencyKey: string; readonly runId: AgentRunId; }
@@ -36,34 +38,77 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
     this.scope.stage(context, { type:'add', store:TutorIndexedDbStore.AgentRunAggregates, value:stored(run,[created],[]) });
   }
   async replace(run: AgentRunRecord, expectedVersion: number, event: AgentRunEventRecord, context: TransactionContext, guard?: AgentRunMutationGuard): Promise<void> {
-    const current=await this.findById(run.id);
-    if (guard && (!current || !matchesActiveLease(current.run, guard.leaseToken, guard.now))) {
-      throw new AgentRunLeaseLostError(run.id);
-    }
-    if(!current||current.run.version!==expectedVersion||run.version!==expectedVersion+1) throw new Error(`Agent run version conflict: ${run.id}`);
-    this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...current.events,event],(await this.get(run.id))!.invocations)});
+    const before = await this.findById(run.id);
+    if (guard && (!before || !matchesActiveLease(before.run, guard.leaseToken, guard.now))) throw new AgentRunLeaseLostError(run.id);
+    if (!before || before.run.version !== expectedVersion || run.version !== expectedVersion + 1) throw new AgentRunVersionConflictError(run.id);
+    this.scope.stage(context, {
+      type: 'update', store: TutorIndexedDbStore.AgentRunAggregates, key: run.id,
+      update: (value) => {
+        const current = value as StoredRun | undefined;
+        if (guard && (!current || !matchesActiveLease(current.run, guard.leaseToken, guard.now))) {
+          throw new AgentRunLeaseLostError(run.id);
+        }
+        if (!current || current.run.version !== expectedVersion || run.version !== expectedVersion + 1) {
+          throw new AgentRunVersionConflictError(run.id);
+        }
+        // Heartbeats do not increment the run version; preserve a renewal in the same lease epoch.
+        const keepsLease = run.status === 'running' && run.leaseOwner === current.run.leaseOwner
+          && run.leaseEpoch === current.run.leaseEpoch;
+        const next = keepsLease ? { ...run, leaseExpiresAt: current.run.leaseExpiresAt } : run;
+        return stored(next, [...current.events, event], current.invocations);
+      }
+    });
   }
   async findById(id: AgentRunId): Promise<AgentRunAggregate|undefined> { const item=await this.get(id); return item&&{run:item.run,events:item.events}; }
+  /** Reads a candidate version; replace validates it again in the native write transaction. */
+  async findByIdInTransaction(id: AgentRunId, _context: TransactionContext): Promise<AgentRunAggregate|undefined> { return this.findById(id); }
   async findByIdempotencyKey(key:string): Promise<AgentRunAggregate|undefined> {
     const reservation=await this.database.get<StoredRunIdempotency>(TutorIndexedDbStore.AgentRunIdempotency,key);
     return reservation ? this.findById(reservation.runId) : undefined;
   }
   async findLatestByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{const all=await this.targetRuns(type,id);const item=[...all].sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id)))[0];return item&&{run:item.run,events:item.events};}
   async findActiveByTarget(type:string,id:string):Promise<AgentRunAggregate|undefined>{const all=await this.targetRuns(type,id);const item=all.filter(value=>active(value.run.status)).sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id)))[0];return item&&{run:item.run,events:item.events};}
-  async appendInvocation(invocation:AgentInvocationRecord, context:TransactionContext):Promise<void> { const current=await this.get(invocation.agentRunId); if(!current) throw new Error(`Agent run not found: ${invocation.agentRunId}`); this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(current.run,current.events,[...current.invocations,invocation])}); }
-  async updateInvocationResult(id:AgentInvocationRecord['id'], value:Pick<AgentInvocationRecord,'providerRequestId'|'inputTokens'|'outputTokens'|'latencyMs'|'finishReason'>, context:TransactionContext):Promise<void>{const current=await this.findInvocation(id);if(!current||current.invocation.validationStatus!=='pending')throw new Error(`Agent invocation result conflict: ${id}`);this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(current.stored.run,current.stored.events,current.stored.invocations.map(item=>item.id===id?{...item,...value}:item))});}
-  async updateInvocationValidation(id:AgentInvocationRecord['id'], status:AgentInvocationRecord['validationStatus'], errorCode:string|undefined, context:TransactionContext):Promise<void>{const current=await this.findInvocation(id);if(!current||current.invocation.validationStatus!=='pending')throw new Error(`Agent invocation validation conflict: ${id}`);this.scope.stage(context,{type:'put',store:TutorIndexedDbStore.AgentRunAggregates,value:stored(current.stored.run,current.stored.events,current.stored.invocations.map(item=>item.id===id?{...item,validationStatus:status,errorCode}:item))});}
+  async appendInvocation(invocation: AgentInvocationRecord, context: TransactionContext): Promise<void> {
+    this.stageInvocations(invocation.agentRunId, context, (items) => {
+      if (items.some((item) => item.id === invocation.id)) throw new Error(`Duplicate Agent invocation: ${invocation.id}`);
+      return [...items, invocation];
+    });
+  }
+  async updateInvocationResult(id: AgentInvocationRecord['id'], value: Pick<AgentInvocationRecord, 'providerRequestId'|'inputTokens'|'outputTokens'|'latencyMs'|'finishReason'>, context: TransactionContext): Promise<void> {
+    await this.updateInvocation(id, value, context);
+  }
+  async updateInvocationValidation(id: AgentInvocationRecord['id'], status: AgentInvocationRecord['validationStatus'], errorCode: string | undefined, context: TransactionContext): Promise<void> {
+    await this.updateInvocation(id, { validationStatus: status, errorCode }, context);
+  }
+  private async updateInvocation(id: AgentInvocationRecord['id'], patch: Partial<AgentInvocationRecord>, context: TransactionContext): Promise<void> {
+    const found = await this.findInvocation(id);
+    if (!found) throw new Error(`Agent invocation does not exist: ${id}`);
+    this.stageInvocations(found.stored.run.id, context, (items) => {
+      if (items.find((item) => item.id === id)?.validationStatus !== 'pending') throw new Error(`Agent invocation conflict: ${id}`);
+      return items.map((item) => item.id === id ? { ...item, ...patch } : item);
+    });
+  }
+  private stageInvocations(id: AgentRunId, context: TransactionContext, update: (items: readonly AgentInvocationRecord[]) => readonly AgentInvocationRecord[]): void {
+    this.scope.stage(context, {
+      type: 'update', store: TutorIndexedDbStore.AgentRunAggregates, key: id,
+      update: (value) => {
+        const current = value as StoredRun | undefined;
+        if (!current) throw new Error(`Agent run not found: ${id}`);
+        return stored(current.run, current.events, update(current.invocations));
+      }
+    });
+  }
   async listInvocations(id:AgentRunId):Promise<readonly AgentInvocationRecord[]> { return (await this.get(id))?.invocations??[]; }
   async countInvocations(runIds:readonly AgentRunId[]):Promise<Readonly<Record<string,number>>>{const wanted=new Set<string>(runIds);const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates);return Object.fromEntries(all.filter(item=>wanted.has(item.run.id)).map(item=>[item.run.id,item.invocations.length]));}
   async listRecent(limit:number):Promise<readonly AgentRunAggregate[]> { if(!Number.isInteger(limit)||limit<1||limit>50)throw new RangeError('Agent recent limit must be between 1 and 50'); const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates); return [...all].sort((a,b)=>b.run.updatedAt-a.run.updatedAt||String(b.run.id).localeCompare(String(a.run.id))).slice(0,limit).map(v=>({run:v.run,events:v.events})); }
-  async listRunnable(now:InstantMs,limit:number):Promise<readonly AgentRunAggregate[]> { if(!Number.isInteger(limit)||limit<1||limit>3)throw new RangeError('Agent runnable limit must be between 1 and 3'); const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates); return all.filter(v=>v.run.status==='queued'&&(!v.run.nextRunAt||v.run.nextRunAt<=now)).sort((a,b)=>a.run.updatedAt-b.run.updatedAt).slice(0,limit).map(v=>({run:v.run,events:v.events})); }
-  async nextWorkAt(now:InstantMs, workPools?:readonly AgentWorkPoolValue[], executionClasses?:readonly AgentExecutionClass[]):Promise<InstantMs|undefined>{const pools=normalizeWorkPools(workPools);const classes=normalizeExecutionClasses(executionClasses);const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates);const candidates=all.filter(({run})=>(!pools.length||pools.includes(workPoolOf(run)))&&(!classes.length||classes.includes(executionClassOf(run)))).flatMap(({run})=>{if(run.status==='queued')return[run.nextRunAt??now];if(run.status==='running')return[run.leaseExpiresAt??now];return[];});return candidates.length?Math.min(...candidates) as InstantMs:undefined;}
+  async listRunnable(now:InstantMs,limit:number):Promise<readonly AgentRunAggregate[]> { if(!Number.isInteger(limit)||limit<1||limit>3)throw new RangeError('Agent runnable limit must be between 1 and 3'); const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates); return all.filter(v=>v.run.status==='queued'&&(!v.run.nextRunAt||v.run.nextRunAt<=now)&&!isChatAgentLoopRun(v.run)).sort((a,b)=>a.run.updatedAt-b.run.updatedAt).slice(0,limit).map(v=>({run:v.run,events:v.events})); }
+  async nextWorkAt(now:InstantMs, workPools?:readonly AgentWorkPoolValue[], executionClasses?:readonly AgentExecutionClass[]):Promise<InstantMs|undefined>{const pools=normalizeWorkPools(workPools);const classes=normalizeExecutionClasses(executionClasses);const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates);const candidates=all.filter(({run})=>!isChatAgentLoopRun(run)&&(!pools.length||pools.includes(workPoolOf(run)))&&(!classes.length||classes.includes(executionClassOf(run)))).flatMap(({run})=>{if(run.status==='queued')return[run.nextRunAt??now];if(run.status==='running'&&typeof run.leaseExpiresAt==='number')return[run.leaseExpiresAt];return[];});return candidates.length?Math.min(...candidates) as InstantMs:undefined;}
   async claimRunnable(options:AgentRunClaimOptions):Promise<readonly AgentRunAggregate[]> {
     if(!options.workerId.trim()||!Number.isInteger(options.limit)||options.limit<1||options.limit>3||options.eventIds.length<options.limit)throw new Error('Invalid agent run claim options');
     const pools=normalizeWorkPools(options.workPools);
     const classes=normalizeExecutionClasses(options.executionClasses);
     return this.database.mutateStore<StoredRun,readonly AgentRunAggregate[]>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{
-      const candidates=values.filter(v=>v.run.status==='queued'&&(!v.run.nextRunAt||v.run.nextRunAt<=options.now)&&(!pools.length||pools.includes(workPoolOf(v.run)))&&(!classes.length||classes.includes(executionClassOf(v.run)))).sort((a,b)=>executionClassPriority(executionClassOf(a.run),classes)-executionClassPriority(executionClassOf(b.run),classes)||poolPriority(workPoolOf(a.run),pools)-poolPriority(workPoolOf(b.run),pools)||a.run.updatedAt-b.run.updatedAt).slice(0,options.limit);
+      const candidates=values.filter(v=>v.run.status==='queued'&&(!v.run.nextRunAt||v.run.nextRunAt<=options.now)&&!isChatAgentLoopRun(v.run)&&(!pools.length||pools.includes(workPoolOf(v.run)))&&(!classes.length||classes.includes(executionClassOf(v.run)))).sort((a,b)=>executionClassPriority(executionClassOf(a.run),classes)-executionClassPriority(executionClassOf(b.run),classes)||poolPriority(workPoolOf(a.run),pools)-poolPriority(workPoolOf(b.run),pools)||a.run.updatedAt-b.run.updatedAt).slice(0,options.limit);
       const operations=[]; const claimed=[];
       for(let index=0;index<candidates.length;index+=1){const item=candidates[index];const leaseEpoch=(item.run.leaseEpoch??0)+1;const run={...item.run,status:'running' as const,attemptCount:item.run.attemptCount+1,leaseOwner:options.workerId.trim(),leaseExpiresAt:options.leaseExpiresAt,leaseEpoch,updatedAt:options.now,version:item.run.version+1};const event={id:options.eventIds[index],agentRunId:run.id,eventType:'started' as const,fromStatus:'queued' as const,toStatus:'running' as const,reasonCode:'agent_run.claimed',payload:{workerId:options.workerId.trim(),leaseExpiresAt:options.leaseExpiresAt,leaseEpoch},occurredAt:options.now,idempotencyKey:`agent-run:${run.id}:claim:${run.version}`};const next=stored(run,[...item.events,event],item.invocations);operations.push({type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:next});claimed.push({run,events:[...item.events,event]});}
       return {operations,result:claimed};
@@ -71,10 +116,32 @@ export class IndexedDbAgentRunRepository implements AgentRunRepository {
   }
   async renewLease(token:AgentRunLeaseToken,now:InstantMs,leaseExpiresAt:InstantMs):Promise<boolean>{return this.database.mutateStore<StoredRun,boolean>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{const current=values.find(item=>item.run.id===token.agentRunId);if(!current||!matchesActiveLease(current.run,token,now))return{operations:[],result:false};return{operations:[{type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:stored({...current.run,leaseExpiresAt},current.events,current.invocations)}],result:true};});}
   async hasActiveLease(token:AgentRunLeaseToken,now:InstantMs):Promise<boolean>{const current=await this.get(token.agentRunId);return Boolean(current&&matchesActiveLease(current.run,token,now));}
-  async recoverExpiredLeases(options:AgentRunRecoveryOptions):Promise<readonly AgentRunAggregate[]> {if(!Number.isInteger(options.limit)||options.limit<1||options.limit>100||options.eventIds.length<options.limit)throw new Error('Invalid agent run recovery options');return this.database.mutateStore<StoredRun,readonly AgentRunAggregate[]>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{const candidates=values.filter(v=>v.run.status==='running'&&v.run.leaseExpiresAt!==undefined&&v.run.leaseExpiresAt<=options.now).sort((a,b)=>(a.run.leaseExpiresAt??0)-(b.run.leaseExpiresAt??0)).slice(0,options.limit);const operations=[];const recovered=[];for(let index=0;index<candidates.length;index+=1){const item=candidates[index];const run={...item.run,status:'queued' as const,nextRunAt:options.now,leaseOwner:undefined,leaseExpiresAt:undefined,updatedAt:options.now,version:item.run.version+1};const event={id:options.eventIds[index],agentRunId:run.id,eventType:'recovered' as const,fromStatus:'running' as const,toStatus:'queued' as const,reasonCode:'agent_run.lease_expired',payload:{},occurredAt:options.now,idempotencyKey:`agent-run:${run.id}:recover:${run.version}`};operations.push({type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...item.events,event],item.invocations)});recovered.push({run,events:[...item.events,event]});}return{operations,result:recovered};});}
+  async recoverExpiredLeases(options:AgentRunRecoveryOptions):Promise<readonly AgentRunAggregate[]> {
+    if(!Number.isInteger(options.limit)||options.limit<1||options.limit>100||options.eventIds.length<options.limit||(options.orphans&&options.orphans.eventIds.length<options.limit))throw new Error('Invalid agent run recovery options');
+    return this.database.mutateStore<StoredRun,readonly AgentRunAggregate[]>(TutorIndexedDbStore.AgentRunAggregates,(values)=>{
+      const operations=[];const recovered=[];
+      if(options.orphans)operations.push(...orphanClosures(values,options.orphans,options.now,options.limit));
+      const candidates=values.filter(v=>v.run.status==='running'&&v.run.leaseExpiresAt!==undefined&&v.run.leaseExpiresAt<=options.now).sort((a,b)=>(a.run.leaseExpiresAt??0)-(b.run.leaseExpiresAt??0)).slice(0,options.limit);
+      for(let index=0;index<candidates.length;index+=1){const item=candidates[index];const run={...item.run,status:'queued' as const,nextRunAt:options.now,leaseOwner:undefined,leaseExpiresAt:undefined,updatedAt:options.now,version:item.run.version+1};const event={id:options.eventIds[index],agentRunId:run.id,eventType:'recovered' as const,fromStatus:'running' as const,toStatus:'queued' as const,reasonCode:'agent_run.lease_expired',payload:{},occurredAt:options.now,idempotencyKey:`agent-run:${run.id}:recover:${run.version}`};operations.push({type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...item.events,event],item.invocations)});recovered.push({run,events:[...item.events,event]});}
+      return{operations,result:recovered};
+    });
+  }
   private get(id:AgentRunId):Promise<StoredRun|undefined>{ return this.database.get<StoredRun>(TutorIndexedDbStore.AgentRunAggregates,id); }
   private targetRuns(type:string,id:string):Promise<readonly StoredRun[]>{return this.database.getAllByIndex<StoredRun>(TutorIndexedDbStore.AgentRunAggregates,'by_target',[type,id]);}
   private async findInvocation(id:AgentInvocationRecord['id']):Promise<{stored:StoredRun;invocation:AgentInvocationRecord}|undefined>{const all=await this.database.getAll<StoredRun>(TutorIndexedDbStore.AgentRunAggregates);for(const stored of all){const invocation=stored.invocations.find(item=>item.id===id);if(invocation)return{stored,invocation};}return undefined;}
+}
+/** Cancels foreground runs no live controller owns; see AgentRunOrphanRecovery. */
+function orphanClosures(values:readonly StoredRun[],orphans:AgentRunOrphanRecovery,now:InstantMs,limit:number){
+  const owned=new Set<string>(orphans.ownedRunIds);
+  const orphaned=values.filter(({run})=>!owned.has(run.id)&&typeof run.leaseExpiresAt!=='number'&&(
+    (run.status==='running'&&run.updatedAt<orphans.runningUpdatedBefore)
+    ||(run.status==='queued'&&isChatAgentLoopRun(run)&&run.updatedAt<orphans.queuedUpdatedBefore)
+  )).sort((a,b)=>a.run.updatedAt-b.run.updatedAt||String(a.run.id).localeCompare(String(b.run.id))).slice(0,limit);
+  return orphaned.map((item,index)=>{
+    const run:AgentRunRecord={...item.run,status:'cancelled',cancellationReason:orphans.reasonCode,errorCode:undefined,nextRunAt:undefined,leaseOwner:undefined,leaseExpiresAt:undefined,completedAt:now,updatedAt:now,version:item.run.version+1};
+    const event:AgentRunEventRecord={id:orphans.eventIds[index],agentRunId:run.id,eventType:'cancelled',fromStatus:item.run.status,toStatus:'cancelled',reasonCode:orphans.reasonCode,payload:{lastUpdatedAt:item.run.updatedAt},occurredAt:now,idempotencyKey:`agent-run:${run.id}:orphaned:${run.version}`};
+    return{type:'put' as const,store:TutorIndexedDbStore.AgentRunAggregates,value:stored(run,[...item.events,event],item.invocations)};
+  });
 }
 function stored(run:AgentRunRecord,events:readonly AgentRunEventRecord[],invocations:readonly AgentInvocationRecord[]):StoredRun{const normalized={...run,rootAgentRunId:run.rootAgentRunId??run.id,leaseEpoch:run.leaseEpoch??0,workPool:workPoolOf(run),executionClass:executionClassOf(run)};return{runId:run.id,idempotencyKey:run.idempotencyKey,run:normalized,events,invocations};}
 function active(status:AgentRunRecord['status']):boolean{return status==='queued'||status==='running'||status==='waiting_user';}

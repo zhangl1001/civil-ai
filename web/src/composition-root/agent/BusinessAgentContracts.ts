@@ -44,6 +44,7 @@ export interface BusinessAgentExecutionContext {
     onDelta: (delta: string) => void | Promise<void>,
     options?: AITextRequestOptions
   ): Promise<string>;
+  /** An optional batch signal supplements the parent run's cancellation. */
   generatePractice(input: {
     readonly module: string;
     readonly knowledgePoint?: string;
@@ -53,7 +54,14 @@ export interface BusinessAgentExecutionContext {
     readonly purpose: string;
     readonly review: boolean;
     readonly capabilityIndex?: number;
-  }): Promise<{
+    /**
+     * Names one batch of a run that generates several question sets (a mock
+     * exam module batch). The same batch replays its own generation on retry;
+     * different batches never share one. A single practice omits it, which
+     * keeps its generation key unchanged.
+     */
+    readonly batchKey?: string;
+  }, signal?: AbortSignal): Promise<{
     readonly questionSetId: string;
     readonly learningThreadId: string;
     readonly capabilityNodeId: string;

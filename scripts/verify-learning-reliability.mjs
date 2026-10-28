@@ -16,7 +16,9 @@ const server = await createServer({
 });
 
 try {
-  const [indexedDb, evidence, swipe, practiceLibrary, practiceDraft, mutexModule, sqliteEvidence, sqliteScope] = await Promise.all([
+  const [
+    indexedDb, evidence, swipe, practiceLibrary, practiceDraft, mutexModule, sqliteEvidence, sqliteScope, nativeDatabase
+  ] = await Promise.all([
     server.ssrLoadModule('/src/capabilities/database/adapters/indexeddb/IndexedDbUnitOfWork.ts'),
     server.ssrLoadModule('/src/modules/evidence/public.ts'),
     server.ssrLoadModule('/src/features/practice/QuestionSwipeNavigation.ts'),
@@ -24,12 +26,14 @@ try {
     server.ssrLoadModule('/src/features/practice/PracticeSessionDraftService.ts'),
     server.ssrLoadModule('/src/capabilities/database/internal/AsyncMutex.ts'),
     server.ssrLoadModule('/src/modules/evidence/adapters/SqliteLearningFactRepositories.ts'),
-    server.ssrLoadModule('/src/capabilities/database/adapters/sqlite/SqlTransactionScope.ts')
+    server.ssrLoadModule('/src/capabilities/database/adapters/sqlite/SqlTransactionScope.ts'),
+    server.ssrLoadModule('/src/capabilities/database/adapters/sqlite/CapacitorSqliteDatabase.ts')
   ]);
   await verifyIndexedDbSerialization(indexedDb);
   await verifyMutexTimeoutRemovesWaiter(mutexModule);
   await verifyObjectiveSubmissionUsesSqlBatch(sqliteEvidence, sqliteScope);
   await verifyNativeDatabaseRecoveryPolicy();
+  await verifyLockContentionIsNotAStall(nativeDatabase);
   await verifyNoSqliteTransactionReentry();
   await verifyObjectiveOutbox(evidence);
   await verifyPostProcessingDependencyOrder(evidence);
@@ -78,6 +82,129 @@ async function verifyNativeDatabaseRecoveryPolicy() {
   assert.match(agentWorkerSource, /tutorDatabaseLifecycleCoordinator\.waitUntilReady\(\)/);
   assert.match(submissionWorkerSource, /tutorDatabaseLifecycleCoordinator\.waitUntilReady\(\)/);
   assert.match(proactiveWorkerSource, /tutorDatabaseLifecycleCoordinator\.waitUntilReady\(\)/);
+}
+
+/**
+ * Waiting for the connection lock is contention, not a hang: a caller that
+ * times out behind a long maintenance transaction gets a retryable busy error
+ * and nothing reloads. A hung native call, or a holder that overran every
+ * bound it declared, still marks the database stalled.
+ */
+async function verifyLockContentionIsNotAStall(nativeDatabase) {
+  const config = {
+    name: 'zhangl-agent-tutor-v2',
+    version: 1,
+    busyTimeoutMs: 5,
+    lockWaitTimeoutMs: 30,
+    lockHolderGraceMs: 10,
+    nativeOperationTimeoutMs: 80,
+    transactionDeadlineMs: 150,
+    maintenanceTransactionDeadlineMs: 10_000,
+    recoveryOperationTimeoutMs: 20,
+    healthCheckIntervalMs: 60_000,
+    journalMode: 'WAL',
+    foreignKeys: true
+  };
+  const stalls = [];
+  const previousWindow = globalThis.window;
+  globalThis.window = { dispatchEvent: (event) => stalls.push(event.detail) };
+  try {
+    const plugin = fakeSqlitePlugin();
+    const database = new nativeDatabase.CapacitorSqliteDatabase(config, async () => plugin.sqlite);
+    await database.open();
+    const restoreStarted = deferred();
+    const restoreRelease = deferred();
+    const restore = database.transaction(async (transaction) => {
+      await transaction.run('INSERT INTO restored VALUES (1)');
+      restoreStarted.resolve();
+      await restoreRelease.promise;
+      await transaction.run('INSERT INTO restored VALUES (2)');
+      return 'restored';
+    }, { workload: 'maintenance' });
+    await restoreStarted.promise;
+    await assert.rejects(
+      database.query('SELECT 1'),
+      (error) => error.code === 'database.busy' && /本地数据库正忙/.test(error.message),
+      'a caller waiting behind a long maintenance transaction must fail as busy'
+    );
+    await database.healthCheck();
+    restoreRelease.resolve();
+    assert.equal(await restore, 'restored', 'lock contention must not roll back the holder');
+    assert.equal(plugin.commits, 1);
+    assert.deepEqual(await database.query('SELECT 1'), [{ ok: 1 }], 'the database stays usable after contention');
+    assert.deepEqual(stalls, [], 'lock contention must never mark the database stalled');
+
+    // The transaction deadline, not a waiter, bounds a callback that never settles.
+    await assert.rejects(
+      database.transaction(() => new Promise(() => {})),
+      (error) => error.code === 'database.transaction_timeout'
+    );
+    assert.equal(plugin.rollbacks, 1);
+    assert.deepEqual(await database.query('SELECT 1'), [{ ok: 1 }]);
+    assert.deepEqual(stalls, []);
+
+    const hungPlugin = fakeSqlitePlugin({ hangingStatements: ['SELECT hang'] });
+    const hungDatabase = new nativeDatabase.CapacitorSqliteDatabase(config, async () => hungPlugin.sqlite);
+    await hungDatabase.open();
+    await assert.rejects(hungDatabase.query('SELECT hang'), (error) => error.code === 'database.stalled' && error.operation === 'sql.query');
+    await assert.rejects(hungDatabase.query('SELECT 1'), (error) => error.code === 'database.stalled');
+    assert.deepEqual(stalls.map((stall) => stall.operation), ['sql.query'], 'a hung native call must still trigger recovery');
+
+    // A holder stuck in a step with no bound of its own (here: loading the plugin) is reported by its waiters.
+    stalls.length = 0;
+    const stuckDatabase = new nativeDatabase.CapacitorSqliteDatabase(config, () => new Promise(() => {}));
+    void stuckDatabase.query('SELECT 1').catch(() => undefined);
+    await assert.rejects(
+      stuckDatabase.query('SELECT 1'),
+      (error) => error.code === 'database.stalled' && error.operation === 'query.overrun'
+    );
+    assert.deepEqual(stalls.map((stall) => stall.operation), ['query.overrun']);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+}
+
+function fakeSqlitePlugin({ hangingStatements = [] } = {}) {
+  const state = { commits: 0, rollbacks: 0, transactionActive: false };
+  const respond = (statement, value) => (hangingStatements.includes(statement) ? new Promise(() => {}) : Promise.resolve(value));
+  const connection = {
+    async isDBOpen() { return { result: true }; },
+    async open() {},
+    async close() {},
+    async delete() {},
+    async isTransactionActive() { return { result: state.transactionActive }; },
+    async beginTransaction() { state.transactionActive = true; return {}; },
+    async commitTransaction() { state.transactionActive = false; state.commits += 1; return {}; },
+    async rollbackTransaction() { state.transactionActive = false; state.rollbacks += 1; return {}; },
+    async execute() { return { changes: { changes: 0 } }; },
+    run: (statement) => respond(statement, { changes: { changes: 1 } }),
+    async executeSet() { return { changes: { changes: 0 } }; },
+    query: (statement) => respond(statement, { values: [{ ok: 1 }] })
+  };
+  const sqlite = {
+    async checkConnectionsConsistency() { return { result: false }; },
+    async isConnection() { return { result: false }; },
+    async isDatabase() { return { result: false }; },
+    async isDatabaseEncrypted() { return { result: false }; },
+    async createConnection() { return connection; },
+    async retrieveConnection() { return connection; },
+    async isSecretStored() { return { result: true }; },
+    async setEncryptionSecret() {},
+    async closeConnection() {},
+    async closeAllConnections() {}
+  };
+  return {
+    sqlite,
+    get commits() { return state.commits; },
+    get rollbacks() { return state.rollbacks; }
+  };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((accept) => { resolve = accept; });
+  return { promise, resolve };
 }
 
 async function verifyNoSqliteTransactionReentry() {
