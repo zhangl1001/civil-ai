@@ -55,7 +55,7 @@
     "@mozilla/readability": "^0.6.0",
     "chart.js": "^4.5.1",
     "dompurify": "^3.4.12",
-    "katex": "^0.17.0",
+    "katex": "^0.19.1",
     "lucide-vue-next": "^0.378.0",
     "marked": "^18.0.6",
     "marked-katex-extension": "^5.1.10",
