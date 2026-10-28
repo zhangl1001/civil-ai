@@ -6,7 +6,7 @@
       :meta="candidateHome ? cycleSubtitle : '建立档案后开始个性化训练'"
     >
       <template #actions>
-        <button class="icon-button" type="button" @click="router.push('/vue/calendar')"><CalendarIcon /></button>
+        <button class="icon-button" type="button" aria-label="打开练习日历" @click="router.push('/vue/calendar')"><CalendarIcon /></button>
       </template>
     </PageHeader>
 

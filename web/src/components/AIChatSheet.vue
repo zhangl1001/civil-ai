@@ -152,7 +152,7 @@
                 <div v-if="attachment" class="attachment-chip">
                   <FileTextIcon />
                   <span>{{ attachment.name }}</span>
-                  <button type="button" @click="clearAttachment"><XIcon /></button>
+                  <button type="button" aria-label="移除附件" @click="clearAttachment"><XIcon /></button>
                 </div>
                 <textarea
                   ref="textareaRef"

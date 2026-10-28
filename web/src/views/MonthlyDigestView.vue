@@ -2,7 +2,7 @@
   <div class="monthly-page app-page">
     <header class="app-page-header">
       <div class="title-row">
-        <button class="icon-button" type="button" @click="goBack">
+        <button class="icon-button" type="button" aria-label="返回" @click="goBack">
           <ArrowLeftIcon />
         </button>
         <div>
